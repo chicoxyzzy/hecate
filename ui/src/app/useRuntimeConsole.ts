@@ -34,6 +34,7 @@ import type {
 } from "../types/runtime";
 
 const defaultPrompt = "Say hello in one short sentence.";
+type SessionKind = "anonymous" | "tenant" | "admin" | "invalid";
 
 export function useRuntimeConsole() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -97,6 +98,34 @@ export function useRuntimeConsole() {
         .filter((issue): issue is LocalProviderIssue => issue !== null),
     [localProviders],
   );
+  const session = useMemo(() => {
+    const trimmedToken = authToken.trim();
+    const hasAdminData = providers.length > 0 || budget !== null || controlPlane !== null;
+    const kind: SessionKind = trimmedToken === "" ? "anonymous" : hasAdminData ? "admin" : models.length > 0 ? "tenant" : "invalid";
+    const label =
+      kind === "admin"
+        ? "Admin"
+        : kind === "tenant"
+          ? "Tenant token"
+          : kind === "invalid"
+            ? "Invalid token"
+            : "Anonymous";
+    const capabilities =
+      kind === "admin"
+        ? ["Playground access", "Model catalog", "Budget admin", "Control-plane admin"]
+        : kind === "tenant"
+          ? ["Playground access", "Model catalog"]
+          : kind === "anonymous"
+            ? ["Health view", "Authentication setup"]
+            : ["No confirmed access yet"];
+    return {
+      kind,
+      label,
+      capabilities,
+      isAdmin: kind === "admin",
+      isAuthenticated: kind === "admin" || kind === "tenant",
+    };
+  }, [authToken, budget, controlPlane, models.length, providers.length]);
 
   useEffect(() => {
     const storedAuthToken = window.localStorage.getItem("hecate.authToken");
@@ -139,12 +168,18 @@ export function useRuntimeConsole() {
         getControlPlane(authToken),
       ]);
 
-      if (healthResult.status !== "fulfilled" || modelsResult.status !== "fulfilled") {
+      if (healthResult.status !== "fulfilled") {
         throw new Error("failed to load runtime console data");
       }
 
       setHealth(healthResult.value);
-      setModels(modelsResult.value.data);
+      if (modelsResult.status === "fulfilled") {
+        setModels(modelsResult.value.data);
+      } else if (modelsResult.reason instanceof Error && modelsResult.reason.message === "missing or invalid bearer token") {
+        setModels([]);
+      } else {
+        throw new Error("failed to load runtime console data");
+      }
 
       if (providersResult.status === "fulfilled") {
         setProviders(providersResult.value.data);
@@ -440,6 +475,7 @@ export function useRuntimeConsole() {
       model,
       modelFilter,
       models,
+      session,
       providerFilter,
       providerScopedModels,
       providers,
@@ -488,6 +524,7 @@ export function useRuntimeConsole() {
       topUpBudget,
       upsertAPIKey,
       upsertTenant,
+      clearAuthToken: () => setAuthToken(""),
     },
   };
 }

@@ -11,7 +11,6 @@ import type {
 } from "../types/runtime";
 
 type PlaygroundPanelProps = {
-  authToken: string;
   chatError: string;
   chatLoading: boolean;
   chatResult: ChatResponse | null;
@@ -26,7 +25,6 @@ type PlaygroundPanelProps = {
   providerScopedModels: ModelRecord[];
   runtimeHeaders: RuntimeHeaders | null;
   tenant: string;
-  onAuthTokenChange: (value: string) => void;
   onMessageChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onProviderFilterChange: (value: string) => void;
@@ -38,16 +36,6 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
   return (
     <Panel eyebrow="Playground" title="Send a request" className="xl:row-span-2">
       <form className="mt-5 grid gap-4 md:grid-cols-2" onSubmit={props.onSubmit}>
-        <label className="md:col-span-2">
-          <span className="mb-2 block text-sm text-slate-600">Bearer token</span>
-          <input
-            className={props.inputClassName}
-            placeholder="Admin token or tenant API key"
-            value={props.authToken}
-            onChange={(event) => props.onAuthTokenChange(event.target.value)}
-          />
-        </label>
-
         <label>
           <span className="mb-2 block text-sm text-slate-600">Provider</span>
           <select
