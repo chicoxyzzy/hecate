@@ -53,9 +53,36 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
       { label: "Total Tokens", value: props.chatResult?.usage?.total_tokens?.toString() },
       { label: "Cost USD", value: props.runtimeHeaders?.costUsd },
       { label: "Cache Hit", value: props.runtimeHeaders?.cache },
+      { label: "Cache Type", value: props.runtimeHeaders?.cacheType },
     ],
-    [props.chatResult?.usage?.completion_tokens, props.chatResult?.usage?.prompt_tokens, props.chatResult?.usage?.total_tokens, props.runtimeHeaders?.cache, props.runtimeHeaders?.costUsd],
+    [
+      props.chatResult?.usage?.completion_tokens,
+      props.chatResult?.usage?.prompt_tokens,
+      props.chatResult?.usage?.total_tokens,
+      props.runtimeHeaders?.cache,
+      props.runtimeHeaders?.cacheType,
+      props.runtimeHeaders?.costUsd,
+    ],
   );
+  const semanticInspector = useMemo(() => {
+    if (!props.runtimeHeaders || props.runtimeHeaders.cacheType !== "semantic") {
+      return null;
+    }
+
+    return {
+      summary: props.runtimeHeaders.semanticStrategy || "semantic hit",
+      items: [
+        { label: "Strategy", value: props.runtimeHeaders.semanticStrategy || "unknown" },
+        { label: "Index", value: props.runtimeHeaders.semanticIndex || "n/a" },
+        { label: "Similarity", value: props.runtimeHeaders.semanticSimilarity || "n/a" },
+      ],
+    };
+  }, [
+    props.runtimeHeaders?.cacheType,
+    props.runtimeHeaders?.semanticIndex,
+    props.runtimeHeaders?.semanticSimilarity,
+    props.runtimeHeaders?.semanticStrategy,
+  ]);
 
   return (
     <Panel eyebrow="Playground" title="Send a request" className="xl:row-span-2">
@@ -204,7 +231,39 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
 
         {resultView === "response" ? (
           <article className="rounded-3xl bg-slate-50/90 p-5">
-            <h3 className="mb-3 text-lg font-semibold text-slate-900">Assistant response</h3>
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <h3 className="text-lg font-semibold text-slate-900">Assistant response</h3>
+              {props.runtimeHeaders?.cacheType ? (
+                <ResultBadge
+                  label="Cache"
+                  value={props.runtimeHeaders.cacheType}
+                  tone={
+                    props.runtimeHeaders.cacheType === "semantic"
+                      ? "cyan"
+                      : props.runtimeHeaders.cacheType === "exact"
+                        ? "emerald"
+                        : "slate"
+                  }
+                />
+              ) : null}
+              {semanticInspector ? <ResultBadge label="Strategy" value={semanticInspector.summary} tone="cyan" /> : null}
+            </div>
+            {semanticInspector ? (
+              <div className="mb-4 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-800">Semantic Cache</p>
+                <p className="mt-1 text-sm text-cyan-950">
+                  Retrieved via <span className="font-semibold">{semanticInspector.summary}</span>
+                </p>
+                <dl className="mt-3 grid gap-3 md:grid-cols-3">
+                  {semanticInspector.items.map((item) => (
+                    <div key={item.label} className="rounded-2xl bg-white/90 px-4 py-3">
+                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{item.label}</dt>
+                      <dd className="mt-1 text-sm font-medium text-slate-900 break-all">{item.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ) : null}
             {props.chatResult ? (
               <pre className="whitespace-pre-wrap font-mono text-sm text-sky-950">
                 {props.chatResult.choices?.[0]?.message?.content ?? "No message content returned."}
@@ -221,14 +280,35 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
           <article className="rounded-3xl bg-slate-50/90 p-5">
             <h3 className="mb-3 text-lg font-semibold text-slate-900">Runtime metadata</h3>
             {props.runtimeHeaders ? (
-              <dl>
-                <KV label="Request ID" value={props.runtimeHeaders.requestId} />
-                <KV label="Provider" value={props.runtimeHeaders.provider} />
-                <KV label="Kind" value={props.runtimeHeaders.providerKind} />
-                <KV label="Route Reason" value={props.runtimeHeaders.routeReason} />
-                <KV label="Requested Model" value={props.runtimeHeaders.requestedModel} />
-                <KV label="Resolved Model" value={props.runtimeHeaders.resolvedModel} />
-              </dl>
+              <div className="grid gap-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <SummaryPill label="Provider" value={props.runtimeHeaders.provider || "unknown"} />
+                  <SummaryPill label="Cache Type" value={props.runtimeHeaders.cacheType || "none"} />
+                  <SummaryPill label="Route Reason" value={props.runtimeHeaders.routeReason || "unknown"} />
+                </div>
+
+                <dl>
+                  <KV label="Request ID" value={props.runtimeHeaders.requestId} />
+                  <KV label="Provider Kind" value={props.runtimeHeaders.providerKind} />
+                  <KV label="Requested Model" value={props.runtimeHeaders.requestedModel} />
+                  <KV label="Resolved Model" value={props.runtimeHeaders.resolvedModel} />
+                </dl>
+
+                <div className="rounded-2xl border border-slate-200/80 bg-white px-4 py-4">
+                  <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Semantic Retrieval</h4>
+                  {props.runtimeHeaders.semanticStrategy ? (
+                    <dl className="mt-3">
+                      <KV label="Strategy" value={props.runtimeHeaders.semanticStrategy} />
+                      <KV label="Index" value={props.runtimeHeaders.semanticIndex || "n/a"} />
+                      <KV label="Similarity" value={props.runtimeHeaders.semanticSimilarity || "n/a"} />
+                    </dl>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-600">
+                      No semantic retrieval metadata was returned for this request.
+                    </p>
+                  )}
+                </div>
+              </div>
             ) : (
               <div className="rounded-2xl border border-slate-200/80 bg-white px-4 py-4 text-sm text-slate-600">
                 Runtime metadata will appear after the first successful request.
@@ -279,6 +359,22 @@ function SummaryPill(props: { label: string; value: string }) {
     <div className="rounded-2xl bg-white px-4 py-3">
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{props.label}</p>
       <p className="mt-1 text-sm font-medium text-slate-900 break-all">{props.value}</p>
+    </div>
+  );
+}
+
+function ResultBadge(props: { label: string; value: string; tone: "slate" | "emerald" | "cyan" }) {
+  const toneClassName =
+    props.tone === "cyan"
+      ? "border-cyan-200 bg-cyan-50 text-cyan-900"
+      : props.tone === "emerald"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+        : "border-slate-200 bg-white text-slate-700";
+
+  return (
+    <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${toneClassName}`}>
+      <span className="uppercase tracking-[0.14em]">{props.label}</span>
+      <span className="break-all">{props.value}</span>
     </div>
   );
 }

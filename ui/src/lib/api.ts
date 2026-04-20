@@ -148,6 +148,10 @@ export async function chatCompletions(
       requestedModel: response.headers.get("X-Runtime-Requested-Model") ?? "",
       resolvedModel: response.headers.get("X-Runtime-Model") ?? "",
       cache: response.headers.get("X-Runtime-Cache") ?? "",
+      cacheType: response.headers.get("X-Runtime-Cache-Type") ?? "",
+      semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
+      semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
+      semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
       costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
     },
   };

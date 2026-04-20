@@ -142,6 +142,10 @@ export type RuntimeHeaders = {
   requestedModel: string;
   resolvedModel: string;
   cache: string;
+  cacheType: string;
+  semanticStrategy: string;
+  semanticIndex: string;
+  semanticSimilarity: string;
   costUsd: string;
 };
 

@@ -71,6 +71,9 @@ Useful response headers:
 - `X-Runtime-Model`
 - `X-Runtime-Cache`
 - `X-Runtime-Cache-Type`
+- `X-Runtime-Semantic-Strategy`
+- `X-Runtime-Semantic-Index`
+- `X-Runtime-Semantic-Similarity`
 - `X-Runtime-Cost-USD`
 - `X-Request-Id`
 
@@ -217,6 +220,12 @@ ANN tuning knobs:
 - `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_IVFFLAT_LISTS`
 - `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_EF`
 - `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_PROBES`
+
+Runtime visibility now includes:
+
+- semantic cache hit strategy in response headers
+- semantic similarity score in response headers
+- Prometheus counters for cache type, semantic retrieval strategy, and semantic index type
 
 ## Auth And Control Plane
 
@@ -373,6 +382,7 @@ Implemented:
 - [x] OpenAI-compatible embedding backends for semantic cache
 - [x] Optional `pgvector` similarity search for Postgres semantic cache
 - [x] ANN index creation and query tuning for Postgres `pgvector` semantic cache
+- [x] Runtime visibility for semantic-cache strategy, similarity, and index type
 - [x] Static pricebook and cost estimation
 - [x] Shared budgets with memory, Redis, and Postgres storage backends
 - [x] Budget admin mutation endpoints
@@ -385,7 +395,7 @@ Implemented:
 Next:
 
 - [ ] Expand routing beyond simple rules to include richer policy inputs
-- [ ] Add runtime metrics and explain/debug visibility for semantic-cache retrieval strategy
+- [ ] Add deeper trace export and richer semantic-cache debugging views in the UI
 - [ ] Add persistent tracing and telemetry export, starting with OpenTelemetry
 - [ ] Add more provider presets and discovery paths on top of the existing generic provider layer
 - [ ] Add background pruning/retention workers for persistent caches

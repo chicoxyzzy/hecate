@@ -27,6 +27,8 @@ type SemanticQuery struct {
 type SemanticMatch struct {
 	Response   *types.ChatResponse
 	Similarity float64
+	Strategy   string
+	IndexType  string
 }
 
 type SemanticEntry struct {
@@ -110,6 +112,7 @@ func (s *MemorySemanticStore) Search(ctx context.Context, query SemanticQuery) (
 			best = &SemanticMatch{
 				Response:   cloned,
 				Similarity: score,
+				Strategy:   "memory_scan",
 			}
 		}
 	}

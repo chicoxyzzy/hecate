@@ -80,6 +80,9 @@ type ResponseMetadata struct {
 	CanonicalResolvedModel  string
 	CacheHit                bool
 	CacheType               string
+	SemanticStrategy        string
+	SemanticIndexType       string
+	SemanticSimilarity      float64
 	PromptTokens            int
 	CompletionTokens        int
 	TotalTokens             int
@@ -233,6 +236,9 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 				CanonicalResolvedModel:  identity.CanonicalResolved,
 				CacheHit:                true,
 				CacheType:               "semantic",
+				SemanticStrategy:        match.Strategy,
+				SemanticIndexType:       match.IndexType,
+				SemanticSimilarity:      match.Similarity,
 				PromptTokens:            match.Response.Usage.PromptTokens,
 				CompletionTokens:        match.Response.Usage.CompletionTokens,
 				TotalTokens:             match.Response.Usage.TotalTokens,
@@ -530,6 +536,9 @@ func (s *Service) logRequestSummary(metadata ResponseMetadata) {
 		slog.String("canonical_resolved_model", metadata.CanonicalResolvedModel),
 		slog.Bool("cache_hit", metadata.CacheHit),
 		slog.String("cache_type", metadata.CacheType),
+		slog.String("semantic_strategy", metadata.SemanticStrategy),
+		slog.String("semantic_index_type", metadata.SemanticIndexType),
+		slog.Float64("semantic_similarity", metadata.SemanticSimilarity),
 		slog.Int("prompt_tokens", metadata.PromptTokens),
 		slog.Int("completion_tokens", metadata.CompletionTokens),
 		slog.Int("total_tokens", metadata.TotalTokens),
@@ -541,7 +550,15 @@ func (s *Service) recordMetrics(metadata ResponseMetadata) {
 	if s.metrics == nil {
 		return
 	}
-	s.metrics.RecordChat(metadata.Provider, metadata.ProviderKind, metadata.CacheHit, metadata.CostMicrosUSD)
+	s.metrics.RecordChat(
+		metadata.Provider,
+		metadata.ProviderKind,
+		metadata.CacheHit,
+		metadata.CacheType,
+		metadata.SemanticStrategy,
+		metadata.SemanticIndexType,
+		metadata.CostMicrosUSD,
+	)
 }
 
 func validate(req types.ChatRequest) error {

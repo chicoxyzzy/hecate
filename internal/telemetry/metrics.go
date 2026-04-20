@@ -15,16 +15,22 @@ type Metrics struct {
 	costMicrosTotal      int64
 	providerRequests     map[string]int64
 	providerKindRequests map[string]int64
+	cacheTypeRequests    map[string]int64
+	semanticStrategyHits map[string]int64
+	semanticIndexHits    map[string]int64
 }
 
 func NewMetrics() *Metrics {
 	return &Metrics{
 		providerRequests:     make(map[string]int64),
 		providerKindRequests: make(map[string]int64),
+		cacheTypeRequests:    make(map[string]int64),
+		semanticStrategyHits: make(map[string]int64),
+		semanticIndexHits:    make(map[string]int64),
 	}
 }
 
-func (m *Metrics) RecordChat(provider, providerKind string, cacheHit bool, costMicros int64) {
+func (m *Metrics) RecordChat(provider, providerKind string, cacheHit bool, cacheType string, semanticStrategy string, semanticIndex string, costMicros int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -41,6 +47,15 @@ func (m *Metrics) RecordChat(provider, providerKind string, cacheHit bool, costM
 	if providerKind != "" {
 		m.providerKindRequests[providerKind]++
 	}
+	if cacheType != "" {
+		m.cacheTypeRequests[cacheType]++
+	}
+	if semanticStrategy != "" {
+		m.semanticStrategyHits[semanticStrategy]++
+	}
+	if semanticIndex != "" {
+		m.semanticIndexHits[semanticIndex]++
+	}
 }
 
 type Snapshot struct {
@@ -50,6 +65,9 @@ type Snapshot struct {
 	CostMicrosTotal      int64
 	ProviderRequests     map[string]int64
 	ProviderKindRequests map[string]int64
+	CacheTypeRequests    map[string]int64
+	SemanticStrategyHits map[string]int64
+	SemanticIndexHits    map[string]int64
 }
 
 func (m *Metrics) Snapshot() Snapshot {
@@ -64,6 +82,18 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.providerKindRequests {
 		providerKindRequests[k] = v
 	}
+	cacheTypeRequests := make(map[string]int64, len(m.cacheTypeRequests))
+	for k, v := range m.cacheTypeRequests {
+		cacheTypeRequests[k] = v
+	}
+	semanticStrategyHits := make(map[string]int64, len(m.semanticStrategyHits))
+	for k, v := range m.semanticStrategyHits {
+		semanticStrategyHits[k] = v
+	}
+	semanticIndexHits := make(map[string]int64, len(m.semanticIndexHits))
+	for k, v := range m.semanticIndexHits {
+		semanticIndexHits[k] = v
+	}
 
 	return Snapshot{
 		ChatRequestsTotal:    m.chatRequestsTotal,
@@ -72,6 +102,9 @@ func (m *Metrics) Snapshot() Snapshot {
 		CostMicrosTotal:      m.costMicrosTotal,
 		ProviderRequests:     providerRequests,
 		ProviderKindRequests: providerKindRequests,
+		CacheTypeRequests:    cacheTypeRequests,
+		SemanticStrategyHits: semanticStrategyHits,
+		SemanticIndexHits:    semanticIndexHits,
 	}
 }
 
@@ -103,6 +136,21 @@ func RenderPrometheus(snapshot Snapshot, health ProviderHealthSnapshot) string {
 	writeHelpType(&b, "gateway_provider_kind_requests_total", "Requests handled by provider kind.", "counter")
 	for _, key := range sortedKeys(snapshot.ProviderKindRequests) {
 		fmt.Fprintf(&b, "gateway_provider_kind_requests_total{provider_kind=%q} %d\n", key, snapshot.ProviderKindRequests[key])
+	}
+
+	writeHelpType(&b, "gateway_cache_type_requests_total", "Requests grouped by cache result type.", "counter")
+	for _, key := range sortedKeys(snapshot.CacheTypeRequests) {
+		fmt.Fprintf(&b, "gateway_cache_type_requests_total{cache_type=%q} %d\n", key, snapshot.CacheTypeRequests[key])
+	}
+
+	writeHelpType(&b, "gateway_semantic_strategy_hits_total", "Semantic cache hits grouped by retrieval strategy.", "counter")
+	for _, key := range sortedKeys(snapshot.SemanticStrategyHits) {
+		fmt.Fprintf(&b, "gateway_semantic_strategy_hits_total{strategy=%q} %d\n", key, snapshot.SemanticStrategyHits[key])
+	}
+
+	writeHelpType(&b, "gateway_semantic_index_hits_total", "Semantic cache hits grouped by index type.", "counter")
+	for _, key := range sortedKeys(snapshot.SemanticIndexHits) {
+		fmt.Fprintf(&b, "gateway_semantic_index_hits_total{index_type=%q} %d\n", key, snapshot.SemanticIndexHits[key])
 	}
 
 	writeHelpType(&b, "gateway_provider_health", "Current provider health counts.", "gauge")

@@ -86,6 +86,10 @@ describe("api client", () => {
             "X-Runtime-Requested-Model": "gpt-4o-mini",
             "X-Runtime-Model": "gpt-4o-mini",
             "X-Runtime-Cache": "false",
+            "X-Runtime-Cache-Type": "false",
+            "X-Runtime-Semantic-Strategy": "postgres_pgvector",
+            "X-Runtime-Semantic-Index": "hnsw",
+            "X-Runtime-Semantic-Similarity": "0.981234",
             "X-Runtime-Cost-USD": "0.000123",
           },
         },
@@ -105,6 +109,10 @@ describe("api client", () => {
     expect(result.data.id).toBe("chatcmpl-123");
     expect(result.headers.provider).toBe("openai");
     expect(result.headers.routeReason).toBe("explicit_model");
+    expect(result.headers.cacheType).toBe("false");
+    expect(result.headers.semanticStrategy).toBe("postgres_pgvector");
+    expect(result.headers.semanticIndex).toBe("hnsw");
+    expect(result.headers.semanticSimilarity).toBe("0.981234");
   });
 });
 

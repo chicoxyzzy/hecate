@@ -167,6 +167,7 @@ func (s *PostgresSemanticStore) Search(ctx context.Context, query SemanticQuery)
 			best = &SemanticMatch{
 				Response:   cloneChatResponse(&response),
 				Similarity: score,
+				Strategy:   "postgres_json_scan",
 			}
 		}
 	}
@@ -346,6 +347,8 @@ func (s *PostgresSemanticStore) searchWithPGVector(ctx context.Context, query Se
 			best = &SemanticMatch{
 				Response:   cloneChatResponse(&response),
 				Similarity: similarity,
+				Strategy:   "postgres_pgvector",
+				IndexType:  s.indexType,
 			}
 		}
 	}

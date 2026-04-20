@@ -194,6 +194,12 @@ func TestChatCompletionsSemanticCacheHitsSimilarPrompt(t *testing.T) {
 	if got := second.Header().Get("X-Runtime-Cache-Type"); got != "semantic" {
 		t.Fatalf("second X-Runtime-Cache-Type = %q, want semantic", got)
 	}
+	if got := second.Header().Get("X-Runtime-Semantic-Strategy"); got != "memory_scan" {
+		t.Fatalf("second X-Runtime-Semantic-Strategy = %q, want memory_scan", got)
+	}
+	if got := second.Header().Get("X-Runtime-Semantic-Similarity"); got == "" {
+		t.Fatal("second X-Runtime-Semantic-Similarity = empty, want value")
+	}
 	if provider.CallCount() != 1 {
 		t.Fatalf("provider call count = %d, want 1 due to semantic cache hit", provider.CallCount())
 	}
