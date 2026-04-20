@@ -13,6 +13,7 @@ type Config struct {
 	Router    RouterConfig
 	Governor  GovernorConfig
 	Cache     CacheConfig
+	Postgres  PostgresConfig
 	Providers ProvidersConfig
 	LogLevel  string
 }
@@ -67,13 +68,27 @@ type CacheConfig struct {
 }
 
 type SemanticCacheConfig struct {
-	Enabled       bool
-	Backend       string
-	DefaultTTL    time.Duration
-	MinSimilarity float64
-	MaxEntries    int
-	MaxTextChars  int
-	Embedder      string
+	Enabled                          bool
+	Backend                          string
+	DefaultTTL                       time.Duration
+	MinSimilarity                    float64
+	MaxEntries                       int
+	MaxTextChars                     int
+	Embedder                         string
+	EmbedderProvider                 string
+	EmbedderModel                    string
+	EmbedderBaseURL                  string
+	EmbedderAPIKey                   string
+	EmbedderTimeout                  time.Duration
+	PostgresVectorMode               string
+	PostgresVectorCandidates         int
+	PostgresVectorIndexMode          string
+	PostgresVectorIndexType          string
+	PostgresVectorHNSWM              int
+	PostgresVectorHNSWEfConstruction int
+	PostgresVectorIVFFlatLists       int
+	PostgresVectorSearchEf           int
+	PostgresVectorSearchProbes       int
 }
 
 type RedisConfig struct {
@@ -82,6 +97,14 @@ type RedisConfig struct {
 	DB       int
 	Prefix   string
 	Timeout  time.Duration
+}
+
+type PostgresConfig struct {
+	DSN          string
+	Schema       string
+	TablePrefix  string
+	MaxOpenConns int
+	MaxIdleConns int
 }
 
 type ProvidersConfig struct {
@@ -148,14 +171,35 @@ func LoadFromEnv() Config {
 				Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
 			},
 			Semantic: SemanticCacheConfig{
-				Enabled:       getEnvBool("GATEWAY_SEMANTIC_CACHE_ENABLED", false),
-				Backend:       getEnv("GATEWAY_SEMANTIC_CACHE_BACKEND", "memory"),
-				DefaultTTL:    getEnvDuration("GATEWAY_SEMANTIC_CACHE_TTL", 24*time.Hour),
-				MinSimilarity: getEnvFloat64("GATEWAY_SEMANTIC_CACHE_MIN_SIMILARITY", 0.92),
-				MaxEntries:    getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES", 10_000),
-				MaxTextChars:  getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS", 8_000),
-				Embedder:      getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER", "local_simple"),
+				Enabled:                          getEnvBool("GATEWAY_SEMANTIC_CACHE_ENABLED", false),
+				Backend:                          getEnv("GATEWAY_SEMANTIC_CACHE_BACKEND", "memory"),
+				DefaultTTL:                       getEnvDuration("GATEWAY_SEMANTIC_CACHE_TTL", 24*time.Hour),
+				MinSimilarity:                    getEnvFloat64("GATEWAY_SEMANTIC_CACHE_MIN_SIMILARITY", 0.92),
+				MaxEntries:                       getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES", 10_000),
+				MaxTextChars:                     getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS", 8_000),
+				Embedder:                         getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER", "local_simple"),
+				EmbedderProvider:                 os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_PROVIDER"),
+				EmbedderModel:                    os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_MODEL"),
+				EmbedderBaseURL:                  os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_BASE_URL"),
+				EmbedderAPIKey:                   os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_API_KEY"),
+				EmbedderTimeout:                  getEnvDuration("GATEWAY_SEMANTIC_CACHE_EMBEDDER_TIMEOUT", 30*time.Second),
+				PostgresVectorMode:               getEnv("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_MODE", "auto"),
+				PostgresVectorCandidates:         getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_CANDIDATES", 200),
+				PostgresVectorIndexMode:          getEnv("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_MODE", "auto"),
+				PostgresVectorIndexType:          getEnv("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_TYPE", "hnsw"),
+				PostgresVectorHNSWM:              getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_HNSW_M", 16),
+				PostgresVectorHNSWEfConstruction: getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_HNSW_EF_CONSTRUCTION", 64),
+				PostgresVectorIVFFlatLists:       getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_IVFFLAT_LISTS", 100),
+				PostgresVectorSearchEf:           getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_EF", 80),
+				PostgresVectorSearchProbes:       getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_PROBES", 10),
 			},
+		},
+		Postgres: PostgresConfig{
+			DSN:          os.Getenv("POSTGRES_DSN"),
+			Schema:       getEnv("POSTGRES_SCHEMA", "public"),
+			TablePrefix:  getEnv("POSTGRES_TABLE_PREFIX", "hecate"),
+			MaxOpenConns: getEnvInt("POSTGRES_MAX_OPEN_CONNS", 10),
+			MaxIdleConns: getEnvInt("POSTGRES_MAX_IDLE_CONNS", 5),
 		},
 		Providers: providersCfg,
 		LogLevel:  getEnv("LOG_LEVEL", "INFO"),

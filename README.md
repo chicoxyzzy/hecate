@@ -4,23 +4,25 @@ Hecate is an open-source AI agent runtime and LLM gateway written in Go.
 
 It sits between agents and model providers and gives you a single OpenAI-compatible surface for routing, caching, budget enforcement, provider normalization, and control-plane management across cloud and local models.
 
-## What It Does
+## Current Scope
 
-- exposes `POST /v1/chat/completions`
-- exposes `GET /v1/models`
-- supports OpenAI-compatible cloud and local providers
-- routes requests with `explicit_or_default` and `local_first`
-- applies exact caching with memory or Redis
-- estimates cost with a static pricebook
-- enforces budgets across global, provider, tenant, and tenant-provider scopes
-- supports admin auth, tenant API keys, and a persisted control plane
-- records lightweight tracing and runtime metadata
-- includes a React + TypeScript operator UI
+- OpenAI-compatible API surface:
+  - `POST /v1/chat/completions`
+  - `GET /v1/models`
+- Vendor-neutral provider layer for OpenAI-compatible cloud and local endpoints
+- Rule-based routing with `explicit_or_default` and `local_first`
+- Exact cache with memory, Redis, and Postgres backends
+- Semantic cache with memory and Postgres backends
+- Local embedder path, OpenAI-compatible embeddings path, and optional `pgvector` search for Postgres
+- Static pricebook and request cost estimation
+- Budgets across global, provider, tenant, and tenant-provider scopes
+- Admin auth, tenant API keys, and persisted control-plane state
+- React + TypeScript operator UI
 
 ## Request Flow
 
 ```text
-auth -> governor -> cache -> router -> provider -> usage normalization -> cost calculation -> telemetry
+auth -> governor -> exact cache -> router -> semantic cache -> provider -> usage normalization -> cost calculation -> telemetry
 ```
 
 Useful response headers:
@@ -30,6 +32,7 @@ Useful response headers:
 - `X-Runtime-Requested-Model`
 - `X-Runtime-Model`
 - `X-Runtime-Cache`
+- `X-Runtime-Cache-Type`
 - `X-Runtime-Cost-USD`
 - `X-Request-Id`
 
@@ -41,7 +44,7 @@ Useful response headers:
 cp .env.example .env
 ```
 
-2. Adjust `.env` for your providers and routing strategy.
+2. Configure at least one provider.
 
 Example mixed setup with both cloud and local providers enabled:
 
@@ -114,11 +117,11 @@ Models example:
 curl -s http://127.0.0.1:8080/v1/models | jq
 ```
 
-## Providers
+## Providers And Routing
 
 The provider layer is vendor-neutral. Any upstream exposing an OpenAI-compatible API can be configured without changing gateway logic.
 
-Current model supports:
+Current support:
 
 - configurable base URL per provider
 - provider kind metadata: `cloud` or `local`
@@ -133,13 +136,56 @@ Examples of local providers that fit this model:
 - LocalAI
 - llama.cpp-compatible bridges
 
+## Semantic Cache
+
+Embedding modes:
+
+- `local_simple`: in-process hashed embeddings for a zero-dependency path
+- `openai_compatible`: calls `/v1/embeddings` on a local or remote OpenAI-compatible endpoint
+
+Example local embeddings setup:
+
+```bash
+GATEWAY_SEMANTIC_CACHE_ENABLED=true
+GATEWAY_SEMANTIC_CACHE_EMBEDDER=openai_compatible
+GATEWAY_SEMANTIC_CACHE_EMBEDDER_PROVIDER=ollama
+GATEWAY_SEMANTIC_CACHE_EMBEDDER_MODEL=nomic-embed-text
+```
+
+You can also override the embedder endpoint directly with `GATEWAY_SEMANTIC_CACHE_EMBEDDER_BASE_URL` and `GATEWAY_SEMANTIC_CACHE_EMBEDDER_API_KEY`.
+
+For Postgres-backed semantic cache, Hecate can optionally use `pgvector` for database-side cosine similarity:
+
+```bash
+GATEWAY_SEMANTIC_CACHE_BACKEND=postgres
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_MODE=auto
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_CANDIDATES=200
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_MODE=auto
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_TYPE=hnsw
+```
+
+`GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_MODE` supports:
+
+- `auto`: try `pgvector`, fall back to JSON-stored embeddings if the extension is unavailable
+- `required`: fail startup unless `pgvector` can be enabled
+- `off`: always use the JSON-stored fallback path
+
+ANN tuning knobs:
+
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_MODE=auto|required|off`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_TYPE=hnsw|ivfflat`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_HNSW_M`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_HNSW_EF_CONSTRUCTION`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_IVFFLAT_LISTS`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_EF`
+- `GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_PROBES`
+
 ## Auth And Control Plane
 
-Hecate supports:
+Auth:
 
 - admin bearer token via `GATEWAY_AUTH_TOKEN`
 - env-defined API keys via `GATEWAY_API_KEYS_JSON`
-- persisted tenants and API keys via the control plane
 
 Tenant API keys can:
 
@@ -147,6 +193,13 @@ Tenant API keys can:
 - access `/v1/models`
 - be bound to a tenant
 - restrict providers and models
+
+Control plane:
+
+- persisted tenants and API keys
+- admin mutation APIs
+- lightweight audit history
+- `file`, `redis`, and `postgres` backends
 
 Admin APIs include:
 
@@ -164,13 +217,6 @@ Admin APIs include:
 - `POST /admin/control-plane/api-keys/rotate`
 - `POST /admin/control-plane/api-keys/delete`
 
-Control-plane backends:
-
-- `file`
-- `redis`
-
-The control plane also keeps lightweight audit history for admin mutations, which is visible in the admin API and UI.
-
 ## Budgets
 
 Budget enforcement currently supports:
@@ -184,6 +230,7 @@ Backends:
 
 - `memory`
 - `redis`
+- `postgres`
 
 If no stored scoped limit exists, the gateway falls back to `GATEWAY_MAX_BUDGET_MICROS_USD`.
 
@@ -203,7 +250,7 @@ Current UI coverage:
 
 ## Key Configuration
 
-Core gateway settings:
+Most important settings:
 
 ```bash
 GATEWAY_ADDRESS=:8080
@@ -216,19 +263,24 @@ GATEWAY_AUTH_TOKEN=
 GATEWAY_API_KEYS_JSON=
 
 GATEWAY_CACHE_BACKEND=memory
-GATEWAY_CACHE_TTL=5m
+GATEWAY_SEMANTIC_CACHE_ENABLED=false
+GATEWAY_SEMANTIC_CACHE_BACKEND=memory
+GATEWAY_SEMANTIC_CACHE_EMBEDDER=local_simple
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_MODE=auto
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_MODE=auto
+GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_INDEX_TYPE=hnsw
 
 GATEWAY_BUDGET_BACKEND=memory
-GATEWAY_BUDGET_KEY=global
-GATEWAY_BUDGET_SCOPE=global
-GATEWAY_BUDGET_TENANT_FALLBACK=anonymous
 GATEWAY_MAX_BUDGET_MICROS_USD=5000000
-GATEWAY_MAX_PROMPT_TOKENS=64000
 
 GATEWAY_CONTROL_PLANE_BACKEND=none
-GATEWAY_CONTROL_PLANE_FILE=
-GATEWAY_CONTROL_PLANE_KEY=control-plane
+
+POSTGRES_DSN=
+POSTGRES_SCHEMA=public
+POSTGRES_TABLE_PREFIX=hecate
 ```
+
+For the full list, use `.env.example` as the source of truth.
 
 Redis example:
 
@@ -248,8 +300,6 @@ GATEWAY_DENIED_MODELS=gpt-4o-mini
 GATEWAY_ALLOWED_PROVIDER_KINDS=local
 ```
 
-For more complete setup examples, use `.env.example` as the source of truth.
-
 ## Repository Layout
 
 ```text
@@ -257,7 +307,7 @@ cmd/gateway           Main HTTP server
 internal/api          HTTP handlers and middleware
 internal/auth         Auth and principal resolution
 internal/billing      Static pricebook and cost estimation
-internal/cache        Exact cache backends
+internal/cache        Exact and semantic cache backends
 internal/config       Environment-based configuration
 internal/controlplane Tenant, API-key, and audit-history persistence
 internal/gateway      Core runtime pipeline
@@ -266,36 +316,41 @@ internal/models       Canonical model identity helpers
 internal/profiler     Lightweight tracing
 internal/providers    OpenAI-compatible provider implementations
 internal/router       Routing logic
-internal/storage      Storage helpers such as Redis primitives
+internal/storage      Storage helpers such as Redis and Postgres primitives
 pkg/types             Vendor-neutral runtime types
 ui                    Operator console
 ```
 
 ## Checklist
 
-Implemented now:
+Implemented:
 
 - [x] OpenAI-compatible `POST /v1/chat/completions`
 - [x] Unified `GET /v1/models` across configured providers
 - [x] Vendor-neutral OpenAI-compatible provider layer
 - [x] Cloud and local provider support
 - [x] Rule-based routing with explicit and local-first strategies
-- [x] Exact cache with memory and Redis backends
+- [x] Exact cache with memory, Redis, and Postgres backends
+- [x] Semantic cache with memory and Postgres backends
+- [x] OpenAI-compatible embedding backends for semantic cache
+- [x] Optional `pgvector` similarity search for Postgres semantic cache
+- [x] ANN index creation and query tuning for Postgres `pgvector` semantic cache
 - [x] Static pricebook and cost estimation
-- [x] Shared budgets with scoped limits and admin mutation endpoints
+- [x] Shared budgets with memory, Redis, and Postgres storage backends
+- [x] Budget admin mutation endpoints
 - [x] Structured logs, request IDs, and lightweight in-process tracing
 - [x] Admin auth, tenant API keys, and tenant-aware restrictions
-- [x] File- and Redis-backed control plane
+- [x] File-, Redis-, and Postgres-backed control plane
 - [x] Control-plane lifecycle operations and audit history
 - [x] React operator UI for playground and admin operations
 
-Next meaningful steps:
+Next:
 
-- [ ] Add semantic cache behind the existing cache abstraction
 - [ ] Expand routing beyond simple rules to include richer policy inputs
+- [ ] Add runtime metrics and explain/debug visibility for semantic-cache retrieval strategy
 - [ ] Add persistent tracing and telemetry export, starting with OpenTelemetry
 - [ ] Add more provider presets and discovery paths on top of the existing generic provider layer
-- [ ] Add Postgres-backed control-plane and budget storage
+- [ ] Add background pruning/retention workers for persistent caches
 - [ ] Add budget history, threshold warnings, and better operator UX
 - [ ] Start the sandbox runtime path in `cmd/sandboxd` and `internal/sandbox`
 - [ ] Add deployment examples for local dev and production-style environments

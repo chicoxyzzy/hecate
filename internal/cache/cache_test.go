@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -58,5 +60,54 @@ func TestStableKeyBuilderCanonicalizesDatedModels(t *testing.T) {
 	}
 	if baseKey != datedKey {
 		t.Fatalf("canonicalized keys mismatch: %s != %s", baseKey, datedKey)
+	}
+}
+
+func TestMemorySemanticStoreFindsSimilarPromptWithinNamespace(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemorySemanticStore(time.Hour, 100, LocalSimpleEmbedder{})
+	response := &types.ChatResponse{Model: "llama3.1:8b"}
+	if err := store.Set(context.Background(), SemanticEntry{
+		Namespace: "model:llama3.1:8b|provider:ollama|tenant:team-a",
+		Text:      "user: explain go channels and goroutines",
+		Response:  response,
+	}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	match, ok := store.Search(context.Background(), SemanticQuery{
+		Namespace:     "model:llama3.1:8b|provider:ollama|tenant:team-a",
+		Text:          "user: explain goroutines and channels in go",
+		MinSimilarity: 0.6,
+		MaxTextChars:  1024,
+	})
+	if !ok {
+		t.Fatal("Search() ok = false, want true")
+	}
+	if match.Response.Model != "llama3.1:8b" {
+		t.Fatalf("match model = %q, want llama3.1:8b", match.Response.Model)
+	}
+}
+
+func TestMemorySemanticStoreIsolatesNamespaces(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemorySemanticStore(time.Hour, 100, LocalSimpleEmbedder{})
+	if err := store.Set(context.Background(), SemanticEntry{
+		Namespace: "model:gpt-4o-mini|provider:openai|tenant:team-a",
+		Text:      "user: explain caching",
+		Response:  &types.ChatResponse{Model: "gpt-4o-mini"},
+	}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	if _, ok := store.Search(context.Background(), SemanticQuery{
+		Namespace:     "model:gpt-4o-mini|provider:openai|tenant:team-b",
+		Text:          "user: explain caching",
+		MinSimilarity: 0.6,
+		MaxTextChars:  1024,
+	}); ok {
+		t.Fatal("Search() ok = true, want false for different namespace")
 	}
 }

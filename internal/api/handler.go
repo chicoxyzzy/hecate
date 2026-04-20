@@ -637,6 +637,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("X-Runtime-Model", result.Metadata.Model)
 	w.Header().Set("X-Runtime-Model-Canonical", result.Metadata.CanonicalResolvedModel)
 	w.Header().Set("X-Runtime-Cache", strconv.FormatBool(result.Metadata.CacheHit))
+	w.Header().Set("X-Runtime-Cache-Type", result.Metadata.CacheType)
 	w.Header().Set("X-Runtime-Cost-USD", formatUSD(result.Metadata.CostMicrosUSD))
 	WriteJSON(w, http.StatusOK, wireResp)
 }

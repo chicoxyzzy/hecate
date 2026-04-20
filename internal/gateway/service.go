@@ -19,26 +19,36 @@ import (
 )
 
 type Dependencies struct {
-	Logger    *slog.Logger
-	Cache     cache.Store
-	Router    router.Router
-	Governor  governor.Governor
-	Providers providers.Registry
-	Pricebook billing.Pricebook
-	Tracer    profiler.Tracer
-	Metrics   *telemetry.Metrics
+	Logger          *slog.Logger
+	Cache           cache.Store
+	Semantic        cache.SemanticStore
+	SemanticOptions SemanticOptions
+	Router          router.Router
+	Governor        governor.Governor
+	Providers       providers.Registry
+	Pricebook       billing.Pricebook
+	Tracer          profiler.Tracer
+	Metrics         *telemetry.Metrics
+}
+
+type SemanticOptions struct {
+	Enabled       bool
+	MinSimilarity float64
+	MaxTextChars  int
 }
 
 type Service struct {
-	logger     *slog.Logger
-	cache      cache.Store
-	keyBuilder cache.KeyBuilder
-	router     router.Router
-	governor   governor.Governor
-	providers  providers.Registry
-	pricebook  billing.Pricebook
-	tracer     profiler.Tracer
-	metrics    *telemetry.Metrics
+	logger          *slog.Logger
+	cache           cache.Store
+	semantic        cache.SemanticStore
+	semanticOptions SemanticOptions
+	keyBuilder      cache.KeyBuilder
+	router          router.Router
+	governor        governor.Governor
+	providers       providers.Registry
+	pricebook       billing.Pricebook
+	tracer          profiler.Tracer
+	metrics         *telemetry.Metrics
 }
 
 type ChatResult struct {
@@ -69,6 +79,7 @@ type ResponseMetadata struct {
 	Model                   string
 	CanonicalResolvedModel  string
 	CacheHit                bool
+	CacheType               string
 	PromptTokens            int
 	CompletionTokens        int
 	TotalTokens             int
@@ -77,15 +88,17 @@ type ResponseMetadata struct {
 
 func NewService(deps Dependencies) *Service {
 	return &Service{
-		logger:     deps.Logger,
-		cache:      deps.Cache,
-		keyBuilder: cache.StableKeyBuilder{},
-		router:     deps.Router,
-		governor:   deps.Governor,
-		providers:  deps.Providers,
-		pricebook:  deps.Pricebook,
-		tracer:     deps.Tracer,
-		metrics:    deps.Metrics,
+		logger:          deps.Logger,
+		cache:           deps.Cache,
+		semantic:        deps.Semantic,
+		semanticOptions: deps.SemanticOptions,
+		keyBuilder:      cache.StableKeyBuilder{},
+		router:          deps.Router,
+		governor:        deps.Governor,
+		providers:       deps.Providers,
+		pricebook:       deps.Pricebook,
+		tracer:          deps.Tracer,
+		metrics:         deps.Metrics,
 	}
 }
 
@@ -139,6 +152,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			Model:                   identity.Resolved,
 			CanonicalResolvedModel:  identity.CanonicalResolved,
 			CacheHit:                true,
+			CacheType:               "exact",
 			PromptTokens:            cached.Usage.PromptTokens,
 			CompletionTokens:        cached.Usage.CompletionTokens,
 			TotalTokens:             cached.Usage.TotalTokens,
@@ -190,6 +204,52 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		"provider_kind":        string(provider.Kind()),
 		"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
 	})
+
+	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
+		namespace := cache.BuildSemanticNamespace(rewrittenReq, decision)
+		query := cache.SemanticQuery{
+			Namespace:     namespace,
+			Text:          cache.BuildSemanticText(rewrittenReq, s.semanticOptions.MaxTextChars),
+			MinSimilarity: s.semanticOptions.MinSimilarity,
+			MaxTextChars:  s.semanticOptions.MaxTextChars,
+		}
+		trace.Record("semantic_cache.lookup_started", map[string]any{
+			"namespace": namespace,
+		})
+		if match, ok := s.semantic.Search(ctx, query); ok {
+			trace.Record("semantic_cache.hit", map[string]any{
+				"namespace":  namespace,
+				"similarity": match.Similarity,
+			})
+			identity := models.BuildIdentity(req.Model, match.Response.Model)
+			metadata := ResponseMetadata{
+				RequestID:               req.RequestID,
+				Provider:                decision.Provider,
+				ProviderKind:            string(provider.Kind()),
+				RouteReason:             decision.Reason,
+				RequestedModel:          identity.Requested,
+				CanonicalRequestedModel: identity.CanonicalRequested,
+				Model:                   identity.Resolved,
+				CanonicalResolvedModel:  identity.CanonicalResolved,
+				CacheHit:                true,
+				CacheType:               "semantic",
+				PromptTokens:            match.Response.Usage.PromptTokens,
+				CompletionTokens:        match.Response.Usage.CompletionTokens,
+				TotalTokens:             match.Response.Usage.TotalTokens,
+				CostMicrosUSD:           match.Response.Cost.TotalMicrosUSD,
+			}
+			s.recordMetrics(metadata)
+			s.logRequestSummary(metadata)
+			return &ChatResult{
+				Response: match.Response,
+				Metadata: metadata,
+				Trace:    trace,
+			}, nil
+		}
+		trace.Record("semantic_cache.miss", map[string]any{
+			"namespace": namespace,
+		})
+	}
 
 	rewrittenReq.Model = decision.Model
 	trace.Record("provider.call.started", map[string]any{
@@ -249,6 +309,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		Model:                   identity.Resolved,
 		CanonicalResolvedModel:  identity.CanonicalResolved,
 		CacheHit:                false,
+		CacheType:               "false",
 		PromptTokens:            resp.Usage.PromptTokens,
 		CompletionTokens:        resp.Usage.CompletionTokens,
 		TotalTokens:             resp.Usage.TotalTokens,
@@ -256,6 +317,20 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}
 	s.recordMetrics(metadata)
 	s.logRequestSummary(metadata)
+
+	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
+		namespace := cache.BuildSemanticNamespace(rewrittenReq, decision)
+		if err := s.semantic.Set(ctx, cache.SemanticEntry{
+			Namespace: namespace,
+			Text:      cache.BuildSemanticText(rewrittenReq, s.semanticOptions.MaxTextChars),
+			Response:  resp,
+		}); err != nil {
+			s.logger.Warn("semantic cache set failed", slog.Any("error", err))
+			trace.Record("semantic_cache.store_failed", map[string]any{"error": err.Error()})
+		} else {
+			trace.Record("semantic_cache.store_finished", map[string]any{"namespace": namespace})
+		}
+	}
 
 	return &ChatResult{
 		Response: resp,
@@ -454,6 +529,7 @@ func (s *Service) logRequestSummary(metadata ResponseMetadata) {
 		slog.String("resolved_model", metadata.Model),
 		slog.String("canonical_resolved_model", metadata.CanonicalResolvedModel),
 		slog.Bool("cache_hit", metadata.CacheHit),
+		slog.String("cache_type", metadata.CacheType),
 		slog.Int("prompt_tokens", metadata.PromptTokens),
 		slog.Int("completion_tokens", metadata.CompletionTokens),
 		slog.Int("total_tokens", metadata.TotalTokens),

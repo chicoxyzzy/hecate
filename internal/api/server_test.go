@@ -99,6 +99,9 @@ func TestChatCompletionsCachesResponsesAndReturnsRuntimeHeaders(t *testing.T) {
 	if got := second.Header().Get("X-Runtime-Cache"); got != "true" {
 		t.Fatalf("second X-Runtime-Cache = %q, want true", got)
 	}
+	if got := second.Header().Get("X-Runtime-Cache-Type"); got != "exact" {
+		t.Fatalf("second X-Runtime-Cache-Type = %q, want exact", got)
+	}
 
 	if provider.CallCount() != 1 {
 		t.Fatalf("provider call count = %d, want 1 due to cache hit", provider.CallCount())
@@ -133,6 +136,66 @@ func TestChatCompletionsCachesResponsesAndReturnsRuntimeHeaders(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, `"cache_hit":true`) {
 		t.Fatalf("log output missing cache_hit true entry: %s", logOutput)
+	}
+}
+
+func TestChatCompletionsSemanticCacheHitsSimilarPrompt(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "ollama",
+		capabilities: providers.Capabilities{
+			Name:         "ollama",
+			Kind:         providers.KindLocal,
+			DefaultModel: "llama3.1:8b",
+			Models:       []string{"llama3.1:8b"},
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-local-1",
+			Model:     "llama3.1:8b",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices: []types.ChatChoice{{
+				Index: 0,
+				Message: types.Message{
+					Role:    "assistant",
+					Content: "Channels coordinate goroutines.",
+				},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 20, CompletionTokens: 4, TotalTokens: 24},
+		},
+	}
+
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Cache: config.CacheConfig{
+			Semantic: config.SemanticCacheConfig{
+				Enabled:       true,
+				Backend:       "memory",
+				DefaultTTL:    time.Hour,
+				MinSimilarity: 0.6,
+				MaxEntries:    100,
+				MaxTextChars:  2048,
+			},
+		},
+	})
+
+	first := performJSONRequest(t, handler, `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Explain Go channels and goroutines."}]}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d, body=%s", first.Code, http.StatusOK, first.Body.String())
+	}
+	second := performJSONRequest(t, handler, `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Explain goroutines and channels in Go."}]}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d, body=%s", second.Code, http.StatusOK, second.Body.String())
+	}
+	if got := second.Header().Get("X-Runtime-Cache"); got != "true" {
+		t.Fatalf("second X-Runtime-Cache = %q, want true", got)
+	}
+	if got := second.Header().Get("X-Runtime-Cache-Type"); got != "semantic" {
+		t.Fatalf("second X-Runtime-Cache-Type = %q, want semantic", got)
+	}
+	if provider.CallCount() != 1 {
+		t.Fatalf("provider call count = %d, want 1 due to semantic cache hit", provider.CallCount())
 	}
 }
 
@@ -765,8 +828,14 @@ func TestMetricsExposeChatCacheCostAndProviderHealth(t *testing.T) {
 
 	registry := providers.NewRegistry(provider)
 	service := gateway.NewService(gateway.Dependencies{
-		Logger:    logger,
-		Cache:     cache.NewMemoryStore(time.Minute),
+		Logger:   logger,
+		Cache:    cache.NewMemoryStore(time.Minute),
+		Semantic: cache.NoopSemanticStore{},
+		SemanticOptions: gateway.SemanticOptions{
+			Enabled:       false,
+			MinSimilarity: 0.92,
+			MaxTextChars:  8_000,
+		},
 		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", registry),
 		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, governor.NewMemoryBudgetStore()),
 		Providers: registry,
@@ -998,8 +1067,14 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
 	service := gateway.NewService(gateway.Dependencies{
-		Logger:    logger,
-		Cache:     cache.NewMemoryStore(time.Minute),
+		Logger:   logger,
+		Cache:    cache.NewMemoryStore(time.Minute),
+		Semantic: buildTestSemanticStore(cfg),
+		SemanticOptions: gateway.SemanticOptions{
+			Enabled:       cfg.Cache.Semantic.Enabled,
+			MinSimilarity: cfg.Cache.Semantic.MinSimilarity,
+			MaxTextChars:  cfg.Cache.Semantic.MaxTextChars,
+		},
 		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", registry),
 		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore),
 		Providers: registry,
@@ -1015,6 +1090,17 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 	cfg.Governor = governorCfg
 	handler := NewHandler(cfg, logger, service, nil)
 	return NewServer(logger, handler)
+}
+
+func buildTestSemanticStore(cfg config.Config) cache.SemanticStore {
+	if !cfg.Cache.Semantic.Enabled {
+		return cache.NoopSemanticStore{}
+	}
+	return cache.NewMemorySemanticStore(
+		cfg.Cache.Semantic.DefaultTTL,
+		cfg.Cache.Semantic.MaxEntries,
+		cache.LocalSimpleEmbedder{MaxTextChars: cfg.Cache.Semantic.MaxTextChars},
+	)
 }
 
 func newBudgetTestHandler(logger *slog.Logger, governorCfg config.GovernorConfig, budgetStore governor.BudgetStore) http.Handler {
