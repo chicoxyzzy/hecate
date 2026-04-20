@@ -13,6 +13,8 @@ type Principal struct {
 	Name             string
 	Role             string
 	Tenant           string
+	Source           string
+	KeyID            string
 	AllowedProviders []string
 	AllowedModels    []string
 }
@@ -35,6 +37,8 @@ func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authen
 			Name:             item.Name,
 			Role:             item.Role,
 			Tenant:           item.Tenant,
+			Source:           "env_api_key",
+			KeyID:            item.Name,
 			AllowedProviders: append([]string(nil), item.AllowedProviders...),
 			AllowedModels:    append([]string(nil), item.AllowedModels...),
 		}
@@ -64,8 +68,9 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 
 	if a.adminToken != "" && token == a.adminToken {
 		return Principal{
-			Name: "admin",
-			Role: "admin",
+			Name:   "admin",
+			Role:   "admin",
+			Source: "admin_token",
 		}, true
 	}
 
@@ -91,6 +96,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 					Name:             key.Name,
 					Role:             key.Role,
 					Tenant:           key.Tenant,
+					Source:           "control_plane_api_key",
+					KeyID:            key.ID,
 					AllowedProviders: mergedAllowlist(key.AllowedProviders, tenantAllowProviders(state.Tenants, key.Tenant)),
 					AllowedModels:    mergedAllowlist(key.AllowedModels, tenantAllowModels(state.Tenants, key.Tenant)),
 				}, true
@@ -98,6 +105,52 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 		}
 	}
 	return Principal{}, false
+}
+
+type Introspection struct {
+	Authenticated bool
+	InvalidToken  bool
+	Principal     Principal
+}
+
+func (a *Authenticator) Introspect(r *http.Request) Introspection {
+	if a == nil || !a.enabled {
+		return Introspection{
+			Authenticated: false,
+			Principal: Principal{
+				Role:   "anonymous",
+				Source: "auth_disabled",
+			},
+		}
+	}
+
+	token := bearerToken(r.Header.Get("Authorization"))
+	if token == "" {
+		return Introspection{
+			Authenticated: false,
+			Principal: Principal{
+				Role:   "anonymous",
+				Source: "no_token",
+			},
+		}
+	}
+
+	principal, ok := a.Authenticate(r)
+	if !ok {
+		return Introspection{
+			Authenticated: false,
+			InvalidToken:  true,
+			Principal: Principal{
+				Role:   "invalid",
+				Source: "invalid_token",
+			},
+		}
+	}
+
+	return Introspection{
+		Authenticated: true,
+		Principal:     principal,
+	}
 }
 
 func bearerToken(header string) string {

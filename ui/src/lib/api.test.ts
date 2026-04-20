@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, getBudget } from "./api";
+import { buildRequestOptions, chatCompletions, getBudget, getSession } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -38,6 +38,33 @@ describe("api client", () => {
         method: "GET",
       }),
     );
+  });
+
+  it("fetches session details for auth introspection", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        object: "session",
+        data: {
+          authenticated: true,
+          invalid_token: false,
+          role: "tenant",
+          tenant: "team-a",
+          source: "control_plane_api_key",
+          key_id: "team-a-dev",
+        },
+      }),
+    );
+
+    const result = await getSession("tenant-secret");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/whoami",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
+    expect(result.data.tenant).toBe("team-a");
+    expect(result.data.key_id).toBe("team-a-dev");
   });
 
   it("returns chat payload plus runtime headers", async () => {

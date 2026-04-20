@@ -3,9 +3,16 @@ import { Panel } from "./Panel";
 type AuthPanelProps = {
   authToken: string;
   inputClassName: string;
+  sessionAllowedModels: string[];
+  sessionAllowedProviders: string[];
   sessionCapabilities: string[];
+  sessionKeyID: string;
   sessionKind: "anonymous" | "tenant" | "admin" | "invalid";
   sessionLabel: string;
+  sessionName: string;
+  sessionRole: string;
+  sessionSource: string;
+  sessionTenant: string;
   onAuthTokenChange: (value: string) => void;
   onClearAuthToken: () => void;
   onRefresh: () => void | Promise<void>;
@@ -64,6 +71,17 @@ export function AuthPanel(props: AuthPanelProps) {
         </div>
 
         <div className="rounded-2xl bg-slate-50/90 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Identity</h3>
+          <dl className="mt-3 grid gap-2 text-sm text-slate-700">
+            <IdentityRow label="Role" value={props.sessionRole || "anonymous"} />
+            <IdentityRow label="Name" value={props.sessionName || "n/a"} />
+            <IdentityRow label="Tenant" value={props.sessionTenant || "n/a"} />
+            <IdentityRow label="Source" value={props.sessionSource || "n/a"} />
+            <IdentityRow label="Key ID" value={props.sessionKeyID || "n/a"} />
+          </dl>
+        </div>
+
+        <div className="rounded-2xl bg-slate-50/90 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">What this session can do</h3>
           <ul className="mt-3 grid gap-2 text-sm text-slate-700">
             {props.sessionCapabilities.map((item) => (
@@ -73,7 +91,40 @@ export function AuthPanel(props: AuthPanelProps) {
             ))}
           </ul>
         </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl bg-slate-50/90 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Allowed providers</h3>
+            <ul className="mt-3 grid gap-2 text-sm text-slate-700">
+              {(props.sessionAllowedProviders.length > 0 ? props.sessionAllowedProviders : ["any"]).map((item) => (
+                <li className="rounded-xl bg-white px-3 py-2" key={item}>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="rounded-2xl bg-slate-50/90 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Allowed models</h3>
+            <ul className="mt-3 grid gap-2 text-sm text-slate-700">
+              {(props.sessionAllowedModels.length > 0 ? props.sessionAllowedModels : ["any"]).map((item) => (
+                <li className="rounded-xl bg-white px-3 py-2 break-all" key={item}>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
       </div>
     </Panel>
+  );
+}
+
+function IdentityRow(props: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-xl bg-white px-3 py-2">
+      <dt className="text-slate-500">{props.label}</dt>
+      <dd className="text-right font-medium text-slate-900">{props.value}</dd>
+    </div>
   );
 }

@@ -41,6 +41,23 @@ type OpenAIModelsResponse struct {
 	Data   []OpenAIModelData `json:"data"`
 }
 
+type SessionResponse struct {
+	Object string              `json:"object"`
+	Data   SessionResponseItem `json:"data"`
+}
+
+type SessionResponseItem struct {
+	Authenticated    bool     `json:"authenticated"`
+	InvalidToken     bool     `json:"invalid_token"`
+	Role             string   `json:"role"`
+	Name             string   `json:"name,omitempty"`
+	Tenant           string   `json:"tenant,omitempty"`
+	Source           string   `json:"source,omitempty"`
+	KeyID            string   `json:"key_id,omitempty"`
+	AllowedProviders []string `json:"allowed_providers,omitempty"`
+	AllowedModels    []string `json:"allowed_models,omitempty"`
+}
+
 type OpenAIModelData struct {
 	ID       string         `json:"id"`
 	Object   string         `json:"object"`

@@ -45,6 +45,24 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleSession(w http.ResponseWriter, r *http.Request) {
+	introspection := h.authenticator.Introspect(r)
+	WriteJSON(w, http.StatusOK, SessionResponse{
+		Object: "session",
+		Data: SessionResponseItem{
+			Authenticated:    introspection.Authenticated,
+			InvalidToken:     introspection.InvalidToken,
+			Role:             introspection.Principal.Role,
+			Name:             introspection.Principal.Name,
+			Tenant:           introspection.Principal.Tenant,
+			Source:           introspection.Principal.Source,
+			KeyID:            introspection.Principal.KeyID,
+			AllowedProviders: introspection.Principal.AllowedProviders,
+			AllowedModels:    introspection.Principal.AllowedModels,
+		},
+	})
+}
+
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.authorizeAny(r)
 	if !ok {

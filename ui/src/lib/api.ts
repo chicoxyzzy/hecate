@@ -6,6 +6,7 @@ import type {
   ModelResponse,
   ProviderStatusResponse,
   RuntimeHeaders,
+  SessionResponse,
 } from "../types/runtime";
 
 type RequestOptions = {
@@ -65,6 +66,10 @@ export type RotateAPIKeyPayload = {
 
 export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>("/healthz");
+}
+
+export async function getSession(authToken?: string): Promise<SessionResponse> {
+  return fetchJSON<SessionResponse>("/v1/whoami", { authToken });
 }
 
 export async function getModels(authToken?: string): Promise<ModelResponse> {

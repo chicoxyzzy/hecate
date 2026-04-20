@@ -503,6 +503,89 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 	}
 }
 
+func TestSessionEndpointReturnsAnonymousTenantAndAdminStates(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	tenant, err := store.UpsertTenant(context.Background(), controlplane.Tenant{Name: "Team A"})
+	if err != nil {
+		t.Fatalf("UpsertTenant() error = %v", err)
+	}
+	if _, err := store.UpsertAPIKey(context.Background(), controlplane.APIKey{
+		Name:   "Team A Dev",
+		Key:    "tenant-secret",
+		Tenant: tenant.ID,
+		Role:   "tenant",
+	}); err != nil {
+		t.Fatalf("UpsertAPIKey() error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	}, governor.NewMemoryBudgetStore(), store)
+
+	cases := []struct {
+		name        string
+		token       string
+		wantStatus  int
+		wantRole    string
+		wantTenant  string
+		wantSource  string
+		wantKeyID   string
+		wantAuth    bool
+		wantInvalid bool
+	}{
+		{name: "anonymous", wantStatus: http.StatusOK, wantRole: "anonymous", wantSource: "no_token", wantAuth: false},
+		{name: "tenant", token: "tenant-secret", wantStatus: http.StatusOK, wantRole: "tenant", wantTenant: "team-a", wantSource: "control_plane_api_key", wantKeyID: "team-a-dev", wantAuth: true},
+		{name: "admin", token: "admin-secret", wantStatus: http.StatusOK, wantRole: "admin", wantSource: "admin_token", wantAuth: true},
+		{name: "invalid", token: "bad-secret", wantStatus: http.StatusOK, wantRole: "invalid", wantSource: "invalid_token", wantAuth: false, wantInvalid: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/whoami", nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", recorder.Code, tc.wantStatus, recorder.Body.String())
+			}
+
+			var response SessionResponse
+			if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if response.Data.Role != tc.wantRole {
+				t.Fatalf("role = %q, want %q", response.Data.Role, tc.wantRole)
+			}
+			if response.Data.Tenant != tc.wantTenant {
+				t.Fatalf("tenant = %q, want %q", response.Data.Tenant, tc.wantTenant)
+			}
+			if response.Data.Source != tc.wantSource {
+				t.Fatalf("source = %q, want %q", response.Data.Source, tc.wantSource)
+			}
+			if response.Data.KeyID != tc.wantKeyID {
+				t.Fatalf("key_id = %q, want %q", response.Data.KeyID, tc.wantKeyID)
+			}
+			if response.Data.Authenticated != tc.wantAuth {
+				t.Fatalf("authenticated = %t, want %t", response.Data.Authenticated, tc.wantAuth)
+			}
+			if response.Data.InvalidToken != tc.wantInvalid {
+				t.Fatalf("invalid_token = %t, want %t", response.Data.InvalidToken, tc.wantInvalid)
+			}
+		})
+	}
+}
+
 func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	t.Parallel()
 

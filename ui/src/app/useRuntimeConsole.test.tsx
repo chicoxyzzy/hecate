@@ -14,6 +14,17 @@ describe("useRuntimeConsole", () => {
       if (url === "/healthz") {
         return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
       }
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: {
+            authenticated: false,
+            invalid_token: false,
+            role: "anonymous",
+            source: "no_token",
+          },
+        });
+      }
       if (url === "/v1/models") {
         return jsonResponse({
           object: "list",

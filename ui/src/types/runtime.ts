@@ -19,6 +19,21 @@ export type ModelResponse = {
   data: ModelRecord[];
 };
 
+export type SessionResponse = {
+  object: string;
+  data: {
+    authenticated: boolean;
+    invalid_token: boolean;
+    role: string;
+    name?: string;
+    tenant?: string;
+    source?: string;
+    key_id?: string;
+    allowed_providers?: string[];
+    allowed_models?: string[];
+  };
+};
+
 export type ProviderRecord = {
   name: string;
   kind: string;

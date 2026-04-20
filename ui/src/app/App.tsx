@@ -134,9 +134,16 @@ export default function App() {
                 <AuthPanel
                   authToken={state.authToken}
                   inputClassName={inputClassName}
+                  sessionAllowedModels={state.session.allowedModels}
+                  sessionAllowedProviders={state.session.allowedProviders}
                   sessionCapabilities={state.session.capabilities}
+                  sessionKeyID={state.session.keyID}
                   sessionKind={state.session.kind}
                   sessionLabel={state.session.label}
+                  sessionName={state.session.name}
+                  sessionRole={state.session.role}
+                  sessionSource={state.session.source}
+                  sessionTenant={state.session.tenant}
                   onAuthTokenChange={actions.setAuthToken}
                   onClearAuthToken={actions.clearAuthToken}
                   onRefresh={actions.loadDashboard}
@@ -242,9 +249,16 @@ export default function App() {
               <AuthPanel
                 authToken={state.authToken}
                 inputClassName={inputClassName}
+                sessionAllowedModels={state.session.allowedModels}
+                sessionAllowedProviders={state.session.allowedProviders}
                 sessionCapabilities={state.session.capabilities}
+                sessionKeyID={state.session.keyID}
                 sessionKind={state.session.kind}
                 sessionLabel={state.session.label}
+                sessionName={state.session.name}
+                sessionRole={state.session.role}
+                sessionSource={state.session.source}
+                sessionTenant={state.session.tenant}
                 onAuthTokenChange={actions.setAuthToken}
                 onClearAuthToken={actions.clearAuthToken}
                 onRefresh={actions.loadDashboard}

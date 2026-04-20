@@ -12,6 +12,7 @@ import {
   getHealth,
   getModels,
   getProviders,
+  getSession,
   rotateAPIKey as rotateAPIKeyRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
@@ -31,10 +32,25 @@ import type {
   ProviderFilter,
   ProviderStatusResponse,
   RuntimeHeaders,
+  SessionResponse,
 } from "../types/runtime";
 
 const defaultPrompt = "Say hello in one short sentence.";
 type SessionKind = "anonymous" | "tenant" | "admin" | "invalid";
+type SessionState = {
+  kind: SessionKind;
+  label: string;
+  capabilities: string[];
+  isAdmin: boolean;
+  isAuthenticated: boolean;
+  role: string;
+  name: string;
+  tenant: string;
+  source: string;
+  keyID: string;
+  allowedProviders: string[];
+  allowedModels: string[];
+};
 
 export function useRuntimeConsole() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -61,6 +77,7 @@ export function useRuntimeConsole() {
   const [budgetActionError, setBudgetActionError] = useState("");
 
   const [authToken, setAuthToken] = useState("");
+  const [sessionInfo, setSessionInfo] = useState<SessionResponse["data"] | null>(null);
   const [controlPlaneError, setControlPlaneError] = useState("");
 
   const [tenantFormName, setTenantFormName] = useState("");
@@ -99,33 +116,8 @@ export function useRuntimeConsole() {
     [localProviders],
   );
   const session = useMemo(() => {
-    const trimmedToken = authToken.trim();
-    const hasAdminData = providers.length > 0 || budget !== null || controlPlane !== null;
-    const kind: SessionKind = trimmedToken === "" ? "anonymous" : hasAdminData ? "admin" : models.length > 0 ? "tenant" : "invalid";
-    const label =
-      kind === "admin"
-        ? "Admin"
-        : kind === "tenant"
-          ? "Tenant token"
-          : kind === "invalid"
-            ? "Invalid token"
-            : "Anonymous";
-    const capabilities =
-      kind === "admin"
-        ? ["Playground access", "Model catalog", "Budget admin", "Control-plane admin"]
-        : kind === "tenant"
-          ? ["Playground access", "Model catalog"]
-          : kind === "anonymous"
-            ? ["Health view", "Authentication setup"]
-            : ["No confirmed access yet"];
-    return {
-      kind,
-      label,
-      capabilities,
-      isAdmin: kind === "admin",
-      isAuthenticated: kind === "admin" || kind === "tenant",
-    };
-  }, [authToken, budget, controlPlane, models.length, providers.length]);
+    return deriveSessionState(sessionInfo);
+  }, [sessionInfo]);
 
   useEffect(() => {
     const storedAuthToken = window.localStorage.getItem("hecate.authToken");
@@ -160,8 +152,9 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
 
     try {
-      const [healthResult, modelsResult, providersResult, budgetResult, controlPlaneResult] = await Promise.allSettled([
+      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, controlPlaneResult] = await Promise.allSettled([
         getHealth(),
+        getSession(authToken),
         getModels(authToken),
         getProviders(authToken),
         getBudget("", authToken),
@@ -173,6 +166,11 @@ export function useRuntimeConsole() {
       }
 
       setHealth(healthResult.value);
+      if (sessionResult.status === "fulfilled") {
+        setSessionInfo(sessionResult.value.data);
+      } else {
+        setSessionInfo(null);
+      }
       if (modelsResult.status === "fulfilled") {
         setModels(modelsResult.value.data);
       } else if (modelsResult.reason instanceof Error && modelsResult.reason.message === "missing or invalid bearer token") {
@@ -526,5 +524,49 @@ export function useRuntimeConsole() {
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
     },
+  };
+}
+
+function deriveSessionState(sessionInfo: SessionResponse["data"] | null): SessionState {
+  const role = sessionInfo?.role ?? "anonymous";
+  const kind: SessionKind = sessionInfo?.invalid_token
+    ? "invalid"
+    : role === "admin"
+      ? "admin"
+      : sessionInfo?.authenticated
+        ? "tenant"
+        : "anonymous";
+
+  const label =
+    kind === "admin"
+      ? "Admin"
+      : kind === "tenant"
+        ? `Tenant${sessionInfo?.tenant ? `: ${sessionInfo.tenant}` : ""}`
+        : kind === "invalid"
+          ? "Invalid token"
+          : "Anonymous";
+
+  const capabilities =
+    kind === "admin"
+      ? ["Playground access", "Model catalog", "Provider status", "Budget admin", "Control-plane admin"]
+      : kind === "tenant"
+        ? ["Playground access", "Model catalog"]
+        : kind === "anonymous"
+          ? ["Health view", "Authentication setup"]
+          : ["No confirmed access"];
+
+  return {
+    kind,
+    label,
+    capabilities,
+    isAdmin: kind === "admin",
+    isAuthenticated: kind === "admin" || kind === "tenant",
+    role,
+    name: sessionInfo?.name ?? "",
+    tenant: sessionInfo?.tenant ?? "",
+    source: sessionInfo?.source ?? "",
+    keyID: sessionInfo?.key_id ?? "",
+    allowedProviders: sessionInfo?.allowed_providers ?? [],
+    allowedModels: sessionInfo?.allowed_models ?? [],
   };
 }
