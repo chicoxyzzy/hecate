@@ -1,0 +1,24 @@
+{
+  "tenants": [
+    {
+      "id": "team-a",
+      "name": "Team A",
+      "description": "Primary engineering tenant",
+      "allowed_providers": ["openai", "ollama"],
+      "allowed_models": ["gpt-4o-mini", "llama3.1:8b"],
+      "enabled": true
+    }
+  ],
+  "api_keys": [
+    {
+      "id": "team-a-dev",
+      "name": "Team A Dev",
+      "key": "hecate-team-a-dev",
+      "tenant": "team-a",
+      "role": "tenant",
+      "allowed_providers": ["ollama"],
+      "allowed_models": ["llama3.1:8b"],
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+package providers
+
+import (
+	"context"
+	"time"
+
+	"github.com/hecate/agent-runtime/pkg/types"
+)
+
+type Kind string
+
+const (
+	KindCloud Kind = "cloud"
+	KindLocal Kind = "local"
+)
+
+type Provider interface {
+	Name() string
+	Kind() Kind
+	DefaultModel() string
+	Capabilities(ctx context.Context) (Capabilities, error)
+	Chat(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error)
+	Supports(model string) bool
+}
+
+type Capabilities struct {
+	Name            string
+	Kind            Kind
+	DefaultModel    string
+	Models          []string
+	Discoverable    bool
+	DiscoverySource string
+	RefreshedAt     time.Time
+}
+
+type Registry interface {
+	Get(name string) (Provider, bool)
+	All() []Provider
+}
+
+type InMemoryRegistry struct {
+	providers []Provider
+	byName    map[string]Provider
+}
+
+func NewRegistry(items ...Provider) *InMemoryRegistry {
+	byName := make(map[string]Provider, len(items))
+	for _, provider := range items {
+		byName[provider.Name()] = provider
+	}
+
+	return &InMemoryRegistry{
+		providers: items,
+		byName:    byName,
+	}
+}
+
+func (r *InMemoryRegistry) Get(name string) (Provider, bool) {
+	provider, ok := r.byName[name]
+	return provider, ok
+}
+
+func (r *InMemoryRegistry) All() []Provider {
+	out := make([]Provider, len(r.providers))
+	copy(out, r.providers)
+	return out
+}

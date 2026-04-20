@@ -1,0 +1,98 @@
+package types
+
+import "time"
+
+type ChatRequest struct {
+	RequestID   string
+	Model       string
+	Messages    []Message
+	MaxTokens   int
+	Temperature float64
+	Metadata    map[string]string
+}
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Name    string `json:"name,omitempty"`
+}
+
+type ChatResponse struct {
+	ID        string
+	Model     string
+	CreatedAt time.Time
+	Choices   []ChatChoice
+	Usage     Usage
+	Cost      CostBreakdown
+	Route     RouteDecision
+}
+
+type ChatChoice struct {
+	Index        int
+	Message      Message
+	FinishReason string
+}
+
+type Usage struct {
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	CachedPromptTokens int
+}
+
+type CostBreakdown struct {
+	Currency                  string
+	InputMicrosUSD            int64
+	OutputMicrosUSD           int64
+	CachedInputMicrosUSD      int64
+	TotalMicrosUSD            int64
+	InputMicrosUSDPerMillion  int64
+	OutputMicrosUSDPerMillion int64
+}
+
+type RouteDecision struct {
+	Provider string
+	Model    string
+	Reason   string
+}
+
+type ModelInfo struct {
+	ID              string
+	Provider        string
+	Kind            string
+	OwnedBy         string
+	Default         bool
+	DiscoverySource string
+}
+
+type ProviderStatus struct {
+	Name            string
+	Kind            string
+	Healthy         bool
+	Status          string
+	DefaultModel    string
+	Models          []string
+	DiscoverySource string
+	RefreshedAt     time.Time
+	Error           string
+}
+
+type BudgetStatus struct {
+	Key                string
+	Scope              string
+	Provider           string
+	Tenant             string
+	Backend            string
+	LimitSource        string
+	SpentMicrosUSD     int64
+	CurrentMicrosUSD   int64
+	MaxMicrosUSD       int64
+	RemainingMicrosUSD int64
+	Enforced           bool
+}
+
+type TraceEvent struct {
+	Name       string
+	Timestamp  time.Time
+	Attributes map[string]any
+}

@@ -1,0 +1,162 @@
+package auth
+
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/controlplane"
+)
+
+type Principal struct {
+	Name             string
+	Role             string
+	Tenant           string
+	AllowedProviders []string
+	AllowedModels    []string
+}
+
+func (p Principal) IsAdmin() bool {
+	return p.Role == "admin"
+}
+
+type Authenticator struct {
+	adminToken string
+	apiKeys    map[string]Principal
+	store      controlplane.Store
+	enabled    bool
+}
+
+func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authenticator {
+	keys := make(map[string]Principal, len(cfg.APIKeys))
+	for _, item := range cfg.APIKeys {
+		keys[item.Key] = Principal{
+			Name:             item.Name,
+			Role:             item.Role,
+			Tenant:           item.Tenant,
+			AllowedProviders: append([]string(nil), item.AllowedProviders...),
+			AllowedModels:    append([]string(nil), item.AllowedModels...),
+		}
+	}
+
+	return &Authenticator{
+		adminToken: cfg.AuthToken,
+		apiKeys:    keys,
+		store:      store,
+		enabled:    cfg.AuthToken != "" || len(keys) > 0 || store != nil,
+	}
+}
+
+func (a *Authenticator) Enabled() bool {
+	return a != nil && a.enabled
+}
+
+func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
+	if a == nil || !a.enabled {
+		return Principal{Role: "anonymous"}, true
+	}
+
+	token := bearerToken(r.Header.Get("Authorization"))
+	if token == "" {
+		return Principal{}, false
+	}
+
+	if a.adminToken != "" && token == a.adminToken {
+		return Principal{
+			Name: "admin",
+			Role: "admin",
+		}, true
+	}
+
+	principal, ok := a.apiKeys[token]
+	if ok {
+		if principal.Role == "" {
+			principal.Role = "tenant"
+		}
+		return principal, true
+	}
+
+	if a.store != nil {
+		state, err := a.store.Snapshot(context.Background())
+		if err == nil {
+			for _, key := range state.APIKeys {
+				if !key.Enabled || key.Key != token {
+					continue
+				}
+				if key.Tenant != "" && !tenantEnabled(state.Tenants, key.Tenant) {
+					return Principal{}, false
+				}
+				return Principal{
+					Name:             key.Name,
+					Role:             key.Role,
+					Tenant:           key.Tenant,
+					AllowedProviders: mergedAllowlist(key.AllowedProviders, tenantAllowProviders(state.Tenants, key.Tenant)),
+					AllowedModels:    mergedAllowlist(key.AllowedModels, tenantAllowModels(state.Tenants, key.Tenant)),
+				}, true
+			}
+		}
+	}
+	return Principal{}, false
+}
+
+func bearerToken(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(header, prefix))
+}
+
+func mergedAllowlist(primary, fallback []string) []string {
+	if len(primary) > 0 && len(fallback) > 0 {
+		out := make([]string, 0, len(primary))
+		for _, item := range primary {
+			for _, candidate := range fallback {
+				if item == candidate {
+					out = append(out, item)
+					break
+				}
+			}
+		}
+		return out
+	}
+	if len(primary) > 0 {
+		return append([]string(nil), primary...)
+	}
+	if len(fallback) > 0 {
+		return append([]string(nil), fallback...)
+	}
+	return nil
+}
+
+func tenantAllowProviders(tenants []controlplane.Tenant, id string) []string {
+	for _, tenant := range tenants {
+		if tenant.ID == id && tenant.Enabled {
+			return tenant.AllowedProviders
+		}
+	}
+	return nil
+}
+
+func tenantAllowModels(tenants []controlplane.Tenant, id string) []string {
+	for _, tenant := range tenants {
+		if tenant.ID == id && tenant.Enabled {
+			return tenant.AllowedModels
+		}
+	}
+	return nil
+}
+
+func tenantEnabled(tenants []controlplane.Tenant, id string) bool {
+	for _, tenant := range tenants {
+		if tenant.ID == id {
+			return tenant.Enabled
+		}
+	}
+	return false
+}
