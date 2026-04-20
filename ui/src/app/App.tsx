@@ -8,6 +8,7 @@ import { ModelsPanel } from "../components/ModelsPanel";
 import { PlaygroundPanel } from "../components/PlaygroundPanel";
 import { ProviderHealthStrip } from "../components/ProviderHealthStrip";
 import { ProvidersPanel } from "../components/ProvidersPanel";
+import { SessionBadge } from "../components/SessionBadge";
 import { StatCard } from "../components/StatCard";
 import { useRuntimeConsole } from "./useRuntimeConsole";
 
@@ -53,19 +54,7 @@ export default function App() {
               A clearer operator console for authenticating, testing requests, inspecting providers, and managing runtime state.
             </p>
             <div className="mt-4 inline-flex flex-wrap items-center gap-2">
-              <span
-                className={
-                  state.session.kind === "admin"
-                    ? "rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900"
-                    : state.session.kind === "tenant"
-                      ? "rounded-full border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-medium text-cyan-900"
-                      : state.session.kind === "invalid"
-                        ? "rounded-full border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800"
-                        : "rounded-full border border-slate-200 bg-white/75 px-3 py-2 text-sm font-medium text-slate-700"
-                }
-              >
-                Session: {state.session.label}
-              </span>
+              <SessionBadge kind={state.session.kind} label={state.session.label} />
               <span className="rounded-full border border-slate-200/80 bg-white/75 px-3 py-2 text-sm text-slate-700">
                 Gateway: {state.health?.status ?? (state.loading ? "loading" : "unknown")}
               </span>
@@ -81,6 +70,24 @@ export default function App() {
         </header>
 
         {state.error ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{state.error}</div> : null}
+        {state.notice ? (
+          <div
+            className={
+              state.notice.kind === "success"
+                ? "mb-4 flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
+                : "mb-4 flex items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            }
+          >
+            <span>{state.notice.message}</span>
+            <button
+              className="rounded-full border border-current/20 px-3 py-1 text-xs font-medium"
+              onClick={actions.dismissNotice}
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         <section className="mb-4 flex flex-wrap gap-2">
           {views.map((view) => (
@@ -110,6 +117,8 @@ export default function App() {
           {activeView === "playground" ? (
             <div className="grid gap-4 xl:grid-cols-[1.7fr_minmax(0,1fr)]">
               <PlaygroundPanel
+                allowedModels={state.session.allowedModels}
+                allowedProviders={state.session.allowedProviders}
                 chatError={state.chatError}
                 chatLoading={state.chatLoading}
                 chatResult={state.chatResult}
@@ -123,6 +132,7 @@ export default function App() {
                 providerFilter={state.providerFilter}
                 providerScopedModels={state.providerScopedModels}
                 runtimeHeaders={state.runtimeHeaders}
+                tenantLocked={state.session.kind === "tenant" && state.session.tenant !== ""}
                 tenant={state.tenant}
                 onMessageChange={actions.setMessage}
                 onModelChange={actions.setModel}

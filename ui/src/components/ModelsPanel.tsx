@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { Panel } from "./Panel";
+import { SegmentedTabs } from "./SegmentedTabs";
 import type { ModelFilter, ModelRecord } from "../types/runtime";
 
 type ModelsPanelProps = {
@@ -55,22 +56,15 @@ export function ModelsPanel(props: ModelsPanelProps) {
   return (
     <Panel eyebrow="Models" title="Discovered catalog">
       <div className="mt-4 grid gap-3">
-        <div className="inline-flex gap-1 rounded-full bg-slate-200/80 p-1">
-          {(["all", "cloud", "local"] as const).map((filter) => (
-            <button
-              className={
-                props.modelFilter === filter
-                  ? "rounded-full bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow"
-                  : "rounded-full px-3 py-2 text-sm text-slate-600"
-              }
-              key={filter}
-              onClick={() => props.onModelFilterChange(filter)}
-              type="button"
-            >
-              {filter === "all" ? "All" : filter[0].toUpperCase() + filter.slice(1)}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          tabs={[
+            { id: "all", label: "All" },
+            { id: "cloud", label: "Cloud" },
+            { id: "local", label: "Local" },
+          ]}
+          value={props.modelFilter}
+          onChange={props.onModelFilterChange}
+        />
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
           <label className="block">

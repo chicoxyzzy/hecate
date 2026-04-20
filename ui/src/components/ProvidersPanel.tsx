@@ -10,6 +10,16 @@ type ProvidersPanelProps = {
 export function ProvidersPanel(props: ProvidersPanelProps) {
   return (
     <Panel eyebrow="Providers" title="Upstream health">
+      {props.providers.length === 0 ? (
+        <div className="mt-4 rounded-2xl border border-slate-200/80 bg-slate-50/90 px-4 py-4 text-sm text-slate-600">
+          <p className="font-medium text-slate-900">No provider data available yet.</p>
+          <p className="mt-1">
+            This usually means the current session is not allowed to inspect provider status, or the runtime has not been configured with any
+            providers yet.
+          </p>
+        </div>
+      ) : null}
+
       <div className="mt-4 grid gap-3">
         {props.providers.map((provider) => (
           <article className="rounded-2xl bg-slate-50/90 p-4" key={provider.name}>

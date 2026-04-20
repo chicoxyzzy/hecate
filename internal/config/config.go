@@ -63,6 +63,17 @@ type CacheConfig struct {
 	DefaultTTL time.Duration
 	Backend    string
 	Redis      RedisConfig
+	Semantic   SemanticCacheConfig
+}
+
+type SemanticCacheConfig struct {
+	Enabled       bool
+	Backend       string
+	DefaultTTL    time.Duration
+	MinSimilarity float64
+	MaxEntries    int
+	MaxTextChars  int
+	Embedder      string
 }
 
 type RedisConfig struct {
@@ -135,6 +146,15 @@ func LoadFromEnv() Config {
 				DB:       getEnvInt("REDIS_DB", 0),
 				Prefix:   getEnv("REDIS_PREFIX", "agent-runtime"),
 				Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
+			},
+			Semantic: SemanticCacheConfig{
+				Enabled:       getEnvBool("GATEWAY_SEMANTIC_CACHE_ENABLED", false),
+				Backend:       getEnv("GATEWAY_SEMANTIC_CACHE_BACKEND", "memory"),
+				DefaultTTL:    getEnvDuration("GATEWAY_SEMANTIC_CACHE_TTL", 24*time.Hour),
+				MinSimilarity: getEnvFloat64("GATEWAY_SEMANTIC_CACHE_MIN_SIMILARITY", 0.92),
+				MaxEntries:    getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES", 10_000),
+				MaxTextChars:  getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS", 8_000),
+				Embedder:      getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER", "local_simple"),
 			},
 		},
 		Providers: providersCfg,
@@ -272,6 +292,16 @@ func getEnvInt64(key string, fallback int64) int64 {
 func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		parsed, err := time.ParseDuration(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat64(key string, fallback float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
 		if err == nil {
 			return parsed
 		}

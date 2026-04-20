@@ -51,6 +51,10 @@ type SessionState = {
   allowedProviders: string[];
   allowedModels: string[];
 };
+type NoticeState = {
+  kind: "success" | "error";
+  message: string;
+};
 
 export function useRuntimeConsole() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -79,6 +83,7 @@ export function useRuntimeConsole() {
   const [authToken, setAuthToken] = useState("");
   const [sessionInfo, setSessionInfo] = useState<SessionResponse["data"] | null>(null);
   const [controlPlaneError, setControlPlaneError] = useState("");
+  const [notice, setNotice] = useState<NoticeState | null>(null);
 
   const [tenantFormName, setTenantFormName] = useState("");
   const [tenantFormID, setTenantFormID] = useState("");
@@ -135,6 +140,16 @@ export function useRuntimeConsole() {
   }, [authToken]);
 
   useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? null : current));
+    }, 3000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
     if (providerFilter === "auto") {
       return;
     }
@@ -145,6 +160,28 @@ export function useRuntimeConsole() {
     const nextModel = models.find((entry) => entry.metadata?.provider === providerFilter)?.id ?? "";
     setModel(nextModel);
   }, [model, models, providerFilter]);
+
+  useEffect(() => {
+    if (session.kind !== "tenant" || !session.tenant) {
+      return;
+    }
+    setTenant((current) => (current === session.tenant ? current : session.tenant));
+  }, [session.kind, session.tenant]);
+
+  useEffect(() => {
+    if (providerFilter !== "auto" && session.allowedProviders.length > 0 && !session.allowedProviders.includes(providerFilter)) {
+      setProviderFilter("auto");
+      return;
+    }
+
+    if (session.allowedModels.length > 0 && model !== "" && !session.allowedModels.includes(model)) {
+      const nextAllowedModel =
+        models.find((entry) => session.allowedModels.includes(entry.id) && (providerFilter === "auto" || entry.metadata?.provider === providerFilter))?.id ??
+        models.find((entry) => session.allowedModels.includes(entry.id))?.id ??
+        "";
+      setModel(nextAllowedModel);
+    }
+  }, [model, models, providerFilter, session.allowedModels, session.allowedProviders]);
 
   async function loadDashboard() {
     setLoading(true);
@@ -243,6 +280,11 @@ export function useRuntimeConsole() {
       return;
     }
     setBudgetActionError("");
+    setNotice(null);
+
+    if (!window.confirm("Reset tracked budget usage for the current scope?")) {
+      return;
+    }
 
     try {
       const payload = await resetBudgetRequest(
@@ -255,9 +297,11 @@ export function useRuntimeConsole() {
         authToken,
       );
       setBudget(payload.data);
+      setNotice({ kind: "success", message: "Budget usage reset." });
       return;
     } catch {
       setBudgetActionError("failed to reset budget usage");
+      setNotice({ kind: "error", message: "Failed to reset budget usage." });
     }
   }
 
@@ -285,9 +329,11 @@ export function useRuntimeConsole() {
         authToken,
       );
       setBudget(payload.data);
+      setNotice({ kind: "success", message: "Budget topped up." });
       return;
     } catch (error) {
       setBudgetActionError(error instanceof Error ? error.message : "failed to top up budget");
+      setNotice({ kind: "error", message: "Failed to top up budget." });
     }
   }
 
@@ -315,14 +361,17 @@ export function useRuntimeConsole() {
         authToken,
       );
       setBudget(payload.data);
+      setNotice({ kind: "success", message: "Budget limit updated." });
       return;
     } catch (error) {
       setBudgetActionError(error instanceof Error ? error.message : "failed to set budget limit");
+      setNotice({ kind: "error", message: "Failed to update budget limit." });
     }
   }
 
   async function upsertTenant() {
     setControlPlaneError("");
+    setNotice(null);
     try {
       await upsertTenantRequest(
         {
@@ -340,13 +389,16 @@ export function useRuntimeConsole() {
       setTenantFormProviders("");
       setTenantFormModels("");
       await loadDashboard();
+      setNotice({ kind: "success", message: "Tenant saved." });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to save tenant");
+      setNotice({ kind: "error", message: "Failed to save tenant." });
     }
   }
 
   async function upsertAPIKey() {
     setControlPlaneError("");
+    setNotice(null);
     try {
       await upsertAPIKeyRequest(
         {
@@ -369,60 +421,83 @@ export function useRuntimeConsole() {
       setAPIKeyFormProviders("");
       setAPIKeyFormModels("");
       await loadDashboard();
+      setNotice({ kind: "success", message: "API key saved." });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to save api key");
+      setNotice({ kind: "error", message: "Failed to save API key." });
     }
   }
 
   async function setTenantEnabled(id: string, enabled: boolean) {
     setControlPlaneError("");
+    setNotice(null);
     try {
       await setTenantEnabledRequest({ id, enabled }, authToken);
       await loadDashboard();
+      setNotice({ kind: "success", message: `Tenant ${enabled ? "enabled" : "disabled"}.` });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to update tenant state");
+      setNotice({ kind: "error", message: "Failed to update tenant state." });
     }
   }
 
   async function deleteTenant(id: string) {
     setControlPlaneError("");
+    setNotice(null);
+    if (!window.confirm(`Delete tenant "${id}"? This cannot be undone.`)) {
+      return;
+    }
     try {
       await deleteTenantRequest({ id }, authToken);
       await loadDashboard();
+      setNotice({ kind: "success", message: "Tenant deleted." });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to delete tenant");
+      setNotice({ kind: "error", message: "Failed to delete tenant." });
     }
   }
 
   async function setAPIKeyEnabled(id: string, enabled: boolean) {
     setControlPlaneError("");
+    setNotice(null);
     try {
       await setAPIKeyEnabledRequest({ id, enabled }, authToken);
       await loadDashboard();
+      setNotice({ kind: "success", message: `API key ${enabled ? "enabled" : "disabled"}.` });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to update api key state");
+      setNotice({ kind: "error", message: "Failed to update API key state." });
     }
   }
 
   async function rotateAPIKey() {
     setControlPlaneError("");
+    setNotice(null);
     try {
       await rotateAPIKeyRequest({ id: rotateAPIKeyID, key: rotateAPIKeySecret }, authToken);
       setRotateAPIKeyID("");
       setRotateAPIKeySecret("");
       await loadDashboard();
+      setNotice({ kind: "success", message: "API key rotated." });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to rotate api key");
+      setNotice({ kind: "error", message: "Failed to rotate API key." });
     }
   }
 
   async function deleteAPIKey(id: string) {
     setControlPlaneError("");
+    setNotice(null);
+    if (!window.confirm(`Delete API key "${id}"? This cannot be undone.`)) {
+      return;
+    }
     try {
       await deleteAPIKeyRequest({ id }, authToken);
       await loadDashboard();
+      setNotice({ kind: "success", message: "API key deleted." });
     } catch (error) {
       setControlPlaneError(error instanceof Error ? error.message : "failed to delete api key");
+      setNotice({ kind: "error", message: "Failed to delete API key." });
     }
   }
 
@@ -473,6 +548,7 @@ export function useRuntimeConsole() {
       model,
       modelFilter,
       models,
+      notice,
       session,
       providerFilter,
       providerScopedModels,
@@ -523,6 +599,7 @@ export function useRuntimeConsole() {
       upsertAPIKey,
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
+      dismissNotice: () => setNotice(null),
     },
   };
 }
