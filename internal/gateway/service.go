@@ -132,6 +132,7 @@ func NewService(deps Dependencies) *Service {
 func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatResult, error) {
 	trace := s.tracer.Start(req.RequestID)
 	defer trace.Finalize()
+	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
 	requestedIdentity := models.BuildIdentity(req.Model, "")
 	trace.Record("request.received", map[string]any{
 		"gen_ai.request.message_count": len(req.Messages),
@@ -201,7 +202,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			SpanID:                  trace.RootSpanID(),
 		}
 		s.recordMetrics(metadata)
-		s.logRequestSummary(metadata)
+		s.logRequestSummary(ctx, metadata)
 		return &ChatResult{
 			Response: cached,
 			Metadata: metadata,
@@ -304,7 +305,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 				SpanID:                  trace.RootSpanID(),
 			}
 			s.recordMetrics(metadata)
-			s.logRequestSummary(metadata)
+			s.logRequestSummary(ctx, metadata)
 			return &ChatResult{
 				Response: match.Response,
 				Metadata: metadata,
@@ -345,7 +346,10 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		"hecate.cost.cached_micros_usd": cost.CachedInputMicrosUSD,
 	})
 	if err := s.governor.RecordUsage(ctx, rewrittenReq, decision, cost.TotalMicrosUSD); err != nil {
-		s.logger.Warn("budget usage record failed", slog.Any("error", err))
+		telemetry.Warn(s.logger, ctx, "gateway.budget.usage_record.failed",
+			slog.String("event.name", "gateway.budget.usage_record.failed"),
+			slog.Any("error", err),
+		)
 		trace.Record("governor.usage_record_failed", map[string]any{
 			"error.message": err.Error(),
 			"hecate.phase":  "governor",
@@ -353,7 +357,11 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}
 
 	if err := s.cache.Set(ctx, cacheKey, resp); err != nil {
-		s.logger.Warn("cache set failed", slog.Any("error", err))
+		telemetry.Warn(s.logger, ctx, "gateway.cache.store.failed",
+			slog.String("event.name", "gateway.cache.store.failed"),
+			slog.String("hecate.cache.type", "exact"),
+			slog.Any("error", err),
+		)
 	}
 
 	identity := models.BuildIdentity(req.Model, resp.Model)
@@ -387,7 +395,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		SpanID:                  trace.RootSpanID(),
 	}
 	s.recordMetrics(metadata)
-	s.logRequestSummary(metadata)
+	s.logRequestSummary(ctx, metadata)
 
 	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
 		namespace := cache.BuildSemanticNamespace(rewrittenReq, decision)
@@ -396,7 +404,12 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			Text:      cache.BuildSemanticText(rewrittenReq, s.semanticOptions.MaxTextChars),
 			Response:  resp,
 		}); err != nil {
-			s.logger.Warn("semantic cache set failed", slog.Any("error", err))
+			telemetry.Warn(s.logger, ctx, "gateway.cache.semantic.store.failed",
+				slog.String("event.name", "gateway.cache.semantic.store.failed"),
+				slog.String("hecate.cache.type", "semantic"),
+				slog.String("hecate.semantic.scope", namespace),
+				slog.Any("error", err),
+			)
 			trace.Record("semantic_cache.store_failed", map[string]any{
 				"error.message":         err.Error(),
 				"hecate.cache.type":     "semantic",
@@ -665,8 +678,9 @@ func (s *Service) ListModels(ctx context.Context) (*ModelsResult, error) {
 	for _, provider := range s.providers.All() {
 		caps, err := provider.Capabilities(ctx)
 		if err != nil {
-			s.logger.Warn("provider capabilities unavailable",
-				slog.String("provider", provider.Name()),
+			telemetry.Warn(s.logger, ctx, "gateway.providers.capabilities.unavailable",
+				slog.String("event.name", "gateway.providers.capabilities.unavailable"),
+				slog.String("gen_ai.provider.name", provider.Name()),
 				slog.Any("error", err),
 			)
 		}
@@ -742,8 +756,9 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 			status.Healthy = false
 			status.Status = "degraded"
 			status.Error = err.Error()
-			s.logger.Warn("provider health degraded",
-				slog.String("provider", provider.Name()),
+			telemetry.Warn(s.logger, ctx, "gateway.providers.health.degraded",
+				slog.String("event.name", "gateway.providers.health.degraded"),
+				slog.String("gen_ai.provider.name", provider.Name()),
 				slog.Any("error", err),
 			)
 		}
@@ -824,30 +839,28 @@ func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, er
 	}, nil
 }
 
-func (s *Service) logRequestSummary(metadata ResponseMetadata) {
-	s.logger.Info("gateway_chat_request",
-		slog.String("request_id", metadata.RequestID),
-		slog.String("provider", metadata.Provider),
-		slog.String("provider_kind", metadata.ProviderKind),
-		slog.String("route_reason", metadata.RouteReason),
-		slog.String("requested_model", metadata.RequestedModel),
-		slog.String("canonical_requested_model", metadata.CanonicalRequestedModel),
-		slog.String("resolved_model", metadata.Model),
-		slog.String("canonical_resolved_model", metadata.CanonicalResolvedModel),
-		slog.Bool("cache_hit", metadata.CacheHit),
-		slog.String("cache_type", metadata.CacheType),
-		slog.String("semantic_strategy", metadata.SemanticStrategy),
-		slog.String("semantic_index_type", metadata.SemanticIndexType),
-		slog.Float64("semantic_similarity", metadata.SemanticSimilarity),
-		slog.Int("prompt_tokens", metadata.PromptTokens),
-		slog.Int("completion_tokens", metadata.CompletionTokens),
-		slog.Int("total_tokens", metadata.TotalTokens),
-		slog.Int64("cost_micros_usd", metadata.CostMicrosUSD),
-		slog.Int("attempt_count", metadata.AttemptCount),
-		slog.Int("retry_count", metadata.RetryCount),
-		slog.String("fallback_from_provider", metadata.FallbackFromProvider),
-		slog.String("trace_id", metadata.TraceID),
-		slog.String("span_id", metadata.SpanID),
+func (s *Service) logRequestSummary(ctx context.Context, metadata ResponseMetadata) {
+	telemetry.Info(s.logger, ctx, "gen_ai.gateway.request",
+		slog.String("event.name", "gen_ai.gateway.request"),
+		slog.String("gen_ai.provider.name", metadata.Provider),
+		slog.String("hecate.provider.kind", metadata.ProviderKind),
+		slog.String("hecate.route.reason", metadata.RouteReason),
+		slog.String("gen_ai.request.model", metadata.RequestedModel),
+		slog.String("hecate.model.requested_canonical", metadata.CanonicalRequestedModel),
+		slog.String("gen_ai.response.model", metadata.Model),
+		slog.String("hecate.model.resolved_canonical", metadata.CanonicalResolvedModel),
+		slog.Bool("hecate.cache.hit", metadata.CacheHit),
+		slog.String("hecate.cache.type", metadata.CacheType),
+		slog.String("hecate.semantic.strategy", metadata.SemanticStrategy),
+		slog.String("hecate.semantic.index_type", metadata.SemanticIndexType),
+		slog.Float64("hecate.semantic.similarity", metadata.SemanticSimilarity),
+		slog.Int("gen_ai.usage.input_tokens", metadata.PromptTokens),
+		slog.Int("gen_ai.usage.output_tokens", metadata.CompletionTokens),
+		slog.Int("gen_ai.usage.total_tokens", metadata.TotalTokens),
+		slog.Int64("hecate.cost.total_micros_usd", metadata.CostMicrosUSD),
+		slog.Int("hecate.retry.attempt_count", metadata.AttemptCount),
+		slog.Int("hecate.retry.retry_count", metadata.RetryCount),
+		slog.String("hecate.failover.from_provider", metadata.FallbackFromProvider),
 	)
 }
 

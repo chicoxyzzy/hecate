@@ -7,13 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
 type middleware func(http.Handler) http.Handler
-
-type contextKey string
-
-const requestIDContextKey contextKey = "request_id"
 
 func Chain(handler http.Handler, middleware ...middleware) http.Handler {
 	wrapped := handler
@@ -30,7 +28,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 			requestID = newRequestID()
 		}
 
-		ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
+		ctx := telemetry.WithRequestID(r.Context(), requestID)
 		w.Header().Set("X-Request-Id", requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -43,14 +41,14 @@ func LoggingMiddleware(logger *slog.Logger) middleware {
 			rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
 
-			logger.Info("http_request",
-				slog.String("request_id", RequestIDFromContext(r.Context())),
+			telemetry.Info(logger, r.Context(), "http.server.request",
+				slog.String("event.name", "http.server.request"),
 				slog.String("trace_id", rw.Header().Get("X-Trace-Id")),
 				slog.String("span_id", rw.Header().Get("X-Span-Id")),
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.Int("status", rw.status),
-				slog.Duration("duration", time.Since(start)),
+				slog.String("http.request.method", r.Method),
+				slog.String("url.path", r.URL.Path),
+				slog.Int("http.response.status_code", rw.status),
+				slog.Int64("hecate.http.duration_ms", time.Since(start).Milliseconds()),
 			)
 		})
 	}
@@ -61,9 +59,9 @@ func RecoveryMiddleware(logger *slog.Logger) middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Error("panic recovered",
-						slog.String("request_id", RequestIDFromContext(r.Context())),
-						slog.Any("panic", recovered),
+					telemetry.Error(logger, r.Context(), "http.server.panic",
+						slog.String("event.name", "http.server.panic"),
+						slog.String("exception.message", stringifyPanic(recovered)),
 					)
 					WriteError(w, http.StatusInternalServerError, "internal_error", "unexpected server error")
 				}
@@ -75,8 +73,7 @@ func RecoveryMiddleware(logger *slog.Logger) middleware {
 }
 
 func RequestIDFromContext(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDContextKey).(string)
-	return requestID
+	return telemetry.RequestIDFromContext(ctx)
 }
 
 func newRequestID() string {
@@ -95,4 +92,15 @@ type statusRecorder struct {
 func (w *statusRecorder) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+func stringifyPanic(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case error:
+		return v.Error()
+	default:
+		return "panic"
+	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,11 +70,12 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
-	result, err := h.service.ListModels(r.Context())
+	result, err := h.service.ListModels(ctx)
 	if err != nil {
-		h.logger.Error("list models failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.models.list.failed",
+			slog.String("event.name", "gateway.models.list.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -105,15 +107,17 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
-	result, err := h.service.ProviderStatus(r.Context())
+	result, err := h.service.ProviderStatus(ctx)
 	if err != nil {
-		h.logger.Error("provider status failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.providers.status.failed",
+			slog.String("event.name", "gateway.providers.status.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -145,10 +149,12 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAny(r); !ok {
+	principal, ok := h.authorizeAny(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	if requestID == "" {
@@ -156,11 +162,11 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.service.Trace(r.Context(), requestID)
+	result, err := h.service.Trace(ctx, requestID)
 	if err != nil {
-		h.logger.Error("trace fetch failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
-			slog.String("trace_request_id", requestID),
+		telemetry.Error(h.logger, ctx, "gateway.trace.fetch.failed",
+			slog.String("event.name", "gateway.trace.fetch.failed"),
+			slog.String("hecate.trace.request_id", requestID),
 			slog.Any("error", err),
 		)
 		if gateway.IsClientError(err) {
@@ -217,15 +223,17 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
-	snapshot, health, err := h.service.MetricsSnapshot(r.Context())
+	snapshot, health, err := h.service.MetricsSnapshot(ctx)
 	if err != nil {
-		h.logger.Error("metrics failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.metrics.fetch.failed",
+			slog.String("event.name", "gateway.metrics.fetch.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -238,15 +246,17 @@ func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleBudgetStatus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
-	result, err := h.service.BudgetStatusWithFilter(r.Context(), budgetFilterFromRequest(r))
+	result, err := h.service.BudgetStatusWithFilter(ctx, budgetFilterFromRequest(r))
 	if err != nil {
-		h.logger.Error("budget status failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.budget.status.failed",
+			slog.String("event.name", "gateway.budget.status.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -257,10 +267,12 @@ func (h *Handler) HandleBudgetStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleBudgetReset(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var resetReq BudgetResetRequest
 	if r.Body != nil && r.ContentLength != 0 {
@@ -284,10 +296,10 @@ func (h *Handler) HandleBudgetReset(w http.ResponseWriter, r *http.Request) {
 		filter.Tenant = resetReq.Tenant
 	}
 
-	result, err := h.service.ResetBudgetWithFilter(r.Context(), filter)
+	result, err := h.service.ResetBudgetWithFilter(ctx, filter)
 	if err != nil {
-		h.logger.Error("budget reset failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.budget.reset.failed",
+			slog.String("event.name", "gateway.budget.reset.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -298,10 +310,12 @@ func (h *Handler) HandleBudgetReset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleBudgetTopUp(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var topUpReq BudgetTopUpRequest
 	if err := json.NewDecoder(r.Body).Decode(&topUpReq); err != nil {
@@ -314,10 +328,10 @@ func (h *Handler) HandleBudgetTopUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := budgetFilterFromMutation(topUpReq.Key, topUpReq.Scope, topUpReq.Provider, topUpReq.Tenant)
-	result, err := h.service.TopUpBudgetWithFilter(r.Context(), filter, topUpReq.AmountMicrosUSD)
+	result, err := h.service.TopUpBudgetWithFilter(ctx, filter, topUpReq.AmountMicrosUSD)
 	if err != nil {
-		h.logger.Error("budget top up failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.budget.top_up.failed",
+			slog.String("event.name", "gateway.budget.top_up.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -328,10 +342,12 @@ func (h *Handler) HandleBudgetTopUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleBudgetSetLimit(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizeAdmin(r); !ok {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var limitReq BudgetLimitRequest
 	if err := json.NewDecoder(r.Body).Decode(&limitReq); err != nil {
@@ -344,10 +360,10 @@ func (h *Handler) HandleBudgetSetLimit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := budgetFilterFromMutation(limitReq.Key, limitReq.Scope, limitReq.Provider, limitReq.Tenant)
-	result, err := h.service.SetBudgetLimitWithFilter(r.Context(), filter, limitReq.LimitMicrosUSD)
+	result, err := h.service.SetBudgetLimitWithFilter(ctx, filter, limitReq.LimitMicrosUSD)
 	if err != nil {
-		h.logger.Error("budget set limit failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gateway.budget.limit_set.failed",
+			slog.String("event.name", "gateway.budget.limit_set.failed"),
 			slog.Any("error", err),
 		)
 		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
@@ -662,6 +678,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
 		return
 	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var wireReq OpenAIChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&wireReq); err != nil {
@@ -669,15 +686,16 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	internalReq, err := normalizeChatRequest(wireReq, RequestIDFromContext(r.Context()), principal)
+	internalReq, err := normalizeChatRequest(wireReq, RequestIDFromContext(ctx), principal)
 	if err != nil {
 		WriteError(w, http.StatusForbidden, "forbidden", err.Error())
 		return
 	}
-	result, err := h.service.HandleChat(r.Context(), internalReq)
+	result, err := h.service.HandleChat(ctx, internalReq)
 	if err != nil {
-		h.logger.Error("chat completion failed",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
+		telemetry.Error(h.logger, ctx, "gen_ai.gateway.request.failed",
+			slog.String("event.name", "gen_ai.gateway.request.failed"),
+			slog.String("gen_ai.request.model", internalReq.Model),
 			slog.Any("error", err),
 		)
 
@@ -728,6 +746,16 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("X-Runtime-Cost-USD", formatUSD(result.Metadata.CostMicrosUSD))
 	WriteJSON(w, http.StatusOK, wireResp)
+}
+
+func (h *Handler) contextWithPrincipal(ctx context.Context, principal auth.Principal) context.Context {
+	return telemetry.WithPrincipal(ctx, telemetry.Principal{
+		Name:     principal.Name,
+		Role:     principal.Role,
+		TenantID: principal.Tenant,
+		Source:   principal.Source,
+		KeyID:    principal.KeyID,
+	})
 }
 
 func (h *Handler) authorizeAny(r *http.Request) (auth.Principal, bool) {

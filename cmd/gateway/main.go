@@ -25,7 +25,24 @@ import (
 
 func main() {
 	cfg := config.LoadFromEnv()
-	logger := telemetry.NewLogger(cfg.LogLevel)
+	logger, shutdownLogs, err := telemetry.NewLoggerWithOTLP(context.Background(), cfg.LogLevel, telemetry.OTelLogOptions{
+		Enabled:     cfg.OTel.LogsEnabled,
+		Endpoint:    firstNonEmpty(cfg.OTel.LogsEndpoint, cfg.OTel.TracesEndpoint),
+		Headers:     firstNonEmptyMap(cfg.OTel.LogsHeaders, cfg.OTel.TracesHeaders),
+		ServiceName: cfg.OTel.ServiceName,
+		Timeout:     firstNonZeroDuration(cfg.OTel.LogsTimeout, cfg.OTel.TracesTimeout),
+	})
+	if err != nil {
+		slog.Error("otel logger init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownLogs(shutdownCtx); err != nil {
+			logger.Warn("otel logger shutdown failed", slog.Any("error", err))
+		}
+	}()
 	metrics := telemetry.NewMetrics()
 	postgresClient := buildPostgresClient(cfg, logger)
 	if postgresClient != nil {
@@ -46,11 +63,11 @@ func main() {
 	pricebook := billing.NewStaticPricebook(cfg.Providers)
 	otelProvider, err := profiler.NewTracerProvider(
 		context.Background(),
-		cfg.OTel.Enabled,
-		cfg.OTel.Endpoint,
-		cfg.OTel.Headers,
+		cfg.OTel.TracesEnabled,
+		cfg.OTel.TracesEndpoint,
+		cfg.OTel.TracesHeaders,
 		cfg.OTel.ServiceName,
-		cfg.OTel.Timeout,
+		cfg.OTel.TracesTimeout,
 	)
 	if err != nil {
 		logger.Error("otel tracer provider init failed", slog.Any("error", err))
@@ -121,8 +138,10 @@ func main() {
 			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
 			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
-			slog.Bool("otel_enabled", cfg.OTel.Enabled),
-			slog.String("otel_endpoint", cfg.OTel.Endpoint),
+			slog.Bool("otel_traces_enabled", cfg.OTel.TracesEnabled),
+			slog.String("otel_traces_endpoint", cfg.OTel.TracesEndpoint),
+			slog.Bool("otel_logs_enabled", cfg.OTel.LogsEnabled),
+			slog.String("otel_logs_endpoint", firstNonEmpty(cfg.OTel.LogsEndpoint, cfg.OTel.TracesEndpoint)),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),
 		)
 
@@ -144,6 +163,38 @@ func main() {
 		logger.Error("shutdown failed", slog.Any("error", err))
 		os.Exit(1)
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyMap(values ...map[string]string) map[string]string {
+	for _, value := range values {
+		if len(value) == 0 {
+			continue
+		}
+		cloned := make(map[string]string, len(value))
+		for key, item := range value {
+			cloned[key] = item
+		}
+		return cloned
+	}
+	return nil
+}
+
+func firstNonZeroDuration(values ...time.Duration) time.Duration {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) controlplane.Store {

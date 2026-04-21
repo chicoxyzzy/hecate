@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -137,8 +138,9 @@ func (p *OpenAICompatibleProvider) Capabilities(ctx context.Context) (Capabiliti
 
 	discovered, err := p.discoverCapabilities(ctx)
 	if err != nil {
-		p.logger.Warn("provider capability discovery failed",
-			slog.String("provider", p.Name()),
+		telemetry.Warn(p.logger, ctx, "gateway.providers.capabilities.discovery_failed",
+			slog.String("event.name", "gateway.providers.capabilities.discovery_failed"),
+			slog.String("gen_ai.provider.name", p.Name()),
 			slog.Any("error", err),
 		)
 		fallback := p.staticCapabilities("config_fallback")

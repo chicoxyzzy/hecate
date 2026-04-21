@@ -125,23 +125,23 @@ func TestChatCompletionsCachesResponsesAndReturnsRuntimeHeaders(t *testing.T) {
 	}
 
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, `"msg":"gateway_chat_request"`) {
-		t.Fatalf("log output missing gateway_chat_request entry: %s", logOutput)
+	if !strings.Contains(logOutput, `"msg":"gen_ai.gateway.request"`) {
+		t.Fatalf("log output missing gen_ai.gateway.request entry: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"requested_model":"gpt-4o-mini"`) {
-		t.Fatalf("log output missing requested_model: %s", logOutput)
+	if !strings.Contains(logOutput, `"gen_ai.request.model":"gpt-4o-mini"`) {
+		t.Fatalf("log output missing gen_ai.request.model: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"canonical_requested_model":"gpt-4o-mini"`) {
-		t.Fatalf("log output missing canonical_requested_model: %s", logOutput)
+	if !strings.Contains(logOutput, `"hecate.model.requested_canonical":"gpt-4o-mini"`) {
+		t.Fatalf("log output missing hecate.model.requested_canonical: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"resolved_model":"gpt-4o-mini-2024-07-18"`) {
-		t.Fatalf("log output missing resolved_model: %s", logOutput)
+	if !strings.Contains(logOutput, `"gen_ai.response.model":"gpt-4o-mini-2024-07-18"`) {
+		t.Fatalf("log output missing gen_ai.response.model: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"canonical_resolved_model":"gpt-4o-mini"`) {
-		t.Fatalf("log output missing canonical_resolved_model: %s", logOutput)
+	if !strings.Contains(logOutput, `"hecate.model.resolved_canonical":"gpt-4o-mini"`) {
+		t.Fatalf("log output missing hecate.model.resolved_canonical: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"cache_hit":true`) {
-		t.Fatalf("log output missing cache_hit true entry: %s", logOutput)
+	if !strings.Contains(logOutput, `"hecate.cache.hit":true`) {
+		t.Fatalf("log output missing hecate.cache.hit true entry: %s", logOutput)
 	}
 }
 

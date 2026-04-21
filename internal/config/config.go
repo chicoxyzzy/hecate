@@ -54,11 +54,15 @@ type ProviderConfig struct {
 }
 
 type OTelConfig struct {
-	Enabled     bool
-	Endpoint    string
-	Headers     map[string]string
-	ServiceName string
-	Timeout     time.Duration
+	TracesEnabled  bool
+	TracesEndpoint string
+	TracesHeaders  map[string]string
+	ServiceName    string
+	TracesTimeout  time.Duration
+	LogsEnabled    bool
+	LogsEndpoint   string
+	LogsHeaders    map[string]string
+	LogsTimeout    time.Duration
 }
 
 type GovernorConfig struct {
@@ -170,11 +174,15 @@ func LoadFromEnv() Config {
 			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
 		},
 		OTel: OTelConfig{
-			Enabled:     getEnvBool("GATEWAY_OTEL_ENABLED", false),
-			Endpoint:    os.Getenv("GATEWAY_OTEL_ENDPOINT"),
-			Headers:     parseEnvMap(os.Getenv("GATEWAY_OTEL_HEADERS")),
-			ServiceName: getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
-			Timeout:     getEnvDuration("GATEWAY_OTEL_TIMEOUT", 5*time.Second),
+			TracesEnabled:  getEnvBoolAny([]string{"GATEWAY_OTEL_TRACES_ENABLED", "GATEWAY_OTEL_ENABLED"}, false),
+			TracesEndpoint: getEnvAny([]string{"GATEWAY_OTEL_TRACES_ENDPOINT", "GATEWAY_OTEL_ENDPOINT"}, ""),
+			TracesHeaders:  parseEnvMap(getEnvAny([]string{"GATEWAY_OTEL_TRACES_HEADERS", "GATEWAY_OTEL_HEADERS"}, "")),
+			ServiceName:    getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
+			TracesTimeout:  getEnvDurationAny([]string{"GATEWAY_OTEL_TRACES_TIMEOUT", "GATEWAY_OTEL_TIMEOUT"}, 5*time.Second),
+			LogsEnabled:    getEnvBool("GATEWAY_OTEL_LOGS_ENABLED", false),
+			LogsEndpoint:   os.Getenv("GATEWAY_OTEL_LOGS_ENDPOINT"),
+			LogsHeaders:    parseEnvMap(os.Getenv("GATEWAY_OTEL_LOGS_HEADERS")),
+			LogsTimeout:    getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
 		},
 		Governor: GovernorConfig{
 			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),
@@ -335,11 +343,32 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+func getEnvAny(keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
 func getEnvBool(key string, fallback bool) bool {
 	if value := os.Getenv(key); value != "" {
 		parsed, err := strconv.ParseBool(value)
 		if err == nil {
 			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnvBoolAny(keys []string, fallback bool) bool {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err == nil {
+				return parsed
+			}
 		}
 	}
 	return fallback
@@ -370,6 +399,18 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		parsed, err := time.ParseDuration(value)
 		if err == nil {
 			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnvDurationAny(keys []string, fallback time.Duration) time.Duration {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			parsed, err := time.ParseDuration(value)
+			if err == nil {
+				return parsed
+			}
 		}
 	}
 	return fallback
