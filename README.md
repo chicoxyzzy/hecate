@@ -196,6 +196,7 @@ Next:
 
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
 - [ ] More advanced routing and policy decisions
+- [ ] A real pricebook ingestion/update path instead of only seeded static defaults
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI
 - [ ] Background retention and pruning workers

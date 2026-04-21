@@ -277,8 +277,16 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		if preflightErr, ok := AsRoutePreflightError(err); ok {
 			switch preflightErr.Kind {
 			case RoutePreflightCostEstimate:
-				recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, nil)
-				return nil, preflightErr
+				recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, map[string]any{
+					telemetry.AttrGenAIProviderName:  decision.Provider,
+					telemetry.AttrGenAIRequestModel:  decision.Model,
+					telemetry.AttrHecateProviderKind: firstNonEmpty(preflightErr.ProviderKind, decision.ProviderKind),
+				})
+				preflight = &RoutePreflightResult{
+					ProviderKind:   firstNonEmpty(preflightErr.ProviderKind, decision.ProviderKind),
+					EstimatedUsage: estimateUsage(withResolvedModel(rewrittenReq, decision.Model)),
+					EstimatedCost:  types.CostBreakdown{Currency: "USD"},
+				}
 			case RoutePreflightRouteDenied:
 				recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, preflightErr, map[string]any{
 					telemetry.AttrGenAIProviderName:            decision.Provider,
@@ -289,7 +297,9 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 				return nil, fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
 			}
 		}
-		return nil, err
+		if preflight == nil {
+			return nil, err
+		}
 	}
 	recordTrace(trace, "governor.route_allowed", "governor", map[string]any{
 		telemetry.AttrGenAIProviderName:            decision.Provider,

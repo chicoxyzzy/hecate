@@ -84,13 +84,15 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 		if err != nil {
 			lastErr = err
 			if preflightErr, ok := AsRoutePreflightError(err); ok {
-				if index == 0 && preflightErr.Kind == RoutePreflightCostEstimate {
-					recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, nil)
-					return nil, preflightErr
-				}
 				reason := string(preflightErr.Kind)
 				if preflightErr.Kind == RoutePreflightCostEstimate {
 					reason = "cost_estimate_failed"
+					recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, map[string]any{
+						telemetry.AttrGenAIProviderName:   candidate.Provider,
+						telemetry.AttrGenAIRequestModel:   candidate.Model,
+						telemetry.AttrHecateProviderKind:  firstNonEmpty(preflightErr.ProviderKind, candidate.ProviderKind),
+						telemetry.AttrHecateProviderIndex: index,
+					})
 				}
 				if preflightErr.Kind == RoutePreflightRouteDenied {
 					reason = "route_denied"

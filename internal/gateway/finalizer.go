@@ -58,7 +58,21 @@ func (f *DefaultResponseFinalizer) FinalizeExecution(ctx context.Context, trace 
 
 	cost, err := f.pricebook.Estimate(decision.Provider, resp.Model, resp.Usage)
 	if err != nil {
-		return nil, fmt.Errorf("estimate cost: %w", err)
+		if billing.IsPriceNotFound(err) {
+			telemetry.Warn(f.logger, ctx, "gateway.cost.estimate.unpriced",
+				slog.String("event.name", "gateway.cost.estimate.unpriced"),
+				slog.String(telemetry.AttrGenAIProviderName, decision.Provider),
+				slog.String(telemetry.AttrGenAIResponseModel, resp.Model),
+				slog.Any("error", err),
+			)
+			recordTraceError(trace, "cost.estimate_unpriced", "response", errorKindBudgetEstimateFailed, err, map[string]any{
+				telemetry.AttrGenAIProviderName:  decision.Provider,
+				telemetry.AttrGenAIResponseModel: resp.Model,
+			})
+			cost = types.CostBreakdown{Currency: "USD"}
+		} else {
+			return nil, fmt.Errorf("estimate cost: %w", err)
+		}
 	}
 	resp.Cost = cost
 	recordTrace(trace, "cost.calculated", "response", map[string]any{

@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/hecate/agent-runtime/internal/config"
@@ -11,9 +12,15 @@ import (
 
 const microsPerDollar = 1_000_000
 
+var errPriceNotFound = errors.New("price not found")
+
 type Pricebook interface {
 	Lookup(provider, model string) (Price, bool)
 	Estimate(provider, model string, usage types.Usage) (types.CostBreakdown, error)
+}
+
+func IsPriceNotFound(err error) bool {
+	return errors.Is(err, errPriceNotFound)
 }
 
 type Price struct {
@@ -25,41 +32,31 @@ type Price struct {
 type StaticPricebook struct {
 	prices        map[string]Price
 	providerKinds map[string]providers.Kind
+	unknownPolicy string
 }
 
-func NewStaticPricebook(cfg config.ProvidersConfig) *StaticPricebook {
+func NewStaticPricebook(providersCfg config.ProvidersConfig, priceCfg config.PricebookConfig) *StaticPricebook {
 	book := &StaticPricebook{
-		prices: map[string]Price{
-			"openai/gpt-4.1-mini": {
-				InputMicrosUSDPerMillionTokens:       400_000,
-				OutputMicrosUSDPerMillionTokens:      1_600_000,
-				CachedInputMicrosUSDPerMillionTokens: 100_000,
-			},
-			"openai/gpt-4o-mini": {
-				InputMicrosUSDPerMillionTokens:       150_000,
-				OutputMicrosUSDPerMillionTokens:      600_000,
-				CachedInputMicrosUSDPerMillionTokens: 75_000,
-			},
-		},
+		prices:        make(map[string]Price),
 		providerKinds: make(map[string]providers.Kind),
+		unknownPolicy: normalizeUnknownModelPolicy(priceCfg.UnknownModelPolicy),
 	}
-	for _, providerCfg := range cfg.OpenAICompatible {
+	for _, providerCfg := range providersCfg.OpenAICompatible {
 		kind := providers.KindCloud
 		if providerCfg.Kind == string(providers.KindLocal) {
 			kind = providers.KindLocal
 		}
 		book.providerKinds[providerCfg.Name] = kind
+	}
 
-		price := Price{
-			InputMicrosUSDPerMillionTokens:       providerCfg.InputMicrosUSDPerMillionTokens,
-			OutputMicrosUSDPerMillionTokens:      providerCfg.OutputMicrosUSDPerMillionTokens,
-			CachedInputMicrosUSDPerMillionTokens: providerCfg.CachedInputMicrosUSDPerMillionTokens,
+	for _, entry := range priceCfg.Entries {
+		if entry.Provider == "" || entry.Model == "" {
+			continue
 		}
-		for _, model := range providerCfg.Models {
-			book.prices[providerCfg.Name+"/"+model] = price
-		}
-		if providerCfg.DefaultModel != "" {
-			book.prices[providerCfg.Name+"/"+providerCfg.DefaultModel] = price
+		book.prices[entry.Provider+"/"+entry.Model] = Price{
+			InputMicrosUSDPerMillionTokens:       entry.InputMicrosUSDPerMillionTokens,
+			OutputMicrosUSDPerMillionTokens:      entry.OutputMicrosUSDPerMillionTokens,
+			CachedInputMicrosUSDPerMillionTokens: entry.CachedInputMicrosUSDPerMillionTokens,
 		}
 	}
 	return book
@@ -84,7 +81,10 @@ func (p *StaticPricebook) Estimate(provider, model string, usage types.Usage) (t
 		if p.providerKinds[provider] == providers.KindLocal {
 			return types.CostBreakdown{Currency: "USD"}, nil
 		}
-		return types.CostBreakdown{}, fmt.Errorf("price not found for provider=%s model=%s", provider, model)
+		if p.unknownPolicy == "zero" {
+			return types.CostBreakdown{Currency: "USD"}, nil
+		}
+		return types.CostBreakdown{}, fmt.Errorf("%w for provider=%s model=%s", errPriceNotFound, provider, model)
 	}
 
 	inputMicros := scaleMicros(price.InputMicrosUSDPerMillionTokens, usage.PromptTokens)
@@ -100,6 +100,15 @@ func (p *StaticPricebook) Estimate(provider, model string, usage types.Usage) (t
 		InputMicrosUSDPerMillion:  price.InputMicrosUSDPerMillionTokens,
 		OutputMicrosUSDPerMillion: price.OutputMicrosUSDPerMillionTokens,
 	}, nil
+}
+
+func normalizeUnknownModelPolicy(policy string) string {
+	switch policy {
+	case "zero":
+		return "zero"
+	default:
+		return "error"
+	}
 }
 
 func scaleMicros(microsPerMillion int64, tokens int) int64 {

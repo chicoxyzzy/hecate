@@ -25,13 +25,15 @@ func TestDefaultResponseFinalizerFinalizeExecution(t *testing.T) {
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
-					Name:                            "openai",
-					Kind:                            "cloud",
-					DefaultModel:                    "gpt-4o-mini",
-					Models:                          []string{"gpt-4o-mini"},
-					InputMicrosUSDPerMillionTokens:  150_000,
-					OutputMicrosUSDPerMillionTokens: 600_000,
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "gpt-4o-mini",
+					Models:       []string{"gpt-4o-mini"},
 				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "gpt-4o-mini", InputMicrosUSDPerMillionTokens: 150_000, OutputMicrosUSDPerMillionTokens: 600_000},
 			},
 		}),
 		telemetry.NewMetrics(),
@@ -88,7 +90,7 @@ func TestDefaultResponseFinalizerFinalizeCache(t *testing.T) {
 	finalizer := NewDefaultResponseFinalizer(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		governor.NewStaticGovernor(config.GovernorConfig{}, governor.NewMemoryBudgetStore(), governor.NewMemoryBudgetStore()),
-		billing.NewStaticPricebook(config.ProvidersConfig{}),
+		billing.NewStaticPricebook(config.ProvidersConfig{}, config.PricebookConfig{}),
 		telemetry.NewMetrics(),
 	)
 
@@ -118,5 +120,63 @@ func TestDefaultResponseFinalizerFinalizeCache(t *testing.T) {
 	}
 	if result.Metadata.Provider != "ollama" {
 		t.Fatalf("provider = %q, want ollama", result.Metadata.Provider)
+	}
+}
+
+func TestDefaultResponseFinalizerFinalizeExecutionAllowsUnpricedResolvedModel(t *testing.T) {
+	t.Parallel()
+
+	store := governor.NewMemoryBudgetStore()
+	finalizer := NewDefaultResponseFinalizer(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		governor.NewStaticGovernor(config.GovernorConfig{BudgetKey: "global"}, store, store),
+		billing.NewStaticPricebook(config.ProvidersConfig{
+			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
+				{
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "gpt-4o-mini",
+					Models:       []string{"gpt-4o-mini"},
+				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "gpt-4o-mini", InputMicrosUSDPerMillionTokens: 150_000, OutputMicrosUSDPerMillionTokens: 600_000},
+			},
+		}),
+		telemetry.NewMetrics(),
+	)
+
+	trace := profiler.NewTrace("finalize-unpriced", nil)
+	defer trace.Finalize()
+
+	result, err := finalizer.FinalizeExecution(context.Background(), trace, &ExecutionPlan{
+		OriginalRequest: types.ChatRequest{
+			RequestID: "req-1",
+			Model:     "gpt-4o-mini",
+			Messages:  []types.Message{{Role: "user", Content: "hello"}},
+		},
+		Request: types.ChatRequest{
+			RequestID: "req-1",
+			Model:     "gpt-4o-mini",
+			Messages:  []types.Message{{Role: "user", Content: "hello"}},
+		},
+	}, &providerCallResult{
+		Response: &types.ChatResponse{
+			Model: "omni-moderation-2024-09-26",
+			Usage: types.Usage{
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+			},
+		},
+		Decision:     types.RouteDecision{Provider: "openai", Model: "gpt-4o-mini", Reason: "test"},
+		ProviderKind: string(providers.KindCloud),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeExecution() error = %v, want degraded cost handling", err)
+	}
+	if result.Metadata.CostMicrosUSD != 0 {
+		t.Fatalf("cost_micros_usd = %d, want 0 for unpriced resolved model", result.Metadata.CostMicrosUSD)
 	}
 }

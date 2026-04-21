@@ -51,6 +51,33 @@ func TestLoadFromEnvSemanticAndPostgresSettings(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvPricebookSettings(t *testing.T) {
+	t.Setenv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "zero")
+	t.Setenv("GATEWAY_PRICEBOOK_JSON", `{
+		"unknown_model_policy":"error",
+		"entries":[
+			{
+				"provider":"openai",
+				"model":"gpt-4o-mini",
+				"input_micros_usd_per_million_tokens":150000,
+				"output_micros_usd_per_million_tokens":600000,
+				"cached_input_micros_usd_per_million_tokens":75000
+			}
+		]
+	}`)
+
+	cfg := LoadFromEnv()
+	if cfg.Pricebook.UnknownModelPolicy != "error" {
+		t.Fatalf("unknown model policy = %q, want error from json override", cfg.Pricebook.UnknownModelPolicy)
+	}
+	if len(cfg.Pricebook.Entries) != 1 {
+		t.Fatalf("pricebook entries = %d, want 1", len(cfg.Pricebook.Entries))
+	}
+	if cfg.Pricebook.Entries[0].Model != "gpt-4o-mini" {
+		t.Fatalf("pricebook entry model = %q, want gpt-4o-mini", cfg.Pricebook.Entries[0].Model)
+	}
+}
+
 func TestSplitCSVTrimsAndDropsEmptyValues(t *testing.T) {
 	t.Parallel()
 

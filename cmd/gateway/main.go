@@ -87,7 +87,7 @@ func main() {
 	providerRegistry := providers.NewRegistry(providerList...)
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 
-	pricebook := billing.NewStaticPricebook(cfg.Providers)
+	pricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
 	otelProvider, err := profiler.NewTracerProvider(
 		context.Background(),
 		cfg.OTel.TracesEnabled,

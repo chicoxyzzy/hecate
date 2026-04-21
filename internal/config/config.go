@@ -17,6 +17,7 @@ type Config struct {
 	Cache     CacheConfig
 	Postgres  PostgresConfig
 	Providers ProvidersConfig
+	Pricebook PricebookConfig
 	LogLevel  string
 }
 
@@ -140,20 +141,30 @@ type ProvidersConfig struct {
 	OpenAICompatible []OpenAICompatibleProviderConfig
 }
 
+type PricebookConfig struct {
+	UnknownModelPolicy string             `json:"unknown_model_policy"`
+	Entries            []ModelPriceConfig `json:"entries"`
+}
+
+type ModelPriceConfig struct {
+	Provider                             string `json:"provider"`
+	Model                                string `json:"model"`
+	InputMicrosUSDPerMillionTokens       int64  `json:"input_micros_usd_per_million_tokens"`
+	OutputMicrosUSDPerMillionTokens      int64  `json:"output_micros_usd_per_million_tokens"`
+	CachedInputMicrosUSDPerMillionTokens int64  `json:"cached_input_micros_usd_per_million_tokens"`
+}
+
 type OpenAICompatibleProviderConfig struct {
-	Name                                 string        `json:"name"`
-	Kind                                 string        `json:"kind"`
-	BaseURL                              string        `json:"base_url"`
-	APIKey                               string        `json:"api_key"`
-	Timeout                              time.Duration `json:"timeout"`
-	StubMode                             bool          `json:"stub_mode"`
-	StubResponse                         string        `json:"stub_response"`
-	DefaultModel                         string        `json:"default_model"`
-	Models                               []string      `json:"models"`
-	AllowAnyModel                        bool          `json:"allow_any_model"`
-	InputMicrosUSDPerMillionTokens       int64         `json:"input_micros_usd_per_million_tokens"`
-	OutputMicrosUSDPerMillionTokens      int64         `json:"output_micros_usd_per_million_tokens"`
-	CachedInputMicrosUSDPerMillionTokens int64         `json:"cached_input_micros_usd_per_million_tokens"`
+	Name          string        `json:"name"`
+	Kind          string        `json:"kind"`
+	BaseURL       string        `json:"base_url"`
+	APIKey        string        `json:"api_key"`
+	Timeout       time.Duration `json:"timeout"`
+	StubMode      bool          `json:"stub_mode"`
+	StubResponse  string        `json:"stub_response"`
+	DefaultModel  string        `json:"default_model"`
+	Models        []string      `json:"models"`
+	AllowAnyModel bool          `json:"allow_any_model"`
 }
 
 func LoadFromEnv() Config {
@@ -256,7 +267,88 @@ func LoadFromEnv() Config {
 			MaxIdleConns: getEnvInt("POSTGRES_MAX_IDLE_CONNS", 5),
 		},
 		Providers: providersCfg,
+		Pricebook: loadPricebookFromEnv(),
 		LogLevel:  getEnv("LOG_LEVEL", "INFO"),
+	}
+}
+
+func loadPricebookFromEnv() PricebookConfig {
+	cfg := defaultPricebookConfig()
+
+	if raw := strings.TrimSpace(os.Getenv("GATEWAY_PRICEBOOK_JSON")); raw != "" {
+		var loaded PricebookConfig
+		if err := json.Unmarshal([]byte(raw), &loaded); err == nil {
+			if strings.TrimSpace(loaded.UnknownModelPolicy) == "" {
+				loaded.UnknownModelPolicy = cfg.UnknownModelPolicy
+			}
+			if len(loaded.Entries) == 0 {
+				loaded.Entries = cfg.Entries
+			}
+			return loaded
+		}
+	}
+
+	if policy := strings.TrimSpace(os.Getenv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY")); policy != "" {
+		cfg.UnknownModelPolicy = policy
+	}
+	return cfg
+}
+
+func defaultPricebookConfig() PricebookConfig {
+	return PricebookConfig{
+		UnknownModelPolicy: "error",
+		Entries: []ModelPriceConfig{
+			// Seeded from OpenAI's published API pricing/model docs as of 2026-04-22.
+			// Keep this list small and explicit for sane defaults, but this is not a long-term
+			// source of truth. Hecate still needs a proper pricebook ingestion/update path.
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4.1",
+				InputMicrosUSDPerMillionTokens:       2_000_000,
+				OutputMicrosUSDPerMillionTokens:      8_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 500_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4.1-mini",
+				InputMicrosUSDPerMillionTokens:       400_000,
+				OutputMicrosUSDPerMillionTokens:      1_600_000,
+				CachedInputMicrosUSDPerMillionTokens: 100_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4.1-nano",
+				InputMicrosUSDPerMillionTokens:       100_000,
+				OutputMicrosUSDPerMillionTokens:      400_000,
+				CachedInputMicrosUSDPerMillionTokens: 25_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4o",
+				InputMicrosUSDPerMillionTokens:       2_500_000,
+				OutputMicrosUSDPerMillionTokens:      10_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 1_250_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4o-mini",
+				InputMicrosUSDPerMillionTokens:       150_000,
+				OutputMicrosUSDPerMillionTokens:      600_000,
+				CachedInputMicrosUSDPerMillionTokens: 75_000,
+			},
+			{
+				Provider: "openai",
+				Model:    "omni-moderation",
+			},
+			{
+				Provider: "openai",
+				Model:    "omni-moderation-latest",
+			},
+			{
+				Provider: "openai",
+				Model:    "text-moderation-latest",
+			},
+		},
 	}
 }
 

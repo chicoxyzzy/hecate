@@ -56,10 +56,14 @@ func (p *sequenceProvider) Supports(model string) bool {
 }
 
 type staticFallbackRouter struct {
+	route     types.RouteDecision
 	fallbacks []types.RouteDecision
 }
 
 func (r staticFallbackRouter) Route(context.Context, types.ChatRequest) (types.RouteDecision, error) {
+	if r.route.Provider != "" {
+		return r.route, nil
+	}
 	return types.RouteDecision{}, errors.New("not used")
 }
 
@@ -86,13 +90,15 @@ func TestResilientExecutorRetriesRetryableError(t *testing.T) {
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
-					Name:                            "openai",
-					Kind:                            "cloud",
-					DefaultModel:                    "model-a",
-					Models:                          []string{"model-a"},
-					InputMicrosUSDPerMillionTokens:  100_000,
-					OutputMicrosUSDPerMillionTokens: 200_000,
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "model-a",
+					Models:       []string{"model-a"},
 				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "model-a", InputMicrosUSDPerMillionTokens: 100_000, OutputMicrosUSDPerMillionTokens: 200_000},
 			},
 		}),
 	)
@@ -153,12 +159,10 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
-					Name:                            "openai",
-					Kind:                            "cloud",
-					DefaultModel:                    "model-a",
-					Models:                          []string{"model-a"},
-					InputMicrosUSDPerMillionTokens:  100_000,
-					OutputMicrosUSDPerMillionTokens: 200_000,
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "model-a",
+					Models:       []string{"model-a"},
 				},
 				{
 					Name:         "ollama",
@@ -166,6 +170,10 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 					DefaultModel: "model-b",
 					Models:       []string{"model-b"},
 				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "model-a", InputMicrosUSDPerMillionTokens: 100_000, OutputMicrosUSDPerMillionTokens: 200_000},
 			},
 		}),
 	)
@@ -202,6 +210,81 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 	}
 	if primary.callCount != 1 {
 		t.Fatalf("primary call_count = %d, want 1", primary.callCount)
+	}
+	if fallback.callCount != 1 {
+		t.Fatalf("fallback call_count = %d, want 1", fallback.callCount)
+	}
+}
+
+func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
+	t.Parallel()
+
+	primary := &sequenceProvider{
+		name: "openai",
+		kind: providers.KindCloud,
+	}
+	fallback := &sequenceProvider{
+		name: "ollama",
+		kind: providers.KindLocal,
+		responses: []providerResponse{
+			{response: &types.ChatResponse{Model: "model-b"}},
+		},
+	}
+	registry := providers.NewRegistry(primary, fallback)
+	store := governor.NewMemoryBudgetStore()
+	preflight := NewDefaultRoutePreflight(
+		governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, store, store),
+		registry,
+		billing.NewStaticPricebook(config.ProvidersConfig{
+			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
+				{
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "priced-model",
+					Models:       []string{"priced-model"},
+				},
+				{
+					Name:         "ollama",
+					Kind:         "local",
+					DefaultModel: "model-b",
+					Models:       []string{"model-b"},
+				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "priced-model", InputMicrosUSDPerMillionTokens: 100_000, OutputMicrosUSDPerMillionTokens: 200_000},
+			},
+		}),
+	)
+	executor := NewResilientExecutor(
+		staticFallbackRouter{
+			fallbacks: []types.RouteDecision{
+				{Provider: "ollama", Model: "model-b", Reason: "test_failover"},
+			},
+		},
+		preflight,
+		registry,
+		nil,
+		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
+	)
+
+	trace := profiler.NewTrace("req-unpriced-failover", nil)
+	defer trace.Finalize()
+
+	result, err := executor.Execute(context.Background(), trace, types.ChatRequest{
+		Model: "model-x",
+		Messages: []types.Message{
+			{Role: "user", Content: "hello"},
+		},
+	}, types.RouteDecision{Provider: "openai", Model: "model-x", Reason: "test"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want fallback success", err)
+	}
+	if result.Decision.Provider != "ollama" {
+		t.Fatalf("provider = %q, want ollama", result.Decision.Provider)
+	}
+	if primary.callCount != 0 {
+		t.Fatalf("primary call_count = %d, want 0 because unpriced candidate should be skipped before call", primary.callCount)
 	}
 	if fallback.callCount != 1 {
 		t.Fatalf("fallback call_count = %d, want 1", fallback.callCount)

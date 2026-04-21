@@ -21,13 +21,15 @@ func TestDefaultRoutePreflightEvaluateReturnsResult(t *testing.T) {
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
-					Name:                            "openai",
-					Kind:                            "cloud",
-					DefaultModel:                    "model-a",
-					Models:                          []string{"model-a"},
-					InputMicrosUSDPerMillionTokens:  100_000,
-					OutputMicrosUSDPerMillionTokens: 200_000,
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "model-a",
+					Models:       []string{"model-a"},
 				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "model-a", InputMicrosUSDPerMillionTokens: 100_000, OutputMicrosUSDPerMillionTokens: 200_000},
 			},
 		}),
 	)
@@ -60,13 +62,15 @@ func TestDefaultRoutePreflightEvaluateDenied(t *testing.T) {
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
-					Name:                            "openai",
-					Kind:                            "cloud",
-					DefaultModel:                    "model-a",
-					Models:                          []string{"model-a"},
-					InputMicrosUSDPerMillionTokens:  100_000,
-					OutputMicrosUSDPerMillionTokens: 200_000,
+					Name:         "openai",
+					Kind:         "cloud",
+					DefaultModel: "model-a",
+					Models:       []string{"model-a"},
 				},
+			},
+		}, config.PricebookConfig{
+			Entries: []config.ModelPriceConfig{
+				{Provider: "openai", Model: "model-a", InputMicrosUSDPerMillionTokens: 100_000, OutputMicrosUSDPerMillionTokens: 200_000},
 			},
 		}),
 	)

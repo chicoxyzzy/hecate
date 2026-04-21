@@ -722,7 +722,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 				{Name: "openai", Kind: "cloud"},
 				{Name: "ollama", Kind: "local"},
 			},
-		}),
+		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
@@ -807,7 +807,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 				{Name: "openai", Kind: "cloud"},
 				{Name: "ollama", Kind: "local"},
 			},
-		}),
+		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
@@ -933,7 +933,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 				{Name: "openai", Kind: "cloud"},
 				{Name: "ollama", Kind: "local"},
 			},
-		}),
+		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{
@@ -1442,7 +1442,7 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 		HealthTracker: healthTracker,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
-		}),
+		}, pricebookConfigForTests(items)),
 		Tracer:  profiler.NewInMemoryTracer(nil),
 		Metrics: telemetry.NewMetrics(),
 	})
@@ -1455,19 +1455,42 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 func providerConfigsForTests(items []providers.Provider) []config.OpenAICompatibleProviderConfig {
 	configs := make([]config.OpenAICompatibleProviderConfig, 0, len(items))
 	for _, provider := range items {
-		cfg := config.OpenAICompatibleProviderConfig{
+		configs = append(configs, config.OpenAICompatibleProviderConfig{
 			Name:         provider.Name(),
 			Kind:         string(provider.Kind()),
 			DefaultModel: provider.DefaultModel(),
-		}
-		if provider.Kind() == providers.KindCloud {
-			cfg.InputMicrosUSDPerMillionTokens = 150_000
-			cfg.OutputMicrosUSDPerMillionTokens = 600_000
-			cfg.CachedInputMicrosUSDPerMillionTokens = 75_000
-		}
-		configs = append(configs, cfg)
+		})
 	}
 	return configs
+}
+
+func pricebookConfigForTests(items []providers.Provider) config.PricebookConfig {
+	entries := make([]config.ModelPriceConfig, 0, len(items)+4)
+	for _, provider := range items {
+		if provider.Kind() != providers.KindCloud || provider.DefaultModel() == "" {
+			continue
+		}
+		entries = append(entries, config.ModelPriceConfig{
+			Provider:                             provider.Name(),
+			Model:                                provider.DefaultModel(),
+			InputMicrosUSDPerMillionTokens:       150_000,
+			OutputMicrosUSDPerMillionTokens:      600_000,
+			CachedInputMicrosUSDPerMillionTokens: 75_000,
+		})
+	}
+	entries = append(entries, defaultPricebookForTests().Entries...)
+	return config.PricebookConfig{Entries: entries}
+}
+
+func defaultPricebookForTests() config.PricebookConfig {
+	return config.PricebookConfig{
+		Entries: []config.ModelPriceConfig{
+			{Provider: "openai", Model: "gpt-4o-mini", InputMicrosUSDPerMillionTokens: 150_000, OutputMicrosUSDPerMillionTokens: 600_000, CachedInputMicrosUSDPerMillionTokens: 75_000},
+			{Provider: "openai", Model: "gpt-4.1-mini", InputMicrosUSDPerMillionTokens: 400_000, OutputMicrosUSDPerMillionTokens: 1_600_000, CachedInputMicrosUSDPerMillionTokens: 100_000},
+			{Provider: "openai", Model: "omni-moderation", InputMicrosUSDPerMillionTokens: 0, OutputMicrosUSDPerMillionTokens: 0, CachedInputMicrosUSDPerMillionTokens: 0},
+			{Provider: "openai", Model: "omni-moderation-latest", InputMicrosUSDPerMillionTokens: 0, OutputMicrosUSDPerMillionTokens: 0, CachedInputMicrosUSDPerMillionTokens: 0},
+		},
+	}
 }
 
 func buildTestSemanticStore(cfg config.Config) cache.SemanticStore {
@@ -1501,7 +1524,7 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{Name: provider.Name(), Kind: string(provider.Kind())},
 			},
-		}),
+		}, pricebookConfigForTests([]providers.Provider{provider})),
 		Tracer:  profiler.NewInMemoryTracer(nil),
 		Metrics: telemetry.NewMetrics(),
 	})
