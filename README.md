@@ -1,38 +1,33 @@
 # Hecate
 
-Hecate is an open-source AI agent runtime and LLM gateway written in Go.
+Hecate is a Go-based LLM gateway for AI-agent workloads.
 
-It sits between agents and model providers and gives you one OpenAI-compatible surface for routing, caching, budget enforcement, observability, and control-plane management across cloud and local models.
+Today, Hecate sits at the model-call layer: it exposes an OpenAI-compatible API, routes requests across cloud and local OpenAI-compatible providers, applies budget and policy checks, supports exact and semantic cache paths, records traces and structured logs, and provides a small operator UI.
 
-## What It Does
+Hecate can already be used by agent systems as the gateway in front of their model traffic. It is not yet a full agent runtime with built-in sandboxed tool execution. That is a future direction, not current functionality.
 
-- Exposes an OpenAI-compatible API:
-  - `POST /v1/chat/completions`
-  - `GET /v1/models`
-  - `GET /v1/traces?request_id=...`
-- Routes requests across cloud and local OpenAI-compatible providers
-- Applies budget checks and policy restrictions before upstream execution
-- Supports exact cache and semantic cache paths
-- Calculates request cost from a local pricebook
-- Records request traces, structured logs, and runtime metadata
-- Provides admin APIs and a small operator UI for providers, budgets, tenants, and API keys
+Current runtime capabilities:
 
-## Current Product Shape
+- OpenAI-compatible provider layer with configurable base URLs
+- cloud and local provider support
+- rule-based routing
+- retry and failover for transient upstream errors
+- exact cache
+- semantic cache
+- static cost estimation via a local pricebook
+- budget enforcement
+- tenant-aware auth and restrictions
+- request tracing and structured logs
+- optional OTLP HTTP export for traces and logs
+- React operator UI
 
-Hecate is currently a single-binary monorepo centered on the `gateway` service.
+Storage backends currently used in different subsystems:
 
-Today it includes:
+- memory
+- Redis
+- Postgres
 
-- OpenAI-compatible provider integration with configurable base URLs
-- Cloud and local model support
-- Rule-based routing with retry and failover
-- Memory, Redis, and Postgres backends for several runtime stores
-- Budget enforcement across global, provider, tenant, and tenant-provider scopes
-- Persisted control-plane state for tenants and API keys
-- OTel-shaped tracing and logs, with optional OTLP export
-- React-based operator console
-
-## Request Flow
+## Architecture
 
 ```text
 client
@@ -47,18 +42,6 @@ client
   -> telemetry and response
 ```
 
-Useful response headers include:
-
-- `X-Runtime-Provider`
-- `X-Runtime-Provider-Kind`
-- `X-Runtime-Model`
-- `X-Runtime-Cache`
-- `X-Runtime-Cache-Type`
-- `X-Runtime-Cost-USD`
-- `X-Request-Id`
-- `X-Trace-Id`
-- `X-Span-Id`
-
 ## Quick Start
 
 1. Create a local env file:
@@ -69,7 +52,7 @@ cp .env.example .env
 
 2. Configure at least one provider in `.env`.
 
-Minimal example with one cloud provider and one local provider:
+Example with one cloud provider and one local provider:
 
 ```bash
 GATEWAY_DEFAULT_PROVIDER=openai
@@ -107,34 +90,18 @@ Default addresses:
 - gateway: `http://127.0.0.1:8080`
 - UI: `http://127.0.0.1:5173`
 
-## Example Request
-
-```bash
-curl -i http://127.0.0.1:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [
-      { "role": "user", "content": "Say hello in one short sentence." }
-    ]
-  }'
-```
-
 ## Providers
 
-The provider layer is vendor-neutral. Any upstream exposing an OpenAI-compatible API can be integrated without changing core gateway logic.
+The provider layer is vendor-neutral at the gateway boundary. Any upstream exposing an OpenAI-compatible API can be integrated through configuration.
 
-This makes Hecate usable with:
+This includes local runtimes such as:
 
-- OpenAI-compatible cloud providers
 - Ollama
 - LM Studio
 - LocalAI
 - llama.cpp-style servers
 
-Hecate treats local and remote providers uniformly and can route between them based on explicit selection, defaults, policies, or fallback behavior.
-
-## Auth, Budgets, and Control Plane
+## Auth And Control Plane
 
 Auth supports:
 
@@ -142,53 +109,38 @@ Auth supports:
 - env-defined API keys
 - persisted API keys managed through the control plane
 
-Budgets currently support:
-
-- `global`
-- `provider`
-- `tenant`
-- `tenant_provider`
-
-Control-plane capabilities include:
+The control plane currently supports:
 
 - tenant management
 - API key management
 - enable/disable and rotation flows
-- lightweight audit history
-- file, Redis, and Postgres storage backends
+- audit history
+- file, Redis, and Postgres backends
 
 ## Observability
 
-Hecate includes:
+Implemented observability features:
 
 - request IDs
 - trace IDs and span IDs in responses
-- structured OTel-shaped logs
-- in-memory request trace snapshots available over HTTP
-- OpenTelemetry trace export over OTLP HTTP
-- optional OpenTelemetry log export over OTLP HTTP
-
-Preferred signal-specific env naming:
-
-- shared:
-  - `GATEWAY_OTEL_SERVICE_NAME`
-- traces: `GATEWAY_OTEL_TRACES_*`
-- logs: `GATEWAY_OTEL_LOGS_*`
-
-Legacy `GATEWAY_OTEL_*` trace variables are still accepted as backward-compatible fallbacks.
+- structured logs
+- in-memory trace snapshots over HTTP
+- OTLP HTTP export for traces
+- OTLP HTTP export for logs
 
 ## UI
 
-The operator console currently covers:
+The operator UI currently includes:
 
 - provider and model visibility
-- provider-aware playground
-- runtime metadata and trace inspection
-- budget inspection and admin mutations
+- playground
+- runtime metadata inspection
+- trace inspection
+- budget admin flows
 - tenant and API key management
-- recent control-plane activity
+- control-plane activity view
 
-## Common Commands
+## Commands
 
 ```bash
 make dev
@@ -220,29 +172,3 @@ internal/storage      Redis and Postgres helpers
 pkg/types             Vendor-neutral runtime types
 ui                    Operator console
 ```
-
-## Checklist
-
-Implemented:
-
-- [x] OpenAI-compatible chat completions endpoint
-- [x] Unified model catalog across configured providers
-- [x] Cloud and local provider support behind a vendor-neutral provider layer
-- [x] Rule-based routing with retry and failover
-- [x] Exact cache and semantic cache
-- [x] Static pricebook and cost estimation
-- [x] Budget enforcement with memory, Redis, and Postgres-backed state
-- [x] Tenant-aware auth and control-plane state
-- [x] Structured logs, request tracing, and OTLP export support
-- [x] React operator UI
-
-Next:
-
-- [ ] Richer circuit-breaker and health-recovery behavior
-- [ ] More advanced routing inputs and policy decisions
-- [ ] Better semantic-cache debugging and trace views in the UI
-- [ ] More provider presets and discovery paths
-- [ ] Background retention and pruning workers
-- [ ] Better budget UX, warnings, and history
-- [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
-- [ ] Deployment examples for local and production-style environments
