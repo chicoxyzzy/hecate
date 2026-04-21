@@ -88,15 +88,14 @@ func (r *GatewayCacheRuntime) Store(ctx context.Context, trace *profiler.Trace, 
 			slog.String("hecate.semantic.scope", namespace),
 			slog.Any("error", err),
 		)
-		trace.Record("semantic_cache.store_failed", map[string]any{
-			"error.message":         err.Error(),
+		recordTraceError(trace, "semantic_cache.store_failed", "cache", errorKindSemanticCacheStore, err, map[string]any{
 			"hecate.cache.type":     "semantic",
 			"hecate.semantic.scope": namespace,
 		})
 		return
 	}
 
-	trace.Record("semantic_cache.store_finished", map[string]any{
+	recordTrace(trace, "semantic_cache.store_finished", "cache", map[string]any{
 		"hecate.cache.type":     "semantic",
 		"hecate.semantic.scope": namespace,
 	})
@@ -105,7 +104,7 @@ func (r *GatewayCacheRuntime) Store(ctx context.Context, trace *profiler.Trace, 
 func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.Trace, plan *ExecutionPlan) (*CacheLookupResult, bool, error) {
 	cached, ok := r.exact.Get(ctx, plan.CacheKey)
 	if !ok {
-		trace.Record("cache.miss", map[string]any{
+		recordTrace(trace, "cache.miss", "cache", map[string]any{
 			"hecate.cache.hit":  false,
 			"hecate.cache.type": "exact",
 			"hecate.cache.key":  plan.CacheKey,
@@ -113,7 +112,7 @@ func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.T
 		return nil, false, nil
 	}
 
-	trace.Record("cache.hit", map[string]any{
+	recordTrace(trace, "cache.hit", "cache", map[string]any{
 		"hecate.cache.hit":  true,
 		"hecate.cache.type": "exact",
 		"hecate.cache.key":  plan.CacheKey,
@@ -124,8 +123,7 @@ func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.T
 		providerKind = string(provider.Kind())
 	}
 	if err := r.governor.CheckRoute(ctx, plan.Request, cached.Route, providerKind, 0); err != nil {
-		trace.Record("governor.route_denied", map[string]any{
-			"error.message":                err.Error(),
+		recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, err, map[string]any{
 			"gen_ai.provider.name":         cached.Route.Provider,
 			"hecate.provider.kind":         providerKind,
 			"hecate.cost.estimated_micros": 0,
@@ -134,7 +132,7 @@ func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.T
 		})
 		return nil, false, fmt.Errorf("%w: %v", errDenied, err)
 	}
-	trace.Record("governor.route_allowed", map[string]any{
+	recordTrace(trace, "governor.route_allowed", "governor", map[string]any{
 		"gen_ai.provider.name":         cached.Route.Provider,
 		"hecate.provider.kind":         providerKind,
 		"hecate.cost.estimated_micros": 0,
@@ -155,14 +153,14 @@ func (r *GatewayCacheRuntime) lookupSemantic(ctx context.Context, trace *profile
 		return nil, false, nil
 	}
 
-	trace.Record("semantic_cache.lookup_started", map[string]any{
+	recordTrace(trace, "semantic_cache.lookup_started", "cache", map[string]any{
 		"hecate.cache.type":      "semantic",
 		"hecate.semantic.lookup": true,
 		"hecate.semantic.scope":  plan.SemanticScope,
 	})
 	match, ok := r.semantic.Search(ctx, plan.SemanticQuery)
 	if !ok {
-		trace.Record("semantic_cache.miss", map[string]any{
+		recordTrace(trace, "semantic_cache.miss", "cache", map[string]any{
 			"hecate.cache.hit":      false,
 			"hecate.cache.type":     "semantic",
 			"hecate.semantic.scope": plan.SemanticScope,
@@ -170,7 +168,7 @@ func (r *GatewayCacheRuntime) lookupSemantic(ctx context.Context, trace *profile
 		return nil, false, nil
 	}
 
-	trace.Record("semantic_cache.hit", map[string]any{
+	recordTrace(trace, "semantic_cache.hit", "cache", map[string]any{
 		"hecate.cache.hit":           true,
 		"hecate.cache.type":          "semantic",
 		"hecate.semantic.scope":      plan.SemanticScope,

@@ -80,11 +80,9 @@ func TestResilientExecutorRetriesRetryableError(t *testing.T) {
 	}
 	registry := providers.NewRegistry(provider)
 	store := governor.NewMemoryBudgetStore()
-	executor := NewResilientExecutor(
-		staticFallbackRouter{},
+	preflight := NewDefaultRoutePreflight(
 		governor.NewStaticGovernor(config.GovernorConfig{}, store, store),
 		registry,
-		nil,
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
@@ -97,6 +95,12 @@ func TestResilientExecutorRetriesRetryableError(t *testing.T) {
 				},
 			},
 		}),
+	)
+	executor := NewResilientExecutor(
+		staticFallbackRouter{},
+		preflight,
+		registry,
+		nil,
 		ResilienceOptions{MaxAttempts: 2, RetryBackoff: time.Millisecond},
 	)
 	executor.sleep = func(context.Context, time.Duration) error { return nil }
@@ -143,15 +147,9 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 	}
 	registry := providers.NewRegistry(primary, fallback)
 	store := governor.NewMemoryBudgetStore()
-	executor := NewResilientExecutor(
-		staticFallbackRouter{
-			fallbacks: []types.RouteDecision{
-				{Provider: "ollama", Model: "model-b", Reason: "test_failover"},
-			},
-		},
+	preflight := NewDefaultRoutePreflight(
 		governor.NewStaticGovernor(config.GovernorConfig{}, store, store),
 		registry,
-		nil,
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
@@ -170,6 +168,16 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 				},
 			},
 		}),
+	)
+	executor := NewResilientExecutor(
+		staticFallbackRouter{
+			fallbacks: []types.RouteDecision{
+				{Provider: "ollama", Model: "model-b", Reason: "test_failover"},
+			},
+		},
+		preflight,
+		registry,
+		nil,
 		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
 	)
 	executor.sleep = func(context.Context, time.Duration) error { return nil }

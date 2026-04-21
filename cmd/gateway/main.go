@@ -96,29 +96,20 @@ func main() {
 	)
 	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore, budgetStore)
 
-	service := gateway.NewService(gateway.Dependencies{
-		Logger:   logger,
-		Cache:    cacheStore,
-		Semantic: semanticStore,
-		SemanticOptions: gateway.SemanticOptions{
-			Enabled:       cfg.Cache.Semantic.Enabled,
-			MinSimilarity: cfg.Cache.Semantic.MinSimilarity,
-			MaxTextChars:  cfg.Cache.Semantic.MaxTextChars,
-		},
-		Resilience: gateway.ResilienceOptions{
-			MaxAttempts:     cfg.Provider.MaxAttempts,
-			RetryBackoff:    cfg.Provider.RetryBackoff,
-			FailoverEnabled: cfg.Provider.FailoverEnabled,
-		},
-		Router:        routerEngine,
-		Catalog:       providerCatalog,
-		Governor:      governorEngine,
-		Providers:     providerRegistry,
-		HealthTracker: healthTracker,
-		Pricebook:     pricebook,
-		Tracer:        tracer,
-		Metrics:       metrics,
-	})
+	service := gateway.NewService(buildGatewayDependencies(
+		cfg,
+		logger,
+		cacheStore,
+		semanticStore,
+		routerEngine,
+		providerCatalog,
+		governorEngine,
+		providerRegistry,
+		healthTracker,
+		pricebook,
+		tracer,
+		metrics,
+	))
 
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore)
 	server := &http.Server{
@@ -197,6 +188,45 @@ func firstNonZeroDuration(values ...time.Duration) time.Duration {
 		}
 	}
 	return 0
+}
+
+func buildGatewayDependencies(
+	cfg config.Config,
+	logger *slog.Logger,
+	cacheStore cache.Store,
+	semanticStore cache.SemanticStore,
+	routerEngine router.Router,
+	providerCatalog catalog.Catalog,
+	governorEngine governor.Governor,
+	providerRegistry providers.Registry,
+	healthTracker providers.HealthTracker,
+	pricebook billing.Pricebook,
+	tracer profiler.Tracer,
+	metrics *telemetry.Metrics,
+) gateway.Dependencies {
+	return gateway.Dependencies{
+		Logger:   logger,
+		Cache:    cacheStore,
+		Semantic: semanticStore,
+		SemanticOptions: gateway.SemanticOptions{
+			Enabled:       cfg.Cache.Semantic.Enabled,
+			MinSimilarity: cfg.Cache.Semantic.MinSimilarity,
+			MaxTextChars:  cfg.Cache.Semantic.MaxTextChars,
+		},
+		Resilience: gateway.ResilienceOptions{
+			MaxAttempts:     cfg.Provider.MaxAttempts,
+			RetryBackoff:    cfg.Provider.RetryBackoff,
+			FailoverEnabled: cfg.Provider.FailoverEnabled,
+		},
+		Router:        routerEngine,
+		Catalog:       providerCatalog,
+		Governor:      governorEngine,
+		Providers:     providerRegistry,
+		HealthTracker: healthTracker,
+		Pricebook:     pricebook,
+		Tracer:        tracer,
+		Metrics:       metrics,
+	}
 }
 
 func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) controlplane.Store {

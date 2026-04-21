@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hecate/agent-runtime/internal/billing"
-	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/router"
@@ -20,28 +18,25 @@ type ProviderExecutor interface {
 
 type ResilientExecutor struct {
 	router        router.Router
-	governor      governor.Governor
+	preflight     RoutePreflight
 	providers     providers.Registry
 	healthTracker providers.HealthTracker
-	pricebook     billing.Pricebook
 	options       ResilienceOptions
 	sleep         func(context.Context, time.Duration) error
 }
 
 func NewResilientExecutor(
 	router router.Router,
-	governor governor.Governor,
+	preflight RoutePreflight,
 	providers providers.Registry,
 	healthTracker providers.HealthTracker,
-	pricebook billing.Pricebook,
 	options ResilienceOptions,
 ) *ResilientExecutor {
 	return &ResilientExecutor{
 		router:        router,
-		governor:      governor,
+		preflight:     preflight,
 		providers:     providers,
 		healthTracker: healthTracker,
-		pricebook:     pricebook,
 		options:       normalizeResilienceOptions(options),
 		sleep:         sleepContext,
 	}
@@ -64,52 +59,51 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			continue
 		}
 
-		estimatedUsage := estimateUsage(withResolvedModel(req, candidate.Model))
-		estimatedCost, err := e.pricebook.Estimate(candidate.Provider, candidate.Model, estimatedUsage)
+		preflight, err := e.preflight.Evaluate(ctx, req, candidate)
 		if err != nil {
-			lastErr = fmt.Errorf("estimate preflight cost: %w", err)
-			if index == 0 {
-				trace.Record("governor.budget_estimate_failed", map[string]any{
-					"error.message": err.Error(),
-					"hecate.phase":  "governor",
+			lastErr = err
+			if preflightErr, ok := AsRoutePreflightError(err); ok {
+				if index == 0 && preflightErr.Kind == RoutePreflightCostEstimate {
+					recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, nil)
+					return nil, preflightErr
+				}
+				reason := string(preflightErr.Kind)
+				if preflightErr.Kind == RoutePreflightCostEstimate {
+					reason = "cost_estimate_failed"
+				}
+				if preflightErr.Kind == RoutePreflightRouteDenied {
+					reason = "route_denied"
+					lastErr = fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
+				}
+				recordTraceError(trace, "provider.failover.skipped", "provider", reason, preflightErr, map[string]any{
+					"gen_ai.provider.name":         candidate.Provider,
+					"gen_ai.request.model":         candidate.Model,
+					"hecate.failover.reason":       reason,
+					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
 				})
-				return nil, lastErr
+				continue
 			}
-			trace.Record("provider.failover.skipped", map[string]any{
-				"gen_ai.provider.name":   candidate.Provider,
-				"gen_ai.request.model":   candidate.Model,
-				"hecate.failover.reason": "cost_estimate_failed",
-				"error.message":          err.Error(),
-			})
+			if index == 0 {
+				return nil, err
+			}
 			continue
 		}
 
 		if index > 0 {
-			if err := e.governor.CheckRoute(ctx, req, candidate, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
-				lastErr = fmt.Errorf("%w: %v", errDenied, err)
-				trace.Record("provider.failover.skipped", map[string]any{
-					"gen_ai.provider.name":         candidate.Provider,
-					"gen_ai.request.model":         candidate.Model,
-					"hecate.failover.reason":       "route_denied",
-					"error.message":                err.Error(),
-					"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
-				})
-				continue
-			}
-			trace.Record("provider.failover.selected", map[string]any{
+			recordTrace(trace, "provider.failover.selected", "provider", map[string]any{
 				"gen_ai.provider.name":          candidate.Provider,
 				"gen_ai.request.model":          candidate.Model,
-				"hecate.provider.kind":          string(provider.Kind()),
+				"hecate.provider.kind":          preflight.ProviderKind,
 				"hecate.failover.from_provider": initial.Provider,
 				"hecate.failover.to_provider":   candidate.Provider,
-				"hecate.cost.estimated_micros":  estimatedCost.TotalMicrosUSD,
+				"hecate.cost.estimated_micros":  preflight.EstimatedCost.TotalMicrosUSD,
 			})
 		}
 
 		attemptReq := withResolvedModel(req, candidate.Model)
 		for attempt := 1; attempt <= e.options.MaxAttempts; attempt++ {
 			totalAttempts++
-			trace.Record("provider.call.started", map[string]any{
+			recordTrace(trace, "provider.call.started", "provider", map[string]any{
 				"gen_ai.provider.name":      candidate.Provider,
 				"gen_ai.request.model":      candidate.Model,
 				"hecate.retry.attempt":      attempt,
@@ -121,7 +115,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			start := time.Now()
 			resp, err := provider.Chat(ctx, attemptReq)
 			if err == nil {
-				trace.Record("provider.call.finished", map[string]any{
+				recordTrace(trace, "provider.call.finished", "provider", map[string]any{
 					"gen_ai.provider.name":       candidate.Provider,
 					"gen_ai.request.model":       candidate.Model,
 					"hecate.retry.attempt":       attempt,
@@ -134,7 +128,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				return &providerCallResult{
 					Response:             resp,
 					Decision:             candidate,
-					Provider:             provider,
+					ProviderKind:         preflight.ProviderKind,
 					AttemptCount:         totalAttempts,
 					RetryCount:           totalRetries,
 					FallbackFromProvider: fallbackFrom(initial.Provider, candidate.Provider),
@@ -142,12 +136,11 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			}
 
 			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
-			trace.Record("provider.call.failed", map[string]any{
+			recordTraceError(trace, "provider.call.failed", "provider", errorKindProviderCallFailed, err, map[string]any{
 				"gen_ai.provider.name":   candidate.Provider,
 				"gen_ai.request.model":   candidate.Model,
 				"hecate.retry.attempt":   attempt,
 				"hecate.provider.index":  index,
-				"error.message":          err.Error(),
 				"hecate.retry.retryable": providers.IsRetryableError(err),
 			})
 
@@ -160,7 +153,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 			totalRetries++
 			backoff := e.retryDelay(attempt)
-			trace.Record("provider.retry.scheduled", map[string]any{
+			recordTrace(trace, "provider.retry.scheduled", "provider", map[string]any{
 				"gen_ai.provider.name":      candidate.Provider,
 				"gen_ai.request.model":      candidate.Model,
 				"hecate.retry.attempt":      attempt,
@@ -168,25 +161,29 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				"hecate.retry.backoff_ms":   backoff.Milliseconds(),
 			})
 			if err := e.sleep(ctx, backoff); err != nil {
+				recordTraceError(trace, "provider.retry.backoff_failed", "provider", errorKindRetryBackoffFailed, err, map[string]any{
+					"gen_ai.provider.name":    candidate.Provider,
+					"gen_ai.request.model":    candidate.Model,
+					"hecate.retry.attempt":    attempt,
+					"hecate.retry.backoff_ms": backoff.Milliseconds(),
+				})
 				return nil, fmt.Errorf("wait for retry backoff: %w", err)
 			}
 		}
 
 		if e.healthTracker != nil && providers.IsRetryableError(lastErr) {
 			e.healthTracker.RecordFailure(candidate.Provider, lastErr)
-			trace.Record("provider.health.degraded", map[string]any{
+			recordTraceError(trace, "provider.health.degraded", "provider", errorKindProviderHealth, lastErr, map[string]any{
 				"gen_ai.provider.name":         candidate.Provider,
-				"error.message":                lastErr.Error(),
 				"hecate.provider.health_state": "degraded",
 			})
 		}
 
 		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
-			trace.Record("provider.failover.triggered", map[string]any{
+			recordTraceError(trace, "provider.failover.triggered", "provider", errorKindProviderCallFailed, lastErr, map[string]any{
 				"gen_ai.provider.name":          candidate.Provider,
 				"gen_ai.request.model":          candidate.Model,
 				"hecate.failover.from_provider": candidate.Provider,
-				"error.message":                 lastErr.Error(),
 			})
 			continue
 		}

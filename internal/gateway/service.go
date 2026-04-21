@@ -23,6 +23,8 @@ type Dependencies struct {
 	Logger          *slog.Logger
 	Cache           cache.Store
 	CacheRuntime    CacheRuntime
+	Finalizer       ResponseFinalizer
+	Preflight       RoutePreflight
 	Semantic        cache.SemanticStore
 	SemanticOptions SemanticOptions
 	Resilience      ResilienceOptions
@@ -50,8 +52,9 @@ type ResilienceOptions struct {
 }
 
 type Service struct {
-	logger          *slog.Logger
 	cacheRuntime    CacheRuntime
+	finalizer       ResponseFinalizer
+	preflight       RoutePreflight
 	semantic        cache.SemanticStore
 	semanticOptions SemanticOptions
 	keyBuilder      cache.KeyBuilder
@@ -59,8 +62,6 @@ type Service struct {
 	router          router.Router
 	catalog         catalog.Catalog
 	governor        governor.Governor
-	providers       providers.Registry
-	pricebook       billing.Pricebook
 	tracer          profiler.Tracer
 	metrics         *telemetry.Metrics
 }
@@ -131,17 +132,23 @@ func NewService(deps Dependencies) *Service {
 	if cat == nil {
 		cat = catalog.NewRegistryCatalog(deps.Providers, deps.HealthTracker)
 	}
+
+	preflight := deps.Preflight
+	if preflight == nil {
+		preflight = NewDefaultRoutePreflight(deps.Governor, deps.Providers, deps.Pricebook)
+	}
+
 	executor := deps.Executor
 	if executor == nil {
 		executor = NewResilientExecutor(
 			deps.Router,
-			deps.Governor,
+			preflight,
 			deps.Providers,
 			deps.HealthTracker,
-			deps.Pricebook,
 			deps.Resilience,
 		)
 	}
+
 	cacheRuntime := deps.CacheRuntime
 	if cacheRuntime == nil {
 		cacheRuntime = NewGatewayCacheRuntime(
@@ -153,9 +160,21 @@ func NewService(deps Dependencies) *Service {
 			deps.Providers,
 		)
 	}
+
+	finalizer := deps.Finalizer
+	if finalizer == nil {
+		finalizer = NewDefaultResponseFinalizer(
+			deps.Logger,
+			deps.Governor,
+			deps.Pricebook,
+			deps.Metrics,
+		)
+	}
+
 	return &Service{
-		logger:          deps.Logger,
 		cacheRuntime:    cacheRuntime,
+		finalizer:       finalizer,
+		preflight:       preflight,
 		semantic:        deps.Semantic,
 		semanticOptions: deps.SemanticOptions,
 		keyBuilder:      cache.StableKeyBuilder{},
@@ -163,8 +182,6 @@ func NewService(deps Dependencies) *Service {
 		router:          deps.Router,
 		catalog:         cat,
 		governor:        deps.Governor,
-		providers:       deps.Providers,
-		pricebook:       deps.Pricebook,
 		tracer:          deps.Tracer,
 		metrics:         deps.Metrics,
 	}
@@ -183,8 +200,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	if cached, ok, err := s.cacheRuntime.Lookup(ctx, trace, plan); err != nil {
 		return nil, err
 	} else if ok {
-		metadata := s.buildCacheMetadata(plan.OriginalRequest, cached.Response, cached.Route, cached.ProviderKind, cached.CacheType, cached.Semantic, trace)
-		return s.completeResult(ctx, trace, cached.Response, metadata), nil
+		return s.finalizer.FinalizeCache(ctx, trace, plan.OriginalRequest, cached), nil
 	}
 
 	return s.executePlan(ctx, trace, plan)
@@ -199,21 +215,17 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 	})
 
 	if err := validate(req); err != nil {
-		trace.Record("request.invalid", map[string]any{
-			"error.message": err.Error(),
-			"hecate.phase":  "request",
-		})
+		recordTraceError(trace, "request.invalid", "request", errorKindInvalidRequest, err, nil)
 		return nil, fmt.Errorf("%w: %v", errClient, err)
 	}
 
 	if err := s.governor.Check(ctx, req); err != nil {
-		trace.Record("governor.denied", map[string]any{
-			"error.message":          err.Error(),
+		recordTraceError(trace, "governor.denied", "governor", errorKindRequestDenied, err, map[string]any{
 			"hecate.governor.result": "denied",
 		})
 		return nil, fmt.Errorf("%w: %v", errDenied, err)
 	}
-	trace.Record("governor.allowed", map[string]any{
+	recordTrace(trace, "governor.allowed", "governor", map[string]any{
 		"hecate.governor.result": "allowed",
 	})
 
@@ -232,46 +244,38 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 
 	decision, err := s.router.Route(ctx, rewrittenReq)
 	if err != nil {
-		trace.Record("router.failed", map[string]any{
-			"error.message": err.Error(),
-			"hecate.phase":  "routing",
-		})
+		recordTraceError(trace, "router.failed", "routing", errorKindRouterFailed, err, nil)
 		return nil, fmt.Errorf("route request: %w", err)
 	}
-	trace.Record("router.selected", map[string]any{
+	recordTrace(trace, "router.selected", "routing", map[string]any{
 		"gen_ai.provider.name": decision.Provider,
 		"gen_ai.request.model": decision.Model,
 		"hecate.route.reason":  decision.Reason,
 	})
 
-	provider, ok := s.providers.Get(decision.Provider)
-	if !ok {
-		return nil, fmt.Errorf("provider %q not found", decision.Provider)
-	}
-
-	estimatedUsage := estimateUsage(rewrittenReq)
-	estimatedCost, err := s.pricebook.Estimate(decision.Provider, decision.Model, estimatedUsage)
+	preflight, err := s.preflight.Evaluate(ctx, rewrittenReq, decision)
 	if err != nil {
-		trace.Record("governor.budget_estimate_failed", map[string]any{
-			"error.message": err.Error(),
-			"hecate.phase":  "governor",
-		})
-		return nil, fmt.Errorf("estimate preflight cost: %w", err)
+		if preflightErr, ok := AsRoutePreflightError(err); ok {
+			switch preflightErr.Kind {
+			case RoutePreflightCostEstimate:
+				recordTraceError(trace, "governor.budget_estimate_failed", "governor", errorKindBudgetEstimateFailed, preflightErr, nil)
+				return nil, preflightErr
+			case RoutePreflightRouteDenied:
+				recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, preflightErr, map[string]any{
+					"gen_ai.provider.name":         decision.Provider,
+					"hecate.provider.kind":         preflightErr.ProviderKind,
+					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
+					"hecate.governor.route_result": "denied",
+				})
+				return nil, fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
+			}
+		}
+		return nil, err
 	}
-	if err := s.governor.CheckRoute(ctx, rewrittenReq, decision, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
-		trace.Record("governor.route_denied", map[string]any{
-			"error.message":                err.Error(),
-			"gen_ai.provider.name":         decision.Provider,
-			"hecate.provider.kind":         string(provider.Kind()),
-			"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
-			"hecate.governor.route_result": "denied",
-		})
-		return nil, fmt.Errorf("%w: %v", errDenied, err)
-	}
-	trace.Record("governor.route_allowed", map[string]any{
+	recordTrace(trace, "governor.route_allowed", "governor", map[string]any{
 		"gen_ai.provider.name":         decision.Provider,
-		"hecate.provider.kind":         string(provider.Kind()),
-		"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
+		"hecate.provider.kind":         preflight.ProviderKind,
+		"hecate.cost.estimated_micros": preflight.EstimatedCost.TotalMicrosUSD,
 		"hecate.governor.route_result": "allowed",
 	})
 
@@ -280,7 +284,7 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		Request:         rewrittenReq,
 		CacheKey:        cacheKey,
 		Route:           decision,
-		ProviderKind:    string(provider.Kind()),
+		ProviderKind:    preflight.ProviderKind,
 	}
 
 	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
@@ -302,117 +306,18 @@ func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *
 	if err != nil {
 		return nil, err
 	}
-	resp := callResult.Response
-	decision := callResult.Decision
-	provider := callResult.Provider
-
-	resp.Route = decision
-	trace.Record("usage.normalized", map[string]any{
-		"gen_ai.usage.input_tokens":  resp.Usage.PromptTokens,
-		"gen_ai.usage.output_tokens": resp.Usage.CompletionTokens,
-		"gen_ai.usage.total_tokens":  resp.Usage.TotalTokens,
-	})
-
-	cost, err := s.pricebook.Estimate(decision.Provider, resp.Model, resp.Usage)
+	result, err := s.finalizer.FinalizeExecution(ctx, trace, plan, callResult)
 	if err != nil {
-		return nil, fmt.Errorf("estimate cost: %w", err)
+		return nil, err
 	}
-	resp.Cost = cost
-	trace.Record("cost.calculated", map[string]any{
-		"hecate.cost.total_micros_usd":  cost.TotalMicrosUSD,
-		"hecate.cost.input_micros_usd":  cost.InputMicrosUSD,
-		"hecate.cost.output_micros_usd": cost.OutputMicrosUSD,
-		"hecate.cost.cached_micros_usd": cost.CachedInputMicrosUSD,
-	})
-	if err := s.governor.RecordUsage(ctx, plan.Request, decision, cost.TotalMicrosUSD); err != nil {
-		telemetry.Warn(s.logger, ctx, "gateway.budget.usage_record.failed",
-			slog.String("event.name", "gateway.budget.usage_record.failed"),
-			slog.Any("error", err),
-		)
-		trace.Record("governor.usage_record_failed", map[string]any{
-			"error.message": err.Error(),
-			"hecate.phase":  "governor",
-		})
-	}
-
-	identity := models.BuildIdentity(plan.OriginalRequest.Model, resp.Model)
-	trace.Record("response.returned", map[string]any{
-		"gen_ai.provider.name":             decision.Provider,
-		"gen_ai.response.model":            resp.Model,
-		"gen_ai.request.model":             identity.Requested,
-		"hecate.model.requested_canonical": identity.CanonicalRequested,
-		"hecate.model.resolved_canonical":  identity.CanonicalResolved,
-	})
-
-	metadata := ResponseMetadata{
-		RequestID:               plan.OriginalRequest.RequestID,
-		Provider:                decision.Provider,
-		ProviderKind:            string(provider.Kind()),
-		RouteReason:             decision.Reason,
-		RequestedModel:          identity.Requested,
-		CanonicalRequestedModel: identity.CanonicalRequested,
-		Model:                   identity.Resolved,
-		CanonicalResolvedModel:  identity.CanonicalResolved,
-		CacheHit:                false,
-		CacheType:               "miss",
-		PromptTokens:            resp.Usage.PromptTokens,
-		CompletionTokens:        resp.Usage.CompletionTokens,
-		TotalTokens:             resp.Usage.TotalTokens,
-		CostMicrosUSD:           cost.TotalMicrosUSD,
-		AttemptCount:            callResult.AttemptCount,
-		RetryCount:              callResult.RetryCount,
-		FallbackFromProvider:    callResult.FallbackFromProvider,
-		TraceID:                 trace.TraceID,
-		SpanID:                  trace.RootSpanID(),
-	}
-
-	s.cacheRuntime.Store(ctx, trace, plan, decision, resp)
-
-	return s.completeResult(ctx, trace, resp, metadata), nil
-}
-
-func (s *Service) buildCacheMetadata(req types.ChatRequest, resp *types.ChatResponse, route types.RouteDecision, providerKind, cacheType string, semantic *cache.SemanticMatch, trace *profiler.Trace) ResponseMetadata {
-	identity := models.BuildIdentity(req.Model, resp.Model)
-	metadata := ResponseMetadata{
-		RequestID:               req.RequestID,
-		Provider:                route.Provider,
-		ProviderKind:            providerKind,
-		RouteReason:             route.Reason,
-		RequestedModel:          identity.Requested,
-		CanonicalRequestedModel: identity.CanonicalRequested,
-		Model:                   identity.Resolved,
-		CanonicalResolvedModel:  identity.CanonicalResolved,
-		CacheHit:                true,
-		CacheType:               cacheType,
-		PromptTokens:            resp.Usage.PromptTokens,
-		CompletionTokens:        resp.Usage.CompletionTokens,
-		TotalTokens:             resp.Usage.TotalTokens,
-		CostMicrosUSD:           resp.Cost.TotalMicrosUSD,
-		TraceID:                 trace.TraceID,
-		SpanID:                  trace.RootSpanID(),
-	}
-	if semantic != nil {
-		metadata.SemanticStrategy = semantic.Strategy
-		metadata.SemanticIndexType = semantic.IndexType
-		metadata.SemanticSimilarity = semantic.Similarity
-	}
-	return metadata
-}
-
-func (s *Service) completeResult(ctx context.Context, trace *profiler.Trace, resp *types.ChatResponse, metadata ResponseMetadata) *ChatResult {
-	s.recordMetrics(metadata)
-	s.logRequestSummary(ctx, metadata)
-	return &ChatResult{
-		Response: resp,
-		Metadata: metadata,
-		Trace:    trace,
-	}
+	s.cacheRuntime.Store(ctx, trace, plan, callResult.Decision, result.Response)
+	return result, nil
 }
 
 type providerCallResult struct {
 	Response             *types.ChatResponse
 	Decision             types.RouteDecision
-	Provider             providers.Provider
+	ProviderKind         string
 	AttemptCount         int
 	RetryCount           int
 	FallbackFromProvider string
@@ -590,46 +495,6 @@ func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, er
 		StartedAt: trace.StartedAt,
 		Spans:     trace.Spans(),
 	}, nil
-}
-
-func (s *Service) logRequestSummary(ctx context.Context, metadata ResponseMetadata) {
-	telemetry.Info(s.logger, ctx, "gen_ai.gateway.request",
-		slog.String("event.name", "gen_ai.gateway.request"),
-		slog.String("gen_ai.provider.name", metadata.Provider),
-		slog.String("hecate.provider.kind", metadata.ProviderKind),
-		slog.String("hecate.route.reason", metadata.RouteReason),
-		slog.String("gen_ai.request.model", metadata.RequestedModel),
-		slog.String("hecate.model.requested_canonical", metadata.CanonicalRequestedModel),
-		slog.String("gen_ai.response.model", metadata.Model),
-		slog.String("hecate.model.resolved_canonical", metadata.CanonicalResolvedModel),
-		slog.Bool("hecate.cache.hit", metadata.CacheHit),
-		slog.String("hecate.cache.type", metadata.CacheType),
-		slog.String("hecate.semantic.strategy", metadata.SemanticStrategy),
-		slog.String("hecate.semantic.index_type", metadata.SemanticIndexType),
-		slog.Float64("hecate.semantic.similarity", metadata.SemanticSimilarity),
-		slog.Int("gen_ai.usage.input_tokens", metadata.PromptTokens),
-		slog.Int("gen_ai.usage.output_tokens", metadata.CompletionTokens),
-		slog.Int("gen_ai.usage.total_tokens", metadata.TotalTokens),
-		slog.Int64("hecate.cost.total_micros_usd", metadata.CostMicrosUSD),
-		slog.Int("hecate.retry.attempt_count", metadata.AttemptCount),
-		slog.Int("hecate.retry.retry_count", metadata.RetryCount),
-		slog.String("hecate.failover.from_provider", metadata.FallbackFromProvider),
-	)
-}
-
-func (s *Service) recordMetrics(metadata ResponseMetadata) {
-	if s.metrics == nil {
-		return
-	}
-	s.metrics.RecordChat(
-		metadata.Provider,
-		metadata.ProviderKind,
-		metadata.CacheHit,
-		metadata.CacheType,
-		metadata.SemanticStrategy,
-		metadata.SemanticIndexType,
-		metadata.CostMicrosUSD,
-	)
 }
 
 func validate(req types.ChatRequest) error {
