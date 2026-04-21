@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -283,20 +284,20 @@ func otelAttributesForEvent(name string, attrs map[string]any) map[string]any {
 
 	switch name {
 	case "request.received":
-		out["hecate.phase"] = "request"
+		out[telemetry.AttrHecatePhase] = "request"
 	case "cache.hit", "cache.miss":
-		out["hecate.phase"] = "cache"
-	case "router.selected":
-		out["hecate.phase"] = "routing"
+		out[telemetry.AttrHecatePhase] = "cache"
+	case "router.selected", "router.candidate.considered", "router.candidate.skipped", "router.candidate.denied", "router.candidate.selected":
+		out[telemetry.AttrHecatePhase] = "routing"
 	case "response.returned":
-		out["hecate.phase"] = "response"
+		out[telemetry.AttrHecatePhase] = "response"
 	}
 
 	return out
 }
 
 func updateSpanStatus(snapshot *types.TraceSpan, span oteltrace.Span, eventName string, attrs map[string]any) {
-	if errText, ok := attrs["error.message"].(string); ok && errText != "" {
+	if errText, ok := attrs[telemetry.AttrErrorMessage].(string); ok && errText != "" {
 		snapshot.StatusCode = "error"
 		snapshot.StatusMessage = errText
 		span.SetStatus(codes.Error, errText)

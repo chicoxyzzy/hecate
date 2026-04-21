@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/hecate/agent-runtime/internal/profiler"
+	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 func tracePhaseAttrs(phase string, attrs map[string]any) map[string]any {
 	out := cloneTraceAttrs(attrs)
 	if phase != "" {
-		out["hecate.phase"] = phase
+		out[telemetry.AttrHecatePhase] = phase
 	}
 	return out
 }
@@ -30,13 +31,13 @@ func tracePhaseAttrs(phase string, attrs map[string]any) map[string]any {
 func traceErrorAttrs(phase, kind string, err error, attrs map[string]any) map[string]any {
 	out := tracePhaseAttrs(phase, attrs)
 	if kind != "" {
-		out["hecate.error.kind"] = kind
-		out["error.type"] = kind
+		out[telemetry.AttrHecateErrorKind] = kind
+		out[telemetry.AttrErrorType] = kind
 	}
 	if err != nil {
-		out["error.message"] = err.Error()
-		if _, ok := out["error.type"]; !ok {
-			out["error.type"] = traceErrorType(err)
+		out[telemetry.AttrErrorMessage] = err.Error()
+		if _, ok := out[telemetry.AttrErrorType]; !ok {
+			out[telemetry.AttrErrorType] = traceErrorType(err)
 		}
 	}
 	return out

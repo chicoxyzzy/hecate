@@ -3,6 +3,8 @@ package gateway
 import (
 	"errors"
 	"testing"
+
+	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
 func TestTraceErrorAttrsIncludesOTelShapedErrorFields(t *testing.T) {
@@ -12,19 +14,19 @@ func TestTraceErrorAttrsIncludesOTelShapedErrorFields(t *testing.T) {
 		"gen_ai.provider.name": "openai",
 	})
 
-	if got := attrs["hecate.phase"]; got != "provider" {
+	if got := attrs[telemetry.AttrHecatePhase]; got != "provider" {
 		t.Fatalf("hecate.phase = %v, want provider", got)
 	}
-	if got := attrs["hecate.error.kind"]; got != errorKindProviderCallFailed {
+	if got := attrs[telemetry.AttrHecateErrorKind]; got != errorKindProviderCallFailed {
 		t.Fatalf("hecate.error.kind = %v, want %q", got, errorKindProviderCallFailed)
 	}
-	if got := attrs["error.type"]; got != errorKindProviderCallFailed {
+	if got := attrs[telemetry.AttrErrorType]; got != errorKindProviderCallFailed {
 		t.Fatalf("error.type = %v, want %q", got, errorKindProviderCallFailed)
 	}
-	if got := attrs["error.message"]; got != "boom" {
+	if got := attrs[telemetry.AttrErrorMessage]; got != "boom" {
 		t.Fatalf("error.message = %v, want boom", got)
 	}
-	if got := attrs["gen_ai.provider.name"]; got != "openai" {
+	if got := attrs[telemetry.AttrGenAIProviderName]; got != "openai" {
 		t.Fatalf("gen_ai.provider.name = %v, want openai", got)
 	}
 }

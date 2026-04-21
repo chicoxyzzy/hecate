@@ -9,6 +9,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/router"
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -54,27 +55,27 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 	for index, candidate := range candidates {
 		recordTrace(trace, "router.candidate.considered", "routing", map[string]any{
-			"gen_ai.provider.name":         candidate.Provider,
-			"gen_ai.request.model":         candidate.Model,
-			"hecate.provider.kind":         candidate.ProviderKind,
-			"hecate.route.reason":          candidate.Reason,
-			"hecate.provider.index":        index,
-			"hecate.route.outcome":         "considered",
-			"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+			telemetry.AttrGenAIProviderName:          candidate.Provider,
+			telemetry.AttrGenAIRequestModel:          candidate.Model,
+			telemetry.AttrHecateProviderKind:         candidate.ProviderKind,
+			telemetry.AttrHecateRouteReason:          candidate.Reason,
+			telemetry.AttrHecateProviderIndex:        index,
+			telemetry.AttrHecateRouteOutcome:         "considered",
+			telemetry.AttrHecateProviderHealthStatus: healthStatus(e.healthTracker, candidate.Provider),
 		})
 
 		provider, ok := e.providers.Get(candidate.Provider)
 		if !ok {
 			lastErr = fmt.Errorf("provider %q not found", candidate.Provider)
 			recordTraceError(trace, "router.candidate.skipped", "routing", errorKindRouterFailed, lastErr, map[string]any{
-				"gen_ai.provider.name":         candidate.Provider,
-				"gen_ai.request.model":         candidate.Model,
-				"hecate.provider.kind":         candidate.ProviderKind,
-				"hecate.route.reason":          candidate.Reason,
-				"hecate.provider.index":        index,
-				"hecate.route.outcome":         "skipped",
-				"hecate.route.skip_reason":     string(RoutePreflightProviderNotFound),
-				"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+				telemetry.AttrGenAIProviderName:          candidate.Provider,
+				telemetry.AttrGenAIRequestModel:          candidate.Model,
+				telemetry.AttrHecateProviderKind:         candidate.ProviderKind,
+				telemetry.AttrHecateRouteReason:          candidate.Reason,
+				telemetry.AttrHecateProviderIndex:        index,
+				telemetry.AttrHecateRouteOutcome:         "skipped",
+				telemetry.AttrHecateRouteSkipReason:      string(RoutePreflightProviderNotFound),
+				telemetry.AttrHecateProviderHealthStatus: healthStatus(e.healthTracker, candidate.Provider),
 			})
 			continue
 		}
@@ -102,21 +103,21 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 					outcome = "denied"
 				}
 				recordTraceError(trace, eventName, "routing", reason, preflightErr, map[string]any{
-					"gen_ai.provider.name":         candidate.Provider,
-					"gen_ai.request.model":         candidate.Model,
-					"hecate.provider.kind":         firstNonEmpty(preflightErr.ProviderKind, candidate.ProviderKind),
-					"hecate.route.reason":          candidate.Reason,
-					"hecate.provider.index":        index,
-					"hecate.route.outcome":         outcome,
-					"hecate.route.skip_reason":     reason,
-					"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
-					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
+					telemetry.AttrGenAIProviderName:            candidate.Provider,
+					telemetry.AttrGenAIRequestModel:            candidate.Model,
+					telemetry.AttrHecateProviderKind:           firstNonEmpty(preflightErr.ProviderKind, candidate.ProviderKind),
+					telemetry.AttrHecateRouteReason:            candidate.Reason,
+					telemetry.AttrHecateProviderIndex:          index,
+					telemetry.AttrHecateRouteOutcome:           outcome,
+					telemetry.AttrHecateRouteSkipReason:        reason,
+					telemetry.AttrHecateProviderHealthStatus:   healthStatus(e.healthTracker, candidate.Provider),
+					telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
 				})
 				recordTraceError(trace, "provider.failover.skipped", "provider", reason, preflightErr, map[string]any{
-					"gen_ai.provider.name":         candidate.Provider,
-					"gen_ai.request.model":         candidate.Model,
-					"hecate.failover.reason":       reason,
-					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
+					telemetry.AttrGenAIProviderName:            candidate.Provider,
+					telemetry.AttrGenAIRequestModel:            candidate.Model,
+					telemetry.AttrHecateFailoverReason:         reason,
+					telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
 				})
 				continue
 			}
@@ -128,36 +129,36 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 		if index > 0 {
 			recordTrace(trace, "provider.failover.selected", "provider", map[string]any{
-				"gen_ai.provider.name":          candidate.Provider,
-				"gen_ai.request.model":          candidate.Model,
-				"hecate.provider.kind":          preflight.ProviderKind,
-				"hecate.failover.from_provider": initial.Provider,
-				"hecate.failover.to_provider":   candidate.Provider,
-				"hecate.cost.estimated_micros":  preflight.EstimatedCost.TotalMicrosUSD,
+				telemetry.AttrGenAIProviderName:            candidate.Provider,
+				telemetry.AttrGenAIRequestModel:            candidate.Model,
+				telemetry.AttrHecateProviderKind:           preflight.ProviderKind,
+				telemetry.AttrHecateFailoverFromProvider:   initial.Provider,
+				telemetry.AttrHecateFailoverToProvider:     candidate.Provider,
+				telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
 			})
 		}
 
 		recordTrace(trace, "router.candidate.selected", "routing", map[string]any{
-			"gen_ai.provider.name":         candidate.Provider,
-			"gen_ai.request.model":         candidate.Model,
-			"hecate.provider.kind":         preflight.ProviderKind,
-			"hecate.route.reason":          candidate.Reason,
-			"hecate.provider.index":        index,
-			"hecate.route.outcome":         "selected",
-			"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
-			"hecate.cost.estimated_micros": preflight.EstimatedCost.TotalMicrosUSD,
+			telemetry.AttrGenAIProviderName:            candidate.Provider,
+			telemetry.AttrGenAIRequestModel:            candidate.Model,
+			telemetry.AttrHecateProviderKind:           preflight.ProviderKind,
+			telemetry.AttrHecateRouteReason:            candidate.Reason,
+			telemetry.AttrHecateProviderIndex:          index,
+			telemetry.AttrHecateRouteOutcome:           "selected",
+			telemetry.AttrHecateProviderHealthStatus:   healthStatus(e.healthTracker, candidate.Provider),
+			telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
 		})
 
 		attemptReq := withResolvedModel(req, candidate.Model)
 		for attempt := 1; attempt <= e.options.MaxAttempts; attempt++ {
 			totalAttempts++
 			recordTrace(trace, "provider.call.started", "provider", map[string]any{
-				"gen_ai.provider.name":      candidate.Provider,
-				"gen_ai.request.model":      candidate.Model,
-				"hecate.retry.attempt":      attempt,
-				"hecate.provider.index":     index,
-				"hecate.retry.max_attempts": e.options.MaxAttempts,
-				"hecate.failover.active":    index > 0,
+				telemetry.AttrGenAIProviderName:      candidate.Provider,
+				telemetry.AttrGenAIRequestModel:      candidate.Model,
+				telemetry.AttrHecateRetryAttempt:     attempt,
+				telemetry.AttrHecateProviderIndex:    index,
+				telemetry.AttrHecateRetryMaxAttempts: e.options.MaxAttempts,
+				telemetry.AttrHecateFailoverActive:   index > 0,
 			})
 
 			start := time.Now()
@@ -165,11 +166,11 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			latency := time.Since(start)
 			if err == nil {
 				recordTrace(trace, "provider.call.finished", "provider", map[string]any{
-					"gen_ai.provider.name":       candidate.Provider,
-					"gen_ai.request.model":       candidate.Model,
-					"hecate.retry.attempt":       attempt,
-					"hecate.provider.index":      index,
-					"hecate.provider.latency_ms": latency.Milliseconds(),
+					telemetry.AttrGenAIProviderName:       candidate.Provider,
+					telemetry.AttrGenAIRequestModel:       candidate.Model,
+					telemetry.AttrHecateRetryAttempt:      attempt,
+					telemetry.AttrHecateProviderIndex:     index,
+					telemetry.AttrHecateProviderLatencyMS: latency.Milliseconds(),
 				})
 				if e.healthTracker != nil {
 					e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{Duration: latency})
@@ -186,12 +187,12 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
 			recordTraceError(trace, "provider.call.failed", "provider", errorKindProviderCallFailed, err, map[string]any{
-				"gen_ai.provider.name":       candidate.Provider,
-				"gen_ai.request.model":       candidate.Model,
-				"hecate.retry.attempt":       attempt,
-				"hecate.provider.index":      index,
-				"hecate.retry.retryable":     providers.IsRetryableError(err),
-				"hecate.provider.latency_ms": latency.Milliseconds(),
+				telemetry.AttrGenAIProviderName:       candidate.Provider,
+				telemetry.AttrGenAIRequestModel:       candidate.Model,
+				telemetry.AttrHecateRetryAttempt:      attempt,
+				telemetry.AttrHecateProviderIndex:     index,
+				"hecate.retry.retryable":              providers.IsRetryableError(err),
+				telemetry.AttrHecateProviderLatencyMS: latency.Milliseconds(),
 			})
 			if e.healthTracker != nil {
 				e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{
@@ -210,18 +211,18 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			totalRetries++
 			backoff := e.retryDelay(attempt)
 			recordTrace(trace, "provider.retry.scheduled", "provider", map[string]any{
-				"gen_ai.provider.name":      candidate.Provider,
-				"gen_ai.request.model":      candidate.Model,
-				"hecate.retry.attempt":      attempt,
-				"hecate.retry.next_attempt": attempt + 1,
-				"hecate.retry.backoff_ms":   backoff.Milliseconds(),
+				telemetry.AttrGenAIProviderName:      candidate.Provider,
+				telemetry.AttrGenAIRequestModel:      candidate.Model,
+				telemetry.AttrHecateRetryAttempt:     attempt,
+				telemetry.AttrHecateRetryNextAttempt: attempt + 1,
+				telemetry.AttrHecateRetryBackoffMS:   backoff.Milliseconds(),
 			})
 			if err := e.sleep(ctx, backoff); err != nil {
 				recordTraceError(trace, "provider.retry.backoff_failed", "provider", errorKindRetryBackoffFailed, err, map[string]any{
-					"gen_ai.provider.name":    candidate.Provider,
-					"gen_ai.request.model":    candidate.Model,
-					"hecate.retry.attempt":    attempt,
-					"hecate.retry.backoff_ms": backoff.Milliseconds(),
+					telemetry.AttrGenAIProviderName:    candidate.Provider,
+					telemetry.AttrGenAIRequestModel:    candidate.Model,
+					telemetry.AttrHecateRetryAttempt:   attempt,
+					telemetry.AttrHecateRetryBackoffMS: backoff.Milliseconds(),
 				})
 				return nil, fmt.Errorf("wait for retry backoff: %w", err)
 			}
@@ -229,16 +230,16 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 		if e.healthTracker != nil && providers.IsRetryableError(lastErr) {
 			recordTraceError(trace, "provider.health.degraded", "provider", errorKindProviderHealth, lastErr, map[string]any{
-				"gen_ai.provider.name":         candidate.Provider,
-				"hecate.provider.health_state": string(e.healthTracker.State(candidate.Provider).Status),
+				telemetry.AttrGenAIProviderName:          candidate.Provider,
+				telemetry.AttrHecateProviderHealthStatus: string(e.healthTracker.State(candidate.Provider).Status),
 			})
 		}
 
 		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
 			recordTraceError(trace, "provider.failover.triggered", "provider", errorKindProviderCallFailed, lastErr, map[string]any{
-				"gen_ai.provider.name":          candidate.Provider,
-				"gen_ai.request.model":          candidate.Model,
-				"hecate.failover.from_provider": candidate.Provider,
+				telemetry.AttrGenAIProviderName:          candidate.Provider,
+				telemetry.AttrGenAIRequestModel:          candidate.Model,
+				telemetry.AttrHecateFailoverFromProvider: candidate.Provider,
 			})
 			continue
 		}

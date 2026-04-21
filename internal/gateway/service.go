@@ -227,9 +227,9 @@ func (s *Service) recordRequestOutcome(ctx context.Context, err error, duration 
 func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace, req types.ChatRequest) (*ExecutionPlan, error) {
 	requestedIdentity := models.BuildIdentity(req.Model, "")
 	trace.Record("request.received", map[string]any{
-		"gen_ai.request.message_count": len(req.Messages),
-		"gen_ai.request.model":         req.Model,
-		"hecate.model.canonical":       requestedIdentity.CanonicalRequested,
+		telemetry.AttrHecateRequestMessageCount: len(req.Messages),
+		telemetry.AttrGenAIRequestModel:         req.Model,
+		telemetry.AttrHecateModelCanonical:      requestedIdentity.CanonicalRequested,
 	})
 
 	if err := validate(req); err != nil {
@@ -239,19 +239,19 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 
 	if err := s.governor.Check(ctx, req); err != nil {
 		recordTraceError(trace, "governor.denied", "governor", errorKindRequestDenied, err, map[string]any{
-			"hecate.governor.result": "denied",
+			telemetry.AttrHecateGovernorResult: telemetry.ResultDenied,
 		})
 		return nil, fmt.Errorf("%w: %v", errDenied, err)
 	}
 	recordTrace(trace, "governor.allowed", "governor", map[string]any{
-		"hecate.governor.result": "allowed",
+		telemetry.AttrHecateGovernorResult: telemetry.ResultSuccess,
 	})
 
 	rewrittenReq := s.governor.Rewrite(req)
 	if rewrittenReq.Model != req.Model {
 		trace.Record("governor.model_rewrite", map[string]any{
-			"gen_ai.request.model.original":  req.Model,
-			"gen_ai.request.model.rewritten": rewrittenReq.Model,
+			telemetry.AttrGenAIRequestModel + ".original":  req.Model,
+			telemetry.AttrGenAIRequestModel + ".rewritten": rewrittenReq.Model,
 		})
 	}
 
@@ -266,10 +266,10 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		return nil, fmt.Errorf("route request: %w", err)
 	}
 	recordTrace(trace, "router.selected", "routing", map[string]any{
-		"gen_ai.provider.name": decision.Provider,
-		"gen_ai.request.model": decision.Model,
-		"hecate.route.reason":  decision.Reason,
-		"hecate.provider.kind": decision.ProviderKind,
+		telemetry.AttrGenAIProviderName:  decision.Provider,
+		telemetry.AttrGenAIRequestModel:  decision.Model,
+		telemetry.AttrHecateRouteReason:  decision.Reason,
+		telemetry.AttrHecateProviderKind: decision.ProviderKind,
 	})
 
 	preflight, err := s.preflight.Evaluate(ctx, rewrittenReq, decision)
@@ -281,10 +281,10 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 				return nil, preflightErr
 			case RoutePreflightRouteDenied:
 				recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, preflightErr, map[string]any{
-					"gen_ai.provider.name":         decision.Provider,
-					"hecate.provider.kind":         preflightErr.ProviderKind,
-					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
-					"hecate.governor.route_result": "denied",
+					telemetry.AttrGenAIProviderName:            decision.Provider,
+					telemetry.AttrHecateProviderKind:           preflightErr.ProviderKind,
+					telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
+					telemetry.AttrHecateGovernorRouteResult:    telemetry.ResultDenied,
 				})
 				return nil, fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
 			}
@@ -292,10 +292,10 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		return nil, err
 	}
 	recordTrace(trace, "governor.route_allowed", "governor", map[string]any{
-		"gen_ai.provider.name":         decision.Provider,
-		"hecate.provider.kind":         preflight.ProviderKind,
-		"hecate.cost.estimated_micros": preflight.EstimatedCost.TotalMicrosUSD,
-		"hecate.governor.route_result": "allowed",
+		telemetry.AttrGenAIProviderName:            decision.Provider,
+		telemetry.AttrHecateProviderKind:           preflight.ProviderKind,
+		telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
+		telemetry.AttrHecateGovernorRouteResult:    telemetry.ResultSuccess,
 	})
 
 	plan := &ExecutionPlan{

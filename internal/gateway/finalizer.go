@@ -51,9 +51,9 @@ func (f *DefaultResponseFinalizer) FinalizeExecution(ctx context.Context, trace 
 
 	resp.Route = decision
 	recordTrace(trace, "usage.normalized", "response", map[string]any{
-		"gen_ai.usage.input_tokens":  resp.Usage.PromptTokens,
-		"gen_ai.usage.output_tokens": resp.Usage.CompletionTokens,
-		"gen_ai.usage.total_tokens":  resp.Usage.TotalTokens,
+		telemetry.AttrGenAIUsageInputTokens:  resp.Usage.PromptTokens,
+		telemetry.AttrGenAIUsageOutputTokens: resp.Usage.CompletionTokens,
+		telemetry.AttrGenAIUsageTotalTokens:  resp.Usage.TotalTokens,
 	})
 
 	cost, err := f.pricebook.Estimate(decision.Provider, resp.Model, resp.Usage)
@@ -62,10 +62,10 @@ func (f *DefaultResponseFinalizer) FinalizeExecution(ctx context.Context, trace 
 	}
 	resp.Cost = cost
 	recordTrace(trace, "cost.calculated", "response", map[string]any{
-		"hecate.cost.total_micros_usd":  cost.TotalMicrosUSD,
-		"hecate.cost.input_micros_usd":  cost.InputMicrosUSD,
-		"hecate.cost.output_micros_usd": cost.OutputMicrosUSD,
-		"hecate.cost.cached_micros_usd": cost.CachedInputMicrosUSD,
+		telemetry.AttrHecateCostTotalMicrosUSD:  cost.TotalMicrosUSD,
+		telemetry.AttrHecateCostInputMicrosUSD:  cost.InputMicrosUSD,
+		telemetry.AttrHecateCostOutputMicrosUSD: cost.OutputMicrosUSD,
+		telemetry.AttrHecateCostCachedMicrosUSD: cost.CachedInputMicrosUSD,
 	})
 
 	if err := f.governor.RecordUsage(ctx, plan.Request, decision, cost.TotalMicrosUSD); err != nil {
@@ -78,11 +78,11 @@ func (f *DefaultResponseFinalizer) FinalizeExecution(ctx context.Context, trace 
 
 	identity := models.BuildIdentity(plan.OriginalRequest.Model, resp.Model)
 	recordTrace(trace, "response.returned", "response", map[string]any{
-		"gen_ai.provider.name":             decision.Provider,
-		"gen_ai.response.model":            resp.Model,
-		"gen_ai.request.model":             identity.Requested,
-		"hecate.model.requested_canonical": identity.CanonicalRequested,
-		"hecate.model.resolved_canonical":  identity.CanonicalResolved,
+		telemetry.AttrGenAIProviderName:             decision.Provider,
+		telemetry.AttrGenAIResponseModel:            resp.Model,
+		telemetry.AttrGenAIRequestModel:             identity.Requested,
+		telemetry.AttrHecateModelRequestedCanonical: identity.CanonicalRequested,
+		telemetry.AttrHecateModelResolvedCanonical:  identity.CanonicalResolved,
 	})
 
 	metadata := ResponseMetadata{
@@ -165,9 +165,9 @@ func (f *DefaultResponseFinalizer) completeResult(ctx context.Context, trace *pr
 		slog.String(telemetry.AttrHecateProviderKind, metadata.ProviderKind),
 		slog.String(telemetry.AttrHecateRouteReason, metadata.RouteReason),
 		slog.String(telemetry.AttrGenAIRequestModel, metadata.RequestedModel),
-		slog.String("hecate.model.requested_canonical", metadata.CanonicalRequestedModel),
+		slog.String(telemetry.AttrHecateModelRequestedCanonical, metadata.CanonicalRequestedModel),
 		slog.String(telemetry.AttrGenAIResponseModel, metadata.Model),
-		slog.String("hecate.model.resolved_canonical", metadata.CanonicalResolvedModel),
+		slog.String(telemetry.AttrHecateModelResolvedCanonical, metadata.CanonicalResolvedModel),
 		slog.Bool(telemetry.AttrHecateCacheHit, metadata.CacheHit),
 		slog.String(telemetry.AttrHecateCacheType, metadata.CacheType),
 		slog.String(telemetry.AttrHecateSemanticStrategy, metadata.SemanticStrategy),

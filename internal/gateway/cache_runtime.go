@@ -89,15 +89,15 @@ func (r *GatewayCacheRuntime) Store(ctx context.Context, trace *profiler.Trace, 
 			slog.Any("error", err),
 		)
 		recordTraceError(trace, "semantic_cache.store_failed", "cache", errorKindSemanticCacheStore, err, map[string]any{
-			"hecate.cache.type":     "semantic",
-			"hecate.semantic.scope": namespace,
+			telemetry.AttrHecateCacheType:     "semantic",
+			telemetry.AttrHecateSemanticScope: namespace,
 		})
 		return
 	}
 
 	recordTrace(trace, "semantic_cache.store_finished", "cache", map[string]any{
-		"hecate.cache.type":     "semantic",
-		"hecate.semantic.scope": namespace,
+		telemetry.AttrHecateCacheType:     "semantic",
+		telemetry.AttrHecateSemanticScope: namespace,
 	})
 }
 
@@ -105,17 +105,17 @@ func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.T
 	cached, ok := r.exact.Get(ctx, plan.CacheKey)
 	if !ok {
 		recordTrace(trace, "cache.miss", "cache", map[string]any{
-			"hecate.cache.hit":  false,
-			"hecate.cache.type": "exact",
-			"hecate.cache.key":  plan.CacheKey,
+			telemetry.AttrHecateCacheHit:  false,
+			telemetry.AttrHecateCacheType: "exact",
+			telemetry.AttrHecateCacheKey:  plan.CacheKey,
 		})
 		return nil, false, nil
 	}
 
 	recordTrace(trace, "cache.hit", "cache", map[string]any{
-		"hecate.cache.hit":  true,
-		"hecate.cache.type": "exact",
-		"hecate.cache.key":  plan.CacheKey,
+		telemetry.AttrHecateCacheHit:  true,
+		telemetry.AttrHecateCacheType: "exact",
+		telemetry.AttrHecateCacheKey:  plan.CacheKey,
 	})
 
 	providerKind := ""
@@ -124,20 +124,20 @@ func (r *GatewayCacheRuntime) lookupExact(ctx context.Context, trace *profiler.T
 	}
 	if err := r.governor.CheckRoute(ctx, plan.Request, cached.Route, providerKind, 0); err != nil {
 		recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, err, map[string]any{
-			"gen_ai.provider.name":         cached.Route.Provider,
-			"hecate.provider.kind":         providerKind,
-			"hecate.cost.estimated_micros": 0,
-			"hecate.governor.route_result": "denied",
-			"hecate.cache.type":            "exact",
+			telemetry.AttrGenAIProviderName:            cached.Route.Provider,
+			telemetry.AttrHecateProviderKind:           providerKind,
+			telemetry.AttrHecateCostEstimatedMicrosUSD: 0,
+			telemetry.AttrHecateGovernorRouteResult:    telemetry.ResultDenied,
+			telemetry.AttrHecateCacheType:              "exact",
 		})
 		return nil, false, fmt.Errorf("%w: %v", errDenied, err)
 	}
 	recordTrace(trace, "governor.route_allowed", "governor", map[string]any{
-		"gen_ai.provider.name":         cached.Route.Provider,
-		"hecate.provider.kind":         providerKind,
-		"hecate.cost.estimated_micros": 0,
-		"hecate.governor.route_result": "allowed",
-		"hecate.cache.type":            "exact",
+		telemetry.AttrGenAIProviderName:            cached.Route.Provider,
+		telemetry.AttrHecateProviderKind:           providerKind,
+		telemetry.AttrHecateCostEstimatedMicrosUSD: 0,
+		telemetry.AttrHecateGovernorRouteResult:    telemetry.ResultSuccess,
+		telemetry.AttrHecateCacheType:              "exact",
 	})
 
 	return &CacheLookupResult{
@@ -154,27 +154,27 @@ func (r *GatewayCacheRuntime) lookupSemantic(ctx context.Context, trace *profile
 	}
 
 	recordTrace(trace, "semantic_cache.lookup_started", "cache", map[string]any{
-		"hecate.cache.type":      "semantic",
-		"hecate.semantic.lookup": true,
-		"hecate.semantic.scope":  plan.SemanticScope,
+		telemetry.AttrHecateCacheType:      "semantic",
+		telemetry.AttrHecateSemanticLookup: true,
+		telemetry.AttrHecateSemanticScope:  plan.SemanticScope,
 	})
 	match, ok := r.semantic.Search(ctx, plan.SemanticQuery)
 	if !ok {
 		recordTrace(trace, "semantic_cache.miss", "cache", map[string]any{
-			"hecate.cache.hit":      false,
-			"hecate.cache.type":     "semantic",
-			"hecate.semantic.scope": plan.SemanticScope,
+			telemetry.AttrHecateCacheHit:      false,
+			telemetry.AttrHecateCacheType:     "semantic",
+			telemetry.AttrHecateSemanticScope: plan.SemanticScope,
 		})
 		return nil, false, nil
 	}
 
 	recordTrace(trace, "semantic_cache.hit", "cache", map[string]any{
-		"hecate.cache.hit":           true,
-		"hecate.cache.type":          "semantic",
-		"hecate.semantic.scope":      plan.SemanticScope,
-		"hecate.semantic.similarity": match.Similarity,
-		"hecate.semantic.strategy":   match.Strategy,
-		"hecate.semantic.index_type": match.IndexType,
+		telemetry.AttrHecateCacheHit:           true,
+		telemetry.AttrHecateCacheType:          "semantic",
+		telemetry.AttrHecateSemanticScope:      plan.SemanticScope,
+		telemetry.AttrHecateSemanticSimilarity: match.Similarity,
+		telemetry.AttrHecateSemanticStrategy:   match.Strategy,
+		telemetry.AttrHecateSemanticIndexType:  match.IndexType,
 	})
 
 	return &CacheLookupResult{

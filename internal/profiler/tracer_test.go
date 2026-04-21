@@ -1,6 +1,10 @@
 package profiler
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/hecate/agent-runtime/internal/telemetry"
+)
 
 func TestTraceRecordCreatesEvent(t *testing.T) {
 	t.Parallel()
@@ -17,5 +21,8 @@ func TestTraceRecordCreatesEvent(t *testing.T) {
 	}
 	if events[0].Attributes["key"] != "abc" {
 		t.Fatalf("event attribute = %#v, want abc", events[0].Attributes["key"])
+	}
+	if spans := trace.Spans(); spans[1].Attributes[telemetry.AttrHecatePhase] != "cache" {
+		t.Fatalf("span phase attribute = %#v, want cache", spans[1].Attributes[telemetry.AttrHecatePhase])
 	}
 }
