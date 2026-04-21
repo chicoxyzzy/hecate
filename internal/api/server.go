@@ -23,7 +23,6 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /admin/control-plane/api-keys/rotate", handler.HandleControlPlaneRotateAPIKey)
 	mux.HandleFunc("POST /admin/control-plane/api-keys/delete", handler.HandleControlPlaneDeleteAPIKey)
 	mux.HandleFunc("GET /admin/providers", handler.HandleProviderStatus)
-	mux.HandleFunc("GET /metrics", handler.HandleMetrics)
 	mux.HandleFunc("GET /v1/models", handler.HandleModels)
 	mux.HandleFunc("POST /v1/chat/completions", handler.HandleChatCompletions)
 

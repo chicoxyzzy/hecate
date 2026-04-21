@@ -1,175 +1,212 @@
 package telemetry
 
 import (
-	"fmt"
-	"sort"
-	"strings"
-	"sync"
+	"context"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otmetric "go.opentelemetry.io/otel/metric"
 )
 
+type ChatMetricsRecord struct {
+	Provider             string
+	ProviderKind         string
+	RequestedModel       string
+	ResponseModel        string
+	CacheHit             bool
+	CacheType            string
+	SemanticStrategy     string
+	SemanticIndexType    string
+	CostMicrosUSD        int64
+	PromptTokens         int64
+	CompletionTokens     int64
+	TotalTokens          int64
+	RetryCount           int
+	FallbackFromProvider string
+}
+
 type Metrics struct {
-	mu                   sync.Mutex
-	chatRequestsTotal    int64
-	cacheHitsTotal       int64
-	cacheMissesTotal     int64
-	costMicrosTotal      int64
-	providerRequests     map[string]int64
-	providerKindRequests map[string]int64
-	cacheTypeRequests    map[string]int64
-	semanticStrategyHits map[string]int64
-	semanticIndexHits    map[string]int64
+	requestsTotal         otmetric.Int64Counter
+	requestDuration       otmetric.Int64Histogram
+	chatRequestsTotal     otmetric.Int64Counter
+	costMicrosTotal       otmetric.Int64Counter
+	promptTokensTotal     otmetric.Int64Counter
+	completionTokensTotal otmetric.Int64Counter
+	totalTokensTotal      otmetric.Int64Counter
+	retriesTotal          otmetric.Int64Counter
+	failoversTotal        otmetric.Int64Counter
 }
 
 func NewMetrics() *Metrics {
+	metrics, err := NewMetricsWithMeterProvider(otel.GetMeterProvider())
+	if err != nil {
+		return &Metrics{}
+	}
+	return metrics
+}
+
+func NewMetricsWithMeterProvider(provider otmetric.MeterProvider) (*Metrics, error) {
+	if provider == nil {
+		provider = otel.GetMeterProvider()
+	}
+
+	meter := provider.Meter("github.com/hecate/agent-runtime/internal/telemetry")
+
+	requestsTotal, err := meter.Int64Counter(
+		"hecate.gateway.requests",
+		otmetric.WithDescription("Total gateway requests grouped by result."),
+		otmetric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	requestDuration, err := meter.Int64Histogram(
+		"hecate.gateway.request.duration",
+		otmetric.WithDescription("Gateway request duration."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	chatRequestsTotal, err := meter.Int64Counter(
+		"gen_ai.gateway.chat.requests",
+		otmetric.WithDescription("Total chat completion responses finalized by the gateway."),
+		otmetric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	costMicrosTotal, err := meter.Int64Counter(
+		"gen_ai.gateway.cost",
+		otmetric.WithDescription("Accumulated estimated cost for chat responses."),
+		otmetric.WithUnit("1"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	promptTokensTotal, err := meter.Int64Counter(
+		"gen_ai.client.tokens.input",
+		otmetric.WithDescription("Accumulated prompt tokens."),
+		otmetric.WithUnit("{token}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	completionTokensTotal, err := meter.Int64Counter(
+		"gen_ai.client.tokens.output",
+		otmetric.WithDescription("Accumulated completion tokens."),
+		otmetric.WithUnit("{token}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	totalTokensTotal, err := meter.Int64Counter(
+		"gen_ai.client.tokens.total",
+		otmetric.WithDescription("Accumulated total tokens."),
+		otmetric.WithUnit("{token}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	retriesTotal, err := meter.Int64Counter(
+		"hecate.gateway.retries",
+		otmetric.WithDescription("Total provider retry attempts beyond the first request attempt."),
+		otmetric.WithUnit("{retry}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	failoversTotal, err := meter.Int64Counter(
+		"hecate.gateway.failovers",
+		otmetric.WithDescription("Total provider failover events."),
+		otmetric.WithUnit("{failover}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
-		providerRequests:     make(map[string]int64),
-		providerKindRequests: make(map[string]int64),
-		cacheTypeRequests:    make(map[string]int64),
-		semanticStrategyHits: make(map[string]int64),
-		semanticIndexHits:    make(map[string]int64),
-	}
+		requestsTotal:         requestsTotal,
+		requestDuration:       requestDuration,
+		chatRequestsTotal:     chatRequestsTotal,
+		costMicrosTotal:       costMicrosTotal,
+		promptTokensTotal:     promptTokensTotal,
+		completionTokensTotal: completionTokensTotal,
+		totalTokensTotal:      totalTokensTotal,
+		retriesTotal:          retriesTotal,
+		failoversTotal:        failoversTotal,
+	}, nil
 }
 
-func (m *Metrics) RecordChat(provider, providerKind string, cacheHit bool, cacheType string, semanticStrategy string, semanticIndex string, costMicros int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Metrics) RecordRequestOutcome(ctx context.Context, result string, duration time.Duration) {
+	if m == nil || result == "" {
+		return
+	}
 
-	m.chatRequestsTotal++
-	if cacheHit {
-		m.cacheHitsTotal++
-	} else {
-		m.cacheMissesTotal++
-	}
-	m.costMicrosTotal += costMicros
-	if provider != "" {
-		m.providerRequests[provider]++
-	}
-	if providerKind != "" {
-		m.providerKindRequests[providerKind]++
-	}
-	if cacheType != "" {
-		m.cacheTypeRequests[cacheType]++
-	}
-	if semanticStrategy != "" {
-		m.semanticStrategyHits[semanticStrategy]++
-	}
-	if semanticIndex != "" {
-		m.semanticIndexHits[semanticIndex]++
-	}
+	attrs := otmetric.WithAttributes(attribute.String(MetricLabelResult, result))
+	m.requestsTotal.Add(ctx, 1, attrs)
+	m.requestDuration.Record(ctx, duration.Milliseconds(), attrs)
 }
 
-type Snapshot struct {
-	ChatRequestsTotal    int64
-	CacheHitsTotal       int64
-	CacheMissesTotal     int64
-	CostMicrosTotal      int64
-	ProviderRequests     map[string]int64
-	ProviderKindRequests map[string]int64
-	CacheTypeRequests    map[string]int64
-	SemanticStrategyHits map[string]int64
-	SemanticIndexHits    map[string]int64
-}
-
-func (m *Metrics) Snapshot() Snapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	providerRequests := make(map[string]int64, len(m.providerRequests))
-	for k, v := range m.providerRequests {
-		providerRequests[k] = v
-	}
-	providerKindRequests := make(map[string]int64, len(m.providerKindRequests))
-	for k, v := range m.providerKindRequests {
-		providerKindRequests[k] = v
-	}
-	cacheTypeRequests := make(map[string]int64, len(m.cacheTypeRequests))
-	for k, v := range m.cacheTypeRequests {
-		cacheTypeRequests[k] = v
-	}
-	semanticStrategyHits := make(map[string]int64, len(m.semanticStrategyHits))
-	for k, v := range m.semanticStrategyHits {
-		semanticStrategyHits[k] = v
-	}
-	semanticIndexHits := make(map[string]int64, len(m.semanticIndexHits))
-	for k, v := range m.semanticIndexHits {
-		semanticIndexHits[k] = v
+func (m *Metrics) RecordChat(ctx context.Context, record ChatMetricsRecord) {
+	if m == nil {
+		return
 	}
 
-	return Snapshot{
-		ChatRequestsTotal:    m.chatRequestsTotal,
-		CacheHitsTotal:       m.cacheHitsTotal,
-		CacheMissesTotal:     m.cacheMissesTotal,
-		CostMicrosTotal:      m.costMicrosTotal,
-		ProviderRequests:     providerRequests,
-		ProviderKindRequests: providerKindRequests,
-		CacheTypeRequests:    cacheTypeRequests,
-		SemanticStrategyHits: semanticStrategyHits,
-		SemanticIndexHits:    semanticIndexHits,
+	attrs := make([]attribute.KeyValue, 0, 9)
+	if record.Provider != "" {
+		attrs = append(attrs, attribute.String(AttrGenAIProviderName, record.Provider))
 	}
-}
-
-type ProviderHealthSnapshot struct {
-	HealthyCount  int
-	DegradedCount int
-}
-
-func RenderPrometheus(snapshot Snapshot, health ProviderHealthSnapshot) string {
-	var b strings.Builder
-
-	writeHelpType(&b, "gateway_chat_requests_total", "Total chat completion requests handled by the gateway.", "counter")
-	fmt.Fprintf(&b, "gateway_chat_requests_total %d\n", snapshot.ChatRequestsTotal)
-
-	writeHelpType(&b, "gateway_cache_hits_total", "Total exact cache hits.", "counter")
-	fmt.Fprintf(&b, "gateway_cache_hits_total %d\n", snapshot.CacheHitsTotal)
-
-	writeHelpType(&b, "gateway_cache_misses_total", "Total exact cache misses.", "counter")
-	fmt.Fprintf(&b, "gateway_cache_misses_total %d\n", snapshot.CacheMissesTotal)
-
-	writeHelpType(&b, "gateway_cost_micros_usd_total", "Accumulated estimated cost in micros of USD.", "counter")
-	fmt.Fprintf(&b, "gateway_cost_micros_usd_total %d\n", snapshot.CostMicrosTotal)
-
-	writeHelpType(&b, "gateway_provider_requests_total", "Requests routed to each provider.", "counter")
-	for _, key := range sortedKeys(snapshot.ProviderRequests) {
-		fmt.Fprintf(&b, "gateway_provider_requests_total{provider=%q} %d\n", key, snapshot.ProviderRequests[key])
+	if record.ProviderKind != "" {
+		attrs = append(attrs, attribute.String(AttrHecateProviderKind, record.ProviderKind))
+	}
+	if record.RequestedModel != "" {
+		attrs = append(attrs, attribute.String(AttrGenAIRequestModel, record.RequestedModel))
+	}
+	if record.ResponseModel != "" {
+		attrs = append(attrs, attribute.String(AttrGenAIResponseModel, record.ResponseModel))
+	}
+	attrs = append(attrs, attribute.Bool(AttrHecateCacheHit, record.CacheHit))
+	if record.CacheType != "" {
+		attrs = append(attrs, attribute.String(AttrHecateCacheType, record.CacheType))
+	}
+	if record.SemanticStrategy != "" {
+		attrs = append(attrs, attribute.String(AttrHecateSemanticStrategy, record.SemanticStrategy))
+	}
+	if record.SemanticIndexType != "" {
+		attrs = append(attrs, attribute.String(AttrHecateSemanticIndexType, record.SemanticIndexType))
 	}
 
-	writeHelpType(&b, "gateway_provider_kind_requests_total", "Requests handled by provider kind.", "counter")
-	for _, key := range sortedKeys(snapshot.ProviderKindRequests) {
-		fmt.Fprintf(&b, "gateway_provider_kind_requests_total{provider_kind=%q} %d\n", key, snapshot.ProviderKindRequests[key])
+	options := otmetric.WithAttributes(attrs...)
+	m.chatRequestsTotal.Add(ctx, 1, options)
+
+	if record.CostMicrosUSD > 0 {
+		m.costMicrosTotal.Add(ctx, record.CostMicrosUSD, options)
 	}
-
-	writeHelpType(&b, "gateway_cache_type_requests_total", "Requests grouped by cache result type.", "counter")
-	for _, key := range sortedKeys(snapshot.CacheTypeRequests) {
-		fmt.Fprintf(&b, "gateway_cache_type_requests_total{cache_type=%q} %d\n", key, snapshot.CacheTypeRequests[key])
+	if record.PromptTokens > 0 {
+		m.promptTokensTotal.Add(ctx, record.PromptTokens, options)
 	}
-
-	writeHelpType(&b, "gateway_semantic_strategy_hits_total", "Semantic cache hits grouped by retrieval strategy.", "counter")
-	for _, key := range sortedKeys(snapshot.SemanticStrategyHits) {
-		fmt.Fprintf(&b, "gateway_semantic_strategy_hits_total{strategy=%q} %d\n", key, snapshot.SemanticStrategyHits[key])
+	if record.CompletionTokens > 0 {
+		m.completionTokensTotal.Add(ctx, record.CompletionTokens, options)
 	}
-
-	writeHelpType(&b, "gateway_semantic_index_hits_total", "Semantic cache hits grouped by index type.", "counter")
-	for _, key := range sortedKeys(snapshot.SemanticIndexHits) {
-		fmt.Fprintf(&b, "gateway_semantic_index_hits_total{index_type=%q} %d\n", key, snapshot.SemanticIndexHits[key])
+	if record.TotalTokens > 0 {
+		m.totalTokensTotal.Add(ctx, record.TotalTokens, options)
 	}
-
-	writeHelpType(&b, "gateway_provider_health", "Current provider health counts.", "gauge")
-	fmt.Fprintf(&b, "gateway_provider_health{status=%q} %d\n", "healthy", health.HealthyCount)
-	fmt.Fprintf(&b, "gateway_provider_health{status=%q} %d\n", "degraded", health.DegradedCount)
-
-	return b.String()
-}
-
-func writeHelpType(b *strings.Builder, name, help, metricType string) {
-	fmt.Fprintf(b, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(b, "# TYPE %s %s\n", name, metricType)
-}
-
-func sortedKeys(m map[string]int64) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	if record.RetryCount > 0 {
+		m.retriesTotal.Add(ctx, int64(record.RetryCount), options)
 	}
-	sort.Strings(keys)
-	return keys
+	if record.FallbackFromProvider != "" {
+		m.failoversTotal.Add(ctx, 1, otmetric.WithAttributes(append(attrs,
+			attribute.String(AttrHecateFailoverFromProvider, record.FallbackFromProvider),
+		)...))
+	}
 }

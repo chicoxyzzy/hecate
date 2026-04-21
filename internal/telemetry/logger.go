@@ -35,7 +35,7 @@ type TraceIDs struct {
 func NewLogger(level string) *slog.Logger {
 	options := &slog.HandlerOptions{Level: parseLevel(level)}
 	return slog.New(slog.NewJSONHandler(os.Stdout, options)).With(
-		slog.String("service.name", ServiceName),
+		slog.String(AttrServiceName, ServiceName),
 	)
 }
 
@@ -100,30 +100,30 @@ func TraceIDsFromContext(ctx context.Context) TraceIDs {
 func ContextAttrs(ctx context.Context) []slog.Attr {
 	attrs := make([]slog.Attr, 0, 8)
 	if requestID := RequestIDFromContext(ctx); requestID != "" {
-		attrs = append(attrs, slog.String("request.id", requestID))
+		attrs = append(attrs, slog.String(AttrRequestID, requestID))
 	}
 	traceIDs := TraceIDsFromContext(ctx)
 	if traceIDs.TraceID != "" {
-		attrs = append(attrs, slog.String("trace_id", traceIDs.TraceID))
+		attrs = append(attrs, slog.String(AttrTraceID, traceIDs.TraceID))
 	}
 	if traceIDs.SpanID != "" {
-		attrs = append(attrs, slog.String("span_id", traceIDs.SpanID))
+		attrs = append(attrs, slog.String(AttrSpanID, traceIDs.SpanID))
 	}
 	if principal, ok := PrincipalFromContext(ctx); ok {
 		if principal.Name != "" {
-			attrs = append(attrs, slog.String("enduser.id", principal.Name))
+			attrs = append(attrs, slog.String(AttrEnduserID, principal.Name))
 		}
 		if principal.TenantID != "" {
-			attrs = append(attrs, slog.String("tenant.id", principal.TenantID))
+			attrs = append(attrs, slog.String(AttrTenantID, principal.TenantID))
 		}
 		if principal.Role != "" {
-			attrs = append(attrs, slog.String("hecate.auth.role", principal.Role))
+			attrs = append(attrs, slog.String(AttrHecateAuthRole, principal.Role))
 		}
 		if principal.Source != "" {
-			attrs = append(attrs, slog.String("hecate.auth.source", principal.Source))
+			attrs = append(attrs, slog.String(AttrHecateAuthSource, principal.Source))
 		}
 		if principal.KeyID != "" {
-			attrs = append(attrs, slog.String("hecate.auth.key_id", principal.KeyID))
+			attrs = append(attrs, slog.String(AttrHecateAuthKeyID, principal.KeyID))
 		}
 	}
 	return attrs

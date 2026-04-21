@@ -223,29 +223,6 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, payload)
 }
 
-func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.authorizeAdmin(r)
-	if !ok {
-		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
-		return
-	}
-	ctx := h.contextWithPrincipal(r.Context(), principal)
-
-	snapshot, health, err := h.service.MetricsSnapshot(ctx)
-	if err != nil {
-		telemetry.Error(h.logger, ctx, "gateway.metrics.fetch.failed",
-			slog.String("event.name", "gateway.metrics.fetch.failed"),
-			slog.Any("error", err),
-		)
-		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(telemetry.RenderPrometheus(snapshot, health)))
-}
-
 func (h *Handler) HandleBudgetStatus(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.authorizeAdmin(r)
 	if !ok {

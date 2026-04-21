@@ -18,7 +18,7 @@ Current runtime capabilities:
 - budget enforcement
 - tenant-aware auth and restrictions
 - request tracing and structured logs
-- optional OTLP HTTP export for traces and logs
+- optional OTLP HTTP export for traces, metrics, and logs
 - React operator UI
 
 Storage backends currently used in different subsystems:
@@ -126,6 +126,7 @@ Implemented observability features:
 - structured logs
 - in-memory trace snapshots over HTTP
 - OTLP HTTP export for traces
+- OTLP HTTP export for metrics
 - OTLP HTTP export for logs
 
 ## UI
@@ -186,7 +187,7 @@ Implemented:
 - [x] Static pricebook and cost estimation
 - [x] Budget enforcement
 - [x] Tenant-aware auth and persisted control-plane state
-- [x] Structured logs, request tracing, and OTLP export support
+- [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
 
 Next:

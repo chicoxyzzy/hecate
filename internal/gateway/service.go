@@ -187,7 +187,10 @@ func NewService(deps Dependencies) *Service {
 	}
 }
 
-func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatResult, error) {
+func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (result *ChatResult, err error) {
+	startedAt := time.Now()
+	defer s.recordRequestOutcome(ctx, err, time.Since(startedAt))
+
 	trace := s.tracer.Start(req.RequestID)
 	defer trace.Finalize()
 	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
@@ -204,6 +207,20 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}
 
 	return s.executePlan(ctx, trace, plan)
+}
+
+func (s *Service) recordRequestOutcome(ctx context.Context, err error, duration time.Duration) {
+	if s.metrics == nil {
+		return
+	}
+	result := telemetry.ResultSuccess
+	if err != nil {
+		result = telemetry.ResultError
+		if IsDeniedError(err) {
+			result = telemetry.ResultDenied
+		}
+	}
+	s.metrics.RecordRequestOutcome(ctx, result, duration)
 }
 
 func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace, req types.ChatRequest) (*ExecutionPlan, error) {
@@ -359,29 +376,6 @@ func normalizeResilienceOptions(options ResilienceOptions) ResilienceOptions {
 		options.RetryBackoff = 200 * time.Millisecond
 	}
 	return options
-}
-
-func (s *Service) MetricsSnapshot(ctx context.Context) (telemetry.Snapshot, telemetry.ProviderHealthSnapshot, error) {
-	snapshot := telemetry.Snapshot{}
-	if s.metrics != nil {
-		snapshot = s.metrics.Snapshot()
-	}
-
-	status, err := s.ProviderStatus(ctx)
-	if err != nil {
-		return snapshot, telemetry.ProviderHealthSnapshot{}, err
-	}
-
-	health := telemetry.ProviderHealthSnapshot{}
-	for _, provider := range status.Providers {
-		if provider.Healthy {
-			health.HealthyCount++
-		} else {
-			health.DegradedCount++
-		}
-	}
-
-	return snapshot, health, nil
 }
 
 func (s *Service) ListModels(ctx context.Context) (*ModelsResult, error) {

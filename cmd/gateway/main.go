@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"github.com/hecate/agent-runtime/internal/api"
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
@@ -44,7 +46,31 @@ func main() {
 			logger.Warn("otel logger shutdown failed", slog.Any("error", err))
 		}
 	}()
-	metrics := telemetry.NewMetrics()
+	meterProvider, shutdownMetrics, err := telemetry.NewMeterProvider(context.Background(), telemetry.OTelMetricOptions{
+		Enabled:     cfg.OTel.MetricsEnabled,
+		Endpoint:    cfg.OTel.MetricsEndpoint,
+		Headers:     cfg.OTel.MetricsHeaders,
+		ServiceName: cfg.OTel.ServiceName,
+		Timeout:     cfg.OTel.MetricsTimeout,
+		Interval:    cfg.OTel.MetricsInterval,
+	})
+	if err != nil {
+		slog.Error("otel meter provider init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownMetrics(shutdownCtx); err != nil {
+			logger.Warn("otel meter provider shutdown failed", slog.Any("error", err))
+		}
+	}()
+	otel.SetMeterProvider(meterProvider)
+	metrics, err := telemetry.NewMetricsWithMeterProvider(meterProvider)
+	if err != nil {
+		logger.Error("otel metrics init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
 	postgresClient := buildPostgresClient(cfg, logger)
 	if postgresClient != nil {
 		defer func() {
@@ -133,6 +159,8 @@ func main() {
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
 			slog.Bool("otel_traces_enabled", cfg.OTel.TracesEnabled),
 			slog.String("otel_traces_endpoint", cfg.OTel.TracesEndpoint),
+			slog.Bool("otel_metrics_enabled", cfg.OTel.MetricsEnabled),
+			slog.String("otel_metrics_endpoint", cfg.OTel.MetricsEndpoint),
 			slog.Bool("otel_logs_enabled", cfg.OTel.LogsEnabled),
 			slog.String("otel_logs_endpoint", firstNonEmpty(cfg.OTel.LogsEndpoint, cfg.OTel.TracesEndpoint)),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),

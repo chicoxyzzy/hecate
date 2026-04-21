@@ -8,7 +8,6 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/healthz": "http://127.0.0.1:8080",
-      "/metrics": "http://127.0.0.1:8080",
       "/v1": "http://127.0.0.1:8080",
       "/admin": "http://127.0.0.1:8080",
     },

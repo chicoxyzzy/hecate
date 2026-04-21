@@ -29,14 +29,14 @@ func TestContextAttrsIncludeRequestTraceAndPrincipal(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"request.id":         "req-123",
-		"trace_id":           "trace-123",
-		"span_id":            "span-123",
-		"enduser.id":         "alice",
-		"tenant.id":          "acme",
-		"hecate.auth.role":   "tenant",
-		"hecate.auth.source": "control_plane_api_key",
-		"hecate.auth.key_id": "key-1",
+		AttrRequestID:        "req-123",
+		AttrTraceID:          "trace-123",
+		AttrSpanID:           "span-123",
+		AttrEnduserID:        "alice",
+		AttrTenantID:         "acme",
+		AttrHecateAuthRole:   "tenant",
+		AttrHecateAuthSource: "control_plane_api_key",
+		AttrHecateAuthKeyID:  "key-1",
 	}
 
 	for key, value := range want {

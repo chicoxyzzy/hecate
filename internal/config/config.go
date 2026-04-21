@@ -54,15 +54,20 @@ type ProviderConfig struct {
 }
 
 type OTelConfig struct {
-	TracesEnabled  bool
-	TracesEndpoint string
-	TracesHeaders  map[string]string
-	ServiceName    string
-	TracesTimeout  time.Duration
-	LogsEnabled    bool
-	LogsEndpoint   string
-	LogsHeaders    map[string]string
-	LogsTimeout    time.Duration
+	TracesEnabled   bool
+	TracesEndpoint  string
+	TracesHeaders   map[string]string
+	ServiceName     string
+	TracesTimeout   time.Duration
+	MetricsEnabled  bool
+	MetricsEndpoint string
+	MetricsHeaders  map[string]string
+	MetricsTimeout  time.Duration
+	MetricsInterval time.Duration
+	LogsEnabled     bool
+	LogsEndpoint    string
+	LogsHeaders     map[string]string
+	LogsTimeout     time.Duration
 }
 
 type GovernorConfig struct {
@@ -174,15 +179,20 @@ func LoadFromEnv() Config {
 			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
 		},
 		OTel: OTelConfig{
-			TracesEnabled:  getEnvBool("GATEWAY_OTEL_TRACES_ENABLED", false),
-			TracesEndpoint: getEnv("GATEWAY_OTEL_TRACES_ENDPOINT", ""),
-			TracesHeaders:  parseEnvMap(getEnv("GATEWAY_OTEL_TRACES_HEADERS", "")),
-			ServiceName:    getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
-			TracesTimeout:  getEnvDuration("GATEWAY_OTEL_TRACES_TIMEOUT", 5*time.Second),
-			LogsEnabled:    getEnvBool("GATEWAY_OTEL_LOGS_ENABLED", false),
-			LogsEndpoint:   os.Getenv("GATEWAY_OTEL_LOGS_ENDPOINT"),
-			LogsHeaders:    parseEnvMap(os.Getenv("GATEWAY_OTEL_LOGS_HEADERS")),
-			LogsTimeout:    getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
+			TracesEnabled:   getEnvBool("GATEWAY_OTEL_TRACES_ENABLED", false),
+			TracesEndpoint:  getEnv("GATEWAY_OTEL_TRACES_ENDPOINT", ""),
+			TracesHeaders:   parseEnvMap(getEnv("GATEWAY_OTEL_TRACES_HEADERS", "")),
+			ServiceName:     getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
+			TracesTimeout:   getEnvDuration("GATEWAY_OTEL_TRACES_TIMEOUT", 5*time.Second),
+			MetricsEnabled:  getEnvBool("GATEWAY_OTEL_METRICS_ENABLED", false),
+			MetricsEndpoint: getEnv("GATEWAY_OTEL_METRICS_ENDPOINT", ""),
+			MetricsHeaders:  parseEnvMap(getEnv("GATEWAY_OTEL_METRICS_HEADERS", "")),
+			MetricsTimeout:  getEnvDuration("GATEWAY_OTEL_METRICS_TIMEOUT", 5*time.Second),
+			MetricsInterval: getEnvDuration("GATEWAY_OTEL_METRICS_INTERVAL", 30*time.Second),
+			LogsEnabled:     getEnvBool("GATEWAY_OTEL_LOGS_ENABLED", false),
+			LogsEndpoint:    os.Getenv("GATEWAY_OTEL_LOGS_ENDPOINT"),
+			LogsHeaders:     parseEnvMap(os.Getenv("GATEWAY_OTEL_LOGS_HEADERS")),
+			LogsTimeout:     getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
 		},
 		Governor: GovernorConfig{
 			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),
