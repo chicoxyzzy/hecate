@@ -43,13 +43,33 @@ describe("PlaygroundView", () => {
       <PlaygroundView
         actions={createRuntimeConsoleActions()}
         state={createRuntimeConsoleFixture({
+          providers: [{ name: "openai", kind: "cloud", healthy: true, status: "healthy", default_model: "gpt-4o-mini" }],
+          runtimeHeaders: {
+            requestId: "req-1",
+            traceId: "trace-1",
+            spanId: "span-1",
+            provider: "openai",
+            providerKind: "cloud",
+            routeReason: "default_model_local_first_failover",
+            requestedModel: "gpt-4o-mini",
+            resolvedModel: "gpt-4o-mini",
+            cache: "false",
+            cacheType: "",
+            semanticStrategy: "",
+            semanticIndex: "",
+            semanticSimilarity: "",
+            attempts: "2",
+            retries: "1",
+            fallbackFrom: "ollama",
+            costUsd: "0.000012",
+          },
           traceSpans: [
             {
               trace_id: "trace-1",
               span_id: "span-1",
               name: "gateway.request",
               status_code: "ok",
-              events: [{ name: "router.selected", timestamp: "2026-04-21T10:00:00Z" }],
+              events: [{ name: "router.selected", timestamp: "2026-04-21T10:00:00Z", attributes: { "gen_ai.provider.name": "openai" } }],
             },
           ],
         })}
@@ -58,5 +78,7 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByText("gateway.request")).toBeInTheDocument();
     expect(screen.getByText("router.selected")).toBeInTheDocument();
+    expect(screen.getByText("Default Model local first failover")).toBeInTheDocument();
+    expect(screen.getByText(/fallback from ollama/i)).toBeInTheDocument();
   });
 });

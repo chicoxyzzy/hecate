@@ -350,6 +350,10 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.metric-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .metric-grid--wide {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -401,6 +405,95 @@ textarea {
   margin: 0.28rem 0 0;
   font-size: clamp(1.15rem, 2vw, 1.45rem);
   font-weight: 700;
+}
+
+.budget-metric {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.budget-metric__label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-family:
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    monospace;
+}
+
+.budget-metric__value,
+.trace-inline-card__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.budget-thresholds,
+.trace-inline-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.budget-thresholds {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.budget-threshold,
+.trace-inline-card,
+.trace-timeline__item,
+.budget-history-item {
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.trace-inline-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.budget-history-list,
+.trace-timeline {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.budget-history-item__head,
+.trace-timeline__meta,
+.budget-history-item__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.budget-history-item__body {
+  justify-content: flex-start;
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.trace-timeline__meta {
+  margin-bottom: 0.35rem;
+}
+
+.trace-timeline__meta span {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .status-pill,
@@ -713,9 +806,11 @@ textarea {
   .console-header,
   .metric-grid--wide,
   .metric-grid,
+  .metric-grid--compact,
   .two-column-grid,
   .form-grid,
-  .form-grid--triple {
+  .form-grid--triple,
+  .trace-inline-grid {
     grid-template-columns: 1fr;
   }
 

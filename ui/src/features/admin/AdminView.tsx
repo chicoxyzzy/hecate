@@ -1,6 +1,8 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatUsd } from "../../lib/format";
+import { budgetConsumedPercent, budgetWarningTone, describeBudgetScope } from "../../lib/runtime-utils";
 import {
+  DefinitionList,
   EmptyState,
   InlineNotice,
   ShellSection,
@@ -17,42 +19,60 @@ type Props = {
 };
 
 export function AdminView({ state, actions }: Props) {
+  const budgetPercent = budgetConsumedPercent(state.budget);
+
   return (
     <div className="workspace-grid">
       <div className="workspace-main">
-        <ShellSection
-          eyebrow="Budget controls"
-          title="Budget"
-        >
+        <ShellSection eyebrow="Budget controls" title="Budget">
           <div className="two-column-grid">
             <Surface>
               {state.budget ? (
-                <dl className="definition-list">
-                  <div className="definition-list__row">
-                    <dt>Scope</dt>
-                    <dd>{state.budget.scope}</dd>
+                <div className="stack-lg">
+                  <div className="stack-sm">
+                    <div className="action-row">
+                      <StatusPill label={describeBudgetScope(state.budget)} tone="neutral" />
+                      <StatusPill label={`${budgetPercent}% used`} tone={budgetPercent >= 90 ? "danger" : budgetPercent >= 70 ? "warning" : "healthy"} />
+                    </div>
+                    <div className="metric-grid metric-grid--compact">
+                      <BudgetMetric label="Current" value={formatUsd(state.budget.current_usd)} />
+                      <BudgetMetric label="Remaining" value={formatUsd(state.budget.remaining_usd)} />
+                      <BudgetMetric label="Limit" value={formatUsd(state.budget.max_usd)} />
+                    </div>
                   </div>
-                  <div className="definition-list__row">
-                    <dt>Key</dt>
-                    <dd>{state.budget.key}</dd>
+
+                  <DefinitionList
+                    items={[
+                      { label: "Scope", value: state.budget.scope },
+                      { label: "Key", value: state.budget.key },
+                      { label: "Backend", value: state.budget.backend },
+                      { label: "Limit source", value: state.budget.limit_source },
+                      { label: "Provider", value: state.budget.provider || "n/a" },
+                      { label: "Tenant", value: state.budget.tenant || "n/a" },
+                    ]}
+                  />
+
+                  <div className="stack-sm">
+                    <p className="label-muted">Warning thresholds</p>
+                    {state.budget.warnings?.length ? (
+                      <div className="budget-thresholds">
+                        {state.budget.warnings.map((warning) => (
+                          <div className="budget-threshold" key={warning.threshold_percent}>
+                            <div className="action-row">
+                              <StatusPill label={`${warning.threshold_percent}%`} tone={budgetWarningTone(warning.triggered)} />
+                              <span className="body-muted">{formatUsd((warning.threshold_micros_usd / 1_000_000).toFixed(6))}</span>
+                            </div>
+                            <p className="body-muted">
+                              {warning.triggered ? "Threshold reached for current scope." : "Threshold not reached yet."}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyState title="No warnings" detail="No warning thresholds returned for this budget scope." />
+                    )}
                   </div>
-                  <div className="definition-list__row">
-                    <dt>Current spend</dt>
-                    <dd>{state.budget.current_usd}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Limit</dt>
-                    <dd>{state.budget.max_usd}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Remaining</dt>
-                    <dd>{state.budget.remaining_usd}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Backend</dt>
-                    <dd>{state.budget.backend}</dd>
-                  </div>
-                </dl>
+                </div>
               ) : (
                 <EmptyState title="No budget data" detail="Admin access required." />
               )}
@@ -72,6 +92,40 @@ export function AdminView({ state, actions }: Props) {
                     Reset usage
                   </ToolbarButton>
                 </div>
+              </div>
+            </Surface>
+          </div>
+
+          <div className="mt-4">
+            <Surface>
+              <div className="stack-sm">
+                <p className="label-muted">Budget history</p>
+                {state.budget?.history?.length ? (
+                  <ul className="budget-history-list">
+                    {state.budget.history.map((entry, index) => (
+                      <li className="budget-history-item" key={`${entry.timestamp}-${entry.type}-${index}`}>
+                        <div className="budget-history-item__head">
+                          <div className="action-row">
+                            <strong>{renderBudgetHistoryLabel(entry.type)}</strong>
+                            <StatusPill label={entry.provider || "scope"} tone="neutral" />
+                            {entry.request_id ? <StatusPill label={entry.request_id} tone="neutral" /> : null}
+                          </div>
+                          <span className="body-muted">{formatDateTime(entry.timestamp)}</span>
+                        </div>
+                        <div className="budget-history-item__body">
+                          <span>{formatUsd(entry.amount_usd)}</span>
+                          <span>Balance {formatUsd(entry.balance_usd)}</span>
+                          <span>Limit {formatUsd(entry.limit_usd)}</span>
+                          {entry.model ? <span>{entry.model}</span> : null}
+                          {entry.actor ? <span>{entry.actor}</span> : null}
+                        </div>
+                        {entry.detail ? <p className="body-muted">{entry.detail}</p> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState title="No history" detail="Top-ups, resets, limit changes, and usage entries will appear here." />
+                )}
               </div>
             </Surface>
           </div>
@@ -208,4 +262,28 @@ export function AdminView({ state, actions }: Props) {
       </aside>
     </div>
   );
+}
+
+function BudgetMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="budget-metric">
+      <p className="budget-metric__label">{label}</p>
+      <p className="budget-metric__value">{value}</p>
+    </div>
+  );
+}
+
+function renderBudgetHistoryLabel(value: string): string {
+  switch (value) {
+    case "top_up":
+      return "Top up";
+    case "set_limit":
+      return "Set limit";
+    case "reset":
+      return "Reset";
+    case "usage":
+      return "Usage";
+    default:
+      return value;
+  }
 }

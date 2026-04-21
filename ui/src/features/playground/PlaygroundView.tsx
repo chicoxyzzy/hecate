@@ -1,6 +1,7 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatUsd } from "../../lib/format";
-import { EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import { buildTraceTimeline, describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
+import { DefinitionList, EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -8,6 +9,9 @@ type Props = {
 };
 
 export function PlaygroundView({ state, actions }: Props) {
+  const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
+  const timeline = buildTraceTimeline(state.traceSpans, state.traceStartedAt);
+
   return (
     <div className="workspace-grid">
       <div className="workspace-main">
@@ -139,40 +143,46 @@ export function PlaygroundView({ state, actions }: Props) {
 
             <Surface>
               {state.runtimeHeaders ? (
-                <dl className="definition-list">
-                  <div className="definition-list__row">
-                    <dt>Route reason</dt>
-                    <dd>{state.runtimeHeaders.routeReason || "Not returned"}</dd>
+                <div className="stack-lg">
+                  <div className="action-row action-row--wide">
+                    <StatusPill label={describeRouteReason(state.runtimeHeaders.routeReason)} tone="neutral" />
+                    <StatusPill label={`cache ${state.runtimeHeaders.cacheType || state.runtimeHeaders.cache || "miss"}`} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
+                    <StatusPill
+                      label={activeProvider ? `${activeProvider.name} ${activeProvider.status}` : state.runtimeHeaders.provider || "unknown provider"}
+                      tone={providerStatusTone(activeProvider ?? undefined)}
+                    />
+                    {state.runtimeHeaders.fallbackFrom ? <StatusPill label={`fallback from ${state.runtimeHeaders.fallbackFrom}`} tone="warning" /> : null}
                   </div>
-                  <div className="definition-list__row">
-                    <dt>Cache</dt>
-                    <dd>{state.runtimeHeaders.cacheType || state.runtimeHeaders.cache || "miss"}</dd>
+
+                  <DefinitionList
+                    items={[
+                      { label: "Provider", value: state.runtimeHeaders.provider || "unknown" },
+                      { label: "Provider kind", value: state.runtimeHeaders.providerKind || "unknown" },
+                      { label: "Requested model", value: state.runtimeHeaders.requestedModel || state.model || "n/a" },
+                      { label: "Resolved model", value: state.runtimeHeaders.resolvedModel || "n/a" },
+                      { label: "Attempts", value: state.runtimeHeaders.attempts || "1" },
+                      { label: "Retries", value: state.runtimeHeaders.retries || "0" },
+                      { label: "Estimated cost", value: formatUsd(state.runtimeHeaders.costUsd) },
+                    ]}
+                  />
+
+                  <div className="trace-inline-grid">
+                    <div className="trace-inline-card">
+                      <p className="label-muted">Semantic cache</p>
+                      <p className="trace-inline-card__title">{state.runtimeHeaders.semanticStrategy || "No semantic match returned"}</p>
+                      <p className="body-muted">
+                        {state.runtimeHeaders.semanticStrategy
+                          ? `Similarity ${state.runtimeHeaders.semanticSimilarity || "n/a"} via ${state.runtimeHeaders.semanticIndex || "unknown index"}.`
+                          : "This request returned no semantic retrieval metadata."}
+                      </p>
+                    </div>
+                    <div className="trace-inline-card">
+                      <p className="label-muted">Request identity</p>
+                      <p className="trace-inline-card__title">{state.runtimeHeaders.requestId}</p>
+                      <p className="body-muted">Trace {state.runtimeHeaders.traceId || "not returned"} · Span {state.runtimeHeaders.spanId || "not returned"}</p>
+                    </div>
                   </div>
-                  <div className="definition-list__row">
-                    <dt>Semantic strategy</dt>
-                    <dd>{state.runtimeHeaders.semanticStrategy || "None"}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Similarity</dt>
-                    <dd>{state.runtimeHeaders.semanticSimilarity || "Not returned"}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Attempts</dt>
-                    <dd>{state.runtimeHeaders.attempts || "1"}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Retries</dt>
-                    <dd>{state.runtimeHeaders.retries || "0"}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Fallback from</dt>
-                    <dd>{state.runtimeHeaders.fallbackFrom || "None"}</dd>
-                  </div>
-                  <div className="definition-list__row">
-                    <dt>Estimated cost</dt>
-                    <dd>{formatUsd(state.runtimeHeaders.costUsd)}</dd>
-                  </div>
-                </dl>
+                </div>
               ) : (
                 <EmptyState title="No metadata" detail="Headers will appear after a response." />
               )}
@@ -190,6 +200,34 @@ export function PlaygroundView({ state, actions }: Props) {
               <InlineNotice message={state.traceError} tone="error" />
             ) : state.traceSpans.length > 0 ? (
               <div className="stack-sm">
+                {timeline.length > 0 ? (
+                  <div className="trace-timeline">
+                    {timeline.map((event, index) => (
+                      <article className="trace-timeline__item" key={`${event.timestamp}-${event.name}-${index}`}>
+                        <div className="trace-timeline__meta">
+                          <StatusPill label={event.phase} tone={event.phase === "provider" ? "warning" : event.phase === "response" ? "healthy" : "neutral"} />
+                          <span>{event.offsetLabel}</span>
+                        </div>
+                        <strong>{event.name}</strong>
+                        <p className="body-muted">
+                          {event.spanName} · {new Date(event.timestamp).toLocaleTimeString()}
+                        </p>
+                        {event.attributes && Object.keys(event.attributes).length > 0 ? (
+                          <dl className="definition-list definition-list--compact">
+                            {Object.entries(event.attributes)
+                              .slice(0, 4)
+                              .map(([key, value]) => (
+                                <div className="definition-list__row" key={key}>
+                                  <dt>{key}</dt>
+                                  <dd>{String(value)}</dd>
+                                </div>
+                              ))}
+                          </dl>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
                 {state.traceSpans.map((span) => (
                   <details className="trace-item" key={span.span_id} open={span.span_id === state.traceSpans[0]?.span_id}>
                     <summary className="trace-item__summary">
@@ -200,18 +238,7 @@ export function PlaygroundView({ state, actions }: Props) {
                       <p className="body-muted">
                         {span.start_time || "Unknown start"} {span.end_time ? `-> ${span.end_time}` : ""}
                       </p>
-                      {span.events?.length ? (
-                        <ul className="trace-event-list">
-                          {span.events.map((event) => (
-                            <li key={`${span.span_id}-${event.timestamp}-${event.name}`}>
-                              <strong>{event.name}</strong>
-                              <span>{event.timestamp}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="body-muted">No events.</p>
-                      )}
+                      <p className="body-muted">{span.events?.length ?? 0} events</p>
                     </div>
                   </details>
                 ))}
