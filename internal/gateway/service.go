@@ -22,6 +22,7 @@ import (
 type Dependencies struct {
 	Logger          *slog.Logger
 	Cache           cache.Store
+	CacheRuntime    CacheRuntime
 	Semantic        cache.SemanticStore
 	SemanticOptions SemanticOptions
 	Resilience      ResilienceOptions
@@ -50,17 +51,15 @@ type ResilienceOptions struct {
 
 type Service struct {
 	logger          *slog.Logger
-	cache           cache.Store
+	cacheRuntime    CacheRuntime
 	semantic        cache.SemanticStore
 	semanticOptions SemanticOptions
-	resilience      ResilienceOptions
 	keyBuilder      cache.KeyBuilder
 	executor        ProviderExecutor
 	router          router.Router
 	catalog         catalog.Catalog
 	governor        governor.Governor
 	providers       providers.Registry
-	healthTracker   providers.HealthTracker
 	pricebook       billing.Pricebook
 	tracer          profiler.Tracer
 	metrics         *telemetry.Metrics
@@ -146,19 +145,28 @@ func NewService(deps Dependencies) *Service {
 			deps.Resilience,
 		)
 	}
+	cacheRuntime := deps.CacheRuntime
+	if cacheRuntime == nil {
+		cacheRuntime = NewGatewayCacheRuntime(
+			deps.Logger,
+			deps.Cache,
+			deps.Semantic,
+			deps.SemanticOptions,
+			deps.Governor,
+			deps.Providers,
+		)
+	}
 	return &Service{
 		logger:          deps.Logger,
-		cache:           deps.Cache,
+		cacheRuntime:    cacheRuntime,
 		semantic:        deps.Semantic,
 		semanticOptions: deps.SemanticOptions,
-		resilience:      normalizeResilienceOptions(deps.Resilience),
 		keyBuilder:      cache.StableKeyBuilder{},
 		executor:        executor,
 		router:          deps.Router,
 		catalog:         cat,
 		governor:        deps.Governor,
 		providers:       deps.Providers,
-		healthTracker:   deps.HealthTracker,
 		pricebook:       deps.Pricebook,
 		tracer:          deps.Tracer,
 		metrics:         deps.Metrics,
@@ -175,14 +183,17 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		return nil, err
 	}
 
-	if exactResult, ok, err := s.tryExactCache(ctx, trace, plan); err != nil {
+	if cached, ok, err := s.cacheRuntime.Lookup(ctx, trace, plan); err != nil {
 		return nil, err
 	} else if ok {
-		return exactResult, nil
-	}
-
-	if semanticResult, ok := s.trySemanticCache(ctx, trace, plan); ok {
-		return semanticResult, nil
+		metadata := s.buildCacheMetadata(plan.OriginalRequest, cached.Response, cached.Route, cached.ProviderKind, cached.CacheType, cached.Semantic, trace)
+		s.recordMetrics(metadata)
+		s.logRequestSummary(ctx, metadata)
+		return &ChatResult{
+			Response: cached.Response,
+			Metadata: metadata,
+			Trace:    trace,
+		}, nil
 	}
 
 	return s.executePlan(ctx, trace, plan)
@@ -298,95 +309,6 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 	return plan, nil
 }
 
-func (s *Service) tryExactCache(ctx context.Context, trace *profiler.Trace, plan *ExecutionPlan) (*ChatResult, bool, error) {
-	cached, ok := s.cache.Get(ctx, plan.CacheKey)
-	if !ok {
-		trace.Record("cache.miss", map[string]any{
-			"hecate.cache.hit":  false,
-			"hecate.cache.type": "exact",
-			"hecate.cache.key":  plan.CacheKey,
-		})
-		return nil, false, nil
-	}
-
-	trace.Record("cache.hit", map[string]any{
-		"hecate.cache.hit":  true,
-		"hecate.cache.type": "exact",
-		"hecate.cache.key":  plan.CacheKey,
-	})
-
-	providerKind := ""
-	if provider, ok := s.providers.Get(cached.Route.Provider); ok {
-		providerKind = string(provider.Kind())
-	}
-	if err := s.governor.CheckRoute(ctx, plan.Request, cached.Route, providerKind, 0); err != nil {
-		trace.Record("governor.route_denied", map[string]any{
-			"error.message":                err.Error(),
-			"gen_ai.provider.name":         cached.Route.Provider,
-			"hecate.provider.kind":         providerKind,
-			"hecate.cost.estimated_micros": 0,
-			"hecate.governor.route_result": "denied",
-			"hecate.cache.type":            "exact",
-		})
-		return nil, false, fmt.Errorf("%w: %v", errDenied, err)
-	}
-	trace.Record("governor.route_allowed", map[string]any{
-		"gen_ai.provider.name":         cached.Route.Provider,
-		"hecate.provider.kind":         providerKind,
-		"hecate.cost.estimated_micros": 0,
-		"hecate.governor.route_result": "allowed",
-		"hecate.cache.type":            "exact",
-	})
-
-	metadata := s.buildCacheMetadata(plan.OriginalRequest, cached, cached.Route, providerKind, "exact", nil, trace)
-	s.recordMetrics(metadata)
-	s.logRequestSummary(ctx, metadata)
-	return &ChatResult{
-		Response: cached,
-		Metadata: metadata,
-		Trace:    trace,
-	}, true, nil
-}
-
-func (s *Service) trySemanticCache(ctx context.Context, trace *profiler.Trace, plan *ExecutionPlan) (*ChatResult, bool) {
-	if !plan.SemanticEligible {
-		return nil, false
-	}
-
-	trace.Record("semantic_cache.lookup_started", map[string]any{
-		"hecate.cache.type":      "semantic",
-		"hecate.semantic.lookup": true,
-		"hecate.semantic.scope":  plan.SemanticScope,
-	})
-	match, ok := s.semantic.Search(ctx, plan.SemanticQuery)
-	if !ok {
-		trace.Record("semantic_cache.miss", map[string]any{
-			"hecate.cache.hit":      false,
-			"hecate.cache.type":     "semantic",
-			"hecate.semantic.scope": plan.SemanticScope,
-		})
-		return nil, false
-	}
-
-	trace.Record("semantic_cache.hit", map[string]any{
-		"hecate.cache.hit":           true,
-		"hecate.cache.type":          "semantic",
-		"hecate.semantic.scope":      plan.SemanticScope,
-		"hecate.semantic.similarity": match.Similarity,
-		"hecate.semantic.strategy":   match.Strategy,
-		"hecate.semantic.index_type": match.IndexType,
-	})
-
-	metadata := s.buildCacheMetadata(plan.OriginalRequest, match.Response, plan.Route, plan.ProviderKind, "semantic", match, trace)
-	s.recordMetrics(metadata)
-	s.logRequestSummary(ctx, metadata)
-	return &ChatResult{
-		Response: match.Response,
-		Metadata: metadata,
-		Trace:    trace,
-	}, true
-}
-
 func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *ExecutionPlan) (*ChatResult, error) {
 	callResult, err := s.executor.Execute(ctx, trace, plan.Request, plan.Route)
 	if err != nil {
@@ -425,14 +347,6 @@ func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *
 		})
 	}
 
-	if err := s.cache.Set(ctx, plan.CacheKey, resp); err != nil {
-		telemetry.Warn(s.logger, ctx, "gateway.cache.store.failed",
-			slog.String("event.name", "gateway.cache.store.failed"),
-			slog.String("hecate.cache.type", "exact"),
-			slog.Any("error", err),
-		)
-	}
-
 	identity := models.BuildIdentity(plan.OriginalRequest.Model, resp.Model)
 	trace.Record("response.returned", map[string]any{
 		"gen_ai.provider.name":             decision.Provider,
@@ -466,44 +380,13 @@ func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *
 	s.recordMetrics(metadata)
 	s.logRequestSummary(ctx, metadata)
 
-	s.storeSemanticCache(ctx, trace, plan.Request, decision, plan.SemanticEligible, resp)
+	s.cacheRuntime.Store(ctx, trace, plan, decision, resp)
 
 	return &ChatResult{
 		Response: resp,
 		Metadata: metadata,
 		Trace:    trace,
 	}, nil
-}
-
-func (s *Service) storeSemanticCache(ctx context.Context, trace *profiler.Trace, req types.ChatRequest, decision types.RouteDecision, eligible bool, resp *types.ChatResponse) {
-	if !eligible {
-		return
-	}
-
-	namespace := cache.BuildSemanticNamespace(req, decision)
-	if err := s.semantic.Set(ctx, cache.SemanticEntry{
-		Namespace: namespace,
-		Text:      cache.BuildSemanticText(req, s.semanticOptions.MaxTextChars),
-		Response:  resp,
-	}); err != nil {
-		telemetry.Warn(s.logger, ctx, "gateway.cache.semantic.store.failed",
-			slog.String("event.name", "gateway.cache.semantic.store.failed"),
-			slog.String("hecate.cache.type", "semantic"),
-			slog.String("hecate.semantic.scope", namespace),
-			slog.Any("error", err),
-		)
-		trace.Record("semantic_cache.store_failed", map[string]any{
-			"error.message":         err.Error(),
-			"hecate.cache.type":     "semantic",
-			"hecate.semantic.scope": namespace,
-		})
-		return
-	}
-
-	trace.Record("semantic_cache.store_finished", map[string]any{
-		"hecate.cache.type":     "semantic",
-		"hecate.semantic.scope": namespace,
-	})
 }
 
 func (s *Service) buildCacheMetadata(req types.ChatRequest, resp *types.ChatResponse, route types.RouteDecision, providerKind, cacheType string, semantic *cache.SemanticMatch, trace *profiler.Trace) ResponseMetadata {
