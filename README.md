@@ -172,3 +172,30 @@ internal/storage      Redis and Postgres helpers
 pkg/types             Vendor-neutral runtime types
 ui                    Operator console
 ```
+
+## Checklist
+
+Implemented:
+
+- [x] OpenAI-compatible chat completions endpoint
+- [x] Unified model catalog across configured providers
+- [x] Cloud and local provider support behind a vendor-neutral provider layer
+- [x] Rule-based routing with retry and failover
+- [x] Exact cache
+- [x] Semantic cache
+- [x] Static pricebook and cost estimation
+- [x] Budget enforcement
+- [x] Tenant-aware auth and persisted control-plane state
+- [x] Structured logs, request tracing, and OTLP export support
+- [x] React operator UI
+
+Next:
+
+- [ ] Richer circuit-breaker and health-recovery behavior
+- [ ] More advanced routing and policy decisions
+- [ ] Better semantic-cache debugging and trace visibility in the UI
+- [ ] Better budget UX, warnings, and history
+- [ ] Background retention and pruning workers
+- [ ] More provider presets and discovery paths
+- [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
+- [ ] Deployment examples for local and production-style environments
