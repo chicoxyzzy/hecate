@@ -9,6 +9,7 @@ import (
 
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
+	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/models"
 	"github.com/hecate/agent-runtime/internal/profiler"
@@ -25,6 +26,7 @@ type Dependencies struct {
 	SemanticOptions SemanticOptions
 	Resilience      ResilienceOptions
 	Router          router.Router
+	Catalog         catalog.Catalog
 	Governor        governor.Governor
 	Providers       providers.Registry
 	HealthTracker   providers.HealthTracker
@@ -53,6 +55,7 @@ type Service struct {
 	resilience      ResilienceOptions
 	keyBuilder      cache.KeyBuilder
 	router          router.Router
+	catalog         catalog.Catalog
 	governor        governor.Governor
 	providers       providers.Registry
 	healthTracker   providers.HealthTracker
@@ -126,6 +129,10 @@ type ExecutionPlan struct {
 }
 
 func NewService(deps Dependencies) *Service {
+	cat := deps.Catalog
+	if cat == nil {
+		cat = catalog.NewRegistryCatalog(deps.Providers, deps.HealthTracker)
+	}
 	return &Service{
 		logger:          deps.Logger,
 		cache:           deps.Cache,
@@ -134,6 +141,7 @@ func NewService(deps Dependencies) *Service {
 		resilience:      normalizeResilienceOptions(deps.Resilience),
 		keyBuilder:      cache.StableKeyBuilder{},
 		router:          deps.Router,
+		catalog:         cat,
 		governor:        deps.Governor,
 		providers:       deps.Providers,
 		healthTracker:   deps.HealthTracker,
@@ -757,33 +765,9 @@ func (s *Service) ListModels(ctx context.Context) (*ModelsResult, error) {
 	seen := make(map[string]struct{})
 	modelsOut := make([]types.ModelInfo, 0, 16)
 
-	for _, provider := range s.providers.All() {
-		caps, err := provider.Capabilities(ctx)
-		if err != nil {
-			telemetry.Warn(s.logger, ctx, "gateway.providers.capabilities.unavailable",
-				slog.String("event.name", "gateway.providers.capabilities.unavailable"),
-				slog.String("gen_ai.provider.name", provider.Name()),
-				slog.Any("error", err),
-			)
-		}
-
-		modelIDs := caps.Models
-		if len(modelIDs) == 0 && provider.DefaultModel() != "" {
-			modelIDs = []string{provider.DefaultModel()}
-		}
-
-		defaultModel := caps.DefaultModel
-		if defaultModel == "" {
-			defaultModel = provider.DefaultModel()
-		}
-
-		discoverySource := caps.DiscoverySource
-		if discoverySource == "" {
-			discoverySource = "provider_default"
-		}
-
-		for _, modelID := range modelIDs {
-			key := provider.Name() + "/" + modelID
+	for _, entry := range s.catalog.Snapshot(ctx) {
+		for _, modelID := range entry.Models {
+			key := entry.Name + "/" + modelID
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -791,11 +775,11 @@ func (s *Service) ListModels(ctx context.Context) (*ModelsResult, error) {
 
 			modelsOut = append(modelsOut, types.ModelInfo{
 				ID:              modelID,
-				Provider:        provider.Name(),
-				Kind:            string(provider.Kind()),
-				OwnedBy:         provider.Name(),
-				Default:         modelID == defaultModel,
-				DiscoverySource: discoverySource,
+				Provider:        entry.Name,
+				Kind:            string(entry.Kind),
+				OwnedBy:         entry.Name,
+				Default:         modelID == entry.DefaultModel,
+				DiscoverySource: entry.DiscoverySource,
 			})
 		}
 	}
@@ -804,55 +788,24 @@ func (s *Service) ListModels(ctx context.Context) (*ModelsResult, error) {
 }
 
 func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, error) {
-	statuses := make([]types.ProviderStatus, 0, len(s.providers.All()))
-
-	for _, provider := range s.providers.All() {
-		caps, err := provider.Capabilities(ctx)
-
-		defaultModel := caps.DefaultModel
-		if defaultModel == "" {
-			defaultModel = provider.DefaultModel()
-		}
-
-		models := append([]string(nil), caps.Models...)
-		if len(models) == 0 && defaultModel != "" {
-			models = []string{defaultModel}
-		}
-
-		discoverySource := caps.DiscoverySource
-		if discoverySource == "" {
-			discoverySource = "provider_default"
-		}
-
+	entries := s.catalog.Snapshot(ctx)
+	statuses := make([]types.ProviderStatus, 0, len(entries))
+	for _, entry := range entries {
 		status := types.ProviderStatus{
-			Name:            provider.Name(),
-			Kind:            string(provider.Kind()),
-			Healthy:         err == nil,
-			Status:          "healthy",
-			DefaultModel:    defaultModel,
-			Models:          models,
-			DiscoverySource: discoverySource,
-			RefreshedAt:     caps.RefreshedAt,
+			Name:            entry.Name,
+			Kind:            string(entry.Kind),
+			Healthy:         entry.Healthy,
+			Status:          entry.Status,
+			DefaultModel:    entry.DefaultModel,
+			Models:          append([]string(nil), entry.Models...),
+			DiscoverySource: entry.DiscoverySource,
+			Error:           entry.Error,
 		}
-		if err != nil {
-			status.Healthy = false
-			status.Status = "degraded"
-			status.Error = err.Error()
-			telemetry.Warn(s.logger, ctx, "gateway.providers.health.degraded",
-				slog.String("event.name", "gateway.providers.health.degraded"),
-				slog.String("gen_ai.provider.name", provider.Name()),
-				slog.Any("error", err),
-			)
-		}
-		if s.healthTracker != nil {
-			state := s.healthTracker.State(provider.Name())
-			if !state.Available {
-				status.Healthy = false
-				status.Status = "degraded"
-				status.Error = providers.FormatHealthStateError(provider.Name(), state)
+		if entry.RefreshedAt != "" {
+			if ts, err := time.Parse(time.RFC3339, entry.RefreshedAt); err == nil {
+				status.RefreshedAt = ts
 			}
 		}
-
 		statuses = append(statuses, status)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/requestscope"
@@ -30,11 +31,12 @@ type BudgetFilter struct {
 
 type StaticGovernor struct {
 	config config.GovernorConfig
-	store  BudgetStore
+	ledger UsageLedger
+	store  BudgetStateStore
 }
 
-func NewStaticGovernor(cfg config.GovernorConfig, store BudgetStore) *StaticGovernor {
-	return &StaticGovernor{config: cfg, store: store}
+func NewStaticGovernor(cfg config.GovernorConfig, ledger UsageLedger, store BudgetStateStore) *StaticGovernor {
+	return &StaticGovernor{config: cfg, ledger: ledger, store: store}
 }
 
 func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
@@ -102,7 +104,7 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 			return nil
 		}
 
-		current, err := g.store.Spent(ctx, budgetKey)
+		current, err := g.ledger.Current(ctx, budgetKey)
 		if err != nil {
 			return fmt.Errorf("read budget state: %w", err)
 		}
@@ -121,10 +123,19 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 }
 
 func (g *StaticGovernor) RecordUsage(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, costMicros int64) error {
-	if g.store == nil || costMicros <= 0 {
+	if g.ledger == nil || costMicros <= 0 {
 		return nil
 	}
-	if err := g.store.AddSpent(ctx, g.budgetKeyForRequest(req, decision), costMicros); err != nil {
+	event := UsageEvent{
+		BudgetKey:  g.budgetKeyForRequest(req, decision),
+		RequestID:  req.RequestID,
+		Tenant:     requestscope.EffectiveTenant(requestscope.Normalize(req.Scope), g.config.BudgetTenantFallback),
+		Provider:   decision.Provider,
+		Model:      decision.Model,
+		CostMicros: costMicros,
+		OccurredAt: time.Now().UTC(),
+	}
+	if err := g.ledger.Record(ctx, event); err != nil {
 		return fmt.Errorf("record budget usage for provider %q: %w", decision.Provider, err)
 	}
 	return nil
@@ -150,7 +161,7 @@ func (g *StaticGovernor) BudgetStatus(ctx context.Context, filter BudgetFilter) 
 		return status, nil
 	}
 
-	spent, err := g.store.Spent(ctx, resolved.Key)
+	spent, err := g.ledger.Current(ctx, resolved.Key)
 	if err != nil {
 		return types.BudgetStatus{}, fmt.Errorf("read budget spent: %w", err)
 	}
@@ -188,10 +199,10 @@ func (g *StaticGovernor) SetBudgetLimit(ctx context.Context, filter BudgetFilter
 }
 
 func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) error {
-	if g.store == nil {
+	if g.ledger == nil {
 		return nil
 	}
-	if err := g.store.ResetSpent(ctx, g.resolveBudgetFilter(filter).Key); err != nil {
+	if err := g.ledger.Reset(ctx, g.resolveBudgetFilter(filter).Key); err != nil {
 		return fmt.Errorf("reset budget state: %w", err)
 	}
 	return nil

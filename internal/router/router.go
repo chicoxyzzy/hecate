@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -19,28 +20,25 @@ type RuleRouter struct {
 	defaultProvider  string
 	fallbackProvider string
 	strategy         string
-	providers        providers.Registry
-	healthTracker    providers.HealthTracker
+	catalog          catalog.Catalog
 }
 
 type routeCandidate struct {
 	Provider providers.Provider
+	Name     string
+	Kind     providers.Kind
 	Model    string
 	Reason   string
 }
 
-func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, registry providers.Registry) *RuleRouter {
+func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, catalog catalog.Catalog) *RuleRouter {
 	return &RuleRouter{
 		defaultModel:     defaultModel,
 		defaultProvider:  defaultProvider,
 		fallbackProvider: fallbackProvider,
 		strategy:         strategy,
-		providers:        registry,
+		catalog:          catalog,
 	}
-}
-
-func (r *RuleRouter) SetHealthTracker(tracker providers.HealthTracker) {
-	r.healthTracker = tracker
 }
 
 func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error) {
@@ -74,7 +72,7 @@ func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.Ro
 	}
 
 	return types.RouteDecision{
-		Provider: candidate.Provider.Name(),
+		Provider: candidate.Name,
 		Model:    candidate.Model,
 		Reason:   candidate.Reason,
 	}, nil
@@ -93,34 +91,34 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 	out := make([]types.RouteDecision, 0, len(ordered))
 
 	for _, provider := range ordered {
-		if provider.Name() == current.Provider {
+		if provider.Name == current.Provider {
 			continue
 		}
-		if !r.providerHealthyForAutoRouting(ctx, provider) {
+		if !provider.Healthy {
 			continue
 		}
 
 		model := ""
 		if explicitModel {
-			if !r.providerSupportsModel(ctx, provider, req.Model) {
+			if !supportsModel(provider, req.Model) {
 				continue
 			}
 			model = req.Model
 		} else {
-			model = r.providerDefaultModel(ctx, provider)
+			model = provider.DefaultModel
 			if model == "" {
 				continue
 			}
 		}
 
-		key := provider.Name() + "/" + model
+		key := provider.Name + "/" + model
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 
 		out = append(out, types.RouteDecision{
-			Provider: provider.Name(),
+			Provider: provider.Name,
 			Model:    model,
 			Reason:   current.Reason + "_failover",
 		})
@@ -130,7 +128,7 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 }
 
 func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRequest, explicitProvider, model string) (types.RouteDecision, error) {
-	provider, ok := r.providers.Get(explicitProvider)
+	entry, ok := r.catalog.Get(ctx, explicitProvider)
 	if !ok {
 		return types.RouteDecision{}, fmt.Errorf("provider %q not found", explicitProvider)
 	}
@@ -139,56 +137,63 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 	reason := "explicit_provider"
 	if req.Model != "" {
 		reason = "explicit_provider_model"
-		if !r.providerSupportsModel(ctx, provider, model) {
+		if !supportsModel(entry, model) {
 			return types.RouteDecision{}, fmt.Errorf("provider %q does not support explicit model %q", explicitProvider, model)
 		}
 	} else {
-		routedModel = r.providerDefaultModel(ctx, provider)
+		routedModel = entry.DefaultModel
 		if routedModel == "" {
 			return types.RouteDecision{}, fmt.Errorf("provider %q has no default model for routing", explicitProvider)
 		}
 	}
 
 	return types.RouteDecision{
-		Provider: provider.Name(),
+		Provider: entry.Name,
 		Model:    routedModel,
 		Reason:   reason,
 	}, nil
 }
 
 func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) []routeCandidate {
-	candidates := make([]routeCandidate, 0, len(r.providers.All())+2)
+	entries := r.catalog.Snapshot(ctx)
+	candidates := make([]routeCandidate, 0, len(entries)+2)
 
 	if r.strategy == "local_first" {
-		for _, provider := range r.providers.All() {
-			if provider.Kind() != providers.KindLocal {
+		for _, entry := range entries {
+			if entry.Kind != providers.KindLocal {
 				continue
 			}
-			if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+			if !entry.Healthy || !supportsModel(entry, model) {
 				continue
 			}
 			candidates = append(candidates, routeCandidate{
-				Provider: provider,
+				Provider: entry.Provider,
+				Name:     entry.Name,
+				Kind:     entry.Kind,
 				Model:    model,
 				Reason:   "explicit_model_local_first",
 			})
 		}
-		if provider, ok := r.namedSupportingProvider(ctx, r.fallbackProvider, model); ok {
+		if entry, ok := r.namedSupportingProvider(ctx, r.fallbackProvider, model); ok {
 			candidates = append(candidates, routeCandidate{
-				Provider: provider,
+				Provider: entry.Provider,
+				Name:     entry.Name,
+				Kind:     entry.Kind,
 				Model:    model,
 				Reason:   "explicit_model_fallback",
 			})
 		}
-		for _, provider := range r.providers.All() {
-			if provider.Kind() != providers.KindCloud {
+		for _, entry := range entries {
+			if entry.Kind != providers.KindCloud {
 				continue
 			}
-			if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+			if !entry.Healthy || !supportsModel(entry, model) {
 				continue
 			}
 			candidates = append(candidates, routeCandidate{
-				Provider: provider,
+				Provider: entry.Provider,
+				Name:     entry.Name,
+				Kind:     entry.Kind,
 				Model:    model,
 				Reason:   "explicit_model_fallback",
 			})
@@ -196,19 +201,23 @@ func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) 
 		return dedupeCandidates(candidates)
 	}
 
-	if provider, ok := r.namedSupportingProvider(ctx, r.defaultProvider, model); ok {
+	if entry, ok := r.namedSupportingProvider(ctx, r.defaultProvider, model); ok {
 		candidates = append(candidates, routeCandidate{
-			Provider: provider,
+			Provider: entry.Provider,
+			Name:     entry.Name,
+			Kind:     entry.Kind,
 			Model:    model,
 			Reason:   "explicit_model",
 		})
 	}
-	for _, provider := range r.providers.All() {
-		if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+	for _, entry := range entries {
+		if !entry.Healthy || !supportsModel(entry, model) {
 			continue
 		}
 		candidates = append(candidates, routeCandidate{
-			Provider: provider,
+			Provider: entry.Provider,
+			Name:     entry.Name,
+			Kind:     entry.Kind,
 			Model:    model,
 			Reason:   "explicit_model",
 		})
@@ -217,46 +226,53 @@ func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) 
 }
 
 func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []routeCandidate {
-	candidates := make([]routeCandidate, 0, len(r.providers.All())+2)
+	entries := r.catalog.Snapshot(ctx)
+	candidates := make([]routeCandidate, 0, len(entries)+2)
 
 	if r.strategy == "local_first" {
 		skippedUnhealthyLocal := false
-		for _, provider := range r.providers.All() {
-			if provider.Kind() != providers.KindLocal {
+		for _, entry := range entries {
+			if entry.Kind != providers.KindLocal {
 				continue
 			}
-			if !r.providerHealthyForAutoRouting(ctx, provider) {
+			if !entry.Healthy {
 				skippedUnhealthyLocal = true
 				continue
 			}
 
-			if localModel := r.providerDefaultModel(ctx, provider); localModel != "" {
+			if localModel := entry.DefaultModel; localModel != "" {
 				candidates = append(candidates, routeCandidate{
-					Provider: provider,
+					Provider: entry.Provider,
+					Name:     entry.Name,
+					Kind:     entry.Kind,
 					Model:    localModel,
 					Reason:   "default_model_local_first",
 				})
 				continue
 			}
-			if r.providerSupportsModel(ctx, provider, model) {
+			if supportsModel(entry, model) {
 				candidates = append(candidates, routeCandidate{
-					Provider: provider,
+					Provider: entry.Provider,
+					Name:     entry.Name,
+					Kind:     entry.Kind,
 					Model:    model,
 					Reason:   "default_model_local_first",
 				})
 			}
 		}
-		if provider, ok := r.namedProvider(ctx, r.fallbackProvider); ok {
+		if entry, ok := r.namedProvider(ctx, r.fallbackProvider); ok {
 			reason := "default_model_fallback"
 			if skippedUnhealthyLocal {
 				reason = "default_model_fallback_unhealthy_local"
 			}
-			routedModel := r.providerDefaultModel(ctx, provider)
+			routedModel := entry.DefaultModel
 			if routedModel == "" {
 				routedModel = model
 			}
 			candidates = append(candidates, routeCandidate{
-				Provider: provider,
+				Provider: entry.Provider,
+				Name:     entry.Name,
+				Kind:     entry.Kind,
 				Model:    routedModel,
 				Reason:   reason,
 			})
@@ -264,27 +280,29 @@ func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []rout
 	}
 
 	skippedDegraded := false
-	if provider, ok := r.namedProvider(ctx, r.defaultProvider); ok {
-		if !r.providerHealthyForAutoRouting(ctx, provider) {
+	if entry, ok := r.catalog.Get(ctx, r.defaultProvider); ok {
+		if !entry.Healthy {
 			skippedDegraded = true
 		} else {
-			routedModel := r.providerDefaultModel(ctx, provider)
+			routedModel := entry.DefaultModel
 			if routedModel == "" {
 				routedModel = model
 			}
 			candidates = append(candidates, routeCandidate{
-				Provider: provider,
+				Provider: entry.Provider,
+				Name:     entry.Name,
+				Kind:     entry.Kind,
 				Model:    routedModel,
 				Reason:   "default_model",
 			})
 		}
 	}
-	for _, provider := range r.providers.All() {
-		if !r.providerHealthyForAutoRouting(ctx, provider) {
+	for _, entry := range entries {
+		if !entry.Healthy {
 			skippedDegraded = true
 			continue
 		}
-		routedModel := r.providerDefaultModel(ctx, provider)
+		routedModel := entry.DefaultModel
 		if routedModel == "" {
 			continue
 		}
@@ -293,7 +311,9 @@ func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []rout
 			reason = "default_model_fallback_degraded_provider"
 		}
 		candidates = append(candidates, routeCandidate{
-			Provider: provider,
+			Provider: entry.Provider,
+			Name:     entry.Name,
+			Kind:     entry.Kind,
 			Model:    routedModel,
 			Reason:   reason,
 		})
@@ -316,7 +336,7 @@ func dedupeCandidates(candidates []routeCandidate) []routeCandidate {
 		if candidate.Provider == nil || candidate.Model == "" {
 			continue
 		}
-		key := candidate.Provider.Name() + "/" + candidate.Model
+		key := candidate.Name + "/" + candidate.Model
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -326,80 +346,57 @@ func dedupeCandidates(candidates []routeCandidate) []routeCandidate {
 	return out
 }
 
-func (r *RuleRouter) namedProvider(ctx context.Context, name string) (providers.Provider, bool) {
+func (r *RuleRouter) namedProvider(ctx context.Context, name string) (catalog.Entry, bool) {
 	if name == "" {
-		return nil, false
+		return catalog.Entry{}, false
 	}
-	provider, ok := r.providers.Get(name)
-	if !ok || !r.providerHealthyForAutoRouting(ctx, provider) {
-		return nil, false
+	entry, ok := r.catalog.Get(ctx, name)
+	if !ok || !entry.Healthy {
+		return catalog.Entry{}, false
 	}
-	return provider, true
+	return entry, true
 }
 
-func (r *RuleRouter) namedSupportingProvider(ctx context.Context, name, model string) (providers.Provider, bool) {
-	provider, ok := r.namedProvider(ctx, name)
-	if !ok || !r.providerSupportsModel(ctx, provider, model) {
-		return nil, false
+func (r *RuleRouter) namedSupportingProvider(ctx context.Context, name, model string) (catalog.Entry, bool) {
+	entry, ok := r.namedProvider(ctx, name)
+	if !ok || !supportsModel(entry, model) {
+		return catalog.Entry{}, false
 	}
-	return provider, true
+	return entry, true
 }
 
-func (r *RuleRouter) providerSupportsModel(ctx context.Context, provider providers.Provider, model string) bool {
-	capabilities, err := provider.Capabilities(ctx)
-	if err == nil && len(capabilities.Models) > 0 {
-		for _, candidate := range capabilities.Models {
-			if candidate == model {
-				return true
-			}
+func supportsModel(entry catalog.Entry, model string) bool {
+	for _, candidate := range entry.Models {
+		if candidate == model {
+			return true
 		}
 	}
-	return provider.Supports(model)
+	return entry.Provider != nil && entry.Provider.Supports(model)
 }
 
-func (r *RuleRouter) providerDefaultModel(ctx context.Context, provider providers.Provider) string {
-	capabilities, err := provider.Capabilities(ctx)
-	if err == nil && capabilities.DefaultModel != "" {
-		return capabilities.DefaultModel
-	}
-	return provider.DefaultModel()
-}
-
-func (r *RuleRouter) providerHealthyForAutoRouting(ctx context.Context, provider providers.Provider) bool {
-	if r.healthTracker != nil {
-		if !r.healthTracker.State(provider.Name()).Available {
-			return false
-		}
-	}
-	if provider.Kind() == providers.KindLocal {
-		_, err := provider.Capabilities(ctx)
-		return err == nil
-	}
-	return true
-}
-
-func (r *RuleRouter) orderedFallbackProviders() []providers.Provider {
-	candidates := make([]providers.Provider, 0, len(r.providers.All())+2)
-	seen := make(map[string]struct{}, len(r.providers.All())+2)
+func (r *RuleRouter) orderedFallbackProviders() []catalog.Entry {
+	entries := r.catalog.Snapshot(context.Background())
+	candidates := make([]catalog.Entry, 0, len(entries)+2)
+	seen := make(map[string]struct{}, len(entries)+2)
 	appendProvider := func(name string) {
 		if name == "" {
 			return
 		}
-		provider, ok := r.providers.Get(name)
+		entry, ok := r.catalog.Get(context.Background(), name)
 		if !ok {
 			return
 		}
-		if _, ok := seen[provider.Name()]; ok {
+		if _, ok := seen[entry.Name]; ok {
 			return
 		}
-		seen[provider.Name()] = struct{}{}
-		candidates = append(candidates, provider)
+		seen[entry.Name] = struct{}{}
+		candidates = append(candidates, entry)
 	}
 
 	appendProvider(r.fallbackProvider)
 	appendProvider(r.defaultProvider)
-	for _, provider := range r.providers.All() {
-		appendProvider(provider.Name())
+	for _, entry := range entries {
+		appendProvider(entry.Name)
 	}
 
 	return candidates

@@ -4,17 +4,36 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
-type BudgetStore interface {
-	Spent(ctx context.Context, key string) (int64, error)
-	AddSpent(ctx context.Context, key string, delta int64) error
-	ResetSpent(ctx context.Context, key string) error
+type UsageEvent struct {
+	BudgetKey  string
+	RequestID  string
+	Tenant     string
+	Provider   string
+	Model      string
+	CostMicros int64
+	OccurredAt time.Time
+}
+
+type UsageLedger interface {
+	Current(ctx context.Context, key string) (int64, error)
+	Record(ctx context.Context, event UsageEvent) error
+	Reset(ctx context.Context, key string) error
+}
+
+type BudgetStateStore interface {
 	Limit(ctx context.Context, key string) (int64, error)
 	SetLimit(ctx context.Context, key string, value int64) error
 	AddLimit(ctx context.Context, key string, delta int64) error
+}
+
+type BudgetStore interface {
+	UsageLedger
+	BudgetStateStore
 }
 
 type MemoryBudgetStore struct {
@@ -30,20 +49,23 @@ func NewMemoryBudgetStore() *MemoryBudgetStore {
 	}
 }
 
-func (s *MemoryBudgetStore) Spent(_ context.Context, key string) (int64, error) {
+func (s *MemoryBudgetStore) Current(_ context.Context, key string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.spent[key], nil
 }
 
-func (s *MemoryBudgetStore) AddSpent(_ context.Context, key string, delta int64) error {
+func (s *MemoryBudgetStore) Record(_ context.Context, event UsageEvent) error {
+	if event.BudgetKey == "" || event.CostMicros <= 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.spent[key] += delta
+	s.spent[event.BudgetKey] += event.CostMicros
 	return nil
 }
 
-func (s *MemoryBudgetStore) ResetSpent(_ context.Context, key string) error {
+func (s *MemoryBudgetStore) Reset(_ context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.spent, key)
@@ -79,7 +101,7 @@ func NewRedisBudgetStore(client *storage.RedisClient, prefix string) *RedisBudge
 	return &RedisBudgetStore{client: client, prefix: prefix}
 }
 
-func (s *RedisBudgetStore) Spent(ctx context.Context, key string) (int64, error) {
+func (s *RedisBudgetStore) Current(ctx context.Context, key string) (int64, error) {
 	payload, err := s.client.Get(ctx, s.spentKey(key))
 	if err != nil {
 		if err == storage.ErrNil {
@@ -94,12 +116,15 @@ func (s *RedisBudgetStore) Spent(ctx context.Context, key string) (int64, error)
 	return value, nil
 }
 
-func (s *RedisBudgetStore) AddSpent(ctx context.Context, key string, delta int64) error {
-	_, err := s.client.IncrBy(ctx, s.spentKey(key), delta)
+func (s *RedisBudgetStore) Record(ctx context.Context, event UsageEvent) error {
+	if event.BudgetKey == "" || event.CostMicros <= 0 {
+		return nil
+	}
+	_, err := s.client.IncrBy(ctx, s.spentKey(event.BudgetKey), event.CostMicros)
 	return err
 }
 
-func (s *RedisBudgetStore) ResetSpent(ctx context.Context, key string) error {
+func (s *RedisBudgetStore) Reset(ctx context.Context, key string) error {
 	return s.client.SetEX(ctx, s.spentKey(key), 0, []byte("0"))
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/auth"
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
+	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
@@ -707,11 +708,14 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 	}
 
 	registry := providers.NewRegistry(cloudProvider, localProvider)
+	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
+	budgetStore := governor.NewMemoryBudgetStore()
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", registry),
-		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, governor.NewMemoryBudgetStore()),
+		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
@@ -789,11 +793,14 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	}
 
 	registry := providers.NewRegistry(healthyProvider, degradedProvider)
+	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
+	budgetStore := governor.NewMemoryBudgetStore()
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", registry),
-		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, governor.NewMemoryBudgetStore()),
+		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
@@ -912,11 +919,14 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 		},
 	}
 	registry := providers.NewRegistry(cloudProvider, localProvider)
+	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
+	budgetStore := governor.NewMemoryBudgetStore()
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", registry),
-		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, governor.NewMemoryBudgetStore()),
+		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
@@ -1223,6 +1233,8 @@ func TestMetricsExposeChatCacheCostAndProviderHealth(t *testing.T) {
 	}
 
 	registry := providers.NewRegistry(provider)
+	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
+	budgetStore := governor.NewMemoryBudgetStore()
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -1232,8 +1244,9 @@ func TestMetricsExposeChatCacheCostAndProviderHealth(t *testing.T) {
 			MinSimilarity: 0.92,
 			MaxTextChars:  8_000,
 		},
-		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", registry),
-		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, governor.NewMemoryBudgetStore()),
+		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
@@ -1281,8 +1294,8 @@ func TestBudgetStatusReturnsCurrentSpend(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.AddSpent(context.Background(), "global", 3_000); err != nil {
-		t.Fatalf("AddSpent() error = %v", err)
+	if err := budgetStore.Record(context.Background(), governor.UsageEvent{BudgetKey: "global", CostMicros: 3_000}); err != nil {
+		t.Fatalf("Record() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1324,8 +1337,8 @@ func TestBudgetResetSupportsExplicitKey(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.AddSpent(context.Background(), "team-a", 9_999); err != nil {
-		t.Fatalf("AddSpent() error = %v", err)
+	if err := budgetStore.Record(context.Background(), governor.UsageEvent{BudgetKey: "team-a", CostMicros: 9_999}); err != nil {
+		t.Fatalf("Record() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1362,8 +1375,11 @@ func TestBudgetStatusSupportsTenantProviderScope(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.AddSpent(context.Background(), "global:tenant:team-a:provider:ollama", 7_500); err != nil {
-		t.Fatalf("AddSpent() error = %v", err)
+	if err := budgetStore.Record(context.Background(), governor.UsageEvent{
+		BudgetKey:  "global:tenant:team-a:provider:ollama",
+		CostMicros: 7_500,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1465,6 +1481,7 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provider, cfg config.Config) http.Handler {
 	registry := providers.NewRegistry(items...)
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
+	providerCatalog := catalog.NewRegistryCatalog(registry, healthTracker)
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
 	routerCfg := cfg.Router
@@ -1477,8 +1494,7 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 	if routerCfg.Strategy == "" {
 		routerCfg.Strategy = "explicit_or_default"
 	}
-	routerEngine := router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, registry)
-	routerEngine.SetHealthTracker(healthTracker)
+	routerEngine := router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, providerCatalog)
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -1494,7 +1510,8 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
 		Router:        routerEngine,
-		Governor:      governor.NewStaticGovernor(governorCfg, budgetStore),
+		Catalog:       providerCatalog,
+		Governor:      governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
 		Providers:     registry,
 		HealthTracker: healthTracker,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
@@ -1545,12 +1562,14 @@ func newBudgetTestHandler(logger *slog.Logger, governorCfg config.GovernorConfig
 func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budgetStore governor.BudgetStore, cpStore controlplane.Store) http.Handler {
 	provider := &fakeProvider{name: "openai"}
 	registry := providers.NewRegistry(provider)
+	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", registry),
-		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore),
+		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{

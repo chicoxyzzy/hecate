@@ -12,6 +12,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/api"
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
+	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
@@ -85,15 +86,15 @@ func main() {
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
 	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
+	providerCatalog := catalog.NewRegistryCatalog(providerRegistry, healthTracker)
 	routerEngine := router.NewRuleRouter(
 		cfg.Router.DefaultProvider,
 		cfg.Router.DefaultModel,
 		cfg.Router.Strategy,
 		cfg.Router.FallbackProvider,
-		providerRegistry,
+		providerCatalog,
 	)
-	routerEngine.SetHealthTracker(healthTracker)
-	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore)
+	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore, budgetStore)
 
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
@@ -110,6 +111,7 @@ func main() {
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
 		Router:        routerEngine,
+		Catalog:       providerCatalog,
 		Governor:      governorEngine,
 		Providers:     providerRegistry,
 		HealthTracker: healthTracker,

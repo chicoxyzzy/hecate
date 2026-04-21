@@ -11,11 +11,12 @@ import (
 func TestStaticGovernorCheckRoutePolicy(t *testing.T) {
 	t.Parallel()
 
+	store := NewMemoryBudgetStore()
 	gov := NewStaticGovernor(config.GovernorConfig{
 		RouteMode:        "local_only",
 		AllowedProviders: []string{"ollama"},
 		DeniedModels:     []string{"gpt-4o-mini"},
-	}, NewMemoryBudgetStore())
+	}, store, store)
 
 	err := gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
 		Provider: "openai",
@@ -33,7 +34,7 @@ func TestStaticGovernorBudgetTracking(t *testing.T) {
 	gov := NewStaticGovernor(config.GovernorConfig{
 		MaxTotalBudgetMicros: 100,
 		BudgetKey:            "global",
-	}, store)
+	}, store, store)
 
 	if err := gov.RecordUsage(context.Background(), types.ChatRequest{}, types.RouteDecision{Provider: "openai"}, 60); err != nil {
 		t.Fatalf("RecordUsage() error = %v", err)
@@ -57,7 +58,7 @@ func TestStaticGovernorBudgetTrackingByTenantProvider(t *testing.T) {
 		BudgetKey:            "global",
 		BudgetScope:          "tenant_provider",
 		BudgetTenantFallback: "anonymous",
-	}, store)
+	}, store, store)
 
 	req := types.ChatRequest{
 		Scope: types.RequestScope{
@@ -96,7 +97,7 @@ func TestStaticGovernorBudgetTopUpOverridesConfigLimit(t *testing.T) {
 	gov := NewStaticGovernor(config.GovernorConfig{
 		MaxTotalBudgetMicros: 100,
 		BudgetKey:            "global",
-	}, store)
+	}, store, store)
 
 	if err := gov.TopUpBudget(context.Background(), BudgetFilter{Scope: "global"}, 200); err != nil {
 		t.Fatalf("TopUpBudget() error = %v", err)

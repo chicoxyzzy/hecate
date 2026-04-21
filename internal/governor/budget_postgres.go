@@ -28,7 +28,7 @@ func NewPostgresBudgetStore(ctx context.Context, client *storage.PostgresClient)
 	return store, nil
 }
 
-func (s *PostgresBudgetStore) Spent(ctx context.Context, key string) (int64, error) {
+func (s *PostgresBudgetStore) Current(ctx context.Context, key string) (int64, error) {
 	var value int64
 	err := s.db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT spent_micros_usd FROM %s WHERE budget_key = $1`, s.table),
@@ -40,7 +40,10 @@ func (s *PostgresBudgetStore) Spent(ctx context.Context, key string) (int64, err
 	return value, err
 }
 
-func (s *PostgresBudgetStore) AddSpent(ctx context.Context, key string, delta int64) error {
+func (s *PostgresBudgetStore) Record(ctx context.Context, event UsageEvent) error {
+	if event.BudgetKey == "" || event.CostMicros <= 0 {
+		return nil
+	}
 	_, err := s.db.ExecContext(ctx,
 		fmt.Sprintf(`
 			INSERT INTO %s (budget_key, spent_micros_usd, limit_micros_usd, updated_at)
@@ -48,13 +51,13 @@ func (s *PostgresBudgetStore) AddSpent(ctx context.Context, key string, delta in
 			ON CONFLICT (budget_key)
 			DO UPDATE SET spent_micros_usd = %s.spent_micros_usd + EXCLUDED.spent_micros_usd, updated_at = NOW()
 		`, s.table, s.table),
-		key,
-		delta,
+		event.BudgetKey,
+		event.CostMicros,
 	)
 	return err
 }
 
-func (s *PostgresBudgetStore) ResetSpent(ctx context.Context, key string) error {
+func (s *PostgresBudgetStore) Reset(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx,
 		fmt.Sprintf(`
 			INSERT INTO %s (budget_key, spent_micros_usd, limit_micros_usd, updated_at)
