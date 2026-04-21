@@ -214,6 +214,14 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 			RequestID: result.RequestID,
 			TraceID:   result.TraceID,
 			Spans:     spans,
+			Route: TraceRouteReportRecord{
+				FinalProvider:     result.Route.FinalProvider,
+				FinalProviderKind: result.Route.FinalProviderKind,
+				FinalModel:        result.Route.FinalModel,
+				FinalReason:       result.Route.FinalReason,
+				FallbackFrom:      result.Route.FallbackFrom,
+				Candidates:        renderTraceRouteCandidates(result.Route.Candidates),
+			},
 		},
 	}
 	if !result.StartedAt.IsZero() {
@@ -979,6 +987,31 @@ func budgetFilterFromRequest(r *http.Request) governor.BudgetFilter {
 
 func formatUSD(micros int64) string {
 	return fmt.Sprintf("%.6f", float64(micros)/1_000_000)
+}
+
+func renderTraceRouteCandidates(candidates []types.RouteCandidateReport) []TraceRouteCandidateRecord {
+	items := make([]TraceRouteCandidateRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		item := TraceRouteCandidateRecord{
+			Provider:           candidate.Provider,
+			ProviderKind:       candidate.ProviderKind,
+			Model:              candidate.Model,
+			Reason:             candidate.Reason,
+			Outcome:            candidate.Outcome,
+			SkipReason:         candidate.SkipReason,
+			HealthStatus:       candidate.HealthStatus,
+			EstimatedMicrosUSD: candidate.EstimatedMicrosUSD,
+			EstimatedUSD:       formatUSD(candidate.EstimatedMicrosUSD),
+			Attempt:            candidate.Attempt,
+			Index:              candidate.Index,
+			Detail:             candidate.Detail,
+		}
+		if !candidate.Timestamp.IsZero() {
+			item.Timestamp = candidate.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func mapUpstreamStatus(statusCode int) int {

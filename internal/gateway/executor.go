@@ -53,9 +53,29 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 	var lastErr error
 
 	for index, candidate := range candidates {
+		recordTrace(trace, "router.candidate.considered", "routing", map[string]any{
+			"gen_ai.provider.name":         candidate.Provider,
+			"gen_ai.request.model":         candidate.Model,
+			"hecate.provider.kind":         candidate.ProviderKind,
+			"hecate.route.reason":          candidate.Reason,
+			"hecate.provider.index":        index,
+			"hecate.route.outcome":         "considered",
+			"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+		})
+
 		provider, ok := e.providers.Get(candidate.Provider)
 		if !ok {
 			lastErr = fmt.Errorf("provider %q not found", candidate.Provider)
+			recordTraceError(trace, "router.candidate.skipped", "routing", errorKindRouterFailed, lastErr, map[string]any{
+				"gen_ai.provider.name":         candidate.Provider,
+				"gen_ai.request.model":         candidate.Model,
+				"hecate.provider.kind":         candidate.ProviderKind,
+				"hecate.route.reason":          candidate.Reason,
+				"hecate.provider.index":        index,
+				"hecate.route.outcome":         "skipped",
+				"hecate.route.skip_reason":     string(RoutePreflightProviderNotFound),
+				"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+			})
 			continue
 		}
 
@@ -75,6 +95,23 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 					reason = "route_denied"
 					lastErr = fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
 				}
+				eventName := "router.candidate.skipped"
+				outcome := "skipped"
+				if preflightErr.Kind == RoutePreflightRouteDenied {
+					eventName = "router.candidate.denied"
+					outcome = "denied"
+				}
+				recordTraceError(trace, eventName, "routing", reason, preflightErr, map[string]any{
+					"gen_ai.provider.name":         candidate.Provider,
+					"gen_ai.request.model":         candidate.Model,
+					"hecate.provider.kind":         firstNonEmpty(preflightErr.ProviderKind, candidate.ProviderKind),
+					"hecate.route.reason":          candidate.Reason,
+					"hecate.provider.index":        index,
+					"hecate.route.outcome":         outcome,
+					"hecate.route.skip_reason":     reason,
+					"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+					"hecate.cost.estimated_micros": preflightErr.EstimatedCostMicros,
+				})
 				recordTraceError(trace, "provider.failover.skipped", "provider", reason, preflightErr, map[string]any{
 					"gen_ai.provider.name":         candidate.Provider,
 					"gen_ai.request.model":         candidate.Model,
@@ -99,6 +136,17 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				"hecate.cost.estimated_micros":  preflight.EstimatedCost.TotalMicrosUSD,
 			})
 		}
+
+		recordTrace(trace, "router.candidate.selected", "routing", map[string]any{
+			"gen_ai.provider.name":         candidate.Provider,
+			"gen_ai.request.model":         candidate.Model,
+			"hecate.provider.kind":         preflight.ProviderKind,
+			"hecate.route.reason":          candidate.Reason,
+			"hecate.provider.index":        index,
+			"hecate.route.outcome":         "selected",
+			"hecate.provider.health_state": healthStatus(e.healthTracker, candidate.Provider),
+			"hecate.cost.estimated_micros": preflight.EstimatedCost.TotalMicrosUSD,
+		})
 
 		attemptReq := withResolvedModel(req, candidate.Model)
 		for attempt := 1; attempt <= e.options.MaxAttempts; attempt++ {
@@ -201,6 +249,22 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 		lastErr = errors.New("provider call failed")
 	}
 	return nil, lastErr
+}
+
+func healthStatus(tracker providers.HealthTracker, provider string) string {
+	if tracker == nil {
+		return ""
+	}
+	return string(tracker.State(provider).Status)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (e *ResilientExecutor) retryDelay(attempt int) time.Duration {

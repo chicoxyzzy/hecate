@@ -89,6 +89,7 @@ type TraceResult struct {
 	TraceID   string
 	StartedAt time.Time
 	Spans     []types.TraceSpan
+	Route     types.RouteDecisionReport
 }
 
 type ResponseMetadata struct {
@@ -484,11 +485,13 @@ func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, er
 		return nil, fmt.Errorf("trace %q not found", requestID)
 	}
 
+	spans := trace.Spans()
 	return &TraceResult{
 		RequestID: trace.RequestID,
 		TraceID:   trace.TraceID,
 		StartedAt: trace.StartedAt,
-		Spans:     trace.Spans(),
+		Spans:     spans,
+		Route:     buildRouteDecisionReport(spans),
 	}, nil
 }
 

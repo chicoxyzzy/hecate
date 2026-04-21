@@ -11,6 +11,7 @@ type Props = {
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const timeline = buildTraceTimeline(state.traceSpans, state.traceStartedAt);
+  const routeReport = state.traceRoute;
 
   return (
     <div className="workspace-grid">
@@ -148,7 +149,7 @@ export function PlaygroundView({ state, actions }: Props) {
                     <StatusPill label={describeRouteReason(state.runtimeHeaders.routeReason)} tone="neutral" />
                     <StatusPill label={`cache ${state.runtimeHeaders.cacheType || state.runtimeHeaders.cache || "miss"}`} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
                     <StatusPill
-                      label={activeProvider ? `${activeProvider.name} ${activeProvider.status}` : state.runtimeHeaders.provider || "unknown provider"}
+                      label={activeProvider ? `${activeProvider.name} ${activeProvider.status}` : routeReport?.final_provider || state.runtimeHeaders.provider || "unknown provider"}
                       tone={providerStatusTone(activeProvider ?? undefined)}
                     />
                     {state.runtimeHeaders.fallbackFrom ? <StatusPill label={`fallback from ${state.runtimeHeaders.fallbackFrom}`} tone="warning" /> : null}
@@ -181,6 +182,47 @@ export function PlaygroundView({ state, actions }: Props) {
                       <p className="trace-inline-card__title">{state.runtimeHeaders.requestId}</p>
                       <p className="body-muted">Trace {state.runtimeHeaders.traceId || "not returned"} · Span {state.runtimeHeaders.spanId || "not returned"}</p>
                     </div>
+                  </div>
+
+                  <div className="stack-sm">
+                    <p className="label-muted">Route decision</p>
+                    {routeReport?.candidates?.length ? (
+                      <div className="trace-timeline">
+                        {routeReport.candidates.map((candidate, index) => (
+                          <article className="trace-timeline__item" key={`${candidate.provider}-${candidate.model}-${candidate.index ?? index}`}>
+                            <div className="trace-timeline__meta">
+                              <StatusPill
+                                label={candidate.outcome || "unknown"}
+                                tone={
+                                  candidate.outcome === "selected"
+                                    ? "healthy"
+                                    : candidate.outcome === "denied" || candidate.outcome === "skipped"
+                                      ? "warning"
+                                      : "neutral"
+                                }
+                              />
+                              <span>{candidate.provider_kind || "unknown kind"}</span>
+                            </div>
+                            <strong>{candidate.provider || "unknown provider"} · {candidate.model || "unknown model"}</strong>
+                            <p className="body-muted">
+                              {describeRouteReason(candidate.reason)}{candidate.health_status ? ` · health ${candidate.health_status}` : ""}
+                            </p>
+                            <dl className="definition-list definition-list--compact">
+                              <div className="definition-list__row">
+                                <dt>Estimated</dt>
+                                <dd>{candidate.estimated_usd || "$0.00"}</dd>
+                              </div>
+                              <div className="definition-list__row">
+                                <dt>Skip reason</dt>
+                                <dd>{candidate.skip_reason || candidate.detail || "n/a"}</dd>
+                              </div>
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="body-muted">No structured route report was returned for this request.</p>
+                    )}
                   </div>
                 </div>
               ) : (

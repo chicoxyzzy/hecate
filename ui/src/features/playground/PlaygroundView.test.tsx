@@ -63,6 +63,32 @@ describe("PlaygroundView", () => {
             fallbackFrom: "ollama",
             costUsd: "0.000012",
           },
+          traceRoute: {
+            final_provider: "openai",
+            final_provider_kind: "cloud",
+            final_model: "gpt-4o-mini",
+            final_reason: "default_model_local_first_failover",
+            fallback_from: "ollama",
+            candidates: [
+              {
+                provider: "ollama",
+                provider_kind: "local",
+                model: "llama3.1:8b",
+                reason: "default_model_local_first",
+                outcome: "denied",
+                skip_reason: "route_denied",
+                estimated_usd: "0.000000",
+              },
+              {
+                provider: "openai",
+                provider_kind: "cloud",
+                model: "gpt-4o-mini",
+                reason: "default_model_local_first_failover",
+                outcome: "selected",
+                estimated_usd: "0.000012",
+              },
+            ],
+          },
           traceSpans: [
             {
               trace_id: "trace-1",
@@ -78,7 +104,9 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByText("gateway.request")).toBeInTheDocument();
     expect(screen.getByText("router.selected")).toBeInTheDocument();
-    expect(screen.getByText("Default Model local first failover")).toBeInTheDocument();
+    expect(screen.getAllByText("Default Model local first failover").length).toBeGreaterThan(0);
     expect(screen.getByText(/fallback from ollama/i)).toBeInTheDocument();
+    expect(screen.getByText("Route decision")).toBeInTheDocument();
+    expect(screen.getByText("route_denied")).toBeInTheDocument();
   });
 });

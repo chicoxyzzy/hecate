@@ -78,6 +78,28 @@ export type TraceResponse = {
     trace_id?: string;
     started_at?: string;
     spans?: TraceSpanRecord[];
+    route?: {
+      final_provider?: string;
+      final_provider_kind?: string;
+      final_model?: string;
+      final_reason?: string;
+      fallback_from?: string;
+      candidates?: Array<{
+        provider?: string;
+        provider_kind?: string;
+        model?: string;
+        reason?: string;
+        outcome?: string;
+        skip_reason?: string;
+        health_status?: string;
+        estimated_micros_usd?: number;
+        estimated_usd?: string;
+        attempt?: number;
+        index?: number;
+        detail?: string;
+        timestamp?: string;
+      }>;
+    };
   };
 };
 

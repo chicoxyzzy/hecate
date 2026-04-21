@@ -34,6 +34,7 @@ import type {
   ProviderStatusResponse,
   RuntimeHeaders,
   SessionResponse,
+  TraceResponse,
   TraceSpanRecord,
 } from "../types/runtime";
 
@@ -74,6 +75,7 @@ export function useRuntimeConsole() {
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
   const [runtimeHeaders, setRuntimeHeaders] = useState<RuntimeHeaders | null>(null);
   const [traceSpans, setTraceSpans] = useState<TraceSpanRecord[]>([]);
+  const [traceRoute, setTraceRoute] = useState<TraceResponse["data"]["route"] | null>(null);
   const [traceStartedAt, setTraceStartedAt] = useState("");
   const [traceLoading, setTraceLoading] = useState(false);
   const [traceError, setTraceError] = useState("");
@@ -269,9 +271,11 @@ export function useRuntimeConsole() {
       try {
         const trace = await getTrace(response.headers.requestId, authToken);
         setTraceSpans(trace.data.spans ?? []);
+        setTraceRoute(trace.data.route ?? null);
         setTraceStartedAt(trace.data.started_at ?? "");
       } catch (traceLoadError) {
         setTraceSpans([]);
+        setTraceRoute(null);
         setTraceStartedAt("");
         setTraceError(traceLoadError instanceof Error ? traceLoadError.message : "failed to load trace");
       } finally {
@@ -578,6 +582,7 @@ export function useRuntimeConsole() {
       traceError,
       traceSpans,
       traceLoading,
+      traceRoute,
       traceStartedAt,
       tenant,
       tenantFormID,

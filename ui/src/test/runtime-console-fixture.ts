@@ -59,6 +59,7 @@ export function createRuntimeConsoleFixture(
     rotateAPIKeySecret: "",
     runtimeHeaders: null,
     traceError: "",
+    traceRoute: null,
     traceSpans: [],
     traceLoading: false,
     traceStartedAt: "",

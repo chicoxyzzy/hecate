@@ -76,10 +76,36 @@ type TraceResponse struct {
 }
 
 type TraceResponseItem struct {
-	RequestID string            `json:"request_id"`
-	TraceID   string            `json:"trace_id,omitempty"`
-	StartedAt string            `json:"started_at,omitempty"`
-	Spans     []TraceSpanRecord `json:"spans,omitempty"`
+	RequestID string                 `json:"request_id"`
+	TraceID   string                 `json:"trace_id,omitempty"`
+	StartedAt string                 `json:"started_at,omitempty"`
+	Spans     []TraceSpanRecord      `json:"spans,omitempty"`
+	Route     TraceRouteReportRecord `json:"route,omitempty"`
+}
+
+type TraceRouteReportRecord struct {
+	FinalProvider     string                      `json:"final_provider,omitempty"`
+	FinalProviderKind string                      `json:"final_provider_kind,omitempty"`
+	FinalModel        string                      `json:"final_model,omitempty"`
+	FinalReason       string                      `json:"final_reason,omitempty"`
+	FallbackFrom      string                      `json:"fallback_from,omitempty"`
+	Candidates        []TraceRouteCandidateRecord `json:"candidates,omitempty"`
+}
+
+type TraceRouteCandidateRecord struct {
+	Provider           string `json:"provider,omitempty"`
+	ProviderKind       string `json:"provider_kind,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	Outcome            string `json:"outcome,omitempty"`
+	SkipReason         string `json:"skip_reason,omitempty"`
+	HealthStatus       string `json:"health_status,omitempty"`
+	EstimatedMicrosUSD int64  `json:"estimated_micros_usd,omitempty"`
+	EstimatedUSD       string `json:"estimated_usd,omitempty"`
+	Attempt            int    `json:"attempt,omitempty"`
+	Index              int    `json:"index,omitempty"`
+	Detail             string `json:"detail,omitempty"`
+	Timestamp          string `json:"timestamp,omitempty"`
 }
 
 type TraceSpanRecord struct {

@@ -133,6 +133,30 @@ type BudgetHistoryEntry struct {
 	Timestamp        time.Time
 }
 
+type RouteDecisionReport struct {
+	FinalProvider     string
+	FinalProviderKind string
+	FinalModel        string
+	FinalReason       string
+	FallbackFrom      string
+	Candidates        []RouteCandidateReport
+}
+
+type RouteCandidateReport struct {
+	Provider           string
+	ProviderKind       string
+	Model              string
+	Reason             string
+	Outcome            string
+	SkipReason         string
+	HealthStatus       string
+	EstimatedMicrosUSD int64
+	Attempt            int
+	Index              int
+	Detail             string
+	Timestamp          time.Time
+}
+
 type TraceEvent struct {
 	Name       string
 	Timestamp  time.Time

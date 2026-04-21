@@ -181,6 +181,20 @@ describe("useRuntimeConsole", () => {
             request_id: "req-123",
             trace_id: "req-123",
             started_at: "2026-04-21T00:00:00Z",
+            route: {
+              final_provider: "openai",
+              final_provider_kind: "cloud",
+              final_model: "gpt-4o-mini",
+              final_reason: "default_model",
+              candidates: [
+                {
+                  provider: "openai",
+                  provider_kind: "cloud",
+                  model: "gpt-4o-mini",
+                  outcome: "selected",
+                },
+              ],
+            },
             spans: [
               {
                 trace_id: "req-123",
@@ -207,6 +221,7 @@ describe("useRuntimeConsole", () => {
     await waitFor(() => {
       expect(result.current.state.runtimeHeaders?.requestId).toBe("req-123");
       expect(result.current.state.traceSpans).toHaveLength(1);
+      expect(result.current.state.traceRoute?.final_provider).toBe("openai");
       expect(result.current.state.traceSpans[0]?.events?.[0]?.name).toBe("request.received");
     });
   });
