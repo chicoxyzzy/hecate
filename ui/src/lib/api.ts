@@ -152,6 +152,9 @@ export async function chatCompletions(
       semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
       semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
       semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
+      attempts: response.headers.get("X-Runtime-Attempts") ?? "",
+      retries: response.headers.get("X-Runtime-Retries") ?? "",
+      fallbackFrom: response.headers.get("X-Runtime-Fallback-From") ?? "",
       costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
     },
   };

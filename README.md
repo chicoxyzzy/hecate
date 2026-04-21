@@ -11,6 +11,7 @@ It sits between agents and model providers and gives you a single OpenAI-compati
   - `GET /v1/models`
 - Vendor-neutral provider layer for OpenAI-compatible cloud and local endpoints
 - Rule-based routing with `explicit_or_default` and `local_first`
+- Retry and failover handling for transient provider errors
 - Exact cache with memory, Redis, and Postgres backends
 - Semantic cache with memory and Postgres backends
 - Local embedder path, OpenAI-compatible embeddings path, and optional `pgvector` search for Postgres
@@ -74,6 +75,9 @@ Useful response headers:
 - `X-Runtime-Semantic-Strategy`
 - `X-Runtime-Semantic-Index`
 - `X-Runtime-Semantic-Similarity`
+- `X-Runtime-Attempts`
+- `X-Runtime-Retries`
+- `X-Runtime-Fallback-From`
 - `X-Runtime-Cost-USD`
 - `X-Request-Id`
 
@@ -94,6 +98,9 @@ GATEWAY_DEFAULT_PROVIDER=openai
 GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 GATEWAY_ROUTER_STRATEGY=local_first
 GATEWAY_ROUTER_FALLBACK_PROVIDER=openai
+GATEWAY_PROVIDER_MAX_ATTEMPTS=2
+GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
+GATEWAY_PROVIDER_FAILOVER_ENABLED=true
 
 OPENAI_PROVIDER_NAME=openai
 OPENAI_PROVIDER_KIND=cloud
@@ -168,6 +175,7 @@ Current support:
 - provider kind metadata: `cloud` or `local`
 - default model and discovered or configured model lists
 - explicit model/provider routing and local-first routing with cloud fallback
+- retry and failover at the gateway layer for transient upstream failures
 - zero-cost or custom pricing for local models
 
 Examples of local providers that fit this model:
@@ -291,6 +299,7 @@ Current UI coverage:
 - model catalog with Cloud and Local grouping
 - provider-aware playground
 - runtime header inspection
+- retry/failover visibility in runtime metadata
 - budget inspection and admin mutations
 - tenant and API key management
 - recent control-plane activity
@@ -305,6 +314,9 @@ GATEWAY_DEFAULT_PROVIDER=openai
 GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 GATEWAY_ROUTER_STRATEGY=explicit_or_default
 GATEWAY_ROUTER_FALLBACK_PROVIDER=
+GATEWAY_PROVIDER_MAX_ATTEMPTS=2
+GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
+GATEWAY_PROVIDER_FAILOVER_ENABLED=true
 
 GATEWAY_AUTH_TOKEN=
 GATEWAY_API_KEYS_JSON=
@@ -377,6 +389,7 @@ Implemented:
 - [x] Vendor-neutral OpenAI-compatible provider layer
 - [x] Cloud and local provider support
 - [x] Rule-based routing with explicit and local-first strategies
+- [x] Retry and failover handling for transient provider failures
 - [x] Exact cache with memory, Redis, and Postgres backends
 - [x] Semantic cache with memory and Postgres backends
 - [x] OpenAI-compatible embedding backends for semantic cache
@@ -394,6 +407,7 @@ Implemented:
 
 Next:
 
+- [ ] Add provider health memory or circuit breaking on repeated failures
 - [ ] Expand routing beyond simple rules to include richer policy inputs
 - [ ] Add deeper trace export and richer semantic-cache debugging views in the UI
 - [ ] Add persistent tracing and telemetry export, starting with OpenTelemetry

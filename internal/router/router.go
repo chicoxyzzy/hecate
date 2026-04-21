@@ -10,6 +10,7 @@ import (
 
 type Router interface {
 	Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error)
+	Fallbacks(ctx context.Context, req types.ChatRequest, current types.RouteDecision) []types.RouteDecision
 }
 
 type RuleRouter struct {
@@ -89,6 +90,52 @@ func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.Ro
 		Model:    routedModel,
 		Reason:   reasonLabel,
 	}, nil
+}
+
+func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, current types.RouteDecision) []types.RouteDecision {
+	if req.Metadata["provider"] != "" {
+		return nil
+	}
+
+	explicitModel := req.Model != ""
+	seen := map[string]struct{}{
+		current.Provider + "/" + current.Model: {},
+	}
+	ordered := r.orderedFallbackProviders()
+	out := make([]types.RouteDecision, 0, len(ordered))
+
+	for _, provider := range ordered {
+		if provider.Name() == current.Provider {
+			continue
+		}
+
+		model := ""
+		if explicitModel {
+			if !r.providerSupportsModel(ctx, provider, req.Model) {
+				continue
+			}
+			model = req.Model
+		} else {
+			model = r.providerDefaultModel(ctx, provider)
+			if model == "" {
+				continue
+			}
+		}
+
+		key := provider.Name() + "/" + model
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		out = append(out, types.RouteDecision{
+			Provider: provider.Name(),
+			Model:    model,
+			Reason:   current.Reason + "_failover",
+		})
+	}
+
+	return out
 }
 
 func (r *RuleRouter) selectExplicitModelProvider(ctx context.Context, model string) (providers.Provider, bool) {
@@ -206,4 +253,31 @@ func (r *RuleRouter) providerHealthyForAutoRouting(ctx context.Context, provider
 	}
 	_, err := provider.Capabilities(ctx)
 	return err == nil
+}
+
+func (r *RuleRouter) orderedFallbackProviders() []providers.Provider {
+	candidates := make([]providers.Provider, 0, len(r.providers.All())+2)
+	seen := make(map[string]struct{}, len(r.providers.All())+2)
+	appendProvider := func(name string) {
+		if name == "" {
+			return
+		}
+		provider, ok := r.providers.Get(name)
+		if !ok {
+			return
+		}
+		if _, ok := seen[provider.Name()]; ok {
+			return
+		}
+		seen[provider.Name()] = struct{}{}
+		candidates = append(candidates, provider)
+	}
+
+	appendProvider(r.fallbackProvider)
+	appendProvider(r.defaultProvider)
+	for _, provider := range r.providers.All() {
+		appendProvider(provider.Name())
+	}
+
+	return candidates
 }

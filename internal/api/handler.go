@@ -647,6 +647,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if result.Metadata.SemanticSimilarity > 0 {
 		w.Header().Set("X-Runtime-Semantic-Similarity", fmt.Sprintf("%.6f", result.Metadata.SemanticSimilarity))
 	}
+	w.Header().Set("X-Runtime-Attempts", strconv.Itoa(result.Metadata.AttemptCount))
+	w.Header().Set("X-Runtime-Retries", strconv.Itoa(result.Metadata.RetryCount))
+	if result.Metadata.FallbackFromProvider != "" {
+		w.Header().Set("X-Runtime-Fallback-From", result.Metadata.FallbackFromProvider)
+	}
 	w.Header().Set("X-Runtime-Cost-USD", formatUSD(result.Metadata.CostMicrosUSD))
 	WriteJSON(w, http.StatusOK, wireResp)
 }

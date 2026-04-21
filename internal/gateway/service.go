@@ -23,6 +23,7 @@ type Dependencies struct {
 	Cache           cache.Store
 	Semantic        cache.SemanticStore
 	SemanticOptions SemanticOptions
+	Resilience      ResilienceOptions
 	Router          router.Router
 	Governor        governor.Governor
 	Providers       providers.Registry
@@ -37,11 +38,18 @@ type SemanticOptions struct {
 	MaxTextChars  int
 }
 
+type ResilienceOptions struct {
+	MaxAttempts     int
+	RetryBackoff    time.Duration
+	FailoverEnabled bool
+}
+
 type Service struct {
 	logger          *slog.Logger
 	cache           cache.Store
 	semantic        cache.SemanticStore
 	semanticOptions SemanticOptions
+	resilience      ResilienceOptions
 	keyBuilder      cache.KeyBuilder
 	router          router.Router
 	governor        governor.Governor
@@ -87,6 +95,9 @@ type ResponseMetadata struct {
 	CompletionTokens        int
 	TotalTokens             int
 	CostMicrosUSD           int64
+	AttemptCount            int
+	RetryCount              int
+	FallbackFromProvider    string
 }
 
 func NewService(deps Dependencies) *Service {
@@ -95,6 +106,7 @@ func NewService(deps Dependencies) *Service {
 		cache:           deps.Cache,
 		semantic:        deps.Semantic,
 		semanticOptions: deps.SemanticOptions,
+		resilience:      normalizeResilienceOptions(deps.Resilience),
 		keyBuilder:      cache.StableKeyBuilder{},
 		router:          deps.Router,
 		governor:        deps.Governor,
@@ -257,21 +269,13 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		})
 	}
 
-	rewrittenReq.Model = decision.Model
-	trace.Record("provider.call.started", map[string]any{
-		"provider": decision.Provider,
-		"model":    decision.Model,
-	})
-
-	start := time.Now()
-	resp, err := provider.Chat(ctx, rewrittenReq)
+	callResult, err := s.executeWithResilience(ctx, trace, rewrittenReq, decision)
 	if err != nil {
-		trace.Record("provider.call.failed", map[string]any{"error": err.Error()})
-		return nil, fmt.Errorf("provider call failed: %w", err)
+		return nil, err
 	}
-	trace.Record("provider.call.finished", map[string]any{
-		"latency_ms": time.Since(start).Milliseconds(),
-	})
+	resp := callResult.Response
+	decision = callResult.Decision
+	provider = callResult.Provider
 
 	resp.Route = decision
 	trace.Record("usage.normalized", map[string]any{
@@ -320,6 +324,9 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		CompletionTokens:        resp.Usage.CompletionTokens,
 		TotalTokens:             resp.Usage.TotalTokens,
 		CostMicrosUSD:           cost.TotalMicrosUSD,
+		AttemptCount:            callResult.AttemptCount,
+		RetryCount:              callResult.RetryCount,
+		FallbackFromProvider:    callResult.FallbackFromProvider,
 	}
 	s.recordMetrics(metadata)
 	s.logRequestSummary(metadata)
@@ -345,6 +352,150 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}, nil
 }
 
+type providerCallResult struct {
+	Response             *types.ChatResponse
+	Decision             types.RouteDecision
+	Provider             providers.Provider
+	AttemptCount         int
+	RetryCount           int
+	FallbackFromProvider string
+}
+
+func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Trace, req types.ChatRequest, initial types.RouteDecision) (*providerCallResult, error) {
+	candidates := []types.RouteDecision{initial}
+	if s.resilience.FailoverEnabled {
+		candidates = append(candidates, s.router.Fallbacks(ctx, req, initial)...)
+	}
+
+	totalAttempts := 0
+	totalRetries := 0
+	lastErr := error(nil)
+
+	for index, candidate := range candidates {
+		provider, ok := s.providers.Get(candidate.Provider)
+		if !ok {
+			lastErr = fmt.Errorf("provider %q not found", candidate.Provider)
+			continue
+		}
+
+		estimatedUsage := estimateUsage(withResolvedModel(req, candidate.Model))
+		estimatedCost, err := s.pricebook.Estimate(candidate.Provider, candidate.Model, estimatedUsage)
+		if err != nil {
+			lastErr = fmt.Errorf("estimate preflight cost: %w", err)
+			if index == 0 {
+				trace.Record("governor.budget_estimate_failed", map[string]any{"error": err.Error()})
+				return nil, lastErr
+			}
+			trace.Record("provider.failover.skipped", map[string]any{
+				"provider": candidate.Provider,
+				"model":    candidate.Model,
+				"reason":   "cost_estimate_failed",
+				"error":    err.Error(),
+			})
+			continue
+		}
+
+		if index > 0 {
+			if err := s.governor.CheckRoute(ctx, req, candidate, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
+				lastErr = fmt.Errorf("%w: %v", errDenied, err)
+				trace.Record("provider.failover.skipped", map[string]any{
+					"provider":             candidate.Provider,
+					"model":                candidate.Model,
+					"reason":               "route_denied",
+					"error":                err.Error(),
+					"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+				})
+				continue
+			}
+			trace.Record("provider.failover.selected", map[string]any{
+				"from_provider":        initial.Provider,
+				"to_provider":          candidate.Provider,
+				"model":                candidate.Model,
+				"provider_kind":        string(provider.Kind()),
+				"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+			})
+		}
+
+		attemptReq := withResolvedModel(req, candidate.Model)
+		for attempt := 1; attempt <= s.resilience.MaxAttempts; attempt++ {
+			totalAttempts++
+			trace.Record("provider.call.started", map[string]any{
+				"provider":        candidate.Provider,
+				"model":           candidate.Model,
+				"attempt":         attempt,
+				"provider_index":  index,
+				"max_attempts":    s.resilience.MaxAttempts,
+				"failover_active": index > 0,
+			})
+
+			start := time.Now()
+			resp, err := provider.Chat(ctx, attemptReq)
+			if err == nil {
+				trace.Record("provider.call.finished", map[string]any{
+					"provider":       candidate.Provider,
+					"model":          candidate.Model,
+					"attempt":        attempt,
+					"provider_index": index,
+					"latency_ms":     time.Since(start).Milliseconds(),
+				})
+				return &providerCallResult{
+					Response:             resp,
+					Decision:             candidate,
+					Provider:             provider,
+					AttemptCount:         totalAttempts,
+					RetryCount:           totalRetries,
+					FallbackFromProvider: fallbackFrom(initial.Provider, candidate.Provider),
+				}, nil
+			}
+
+			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
+			trace.Record("provider.call.failed", map[string]any{
+				"provider":       candidate.Provider,
+				"model":          candidate.Model,
+				"attempt":        attempt,
+				"provider_index": index,
+				"error":          err.Error(),
+				"retryable":      providers.IsRetryableError(err),
+			})
+
+			if !providers.IsRetryableError(err) {
+				break
+			}
+			if attempt >= s.resilience.MaxAttempts {
+				break
+			}
+
+			totalRetries++
+			backoff := s.retryDelay(attempt)
+			trace.Record("provider.retry.scheduled", map[string]any{
+				"provider":    candidate.Provider,
+				"model":       candidate.Model,
+				"attempt":     attempt,
+				"next_attempt": attempt + 1,
+				"backoff_ms":  backoff.Milliseconds(),
+			})
+			if err := sleepContext(ctx, backoff); err != nil {
+				return nil, fmt.Errorf("wait for retry backoff: %w", err)
+			}
+		}
+
+		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
+			trace.Record("provider.failover.triggered", map[string]any{
+				"from_provider": candidate.Provider,
+				"from_model":    candidate.Model,
+				"error":         lastErr.Error(),
+			})
+			continue
+		}
+		break
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("provider call failed")
+	}
+	return nil, lastErr
+}
+
 func estimateUsage(req types.ChatRequest) types.Usage {
 	promptTokens := 0
 	for _, msg := range req.Messages {
@@ -358,6 +509,47 @@ func estimateUsage(req types.ChatRequest) types.Usage {
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
+	}
+}
+
+func withResolvedModel(req types.ChatRequest, model string) types.ChatRequest {
+	req.Model = model
+	return req
+}
+
+func fallbackFrom(initialProvider, finalProvider string) string {
+	if initialProvider == "" || initialProvider == finalProvider {
+		return ""
+	}
+	return initialProvider
+}
+
+func normalizeResilienceOptions(options ResilienceOptions) ResilienceOptions {
+	if options.MaxAttempts <= 0 {
+		options.MaxAttempts = 1
+	}
+	if options.RetryBackoff <= 0 {
+		options.RetryBackoff = 200 * time.Millisecond
+	}
+	return options
+}
+
+func (s *Service) retryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return s.resilience.RetryBackoff
+	}
+	return time.Duration(attempt) * s.resilience.RetryBackoff
+}
+
+func sleepContext(ctx context.Context, wait time.Duration) error {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -543,6 +735,9 @@ func (s *Service) logRequestSummary(metadata ResponseMetadata) {
 		slog.Int("completion_tokens", metadata.CompletionTokens),
 		slog.Int("total_tokens", metadata.TotalTokens),
 		slog.Int64("cost_micros_usd", metadata.CostMicrosUSD),
+		slog.Int("attempt_count", metadata.AttemptCount),
+		slog.Int("retry_count", metadata.RetryCount),
+		slog.String("fallback_from_provider", metadata.FallbackFromProvider),
 	)
 }
 

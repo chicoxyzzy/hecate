@@ -66,6 +66,11 @@ func main() {
 			MinSimilarity: cfg.Cache.Semantic.MinSimilarity,
 			MaxTextChars:  cfg.Cache.Semantic.MaxTextChars,
 		},
+		Resilience: gateway.ResilienceOptions{
+			MaxAttempts:     cfg.Provider.MaxAttempts,
+			RetryBackoff:    cfg.Provider.RetryBackoff,
+			FailoverEnabled: cfg.Provider.FailoverEnabled,
+		},
 		Router:    routerEngine,
 		Governor:  governorEngine,
 		Providers: providerRegistry,
@@ -90,6 +95,8 @@ func main() {
 			slog.String("cache_backend", cfg.Cache.Backend),
 			slog.Bool("semantic_cache_enabled", cfg.Cache.Semantic.Enabled),
 			slog.String("semantic_cache_backend", cfg.Cache.Semantic.Backend),
+			slog.Int("provider_max_attempts", cfg.Provider.MaxAttempts),
+			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),
 		)
 

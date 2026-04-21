@@ -2,6 +2,9 @@ package providers
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/http"
 	"time"
 
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -64,4 +67,34 @@ func (r *InMemoryRegistry) All() []Provider {
 	out := make([]Provider, len(r.providers))
 	copy(out, r.providers)
 	return out
+}
+
+func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var upstreamErr *UpstreamError
+	if errors.As(err, &upstreamErr) {
+		switch upstreamErr.StatusCode {
+		case http.StatusRequestTimeout,
+			http.StatusTooManyRequests,
+			http.StatusInternalServerError,
+			http.StatusBadGateway,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout:
+			return true
+		}
+	}
+
+	return false
 }

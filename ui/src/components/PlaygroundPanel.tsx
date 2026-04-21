@@ -54,14 +54,18 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
       { label: "Cost USD", value: props.runtimeHeaders?.costUsd },
       { label: "Cache Hit", value: props.runtimeHeaders?.cache },
       { label: "Cache Type", value: props.runtimeHeaders?.cacheType },
+      { label: "Attempts", value: props.runtimeHeaders?.attempts },
+      { label: "Retries", value: props.runtimeHeaders?.retries },
     ],
     [
       props.chatResult?.usage?.completion_tokens,
       props.chatResult?.usage?.prompt_tokens,
       props.chatResult?.usage?.total_tokens,
+      props.runtimeHeaders?.attempts,
       props.runtimeHeaders?.cache,
       props.runtimeHeaders?.cacheType,
       props.runtimeHeaders?.costUsd,
+      props.runtimeHeaders?.retries,
     ],
   );
   const semanticInspector = useMemo(() => {
@@ -292,6 +296,9 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
                   <KV label="Provider Kind" value={props.runtimeHeaders.providerKind} />
                   <KV label="Requested Model" value={props.runtimeHeaders.requestedModel} />
                   <KV label="Resolved Model" value={props.runtimeHeaders.resolvedModel} />
+                  <KV label="Attempts" value={props.runtimeHeaders.attempts || "1"} />
+                  <KV label="Retries" value={props.runtimeHeaders.retries || "0"} />
+                  <KV label="Fallback From" value={props.runtimeHeaders.fallbackFrom || "n/a"} />
                 </dl>
 
                 <div className="rounded-2xl border border-slate-200/80 bg-white px-4 py-4">

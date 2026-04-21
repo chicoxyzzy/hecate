@@ -146,6 +146,9 @@ export type RuntimeHeaders = {
   semanticStrategy: string;
   semanticIndex: string;
   semanticSimilarity: string;
+  attempts: string;
+  retries: string;
+  fallbackFrom: string;
   costUsd: string;
 };
 

@@ -90,6 +90,9 @@ describe("api client", () => {
             "X-Runtime-Semantic-Strategy": "postgres_pgvector",
             "X-Runtime-Semantic-Index": "hnsw",
             "X-Runtime-Semantic-Similarity": "0.981234",
+            "X-Runtime-Attempts": "2",
+            "X-Runtime-Retries": "1",
+            "X-Runtime-Fallback-From": "ollama",
             "X-Runtime-Cost-USD": "0.000123",
           },
         },
@@ -113,6 +116,9 @@ describe("api client", () => {
     expect(result.headers.semanticStrategy).toBe("postgres_pgvector");
     expect(result.headers.semanticIndex).toBe("hnsw");
     expect(result.headers.semanticSimilarity).toBe("0.981234");
+    expect(result.headers.attempts).toBe("2");
+    expect(result.headers.retries).toBe("1");
+    expect(result.headers.fallbackFrom).toBe("ollama");
   });
 });
 

@@ -215,3 +215,46 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 		t.Fatalf("Route() reason = %q, want default_model_fallback_unhealthy_local", got.Reason)
 	}
 }
+
+func TestRuleRouterFallbacksPreferConfiguredFallbackProvider(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
+	)
+	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", registry)
+
+	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
+	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
+	if len(fallbacks) < 2 {
+		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
+	}
+	if fallbacks[0].Provider != "openai" {
+		t.Fatalf("Fallbacks()[0] provider = %q, want openai", fallbacks[0].Provider)
+	}
+	if fallbacks[0].Model != "gpt-4o-mini" {
+		t.Fatalf("Fallbacks()[0] model = %q, want gpt-4o-mini", fallbacks[0].Model)
+	}
+	if fallbacks[0].Reason != "default_model_local_first_failover" {
+		t.Fatalf("Fallbacks()[0] reason = %q, want failover reason", fallbacks[0].Reason)
+	}
+}
+
+func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
+	)
+	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "openai", registry)
+
+	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{
+		Metadata: map[string]string{"provider": "ollama"},
+	}, types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "explicit_provider"})
+	if len(fallbacks) != 0 {
+		t.Fatalf("Fallbacks() count = %d, want 0 for explicit provider", len(fallbacks))
+	}
+}

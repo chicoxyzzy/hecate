@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Server    ServerConfig
 	Router    RouterConfig
+	Provider  ProviderConfig
 	Governor  GovernorConfig
 	Cache     CacheConfig
 	Postgres  PostgresConfig
@@ -41,6 +42,12 @@ type RouterConfig struct {
 	DefaultProvider  string
 	Strategy         string
 	FallbackProvider string
+}
+
+type ProviderConfig struct {
+	MaxAttempts     int
+	RetryBackoff    time.Duration
+	FailoverEnabled bool
 }
 
 type GovernorConfig struct {
@@ -143,6 +150,11 @@ func LoadFromEnv() Config {
 			DefaultProvider:  getEnv("GATEWAY_DEFAULT_PROVIDER", firstProviderName(providersCfg, "openai")),
 			Strategy:         getEnv("GATEWAY_ROUTER_STRATEGY", "explicit_or_default"),
 			FallbackProvider: os.Getenv("GATEWAY_ROUTER_FALLBACK_PROVIDER"),
+		},
+		Provider: ProviderConfig{
+			MaxAttempts:     getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
+			RetryBackoff:    getEnvDuration("GATEWAY_PROVIDER_RETRY_BACKOFF", 200*time.Millisecond),
+			FailoverEnabled: getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
 		},
 		Governor: GovernorConfig{
 			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),

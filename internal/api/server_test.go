@@ -237,6 +237,144 @@ func TestChatCompletionsMapsUpstreamErrors(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRetriesTransientProviderFailure(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		errSequence: []error{
+			&providers.UpstreamError{StatusCode: http.StatusServiceUnavailable, Message: "temporary outage", Type: "server_error"},
+			nil,
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-retry",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices: []types.ChatChoice{{
+				Index: 0,
+				Message: types.Message{
+					Role:    "assistant",
+					Content: "Recovered after retry.",
+				},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14},
+		},
+	}
+
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Provider: config.ProviderConfig{
+			MaxAttempts:     2,
+			RetryBackoff:    time.Millisecond,
+			FailoverEnabled: true,
+		},
+	})
+	response := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if got := response.Header().Get("X-Runtime-Attempts"); got != "2" {
+		t.Fatalf("X-Runtime-Attempts = %q, want 2", got)
+	}
+	if got := response.Header().Get("X-Runtime-Retries"); got != "1" {
+		t.Fatalf("X-Runtime-Retries = %q, want 1", got)
+	}
+	if got := response.Header().Get("X-Runtime-Fallback-From"); got != "" {
+		t.Fatalf("X-Runtime-Fallback-From = %q, want empty", got)
+	}
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider call count = %d, want 2", provider.CallCount())
+	}
+}
+
+func TestChatCompletionsFailsOverToConfiguredProvider(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	localProvider := &fakeProvider{
+		name:         "ollama",
+		defaultModel: "llama3.1:8b",
+		capabilities: providers.Capabilities{
+			Name:         "ollama",
+			Kind:         providers.KindLocal,
+			DefaultModel: "llama3.1:8b",
+			Models:       []string{"llama3.1:8b"},
+		},
+		errSequence: []error{
+			&providers.UpstreamError{StatusCode: http.StatusBadGateway, Message: "local runtime unavailable", Type: "server_error"},
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-local",
+			Model:     "llama3.1:8b",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "local"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14},
+		},
+	}
+	cloudProvider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-cloud",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "cloud fallback"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17},
+		},
+	}
+
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{localProvider, cloudProvider}, config.Config{
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			RetryBackoff:    time.Millisecond,
+			FailoverEnabled: true,
+		},
+		Router: config.RouterConfig{
+			DefaultProvider:  "openai",
+			DefaultModel:     "gpt-4o-mini",
+			Strategy:         "local_first",
+			FallbackProvider: "openai",
+		},
+	})
+	response := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hello"}]}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if got := response.Header().Get("X-Runtime-Provider"); got != "openai" {
+		t.Fatalf("X-Runtime-Provider = %q, want openai", got)
+	}
+	if got := response.Header().Get("X-Runtime-Provider-Kind"); got != "cloud" {
+		t.Fatalf("X-Runtime-Provider-Kind = %q, want cloud", got)
+	}
+	if got := response.Header().Get("X-Runtime-Fallback-From"); got != "ollama" {
+		t.Fatalf("X-Runtime-Fallback-From = %q, want ollama", got)
+	}
+	if got := response.Header().Get("X-Runtime-Attempts"); got != "2" {
+		t.Fatalf("X-Runtime-Attempts = %q, want 2", got)
+	}
+	if got := response.Header().Get("X-Runtime-Retries"); got != "0" {
+		t.Fatalf("X-Runtime-Retries = %q, want 0", got)
+	}
+	if got := response.Header().Get("X-Runtime-Route-Reason"); got != "default_model_local_first_failover" {
+		t.Fatalf("X-Runtime-Route-Reason = %q, want failover reason", got)
+	}
+	if localProvider.CallCount() != 1 {
+		t.Fatalf("local provider call count = %d, want 1", localProvider.CallCount())
+	}
+	if cloudProvider.CallCount() != 1 {
+		t.Fatalf("cloud provider call count = %d, want 1", cloudProvider.CallCount())
+	}
+}
+
 func TestNormalizeChatRequestCarriesProviderHint(t *testing.T) {
 	t.Parallel()
 
@@ -1069,9 +1207,23 @@ func newTestHTTPHandler(logger *slog.Logger, provider providers.Provider) http.H
 }
 
 func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provider, cfg config.Config) http.Handler {
-	registry := providers.NewRegistry(provider)
+	return newTestHTTPHandlerForProviders(logger, []providers.Provider{provider}, cfg)
+}
+
+func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provider, cfg config.Config) http.Handler {
+	registry := providers.NewRegistry(items...)
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
+	routerCfg := cfg.Router
+	if routerCfg.DefaultProvider == "" && len(items) > 0 {
+		routerCfg.DefaultProvider = items[0].Name()
+	}
+	if routerCfg.DefaultModel == "" && len(items) > 0 {
+		routerCfg.DefaultModel = items[0].DefaultModel()
+	}
+	if routerCfg.Strategy == "" {
+		routerCfg.Strategy = "explicit_or_default"
+	}
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -1081,13 +1233,16 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 			MinSimilarity: cfg.Cache.Semantic.MinSimilarity,
 			MaxTextChars:  cfg.Cache.Semantic.MaxTextChars,
 		},
-		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", registry),
+		Resilience: gateway.ResilienceOptions{
+			MaxAttempts:     cfg.Provider.MaxAttempts,
+			RetryBackoff:    cfg.Provider.RetryBackoff,
+			FailoverEnabled: cfg.Provider.FailoverEnabled,
+		},
+		Router:    router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, registry),
 		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore),
 		Providers: registry,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
-			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
-				{Name: provider.Name(), Kind: string(provider.Kind())},
-			},
+			OpenAICompatible: providerConfigsForTests(items),
 		}),
 		Tracer:  profiler.NewInMemoryTracer(),
 		Metrics: telemetry.NewMetrics(),
@@ -1096,6 +1251,24 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 	cfg.Governor = governorCfg
 	handler := NewHandler(cfg, logger, service, nil)
 	return NewServer(logger, handler)
+}
+
+func providerConfigsForTests(items []providers.Provider) []config.OpenAICompatibleProviderConfig {
+	configs := make([]config.OpenAICompatibleProviderConfig, 0, len(items))
+	for _, provider := range items {
+		cfg := config.OpenAICompatibleProviderConfig{
+			Name:         provider.Name(),
+			Kind:         string(provider.Kind()),
+			DefaultModel: provider.DefaultModel(),
+		}
+		if provider.Kind() == providers.KindCloud {
+			cfg.InputMicrosUSDPerMillionTokens = 150_000
+			cfg.OutputMicrosUSDPerMillionTokens = 600_000
+			cfg.CachedInputMicrosUSDPerMillionTokens = 75_000
+		}
+		configs = append(configs, cfg)
+	}
+	return configs
 }
 
 func buildTestSemanticStore(cfg config.Config) cache.SemanticStore {
@@ -1169,6 +1342,7 @@ type fakeProvider struct {
 	defaultModel string
 	response     *types.ChatResponse
 	err          error
+	errSequence  []error
 	calls        int
 	capabilities providers.Capabilities
 	capsErr      error
@@ -1218,6 +1392,13 @@ func (p *fakeProvider) Chat(_ context.Context, _ types.ChatRequest) (*types.Chat
 	defer p.mu.Unlock()
 
 	p.calls++
+	if len(p.errSequence) > 0 {
+		err := p.errSequence[0]
+		p.errSequence = p.errSequence[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -1228,7 +1409,24 @@ func (p *fakeProvider) Chat(_ context.Context, _ types.ChatRequest) (*types.Chat
 }
 
 func (p *fakeProvider) Supports(model string) bool {
-	return strings.HasPrefix(model, "gpt-")
+	if p.capabilities.DefaultModel == model {
+		return true
+	}
+	for _, candidate := range p.capabilities.Models {
+		if candidate == model {
+			return true
+		}
+	}
+	if p.defaultModel == model {
+		return true
+	}
+	if strings.HasPrefix(model, "gpt-") && p.Kind() == providers.KindCloud {
+		return true
+	}
+	if strings.HasPrefix(model, "llama") && p.Kind() == providers.KindLocal {
+		return true
+	}
+	return false
 }
 
 func (p *fakeProvider) CallCount() int {
