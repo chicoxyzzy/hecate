@@ -23,6 +23,12 @@ type RuleRouter struct {
 	healthTracker    providers.HealthTracker
 }
 
+type routeCandidate struct {
+	Provider providers.Provider
+	Model    string
+	Reason   string
+}
+
 func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, registry providers.Registry) *RuleRouter {
 	return &RuleRouter{
 		defaultModel:     defaultModel,
@@ -38,63 +44,39 @@ func (r *RuleRouter) SetHealthTracker(tracker providers.HealthTracker) {
 }
 
 func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error) {
-	explicitProvider := requestscope.FromChatRequest(req).ProviderHint
+	scope := requestscope.FromChatRequest(req)
 	model := req.Model
-	reason := "explicit_model"
 	if model == "" {
 		model = r.defaultModel
-		reason = "default_model"
 	}
 	if model == "" {
 		return types.RouteDecision{}, fmt.Errorf("no model available for routing")
 	}
 
-	if explicitProvider != "" {
-		provider, ok := r.providers.Get(explicitProvider)
+	if scope.ProviderHint != "" {
+		return r.routeExplicitProvider(ctx, req, scope.ProviderHint, model)
+	}
+
+	var (
+		candidate routeCandidate
+		ok        bool
+	)
+	if req.Model != "" {
+		candidate, ok = r.selectCandidate(r.explicitModelCandidates(ctx, model))
 		if !ok {
-			return types.RouteDecision{}, fmt.Errorf("provider %q not found", explicitProvider)
+			return types.RouteDecision{}, fmt.Errorf("no provider supports explicit model %q", model)
 		}
-
-		routedModel := model
-		explicitReason := "explicit_provider"
-		if req.Model != "" {
-			explicitReason = "explicit_provider_model"
-			if !r.providerSupportsModel(ctx, provider, model) {
-				return types.RouteDecision{}, fmt.Errorf("provider %q does not support explicit model %q", explicitProvider, model)
-			}
-		} else {
-			routedModel = r.providerDefaultModel(ctx, provider)
-			if routedModel == "" {
-				return types.RouteDecision{}, fmt.Errorf("provider %q has no default model for routing", explicitProvider)
-			}
+	} else {
+		candidate, ok = r.selectCandidate(r.defaultCandidates(ctx, model))
+		if !ok {
+			return types.RouteDecision{}, fmt.Errorf("no provider available for default routing")
 		}
-
-		return types.RouteDecision{
-			Provider: provider.Name(),
-			Model:    routedModel,
-			Reason:   explicitReason,
-		}, nil
 	}
 
-	if reason == "explicit_model" {
-		if provider, ok := r.selectExplicitModelProvider(ctx, model); ok {
-			return types.RouteDecision{
-				Provider: provider.Name(),
-				Model:    model,
-				Reason:   r.strategyReason(reason, provider),
-			}, nil
-		}
-		return types.RouteDecision{}, fmt.Errorf("no provider supports explicit model %q", model)
-	}
-
-	provider, routedModel, reasonLabel, err := r.selectDefaultProviderAndModel(ctx, model)
-	if err != nil {
-		return types.RouteDecision{}, err
-	}
 	return types.RouteDecision{
-		Provider: provider.Name(),
-		Model:    routedModel,
-		Reason:   reasonLabel,
+		Provider: candidate.Provider.Name(),
+		Model:    candidate.Model,
+		Reason:   candidate.Reason,
 	}, nil
 }
 
@@ -147,80 +129,154 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 	return out
 }
 
-func (r *RuleRouter) selectExplicitModelProvider(ctx context.Context, model string) (providers.Provider, bool) {
-	if r.strategy == "local_first" {
-		for _, provider := range r.providers.All() {
-			if provider.Kind() == providers.KindLocal && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
-				return provider, true
-			}
+func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRequest, explicitProvider, model string) (types.RouteDecision, error) {
+	provider, ok := r.providers.Get(explicitProvider)
+	if !ok {
+		return types.RouteDecision{}, fmt.Errorf("provider %q not found", explicitProvider)
+	}
+
+	routedModel := model
+	reason := "explicit_provider"
+	if req.Model != "" {
+		reason = "explicit_provider_model"
+		if !r.providerSupportsModel(ctx, provider, model) {
+			return types.RouteDecision{}, fmt.Errorf("provider %q does not support explicit model %q", explicitProvider, model)
 		}
-		if r.fallbackProvider != "" {
-			if provider, ok := r.providers.Get(r.fallbackProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
-				return provider, true
-			}
-		}
-		for _, provider := range r.providers.All() {
-			if provider.Kind() == providers.KindCloud && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
-				return provider, true
-			}
+	} else {
+		routedModel = r.providerDefaultModel(ctx, provider)
+		if routedModel == "" {
+			return types.RouteDecision{}, fmt.Errorf("provider %q has no default model for routing", explicitProvider)
 		}
 	}
 
-	if r.defaultProvider != "" {
-		if provider, ok := r.providers.Get(r.defaultProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
-			return provider, true
-		}
-	}
-	for _, provider := range r.providers.All() {
-		if r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
-			return provider, true
-		}
-	}
-	return nil, false
+	return types.RouteDecision{
+		Provider: provider.Name(),
+		Model:    routedModel,
+		Reason:   reason,
+	}, nil
 }
 
-func (r *RuleRouter) selectDefaultProviderAndModel(ctx context.Context, model string) (providers.Provider, string, string, error) {
+func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) []routeCandidate {
+	candidates := make([]routeCandidate, 0, len(r.providers.All())+2)
+
+	if r.strategy == "local_first" {
+		for _, provider := range r.providers.All() {
+			if provider.Kind() != providers.KindLocal {
+				continue
+			}
+			if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+				continue
+			}
+			candidates = append(candidates, routeCandidate{
+				Provider: provider,
+				Model:    model,
+				Reason:   "explicit_model_local_first",
+			})
+		}
+		if provider, ok := r.namedSupportingProvider(ctx, r.fallbackProvider, model); ok {
+			candidates = append(candidates, routeCandidate{
+				Provider: provider,
+				Model:    model,
+				Reason:   "explicit_model_fallback",
+			})
+		}
+		for _, provider := range r.providers.All() {
+			if provider.Kind() != providers.KindCloud {
+				continue
+			}
+			if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+				continue
+			}
+			candidates = append(candidates, routeCandidate{
+				Provider: provider,
+				Model:    model,
+				Reason:   "explicit_model_fallback",
+			})
+		}
+		return dedupeCandidates(candidates)
+	}
+
+	if provider, ok := r.namedSupportingProvider(ctx, r.defaultProvider, model); ok {
+		candidates = append(candidates, routeCandidate{
+			Provider: provider,
+			Model:    model,
+			Reason:   "explicit_model",
+		})
+	}
+	for _, provider := range r.providers.All() {
+		if !r.providerHealthyForAutoRouting(ctx, provider) || !r.providerSupportsModel(ctx, provider, model) {
+			continue
+		}
+		candidates = append(candidates, routeCandidate{
+			Provider: provider,
+			Model:    model,
+			Reason:   "explicit_model",
+		})
+	}
+	return dedupeCandidates(candidates)
+}
+
+func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []routeCandidate {
+	candidates := make([]routeCandidate, 0, len(r.providers.All())+2)
+
 	if r.strategy == "local_first" {
 		skippedUnhealthyLocal := false
 		for _, provider := range r.providers.All() {
-			if provider.Kind() == providers.KindLocal {
-				if !r.providerHealthyForAutoRouting(ctx, provider) {
-					skippedUnhealthyLocal = true
-					continue
-				}
-				if model := r.providerDefaultModel(ctx, provider); model != "" {
-					return provider, model, "default_model_local_first", nil
-				}
-				if r.providerSupportsModel(ctx, provider, model) {
-					return provider, model, "default_model_local_first", nil
-				}
+			if provider.Kind() != providers.KindLocal {
+				continue
+			}
+			if !r.providerHealthyForAutoRouting(ctx, provider) {
+				skippedUnhealthyLocal = true
+				continue
+			}
+
+			if localModel := r.providerDefaultModel(ctx, provider); localModel != "" {
+				candidates = append(candidates, routeCandidate{
+					Provider: provider,
+					Model:    localModel,
+					Reason:   "default_model_local_first",
+				})
+				continue
+			}
+			if r.providerSupportsModel(ctx, provider, model) {
+				candidates = append(candidates, routeCandidate{
+					Provider: provider,
+					Model:    model,
+					Reason:   "default_model_local_first",
+				})
 			}
 		}
-		if r.fallbackProvider != "" {
-			if provider, ok := r.providers.Get(r.fallbackProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) {
-				reason := "default_model_fallback"
-				if skippedUnhealthyLocal {
-					reason = "default_model_fallback_unhealthy_local"
-				}
-				if model := r.providerDefaultModel(ctx, provider); model != "" {
-					return provider, model, reason, nil
-				}
-				return provider, model, reason, nil
+		if provider, ok := r.namedProvider(ctx, r.fallbackProvider); ok {
+			reason := "default_model_fallback"
+			if skippedUnhealthyLocal {
+				reason = "default_model_fallback_unhealthy_local"
 			}
+			routedModel := r.providerDefaultModel(ctx, provider)
+			if routedModel == "" {
+				routedModel = model
+			}
+			candidates = append(candidates, routeCandidate{
+				Provider: provider,
+				Model:    routedModel,
+				Reason:   reason,
+			})
 		}
 	}
 
 	skippedDegraded := false
-	if r.defaultProvider != "" {
-		if provider, ok := r.providers.Get(r.defaultProvider); ok {
-			if !r.providerHealthyForAutoRouting(ctx, provider) {
-				skippedDegraded = true
-			} else {
-				if model := r.providerDefaultModel(ctx, provider); model != "" {
-					return provider, model, "default_model", nil
-				}
-				return provider, model, "default_model", nil
+	if provider, ok := r.namedProvider(ctx, r.defaultProvider); ok {
+		if !r.providerHealthyForAutoRouting(ctx, provider) {
+			skippedDegraded = true
+		} else {
+			routedModel := r.providerDefaultModel(ctx, provider)
+			if routedModel == "" {
+				routedModel = model
 			}
+			candidates = append(candidates, routeCandidate{
+				Provider: provider,
+				Model:    routedModel,
+				Reason:   "default_model",
+			})
 		}
 	}
 	for _, provider := range r.providers.All() {
@@ -228,25 +284,65 @@ func (r *RuleRouter) selectDefaultProviderAndModel(ctx context.Context, model st
 			skippedDegraded = true
 			continue
 		}
-		if model := r.providerDefaultModel(ctx, provider); model != "" {
-			reason := "default_model"
-			if skippedDegraded {
-				reason = "default_model_fallback_degraded_provider"
-			}
-			return provider, model, reason, nil
+		routedModel := r.providerDefaultModel(ctx, provider)
+		if routedModel == "" {
+			continue
 		}
+		reason := "default_model"
+		if skippedDegraded {
+			reason = "default_model_fallback_degraded_provider"
+		}
+		candidates = append(candidates, routeCandidate{
+			Provider: provider,
+			Model:    routedModel,
+			Reason:   reason,
+		})
 	}
-	return nil, "", "", fmt.Errorf("no provider available for default routing")
+
+	return dedupeCandidates(candidates)
 }
 
-func (r *RuleRouter) strategyReason(base string, provider providers.Provider) string {
-	if r.strategy == "local_first" && provider.Kind() == providers.KindLocal {
-		return base + "_local_first"
+func (r *RuleRouter) selectCandidate(candidates []routeCandidate) (routeCandidate, bool) {
+	if len(candidates) == 0 {
+		return routeCandidate{}, false
 	}
-	if r.strategy == "local_first" && provider.Kind() == providers.KindCloud {
-		return base + "_fallback"
+	return candidates[0], true
+}
+
+func dedupeCandidates(candidates []routeCandidate) []routeCandidate {
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]routeCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Provider == nil || candidate.Model == "" {
+			continue
+		}
+		key := candidate.Provider.Name() + "/" + candidate.Model
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, candidate)
 	}
-	return base
+	return out
+}
+
+func (r *RuleRouter) namedProvider(ctx context.Context, name string) (providers.Provider, bool) {
+	if name == "" {
+		return nil, false
+	}
+	provider, ok := r.providers.Get(name)
+	if !ok || !r.providerHealthyForAutoRouting(ctx, provider) {
+		return nil, false
+	}
+	return provider, true
+}
+
+func (r *RuleRouter) namedSupportingProvider(ctx context.Context, name, model string) (providers.Provider, bool) {
+	provider, ok := r.namedProvider(ctx, name)
+	if !ok || !r.providerSupportsModel(ctx, provider, model) {
+		return nil, false
+	}
+	return provider, true
 }
 
 func (r *RuleRouter) providerSupportsModel(ctx context.Context, provider providers.Provider, model string) bool {
