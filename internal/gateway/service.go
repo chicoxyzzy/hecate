@@ -27,6 +27,7 @@ type Dependencies struct {
 	Router          router.Router
 	Governor        governor.Governor
 	Providers       providers.Registry
+	HealthTracker   providers.HealthTracker
 	Pricebook       billing.Pricebook
 	Tracer          profiler.Tracer
 	Metrics         *telemetry.Metrics
@@ -54,6 +55,7 @@ type Service struct {
 	router          router.Router
 	governor        governor.Governor
 	providers       providers.Registry
+	healthTracker   providers.HealthTracker
 	pricebook       billing.Pricebook
 	tracer          profiler.Tracer
 	metrics         *telemetry.Metrics
@@ -111,6 +113,7 @@ func NewService(deps Dependencies) *Service {
 		router:          deps.Router,
 		governor:        deps.Governor,
 		providers:       deps.Providers,
+		healthTracker:   deps.HealthTracker,
 		pricebook:       deps.Pricebook,
 		tracer:          deps.Tracer,
 		metrics:         deps.Metrics,
@@ -438,6 +441,9 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 					"provider_index": index,
 					"latency_ms":     time.Since(start).Milliseconds(),
 				})
+				if s.healthTracker != nil {
+					s.healthTracker.RecordSuccess(candidate.Provider)
+				}
 				return &providerCallResult{
 					Response:             resp,
 					Decision:             candidate,
@@ -468,15 +474,23 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 			totalRetries++
 			backoff := s.retryDelay(attempt)
 			trace.Record("provider.retry.scheduled", map[string]any{
-				"provider":    candidate.Provider,
-				"model":       candidate.Model,
-				"attempt":     attempt,
+				"provider":     candidate.Provider,
+				"model":        candidate.Model,
+				"attempt":      attempt,
 				"next_attempt": attempt + 1,
-				"backoff_ms":  backoff.Milliseconds(),
+				"backoff_ms":   backoff.Milliseconds(),
 			})
 			if err := sleepContext(ctx, backoff); err != nil {
 				return nil, fmt.Errorf("wait for retry backoff: %w", err)
 			}
+		}
+
+		if s.healthTracker != nil && providers.IsRetryableError(lastErr) {
+			s.healthTracker.RecordFailure(candidate.Provider, lastErr)
+			trace.Record("provider.health.degraded", map[string]any{
+				"provider": candidate.Provider,
+				"error":    lastErr.Error(),
+			})
 		}
 
 		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
@@ -664,6 +678,14 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 				slog.String("provider", provider.Name()),
 				slog.Any("error", err),
 			)
+		}
+		if s.healthTracker != nil {
+			state := s.healthTracker.State(provider.Name())
+			if !state.Available {
+				status.Healthy = false
+				status.Status = "degraded"
+				status.Error = providers.FormatHealthStateError(provider.Name(), state)
+			}
 		}
 
 		statuses = append(statuses, status)

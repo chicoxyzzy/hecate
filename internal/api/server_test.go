@@ -375,6 +375,90 @@ func TestChatCompletionsFailsOverToConfiguredProvider(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsSkipsDegradedProviderAfterTransientFailures(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	localProvider := &fakeProvider{
+		name:         "ollama",
+		defaultModel: "llama3.1:8b",
+		capabilities: providers.Capabilities{
+			Name:         "ollama",
+			Kind:         providers.KindLocal,
+			DefaultModel: "llama3.1:8b",
+			Models:       []string{"llama3.1:8b"},
+		},
+		errSequence: []error{
+			&providers.UpstreamError{StatusCode: http.StatusBadGateway, Message: "local runtime unavailable", Type: "server_error"},
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-local",
+			Model:     "llama3.1:8b",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "local"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14},
+		},
+	}
+	cloudProvider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-cloud",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "cloud fallback"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17},
+		},
+	}
+
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{localProvider, cloudProvider}, config.Config{
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			RetryBackoff:    time.Millisecond,
+			FailoverEnabled: true,
+			HealthThreshold: 1,
+			HealthCooldown:  time.Hour,
+		},
+		Router: config.RouterConfig{
+			DefaultProvider:  "openai",
+			DefaultModel:     "gpt-4o-mini",
+			Strategy:         "local_first",
+			FallbackProvider: "openai",
+		},
+	})
+
+	first := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hello"}]}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d, body=%s", first.Code, http.StatusOK, first.Body.String())
+	}
+	if got := first.Header().Get("X-Runtime-Fallback-From"); got != "ollama" {
+		t.Fatalf("first X-Runtime-Fallback-From = %q, want ollama", got)
+	}
+
+	second := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hello again"}]}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d, body=%s", second.Code, http.StatusOK, second.Body.String())
+	}
+	if got := second.Header().Get("X-Runtime-Provider"); got != "openai" {
+		t.Fatalf("second X-Runtime-Provider = %q, want openai", got)
+	}
+	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model_fallback_unhealthy_local" && got != "default_model_fallback_degraded_provider" {
+		t.Fatalf("second X-Runtime-Route-Reason = %q, want degraded fallback reason", got)
+	}
+	if localProvider.CallCount() != 1 {
+		t.Fatalf("local provider call count = %d, want 1 because degraded provider should be skipped", localProvider.CallCount())
+	}
+	if cloudProvider.CallCount() != 2 {
+		t.Fatalf("cloud provider call count = %d, want 2", cloudProvider.CallCount())
+	}
+}
+
 func TestNormalizeChatRequestCarriesProviderHint(t *testing.T) {
 	t.Parallel()
 
@@ -1212,6 +1296,7 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 
 func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provider, cfg config.Config) http.Handler {
 	registry := providers.NewRegistry(items...)
+	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
 	routerCfg := cfg.Router
@@ -1224,6 +1309,8 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 	if routerCfg.Strategy == "" {
 		routerCfg.Strategy = "explicit_or_default"
 	}
+	routerEngine := router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, registry)
+	routerEngine.SetHealthTracker(healthTracker)
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -1238,9 +1325,10 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 			RetryBackoff:    cfg.Provider.RetryBackoff,
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
-		Router:    router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, registry),
-		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore),
-		Providers: registry,
+		Router:        routerEngine,
+		Governor:      governor.NewStaticGovernor(governorCfg, budgetStore),
+		Providers:     registry,
+		HealthTracker: healthTracker,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
 		}),

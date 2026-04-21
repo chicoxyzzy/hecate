@@ -48,6 +48,8 @@ type ProviderConfig struct {
 	MaxAttempts     int
 	RetryBackoff    time.Duration
 	FailoverEnabled bool
+	HealthThreshold int
+	HealthCooldown  time.Duration
 }
 
 type GovernorConfig struct {
@@ -155,6 +157,8 @@ func LoadFromEnv() Config {
 			MaxAttempts:     getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
 			RetryBackoff:    getEnvDuration("GATEWAY_PROVIDER_RETRY_BACKOFF", 200*time.Millisecond),
 			FailoverEnabled: getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
+			HealthThreshold: getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
+			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
 		},
 		Governor: GovernorConfig{
 			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),

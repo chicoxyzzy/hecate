@@ -41,6 +41,7 @@ func main() {
 		providerList = append(providerList, providers.NewOpenAICompatibleProvider(providerCfg, logger))
 	}
 	providerRegistry := providers.NewRegistry(providerList...)
+	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 
 	pricebook := billing.NewStaticPricebook(cfg.Providers)
 	tracer := profiler.NewInMemoryTracer()
@@ -55,6 +56,7 @@ func main() {
 		cfg.Router.FallbackProvider,
 		providerRegistry,
 	)
+	routerEngine.SetHealthTracker(healthTracker)
 	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore)
 
 	service := gateway.NewService(gateway.Dependencies{
@@ -71,12 +73,13 @@ func main() {
 			RetryBackoff:    cfg.Provider.RetryBackoff,
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
-		Router:    routerEngine,
-		Governor:  governorEngine,
-		Providers: providerRegistry,
-		Pricebook: pricebook,
-		Tracer:    tracer,
-		Metrics:   metrics,
+		Router:        routerEngine,
+		Governor:      governorEngine,
+		Providers:     providerRegistry,
+		HealthTracker: healthTracker,
+		Pricebook:     pricebook,
+		Tracer:        tracer,
+		Metrics:       metrics,
 	})
 
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore)
@@ -97,6 +100,8 @@ func main() {
 			slog.String("semantic_cache_backend", cfg.Cache.Semantic.Backend),
 			slog.Int("provider_max_attempts", cfg.Provider.MaxAttempts),
 			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
+			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
+			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),
 		)
 

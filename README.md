@@ -12,6 +12,7 @@ It sits between agents and model providers and gives you a single OpenAI-compati
 - Vendor-neutral provider layer for OpenAI-compatible cloud and local endpoints
 - Rule-based routing with `explicit_or_default` and `local_first`
 - Retry and failover handling for transient provider errors
+- Provider health memory with cooldown-based auto-routing avoidance
 - Exact cache with memory, Redis, and Postgres backends
 - Semantic cache with memory and Postgres backends
 - Local embedder path, OpenAI-compatible embeddings path, and optional `pgvector` search for Postgres
@@ -101,6 +102,8 @@ GATEWAY_ROUTER_FALLBACK_PROVIDER=openai
 GATEWAY_PROVIDER_MAX_ATTEMPTS=2
 GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
 GATEWAY_PROVIDER_FAILOVER_ENABLED=true
+GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD=3
+GATEWAY_PROVIDER_HEALTH_COOLDOWN=30s
 
 OPENAI_PROVIDER_NAME=openai
 OPENAI_PROVIDER_KIND=cloud
@@ -176,6 +179,7 @@ Current support:
 - default model and discovered or configured model lists
 - explicit model/provider routing and local-first routing with cloud fallback
 - retry and failover at the gateway layer for transient upstream failures
+- simple health memory that temporarily avoids degraded providers during auto-routing
 - zero-cost or custom pricing for local models
 
 Examples of local providers that fit this model:
@@ -317,6 +321,8 @@ GATEWAY_ROUTER_FALLBACK_PROVIDER=
 GATEWAY_PROVIDER_MAX_ATTEMPTS=2
 GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
 GATEWAY_PROVIDER_FAILOVER_ENABLED=true
+GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD=3
+GATEWAY_PROVIDER_HEALTH_COOLDOWN=30s
 
 GATEWAY_AUTH_TOKEN=
 GATEWAY_API_KEYS_JSON=
@@ -390,6 +396,7 @@ Implemented:
 - [x] Cloud and local provider support
 - [x] Rule-based routing with explicit and local-first strategies
 - [x] Retry and failover handling for transient provider failures
+- [x] Provider health memory with cooldown-based routing avoidance
 - [x] Exact cache with memory, Redis, and Postgres backends
 - [x] Semantic cache with memory and Postgres backends
 - [x] OpenAI-compatible embedding backends for semantic cache
@@ -407,7 +414,7 @@ Implemented:
 
 Next:
 
-- [ ] Add provider health memory or circuit breaking on repeated failures
+- [ ] Add half-open probing and richer circuit-breaker policies
 - [ ] Expand routing beyond simple rules to include richer policy inputs
 - [ ] Add deeper trace export and richer semantic-cache debugging views in the UI
 - [ ] Add persistent tracing and telemetry export, starting with OpenTelemetry

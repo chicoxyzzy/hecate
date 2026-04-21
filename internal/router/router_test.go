@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -256,5 +257,30 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 	}, types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "explicit_provider"})
 	if len(fallbacks) != 0 {
 		t.Fatalf("Fallbacks() count = %d, want 0 for explicit provider", len(fallbacks))
+	}
+}
+
+func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+	)
+	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
+	tracker.RecordFailure("openai", context.DeadlineExceeded)
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", registry)
+	router.SetHealthTracker(tracker)
+
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
+	}
+	if got.Reason != "default_model_fallback_degraded_provider" {
+		t.Fatalf("Route() reason = %q, want default_model_fallback_degraded_provider", got.Reason)
 	}
 }

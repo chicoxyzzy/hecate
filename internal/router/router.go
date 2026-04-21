@@ -19,6 +19,7 @@ type RuleRouter struct {
 	fallbackProvider string
 	strategy         string
 	providers        providers.Registry
+	healthTracker    providers.HealthTracker
 }
 
 func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, registry providers.Registry) *RuleRouter {
@@ -29,6 +30,10 @@ func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider str
 		strategy:         strategy,
 		providers:        registry,
 	}
+}
+
+func (r *RuleRouter) SetHealthTracker(tracker providers.HealthTracker) {
+	r.healthTracker = tracker
 }
 
 func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error) {
@@ -158,12 +163,12 @@ func (r *RuleRouter) selectExplicitModelProvider(ctx context.Context, model stri
 	}
 
 	if r.defaultProvider != "" {
-		if provider, ok := r.providers.Get(r.defaultProvider); ok && r.providerSupportsModel(ctx, provider, model) {
+		if provider, ok := r.providers.Get(r.defaultProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
 			return provider, true
 		}
 	}
 	for _, provider := range r.providers.All() {
-		if r.providerSupportsModel(ctx, provider, model) {
+		if r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
 			return provider, true
 		}
 	}
@@ -201,17 +206,30 @@ func (r *RuleRouter) selectDefaultProviderAndModel(ctx context.Context, model st
 		}
 	}
 
+	skippedDegraded := false
 	if r.defaultProvider != "" {
 		if provider, ok := r.providers.Get(r.defaultProvider); ok {
-			if model := r.providerDefaultModel(ctx, provider); model != "" {
+			if !r.providerHealthyForAutoRouting(ctx, provider) {
+				skippedDegraded = true
+			} else {
+				if model := r.providerDefaultModel(ctx, provider); model != "" {
+					return provider, model, "default_model", nil
+				}
 				return provider, model, "default_model", nil
 			}
-			return provider, model, "default_model", nil
 		}
 	}
 	for _, provider := range r.providers.All() {
+		if !r.providerHealthyForAutoRouting(ctx, provider) {
+			skippedDegraded = true
+			continue
+		}
 		if model := r.providerDefaultModel(ctx, provider); model != "" {
-			return provider, model, "default_model", nil
+			reason := "default_model"
+			if skippedDegraded {
+				reason = "default_model_fallback_degraded_provider"
+			}
+			return provider, model, reason, nil
 		}
 	}
 	return nil, "", "", fmt.Errorf("no provider available for default routing")
@@ -248,11 +266,16 @@ func (r *RuleRouter) providerDefaultModel(ctx context.Context, provider provider
 }
 
 func (r *RuleRouter) providerHealthyForAutoRouting(ctx context.Context, provider providers.Provider) bool {
-	if provider.Kind() != providers.KindLocal {
-		return true
+	if r.healthTracker != nil {
+		if !r.healthTracker.State(provider.Name()).Available {
+			return false
+		}
 	}
-	_, err := provider.Capabilities(ctx)
-	return err == nil
+	if provider.Kind() == providers.KindLocal {
+		_, err := provider.Capabilities(ctx)
+		return err == nil
+	}
+	return true
 }
 
 func (r *RuleRouter) orderedFallbackProviders() []providers.Provider {
