@@ -627,6 +627,8 @@ export function useRuntimeConsole() {
   };
 }
 
+export type RuntimeConsoleViewModel = ReturnType<typeof useRuntimeConsole>;
+
 function deriveSessionState(sessionInfo: SessionResponse["data"] | null): SessionState {
   const role = sessionInfo?.role ?? "anonymous";
   const kind: SessionKind = sessionInfo?.invalid_token
