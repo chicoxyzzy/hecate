@@ -63,6 +63,87 @@ func TestStableKeyBuilderCanonicalizesDatedModels(t *testing.T) {
 	}
 }
 
+func TestStableKeyBuilderScopesByTenantAndProviderHint(t *testing.T) {
+	t.Parallel()
+
+	builder := StableKeyBuilder{}
+	base := types.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []types.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		Metadata: map[string]string{
+			"user": "team-a",
+		},
+	}
+
+	otherTenant := base
+	otherTenant.Metadata = map[string]string{"user": "team-b"}
+
+	openAI := base
+	openAI.Metadata = map[string]string{"user": "team-a", "provider": "openai"}
+
+	ollama := base
+	ollama.Metadata = map[string]string{"user": "team-a", "provider": "ollama"}
+
+	baseKey, err := builder.Key(base)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+	otherTenantKey, err := builder.Key(otherTenant)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+	openAIKey, err := builder.Key(openAI)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+	ollamaKey, err := builder.Key(ollama)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+
+	if baseKey == otherTenantKey {
+		t.Fatal("Key() matched across tenants, want isolation")
+	}
+	if openAIKey == ollamaKey {
+		t.Fatal("Key() matched across provider hints, want isolation")
+	}
+}
+
+func TestStableKeyBuilderNormalizesAuthAllowlists(t *testing.T) {
+	t.Parallel()
+
+	builder := StableKeyBuilder{}
+	reqA := types.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []types.Message{
+			{Role: "user", Content: "Hello"},
+		},
+		Metadata: map[string]string{
+			"auth_allowed_providers": "openai,ollama",
+			"auth_allowed_models":    "gpt-4o-mini,llama3.1:8b",
+		},
+	}
+	reqB := reqA
+	reqB.Metadata = map[string]string{
+		"auth_allowed_providers": " ollama , openai ",
+		"auth_allowed_models":    "llama3.1:8b, gpt-4o-mini",
+	}
+
+	keyA, err := builder.Key(reqA)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+	keyB, err := builder.Key(reqB)
+	if err != nil {
+		t.Fatalf("Key() error = %v", err)
+	}
+	if keyA != keyB {
+		t.Fatalf("Key() mismatch for equivalent allowlists: %s != %s", keyA, keyB)
+	}
+}
+
 func TestMemorySemanticStoreFindsSimilarPromptWithinNamespace(t *testing.T) {
 	t.Parallel()
 

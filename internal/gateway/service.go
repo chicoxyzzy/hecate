@@ -183,6 +183,24 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		if provider, ok := s.providers.Get(cached.Route.Provider); ok {
 			providerKind = string(provider.Kind())
 		}
+		if err := s.governor.CheckRoute(ctx, rewrittenReq, cached.Route, providerKind, 0); err != nil {
+			trace.Record("governor.route_denied", map[string]any{
+				"error.message":                err.Error(),
+				"gen_ai.provider.name":         cached.Route.Provider,
+				"hecate.provider.kind":         providerKind,
+				"hecate.cost.estimated_micros": 0,
+				"hecate.governor.route_result": "denied",
+				"hecate.cache.type":            "exact",
+			})
+			return nil, fmt.Errorf("%w: %v", errDenied, err)
+		}
+		trace.Record("governor.route_allowed", map[string]any{
+			"gen_ai.provider.name":         cached.Route.Provider,
+			"hecate.provider.kind":         providerKind,
+			"hecate.cost.estimated_micros": 0,
+			"hecate.governor.route_result": "allowed",
+			"hecate.cache.type":            "exact",
+		})
 		metadata := ResponseMetadata{
 			RequestID:               req.RequestID,
 			Provider:                cached.Route.Provider,
@@ -383,7 +401,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		Model:                   identity.Resolved,
 		CanonicalResolvedModel:  identity.CanonicalResolved,
 		CacheHit:                false,
-		CacheType:               "false",
+		CacheType:               "miss",
 		PromptTokens:            resp.Usage.PromptTokens,
 		CompletionTokens:        resp.Usage.CompletionTokens,
 		TotalTokens:             resp.Usage.TotalTokens,

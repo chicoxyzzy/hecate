@@ -211,6 +211,94 @@ func TestChatCompletionsSemanticCacheHitsSimilarPrompt(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsExactCacheIsolatedByUserScope(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-tenant",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "Hello!"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+
+	handler := newTestHTTPHandler(logger, provider)
+
+	first := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","user":"team-a","messages":[{"role":"user","content":"Say hello."}]}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d, body=%s", first.Code, http.StatusOK, first.Body.String())
+	}
+	second := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","user":"team-b","messages":[{"role":"user","content":"Say hello."}]}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d, body=%s", second.Code, http.StatusOK, second.Body.String())
+	}
+	if got := second.Header().Get("X-Runtime-Cache"); got != "false" {
+		t.Fatalf("second X-Runtime-Cache = %q, want false due to user isolation", got)
+	}
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider call count = %d, want 2 due to isolated cache scope", provider.CallCount())
+	}
+}
+
+func TestChatCompletionsExactCacheIsolatedByExplicitProvider(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	openAI := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-openai",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "cloud"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+	anthropic := &fakeProvider{
+		name: "anthropic",
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-anthropic",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "other cloud"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{openAI, anthropic}, config.Config{
+		Router: config.RouterConfig{
+			DefaultProvider: "openai",
+			DefaultModel:    "gpt-4o-mini",
+			Strategy:        "explicit_or_default",
+		},
+	})
+
+	first := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","provider":"openai","messages":[{"role":"user","content":"Say hello."}]}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d, body=%s", first.Code, http.StatusOK, first.Body.String())
+	}
+	second := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","provider":"anthropic","messages":[{"role":"user","content":"Say hello."}]}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d, body=%s", second.Code, http.StatusOK, second.Body.String())
+	}
+	if got := second.Header().Get("X-Runtime-Cache"); got != "false" {
+		t.Fatalf("second X-Runtime-Cache = %q, want false due to provider isolation", got)
+	}
+	if got := second.Header().Get("X-Runtime-Provider"); got != "anthropic" {
+		t.Fatalf("second X-Runtime-Provider = %q, want anthropic", got)
+	}
+	if openAI.CallCount() != 1 {
+		t.Fatalf("openai call count = %d, want 1", openAI.CallCount())
+	}
+	if anthropic.CallCount() != 1 {
+		t.Fatalf("anthropic call count = %d, want 1", anthropic.CallCount())
+	}
+}
+
 func TestChatCompletionsMapsUpstreamErrors(t *testing.T) {
 	t.Parallel()
 

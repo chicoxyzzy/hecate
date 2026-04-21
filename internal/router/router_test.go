@@ -284,3 +284,91 @@ func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
 		t.Fatalf("Route() reason = %q, want default_model_fallback_degraded_provider", got.Reason)
 	}
 }
+
+func TestRuleRouterLocalFirstExplicitModelSkipsUnhealthyFallbackProvider(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", allowAnyModel: true},
+		&fakeProvider{
+			name:            "ollama",
+			kind:            providers.KindLocal,
+			defaultModel:    "llama3.1:8b",
+			supportedModels: []string{"llama3.1:8b"},
+			capabilitiesErr: context.DeadlineExceeded,
+		},
+	)
+	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
+	tracker.RecordFailure("openai", context.DeadlineExceeded)
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", registry)
+	router.SetHealthTracker(tracker)
+
+	got, err := router.Route(context.Background(), types.ChatRequest{Model: "gpt-4.1-mini"})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
+	}
+	if got.Reason != "explicit_model_fallback" {
+		t.Fatalf("Route() reason = %q, want explicit_model_fallback", got.Reason)
+	}
+}
+
+func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+		&fakeProvider{
+			name:            "ollama",
+			kind:            providers.KindLocal,
+			defaultModel:    "llama3.1:8b",
+			supportedModels: []string{"llama3.1:8b"},
+			capabilitiesErr: context.DeadlineExceeded,
+		},
+	)
+	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
+	tracker.RecordFailure("openai", context.DeadlineExceeded)
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", registry)
+	router.SetHealthTracker(tracker)
+
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
+	}
+	if got.Reason != "default_model_fallback_degraded_provider" {
+		t.Fatalf("Route() reason = %q, want default_model_fallback_degraded_provider", got.Reason)
+	}
+}
+
+func TestRuleRouterFallbacksSkipDegradedProviders(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
+	)
+	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
+	tracker.RecordFailure("openai", context.DeadlineExceeded)
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", registry)
+	router.SetHealthTracker(tracker)
+
+	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
+	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
+	if len(fallbacks) != 1 {
+		t.Fatalf("Fallbacks() count = %d, want 1", len(fallbacks))
+	}
+	if fallbacks[0].Provider != "anthropic" {
+		t.Fatalf("Fallbacks()[0] provider = %q, want anthropic", fallbacks[0].Provider)
+	}
+}

@@ -33,8 +33,6 @@ func NewPostgresStore(ctx context.Context, client *storage.PostgresClient, defau
 }
 
 func (s *PostgresStore) Get(ctx context.Context, key string) (*types.ChatResponse, bool) {
-	_, _ = s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE expires_at <= NOW()`, s.table))
-
 	var payload []byte
 	err := s.db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT response FROM %s WHERE cache_key = $1 AND expires_at > NOW()`, s.table),
@@ -49,6 +47,14 @@ func (s *PostgresStore) Get(ctx context.Context, key string) (*types.ChatRespons
 		return nil, false
 	}
 	return &response, true
+}
+
+func (s *PostgresStore) CleanupExpired(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE expires_at <= NOW()`, s.table))
+	if err != nil {
+		return fmt.Errorf("delete expired postgres exact cache rows: %w", err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) Set(ctx context.Context, key string, response *types.ChatResponse) error {

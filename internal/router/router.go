@@ -113,6 +113,9 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 		if provider.Name() == current.Provider {
 			continue
 		}
+		if !r.providerHealthyForAutoRouting(ctx, provider) {
+			continue
+		}
 
 		model := ""
 		if explicitModel {
@@ -151,12 +154,12 @@ func (r *RuleRouter) selectExplicitModelProvider(ctx context.Context, model stri
 			}
 		}
 		if r.fallbackProvider != "" {
-			if provider, ok := r.providers.Get(r.fallbackProvider); ok && r.providerSupportsModel(ctx, provider, model) {
+			if provider, ok := r.providers.Get(r.fallbackProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
 				return provider, true
 			}
 		}
 		for _, provider := range r.providers.All() {
-			if provider.Kind() == providers.KindCloud && r.providerSupportsModel(ctx, provider, model) {
+			if provider.Kind() == providers.KindCloud && r.providerHealthyForAutoRouting(ctx, provider) && r.providerSupportsModel(ctx, provider, model) {
 				return provider, true
 			}
 		}
@@ -193,7 +196,7 @@ func (r *RuleRouter) selectDefaultProviderAndModel(ctx context.Context, model st
 			}
 		}
 		if r.fallbackProvider != "" {
-			if provider, ok := r.providers.Get(r.fallbackProvider); ok {
+			if provider, ok := r.providers.Get(r.fallbackProvider); ok && r.providerHealthyForAutoRouting(ctx, provider) {
 				reason := "default_model_fallback"
 				if skippedUnhealthyLocal {
 					reason = "default_model_fallback_unhealthy_local"
