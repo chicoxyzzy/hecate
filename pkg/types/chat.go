@@ -140,6 +140,7 @@ type RouteDecisionReport struct {
 	FinalReason       string
 	FallbackFrom      string
 	Candidates        []RouteCandidateReport
+	Failovers         []RouteFailoverReport
 }
 
 type RouteCandidateReport struct {
@@ -152,9 +153,23 @@ type RouteCandidateReport struct {
 	HealthStatus       string
 	EstimatedMicrosUSD int64
 	Attempt            int
+	RetryCount         int
+	Retryable          bool
 	Index              int
+	LatencyMS          int64
+	FailoverFrom       string
+	FailoverTo         string
 	Detail             string
 	Timestamp          time.Time
+}
+
+type RouteFailoverReport struct {
+	FromProvider string
+	FromModel    string
+	ToProvider   string
+	ToModel      string
+	Reason       string
+	Timestamp    time.Time
 }
 
 type TraceEvent struct {

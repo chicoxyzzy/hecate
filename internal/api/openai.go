@@ -90,6 +90,7 @@ type TraceRouteReportRecord struct {
 	FinalReason       string                      `json:"final_reason,omitempty"`
 	FallbackFrom      string                      `json:"fallback_from,omitempty"`
 	Candidates        []TraceRouteCandidateRecord `json:"candidates,omitempty"`
+	Failovers         []TraceRouteFailoverRecord  `json:"failovers,omitempty"`
 }
 
 type TraceRouteCandidateRecord struct {
@@ -103,9 +104,23 @@ type TraceRouteCandidateRecord struct {
 	EstimatedMicrosUSD int64  `json:"estimated_micros_usd,omitempty"`
 	EstimatedUSD       string `json:"estimated_usd,omitempty"`
 	Attempt            int    `json:"attempt,omitempty"`
+	RetryCount         int    `json:"retry_count,omitempty"`
+	Retryable          bool   `json:"retryable,omitempty"`
 	Index              int    `json:"index,omitempty"`
+	LatencyMS          int64  `json:"latency_ms,omitempty"`
+	FailoverFrom       string `json:"failover_from,omitempty"`
+	FailoverTo         string `json:"failover_to,omitempty"`
 	Detail             string `json:"detail,omitempty"`
 	Timestamp          string `json:"timestamp,omitempty"`
+}
+
+type TraceRouteFailoverRecord struct {
+	FromProvider string `json:"from_provider,omitempty"`
+	FromModel    string `json:"from_model,omitempty"`
+	ToProvider   string `json:"to_provider,omitempty"`
+	ToModel      string `json:"to_model,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Timestamp    string `json:"timestamp,omitempty"`
 }
 
 type TraceSpanRecord struct {

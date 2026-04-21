@@ -1,6 +1,8 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatUsd } from "../../lib/format";
-import { buildTraceTimeline, describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
+import { describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
+import { RouteWorkbench } from "./RouteWorkbench";
+import { TraceWorkbench } from "./TraceWorkbench";
 import { DefinitionList, EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type Props = {
@@ -10,7 +12,6 @@ type Props = {
 
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
-  const timeline = buildTraceTimeline(state.traceSpans, state.traceStartedAt);
   const routeReport = state.traceRoute;
 
   return (
@@ -166,64 +167,6 @@ export function PlaygroundView({ state, actions }: Props) {
                       { label: "Estimated cost", value: formatUsd(state.runtimeHeaders.costUsd) },
                     ]}
                   />
-
-                  <div className="trace-inline-grid">
-                    <div className="trace-inline-card">
-                      <p className="label-muted">Semantic cache</p>
-                      <p className="trace-inline-card__title">{state.runtimeHeaders.semanticStrategy || "No semantic match returned"}</p>
-                      <p className="body-muted">
-                        {state.runtimeHeaders.semanticStrategy
-                          ? `Similarity ${state.runtimeHeaders.semanticSimilarity || "n/a"} via ${state.runtimeHeaders.semanticIndex || "unknown index"}.`
-                          : "This request returned no semantic retrieval metadata."}
-                      </p>
-                    </div>
-                    <div className="trace-inline-card">
-                      <p className="label-muted">Request identity</p>
-                      <p className="trace-inline-card__title">{state.runtimeHeaders.requestId}</p>
-                      <p className="body-muted">Trace {state.runtimeHeaders.traceId || "not returned"} · Span {state.runtimeHeaders.spanId || "not returned"}</p>
-                    </div>
-                  </div>
-
-                  <div className="stack-sm">
-                    <p className="label-muted">Route decision</p>
-                    {routeReport?.candidates?.length ? (
-                      <div className="trace-timeline">
-                        {routeReport.candidates.map((candidate, index) => (
-                          <article className="trace-timeline__item" key={`${candidate.provider}-${candidate.model}-${candidate.index ?? index}`}>
-                            <div className="trace-timeline__meta">
-                              <StatusPill
-                                label={candidate.outcome || "unknown"}
-                                tone={
-                                  candidate.outcome === "selected"
-                                    ? "healthy"
-                                    : candidate.outcome === "denied" || candidate.outcome === "skipped"
-                                      ? "warning"
-                                      : "neutral"
-                                }
-                              />
-                              <span>{candidate.provider_kind || "unknown kind"}</span>
-                            </div>
-                            <strong>{candidate.provider || "unknown provider"} · {candidate.model || "unknown model"}</strong>
-                            <p className="body-muted">
-                              {describeRouteReason(candidate.reason)}{candidate.health_status ? ` · health ${candidate.health_status}` : ""}
-                            </p>
-                            <dl className="definition-list definition-list--compact">
-                              <div className="definition-list__row">
-                                <dt>Estimated</dt>
-                                <dd>{candidate.estimated_usd || "$0.00"}</dd>
-                              </div>
-                              <div className="definition-list__row">
-                                <dt>Skip reason</dt>
-                                <dd>{candidate.skip_reason || candidate.detail || "n/a"}</dd>
-                              </div>
-                            </dl>
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="body-muted">No structured route report was returned for this request.</p>
-                    )}
-                  </div>
                 </div>
               ) : (
                 <EmptyState title="No metadata" detail="Headers will appear after a response." />
@@ -231,65 +174,12 @@ export function PlaygroundView({ state, actions }: Props) {
             </Surface>
           </div>
         </ShellSection>
+
+        <RouteWorkbench route={routeReport} runtimeHeaders={state.runtimeHeaders} />
       </div>
 
       <aside className="workspace-rail">
-        <ShellSection eyebrow="Trace" title="Spans">
-          <Surface>
-            {state.traceLoading ? (
-              <p className="body-muted">Loading trace...</p>
-            ) : state.traceError ? (
-              <InlineNotice message={state.traceError} tone="error" />
-            ) : state.traceSpans.length > 0 ? (
-              <div className="stack-sm">
-                {timeline.length > 0 ? (
-                  <div className="trace-timeline">
-                    {timeline.map((event, index) => (
-                      <article className="trace-timeline__item" key={`${event.timestamp}-${event.name}-${index}`}>
-                        <div className="trace-timeline__meta">
-                          <StatusPill label={event.phase} tone={event.phase === "provider" ? "warning" : event.phase === "response" ? "healthy" : "neutral"} />
-                          <span>{event.offsetLabel}</span>
-                        </div>
-                        <strong>{event.name}</strong>
-                        <p className="body-muted">
-                          {event.spanName} · {new Date(event.timestamp).toLocaleTimeString()}
-                        </p>
-                        {event.attributes && Object.keys(event.attributes).length > 0 ? (
-                          <dl className="definition-list definition-list--compact">
-                            {Object.entries(event.attributes)
-                              .slice(0, 4)
-                              .map(([key, value]) => (
-                                <div className="definition-list__row" key={key}>
-                                  <dt>{key}</dt>
-                                  <dd>{String(value)}</dd>
-                                </div>
-                              ))}
-                          </dl>
-                        ) : null}
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
-                {state.traceSpans.map((span) => (
-                  <details className="trace-item" key={span.span_id} open={span.span_id === state.traceSpans[0]?.span_id}>
-                    <summary className="trace-item__summary">
-                      <span>{span.name}</span>
-                      <span>{span.status_code || "unset"}</span>
-                    </summary>
-                    <div className="trace-item__body">
-                      <p className="body-muted">
-                        {span.start_time || "Unknown start"} {span.end_time ? `-> ${span.end_time}` : ""}
-                      </p>
-                      <p className="body-muted">{span.events?.length ?? 0} events</p>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title="No trace" detail="Run a request first." />
-            )}
-          </Surface>
-        </ShellSection>
+        <TraceWorkbench error={state.traceError} loading={state.traceLoading} spans={state.traceSpans} traceStartedAt={state.traceStartedAt} />
       </aside>
     </div>
   );

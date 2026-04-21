@@ -86,6 +86,20 @@ describe("PlaygroundView", () => {
                 reason: "default_model_local_first_failover",
                 outcome: "selected",
                 estimated_usd: "0.000012",
+                retry_count: 1,
+                attempt: 2,
+                latency_ms: 220,
+                failover_from: "ollama",
+              },
+            ],
+            failovers: [
+              {
+                from_provider: "ollama",
+                from_model: "llama3.1:8b",
+                to_provider: "openai",
+                to_model: "gpt-4o-mini",
+                reason: "provider_retry_exhausted",
+                timestamp: "2026-04-21T10:00:00Z",
               },
             ],
           },
@@ -106,7 +120,9 @@ describe("PlaygroundView", () => {
     expect(screen.getByText("router.selected")).toBeInTheDocument();
     expect(screen.getAllByText("Default Model local first failover").length).toBeGreaterThan(0);
     expect(screen.getByText(/fallback from ollama/i)).toBeInTheDocument();
-    expect(screen.getByText("Route decision")).toBeInTheDocument();
+    expect(screen.getByText("Route decision tree")).toBeInTheDocument();
+    expect(screen.getByText("Failover chain")).toBeInTheDocument();
     expect(screen.getByText("route_denied")).toBeInTheDocument();
+    expect(screen.getByText("Provider Retry Exhausted")).toBeInTheDocument();
   });
 });

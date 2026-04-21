@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   budgetConsumedPercent,
   buildTraceTimeline,
+  describeCachePath,
   describeRouteReason,
   filterModelsByKind,
   filterModelsByProvider,
+  formatTraceAttributeKey,
+  formatTraceAttributeValue,
   findProvider,
   parseCSV,
   providerStatusTone,
+  routeOutcomeTone,
   usdToMicros,
 } from "./runtime-utils";
 import type { ModelRecord, ProviderRecord, TraceSpanRecord } from "../types/runtime";
@@ -69,6 +73,38 @@ describe("runtime-utils", () => {
     expect(findProvider(providers, "ollama")).toEqual(providers[1]);
     expect(providerStatusTone(providers[1])).toBe("danger");
     expect(providerStatusTone(providers[0])).toBe("healthy");
+    expect(routeOutcomeTone("failed")).toBe("danger");
+    expect(formatTraceAttributeKey("hecate_retry_count")).toBe("hecate retry count");
+    expect(formatTraceAttributeValue({ ok: true })).toBe('{"ok":true}');
+  });
+
+  it("describes cache path from runtime headers", () => {
+    expect(
+      describeCachePath({
+        requestId: "req-1",
+        traceId: "trace-1",
+        spanId: "span-1",
+        provider: "ollama",
+        providerKind: "local",
+        routeReason: "default_model_local_first",
+        requestedModel: "llama3.1:8b",
+        resolvedModel: "llama3.1:8b",
+        cache: "true",
+        cacheType: "semantic",
+        semanticStrategy: "postgres_pgvector",
+        semanticIndex: "hnsw",
+        semanticSimilarity: "0.982",
+        attempts: "1",
+        retries: "0",
+        fallbackFrom: "",
+        costUsd: "0.000000",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        title: "Semantic cache hit",
+        tone: "healthy",
+      }),
+    );
   });
 
   it("calculates budget consumption percent", () => {

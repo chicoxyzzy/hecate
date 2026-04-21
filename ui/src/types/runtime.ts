@@ -95,8 +95,21 @@ export type TraceResponse = {
         estimated_micros_usd?: number;
         estimated_usd?: string;
         attempt?: number;
+        retry_count?: number;
+        retryable?: boolean;
         index?: number;
+        latency_ms?: number;
+        failover_from?: string;
+        failover_to?: string;
         detail?: string;
+        timestamp?: string;
+      }>;
+      failovers?: Array<{
+        from_provider?: string;
+        from_model?: string;
+        to_provider?: string;
+        to_model?: string;
+        reason?: string;
         timestamp?: string;
       }>;
     };

@@ -221,6 +221,7 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 				FinalReason:       result.Route.FinalReason,
 				FallbackFrom:      result.Route.FallbackFrom,
 				Candidates:        renderTraceRouteCandidates(result.Route.Candidates),
+				Failovers:         renderTraceRouteFailovers(result.Route.Failovers),
 			},
 		},
 	}
@@ -1003,11 +1004,34 @@ func renderTraceRouteCandidates(candidates []types.RouteCandidateReport) []Trace
 			EstimatedMicrosUSD: candidate.EstimatedMicrosUSD,
 			EstimatedUSD:       formatUSD(candidate.EstimatedMicrosUSD),
 			Attempt:            candidate.Attempt,
+			RetryCount:         candidate.RetryCount,
+			Retryable:          candidate.Retryable,
 			Index:              candidate.Index,
+			LatencyMS:          candidate.LatencyMS,
+			FailoverFrom:       candidate.FailoverFrom,
+			FailoverTo:         candidate.FailoverTo,
 			Detail:             candidate.Detail,
 		}
 		if !candidate.Timestamp.IsZero() {
 			item.Timestamp = candidate.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func renderTraceRouteFailovers(failovers []types.RouteFailoverReport) []TraceRouteFailoverRecord {
+	items := make([]TraceRouteFailoverRecord, 0, len(failovers))
+	for _, failover := range failovers {
+		item := TraceRouteFailoverRecord{
+			FromProvider: failover.FromProvider,
+			FromModel:    failover.FromModel,
+			ToProvider:   failover.ToProvider,
+			ToModel:      failover.ToModel,
+			Reason:       failover.Reason,
+		}
+		if !failover.Timestamp.IsZero() {
+			item.Timestamp = failover.Timestamp.UTC().Format(time.RFC3339Nano)
 		}
 		items = append(items, item)
 	}

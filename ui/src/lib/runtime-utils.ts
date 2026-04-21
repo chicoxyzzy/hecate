@@ -1,4 +1,4 @@
-import type { BudgetRecord, ModelFilter, ModelRecord, ProviderFilter, ProviderRecord, TraceSpanRecord } from "../types/runtime";
+import type { BudgetRecord, ModelFilter, ModelRecord, ProviderFilter, ProviderRecord, RuntimeHeaders, TraceResponse, TraceSpanRecord } from "../types/runtime";
 
 export function usdToMicros(value: string): number {
   const parsed = Number.parseFloat(value);
@@ -91,6 +91,82 @@ export function describeRouteReason(reason?: string): string {
     })
     .join(" ");
 }
+
+export function routeOutcomeTone(outcome?: string): "healthy" | "warning" | "danger" | "neutral" {
+  switch (outcome) {
+    case "selected":
+    case "completed":
+      return "healthy";
+    case "failed":
+      return "danger";
+    case "denied":
+    case "skipped":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+export function formatTraceAttributeKey(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+export function formatTraceAttributeValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "n/a";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+export function describeCachePath(runtimeHeaders?: RuntimeHeaders | null): { title: string; detail: string; tone: "healthy" | "warning" | "neutral" } {
+  if (!runtimeHeaders) {
+    return {
+      title: "No runtime metadata",
+      detail: "Run a request to inspect exact cache, semantic lookup, and provider execution details.",
+      tone: "neutral",
+    };
+  }
+
+  if (runtimeHeaders.cache === "true" && runtimeHeaders.cacheType === "semantic") {
+    return {
+      title: "Semantic cache hit",
+      detail: runtimeHeaders.semanticStrategy
+        ? `Matched via ${runtimeHeaders.semanticStrategy} with similarity ${runtimeHeaders.semanticSimilarity || "n/a"} using ${runtimeHeaders.semanticIndex || "unknown"} indexing.`
+        : "A semantic match was returned for this request.",
+      tone: "healthy",
+    };
+  }
+
+  if (runtimeHeaders.cache === "true") {
+    return {
+      title: "Exact cache hit",
+      detail: "The response was returned from exact request cache without an upstream provider call.",
+      tone: "healthy",
+    };
+  }
+
+  if (runtimeHeaders.semanticStrategy) {
+    return {
+      title: "Semantic lookup executed",
+      detail: `No cache hit was returned, but semantic lookup metadata came back from ${runtimeHeaders.semanticStrategy}.`,
+      tone: "warning",
+    };
+  }
+
+  return {
+    title: "Provider execution path",
+    detail: "This request went through normal routing and provider execution without a cache hit.",
+    tone: "neutral",
+  };
+}
+
+export type TraceRouteRecord = TraceResponse["data"]["route"];
 
 export function providerStatusTone(provider?: ProviderRecord): "healthy" | "warning" | "danger" | "neutral" {
   if (!provider) {

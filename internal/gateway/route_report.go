@@ -12,12 +12,17 @@ func buildRouteDecisionReport(spans []types.TraceSpan) types.RouteDecisionReport
 	events := flattenTraceEvents(spans)
 	candidateIndex := map[string]int{}
 	candidates := make([]types.RouteCandidateReport, 0, 8)
+	failovers := make([]types.RouteFailoverReport, 0, 4)
 	report := types.RouteDecisionReport{}
 
 	for _, event := range events {
 		switch event.Name {
-		case "router.candidate.considered", "router.candidate.skipped", "router.candidate.denied", "router.candidate.selected":
+		case "router.candidate.considered", "router.candidate.skipped", "router.candidate.denied", "router.candidate.selected",
+			"provider.call.failed", "provider.call.finished", "provider.retry.scheduled", "provider.failover.selected", "provider.failover.triggered":
 			candidate := routeCandidateFromEvent(event)
+			if candidate.Provider == "" && candidate.Model == "" {
+				break
+			}
 			key := routeCandidateKey(candidate.Provider, candidate.Model, candidate.Index)
 			index, ok := candidateIndex[key]
 			if !ok {
@@ -33,9 +38,15 @@ func buildRouteDecisionReport(spans []types.TraceSpan) types.RouteDecisionReport
 				report.FinalModel = candidate.Model
 				report.FinalReason = candidate.Reason
 			}
-		case "provider.failover.selected":
-			if report.FallbackFrom == "" {
-				report.FallbackFrom = stringAttr(event.Attributes, telemetry.AttrHecateFailoverFromProvider)
+		}
+
+		if event.Name == "provider.failover.selected" || event.Name == "provider.failover.triggered" {
+			failover := routeFailoverFromEvent(event)
+			if failover.FromProvider != "" || failover.ToProvider != "" {
+				failovers = append(failovers, failover)
+			}
+			if report.FallbackFrom == "" && failover.FromProvider != "" {
+				report.FallbackFrom = failover.FromProvider
 			}
 		}
 	}
@@ -50,6 +61,7 @@ func buildRouteDecisionReport(spans []types.TraceSpan) types.RouteDecisionReport
 		return candidates[i].Provider < candidates[j].Provider
 	})
 	report.Candidates = candidates
+	report.Failovers = failovers
 	return report
 }
 
@@ -75,9 +87,25 @@ func routeCandidateFromEvent(event types.TraceEvent) types.RouteCandidateReport 
 		HealthStatus:       stringAttr(event.Attributes, telemetry.AttrHecateProviderHealthStatus),
 		EstimatedMicrosUSD: int64Attr(event.Attributes, telemetry.AttrHecateCostEstimatedMicrosUSD),
 		Attempt:            int(int64Attr(event.Attributes, telemetry.AttrHecateRetryAttempt)),
+		RetryCount:         retryCountFromEvent(event),
+		Retryable:          boolAttr(event.Attributes, telemetry.AttrHecateRetryRetryable),
 		Index:              int(int64Attr(event.Attributes, telemetry.AttrHecateProviderIndex)),
+		LatencyMS:          int64Attr(event.Attributes, telemetry.AttrHecateProviderLatencyMS),
+		FailoverFrom:       stringAttr(event.Attributes, telemetry.AttrHecateFailoverFromProvider),
+		FailoverTo:         stringAttr(event.Attributes, telemetry.AttrHecateFailoverToProvider),
 		Detail:             stringAttr(event.Attributes, telemetry.AttrErrorMessage),
 		Timestamp:          event.Timestamp,
+	}
+}
+
+func routeFailoverFromEvent(event types.TraceEvent) types.RouteFailoverReport {
+	return types.RouteFailoverReport{
+		FromProvider: stringAttr(event.Attributes, telemetry.AttrHecateFailoverFromProvider),
+		FromModel:    stringAttr(event.Attributes, telemetry.AttrHecateFailoverFromModel),
+		ToProvider:   stringAttr(event.Attributes, telemetry.AttrHecateFailoverToProvider),
+		ToModel:      stringAttr(event.Attributes, telemetry.AttrHecateFailoverToModel),
+		Reason:       firstNonEmptyString(stringAttr(event.Attributes, telemetry.AttrHecateFailoverReason), stringAttr(event.Attributes, telemetry.AttrErrorMessage)),
+		Timestamp:    event.Timestamp,
 	}
 }
 
@@ -91,6 +119,10 @@ func routeOutcomeFromEvent(name string, attrs map[string]any) string {
 		return "denied"
 	case "router.candidate.selected":
 		return "selected"
+	case "provider.call.failed":
+		return "failed"
+	case "provider.call.finished":
+		return "completed"
 	default:
 		if value := stringAttr(attrs, telemetry.AttrHecateRouteOutcome); value != "" {
 			return value
@@ -112,7 +144,7 @@ func mergeRouteCandidate(target *types.RouteCandidateReport, incoming types.Rout
 	if target.Reason == "" {
 		target.Reason = incoming.Reason
 	}
-	if incoming.Outcome != "" {
+	if shouldReplaceOutcome(target.Outcome, incoming.Outcome) {
 		target.Outcome = incoming.Outcome
 	}
 	if incoming.SkipReason != "" {
@@ -126,6 +158,21 @@ func mergeRouteCandidate(target *types.RouteCandidateReport, incoming types.Rout
 	}
 	if incoming.Attempt > 0 {
 		target.Attempt = incoming.Attempt
+	}
+	if incoming.RetryCount > target.RetryCount {
+		target.RetryCount = incoming.RetryCount
+	}
+	if incoming.Retryable {
+		target.Retryable = incoming.Retryable
+	}
+	if incoming.LatencyMS > 0 {
+		target.LatencyMS = incoming.LatencyMS
+	}
+	if incoming.FailoverFrom != "" {
+		target.FailoverFrom = incoming.FailoverFrom
+	}
+	if incoming.FailoverTo != "" {
+		target.FailoverTo = incoming.FailoverTo
 	}
 	if incoming.Detail != "" {
 		target.Detail = incoming.Detail
@@ -177,6 +224,29 @@ func int64Attr(attrs map[string]any, key string) int64 {
 	}
 }
 
+func boolAttr(attrs map[string]any, key string) bool {
+	if len(attrs) == 0 {
+		return false
+	}
+	value, ok := attrs[key]
+	if !ok || value == nil {
+		return false
+	}
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func retryCountFromEvent(event types.TraceEvent) int {
+	if event.Name != "provider.retry.scheduled" {
+		return 0
+	}
+	nextAttempt := int(int64Attr(event.Attributes, telemetry.AttrHecateRetryNextAttempt))
+	if nextAttempt <= 1 {
+		return 0
+	}
+	return nextAttempt - 1
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -184,4 +254,22 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func shouldReplaceOutcome(current, incoming string) bool {
+	if incoming == "" || incoming == "unknown" {
+		return false
+	}
+	if current == "" || current == "unknown" {
+		return true
+	}
+	rank := map[string]int{
+		"considered": 1,
+		"skipped":    2,
+		"denied":     2,
+		"selected":   3,
+		"failed":     4,
+		"completed":  5,
+	}
+	return rank[incoming] >= rank[current]
 }

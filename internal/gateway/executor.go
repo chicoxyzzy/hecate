@@ -133,7 +133,11 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrGenAIRequestModel:            candidate.Model,
 				telemetry.AttrHecateProviderKind:           preflight.ProviderKind,
 				telemetry.AttrHecateFailoverFromProvider:   initial.Provider,
+				telemetry.AttrHecateFailoverFromModel:      initial.Model,
 				telemetry.AttrHecateFailoverToProvider:     candidate.Provider,
+				telemetry.AttrHecateFailoverToModel:        candidate.Model,
+				telemetry.AttrHecateFailoverReason:         candidate.Reason,
+				telemetry.AttrHecateProviderIndex:          index,
 				telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
 			})
 		}
@@ -213,9 +217,12 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 			recordTrace(trace, "provider.retry.scheduled", "provider", map[string]any{
 				telemetry.AttrGenAIProviderName:      candidate.Provider,
 				telemetry.AttrGenAIRequestModel:      candidate.Model,
+				telemetry.AttrHecateProviderIndex:    index,
 				telemetry.AttrHecateRetryAttempt:     attempt,
 				telemetry.AttrHecateRetryNextAttempt: attempt + 1,
+				telemetry.AttrHecateRetryMaxAttempts: e.options.MaxAttempts,
 				telemetry.AttrHecateRetryBackoffMS:   backoff.Milliseconds(),
+				telemetry.AttrHecateFailoverActive:   index > 0,
 			})
 			if err := e.sleep(ctx, backoff); err != nil {
 				recordTraceError(trace, "provider.retry.backoff_failed", "provider", errorKindRetryBackoffFailed, err, map[string]any{
@@ -236,10 +243,16 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 		}
 
 		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
+			nextCandidate := candidates[index+1]
 			recordTraceError(trace, "provider.failover.triggered", "provider", errorKindProviderCallFailed, lastErr, map[string]any{
 				telemetry.AttrGenAIProviderName:          candidate.Provider,
 				telemetry.AttrGenAIRequestModel:          candidate.Model,
 				telemetry.AttrHecateFailoverFromProvider: candidate.Provider,
+				telemetry.AttrHecateFailoverFromModel:    candidate.Model,
+				telemetry.AttrHecateFailoverToProvider:   nextCandidate.Provider,
+				telemetry.AttrHecateFailoverToModel:      nextCandidate.Model,
+				telemetry.AttrHecateFailoverReason:       "provider_retry_exhausted",
+				telemetry.AttrHecateProviderIndex:        index,
 			})
 			continue
 		}

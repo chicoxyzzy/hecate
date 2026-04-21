@@ -42,6 +42,20 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 					},
 				},
 				{
+					Name:      "provider.failover.triggered",
+					Timestamp: now.Add(1500 * time.Microsecond),
+					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:          "ollama",
+						telemetry.AttrGenAIRequestModel:          "llama3.1:8b",
+						telemetry.AttrHecateProviderIndex:        0,
+						telemetry.AttrHecateFailoverFromProvider: "ollama",
+						telemetry.AttrHecateFailoverFromModel:    "llama3.1:8b",
+						telemetry.AttrHecateFailoverToProvider:   "openai",
+						telemetry.AttrHecateFailoverToModel:      "gpt-4o-mini",
+						telemetry.AttrHecateFailoverReason:       "provider_retry_exhausted",
+					},
+				},
+				{
 					Name:      "router.candidate.selected",
 					Timestamp: now.Add(2 * time.Millisecond),
 					Attributes: map[string]any{
@@ -54,10 +68,40 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 					},
 				},
 				{
+					Name:      "provider.retry.scheduled",
+					Timestamp: now.Add(2500 * time.Microsecond),
+					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:      "openai",
+						telemetry.AttrGenAIRequestModel:      "gpt-4o-mini",
+						telemetry.AttrHecateProviderIndex:    1,
+						telemetry.AttrHecateRetryAttempt:     1,
+						telemetry.AttrHecateRetryNextAttempt: 2,
+						telemetry.AttrHecateRetryBackoffMS:   int64(200),
+					},
+				},
+				{
+					Name:      "provider.call.finished",
+					Timestamp: now.Add(2750 * time.Microsecond),
+					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:       "openai",
+						telemetry.AttrGenAIRequestModel:       "gpt-4o-mini",
+						telemetry.AttrHecateProviderIndex:     1,
+						telemetry.AttrHecateRetryAttempt:      2,
+						telemetry.AttrHecateProviderLatencyMS: int64(320),
+					},
+				},
+				{
 					Name:      "provider.failover.selected",
 					Timestamp: now.Add(3 * time.Millisecond),
 					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:          "openai",
+						telemetry.AttrGenAIRequestModel:          "gpt-4o-mini",
+						telemetry.AttrHecateProviderIndex:        1,
 						telemetry.AttrHecateFailoverFromProvider: "ollama",
+						telemetry.AttrHecateFailoverFromModel:    "llama3.1:8b",
+						telemetry.AttrHecateFailoverToProvider:   "openai",
+						telemetry.AttrHecateFailoverToModel:      "gpt-4o-mini",
+						telemetry.AttrHecateFailoverReason:       "default_model_local_first_failover",
 					},
 				},
 			},
@@ -79,7 +123,25 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 	if report.Candidates[0].SkipReason != "route_denied" {
 		t.Fatalf("candidate[0].SkipReason = %q, want route_denied", report.Candidates[0].SkipReason)
 	}
-	if report.Candidates[1].Outcome != "selected" {
-		t.Fatalf("candidate[1].Outcome = %q, want selected", report.Candidates[1].Outcome)
+	if report.Candidates[1].Outcome != "completed" {
+		t.Fatalf("candidate[1].Outcome = %q, want completed", report.Candidates[1].Outcome)
+	}
+	if report.Candidates[1].RetryCount != 1 {
+		t.Fatalf("candidate[1].RetryCount = %d, want 1", report.Candidates[1].RetryCount)
+	}
+	if report.Candidates[1].Attempt != 2 {
+		t.Fatalf("candidate[1].Attempt = %d, want 2", report.Candidates[1].Attempt)
+	}
+	if report.Candidates[1].LatencyMS != 320 {
+		t.Fatalf("candidate[1].LatencyMS = %d, want 320", report.Candidates[1].LatencyMS)
+	}
+	if report.Candidates[1].FailoverFrom != "ollama" {
+		t.Fatalf("candidate[1].FailoverFrom = %q, want ollama", report.Candidates[1].FailoverFrom)
+	}
+	if len(report.Failovers) != 2 {
+		t.Fatalf("failover count = %d, want 2", len(report.Failovers))
+	}
+	if report.Failovers[0].ToProvider != "openai" {
+		t.Fatalf("failover[0].ToProvider = %q, want openai", report.Failovers[0].ToProvider)
 	}
 }
