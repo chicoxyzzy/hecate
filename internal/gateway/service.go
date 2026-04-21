@@ -120,10 +120,7 @@ type ExecutionPlan struct {
 	Request          types.ChatRequest
 	CacheKey         string
 	Route            types.RouteDecision
-	Provider         providers.Provider
 	ProviderKind     string
-	EstimatedUsage   types.Usage
-	EstimatedCost    types.CostBreakdown
 	SemanticEligible bool
 	SemanticQuery    cache.SemanticQuery
 	SemanticScope    string
@@ -187,13 +184,7 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		return nil, err
 	} else if ok {
 		metadata := s.buildCacheMetadata(plan.OriginalRequest, cached.Response, cached.Route, cached.ProviderKind, cached.CacheType, cached.Semantic, trace)
-		s.recordMetrics(metadata)
-		s.logRequestSummary(ctx, metadata)
-		return &ChatResult{
-			Response: cached.Response,
-			Metadata: metadata,
-			Trace:    trace,
-		}, nil
+		return s.completeResult(ctx, trace, cached.Response, metadata), nil
 	}
 
 	return s.executePlan(ctx, trace, plan)
@@ -289,10 +280,7 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		Request:         rewrittenReq,
 		CacheKey:        cacheKey,
 		Route:           decision,
-		Provider:        provider,
 		ProviderKind:    string(provider.Kind()),
-		EstimatedUsage:  estimatedUsage,
-		EstimatedCost:   estimatedCost,
 	}
 
 	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
@@ -377,16 +365,10 @@ func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *
 		TraceID:                 trace.TraceID,
 		SpanID:                  trace.RootSpanID(),
 	}
-	s.recordMetrics(metadata)
-	s.logRequestSummary(ctx, metadata)
 
 	s.cacheRuntime.Store(ctx, trace, plan, decision, resp)
 
-	return &ChatResult{
-		Response: resp,
-		Metadata: metadata,
-		Trace:    trace,
-	}, nil
+	return s.completeResult(ctx, trace, resp, metadata), nil
 }
 
 func (s *Service) buildCacheMetadata(req types.ChatRequest, resp *types.ChatResponse, route types.RouteDecision, providerKind, cacheType string, semantic *cache.SemanticMatch, trace *profiler.Trace) ResponseMetadata {
@@ -415,6 +397,16 @@ func (s *Service) buildCacheMetadata(req types.ChatRequest, resp *types.ChatResp
 		metadata.SemanticSimilarity = semantic.Similarity
 	}
 	return metadata
+}
+
+func (s *Service) completeResult(ctx context.Context, trace *profiler.Trace, resp *types.ChatResponse, metadata ResponseMetadata) *ChatResult {
+	s.recordMetrics(metadata)
+	s.logRequestSummary(ctx, metadata)
+	return &ChatResult{
+		Response: resp,
+		Metadata: metadata,
+		Trace:    trace,
+	}
 }
 
 type providerCallResult struct {
