@@ -44,7 +44,7 @@ func (r *RuleRouter) SetHealthTracker(tracker providers.HealthTracker) {
 }
 
 func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error) {
-	scope := requestscope.FromChatRequest(req)
+	scope := requestscope.Normalize(req.Scope)
 	model := req.Model
 	if model == "" {
 		model = r.defaultModel
@@ -81,7 +81,7 @@ func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.Ro
 }
 
 func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, current types.RouteDecision) []types.RouteDecision {
-	if requestscope.FromChatRequest(req).ProviderHint != "" {
+	if requestscope.Normalize(req.Scope).ProviderHint != "" {
 		return nil
 	}
 

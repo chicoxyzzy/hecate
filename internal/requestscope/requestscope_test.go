@@ -17,9 +17,7 @@ func TestBuildAndMetadataRoundTrip(t *testing.T) {
 		AllowedModels:    []string{"llama3.1:8b", "gpt-4o-mini"},
 	}, "team-a", "ollama")
 
-	got := FromChatRequest(types.ChatRequest{
-		Scope: scope,
-	})
+	got := Normalize(scope)
 
 	if got.Tenant != "team-a" {
 		t.Fatalf("tenant = %q, want team-a", got.Tenant)
@@ -41,19 +39,17 @@ func TestBuildAndMetadataRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFromChatRequestUsesTypedScope(t *testing.T) {
+func TestNormalizeUsesTypedScope(t *testing.T) {
 	t.Parallel()
 
-	got := FromChatRequest(types.ChatRequest{
-		Scope: types.RequestScope{
-			Tenant:           "team-a",
-			User:             "team-a",
-			ProviderHint:     "openai",
-			AllowedProviders: []string{" openai ", "ollama"},
-			AllowedModels:    []string{" llama3.1:8b ", "gpt-4o-mini"},
-			Principal: types.PrincipalContext{
-				Role: "tenant",
-			},
+	got := Normalize(types.RequestScope{
+		Tenant:           "team-a",
+		User:             "team-a",
+		ProviderHint:     "openai",
+		AllowedProviders: []string{" openai ", "ollama"},
+		AllowedModels:    []string{" llama3.1:8b ", "gpt-4o-mini"},
+		Principal: types.PrincipalContext{
+			Role: "tenant",
 		},
 	})
 

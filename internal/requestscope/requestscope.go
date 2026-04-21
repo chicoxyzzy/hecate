@@ -25,10 +25,6 @@ func Build(principal auth.Principal, tenant, provider string) types.RequestScope
 	return Normalize(scope)
 }
 
-func FromChatRequest(req types.ChatRequest) types.RequestScope {
-	return Normalize(req.Scope)
-}
-
 func Normalize(scope types.RequestScope) types.RequestScope {
 	scope.Tenant = strings.TrimSpace(scope.Tenant)
 	scope.User = strings.TrimSpace(scope.User)

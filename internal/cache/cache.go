@@ -24,7 +24,7 @@ type KeyBuilder interface {
 type StableKeyBuilder struct{}
 
 func (StableKeyBuilder) Key(req types.ChatRequest) (string, error) {
-	scope := requestscope.FromChatRequest(req)
+	scope := requestscope.Normalize(req.Scope)
 	normalized := struct {
 		Model       string          `json:"model"`
 		Messages    []types.Message `json:"messages"`

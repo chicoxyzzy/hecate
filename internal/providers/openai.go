@@ -285,7 +285,7 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
-		User:        requestscope.FromChatRequest(req).User,
+		User:        requestscope.Normalize(req.Scope).User,
 	}
 	for _, msg := range req.Messages {
 		wireReq.Messages = append(wireReq.Messages, openAIChatMessage{

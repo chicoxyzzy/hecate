@@ -54,7 +54,7 @@ func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
 }
 
 func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, providerKind string, estimatedCostMicros int64) error {
-	scope := requestscope.FromChatRequest(req)
+	scope := requestscope.Normalize(req.Scope)
 	if allowedProviders := scope.AllowedProviders; len(allowedProviders) > 0 && !slices.Contains(allowedProviders, decision.Provider) {
 		return fmt.Errorf("provider %q is not allowed for this api key", decision.Provider)
 	}
@@ -220,7 +220,7 @@ func (g *StaticGovernor) budgetKeyForRequest(req types.ChatRequest, decision typ
 	return g.resolveBudgetFilter(BudgetFilter{
 		Scope:    g.config.BudgetScope,
 		Provider: decision.Provider,
-		Tenant:   requestscope.EffectiveTenant(requestscope.FromChatRequest(req), g.config.BudgetTenantFallback),
+		Tenant:   requestscope.EffectiveTenant(requestscope.Normalize(req.Scope), g.config.BudgetTenantFallback),
 	}).Key
 }
 

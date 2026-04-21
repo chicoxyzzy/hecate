@@ -149,7 +149,7 @@ func (s *MemorySemanticStore) Set(ctx context.Context, entry SemanticEntry) erro
 }
 
 func BuildSemanticNamespace(req types.ChatRequest, decision types.RouteDecision) string {
-	tenant := requestscope.EffectiveTenant(requestscope.FromChatRequest(req), "anonymous")
+	tenant := requestscope.EffectiveTenant(requestscope.Normalize(req.Scope), "anonymous")
 	parts := []string{
 		"tenant:" + tenant,
 		"provider:" + decision.Provider,
