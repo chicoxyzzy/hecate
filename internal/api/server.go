@@ -9,6 +9,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.HandleHealth)
 	mux.HandleFunc("GET /v1/whoami", handler.HandleSession)
+	mux.HandleFunc("GET /v1/traces", handler.HandleTrace)
 	mux.HandleFunc("GET /admin/budget", handler.HandleBudgetStatus)
 	mux.HandleFunc("POST /admin/budget/topup", handler.HandleBudgetTopUp)
 	mux.HandleFunc("POST /admin/budget/limit", handler.HandleBudgetSetLimit)

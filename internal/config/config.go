@@ -12,6 +12,7 @@ type Config struct {
 	Server    ServerConfig
 	Router    RouterConfig
 	Provider  ProviderConfig
+	OTel      OTelConfig
 	Governor  GovernorConfig
 	Cache     CacheConfig
 	Postgres  PostgresConfig
@@ -50,6 +51,14 @@ type ProviderConfig struct {
 	FailoverEnabled bool
 	HealthThreshold int
 	HealthCooldown  time.Duration
+}
+
+type OTelConfig struct {
+	Enabled     bool
+	Endpoint    string
+	Headers     map[string]string
+	ServiceName string
+	Timeout     time.Duration
 }
 
 type GovernorConfig struct {
@@ -159,6 +168,13 @@ func LoadFromEnv() Config {
 			FailoverEnabled: getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
 			HealthThreshold: getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
 			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
+		},
+		OTel: OTelConfig{
+			Enabled:     getEnvBool("GATEWAY_OTEL_ENABLED", false),
+			Endpoint:    os.Getenv("GATEWAY_OTEL_ENDPOINT"),
+			Headers:     parseEnvMap(os.Getenv("GATEWAY_OTEL_HEADERS")),
+			ServiceName: getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
+			Timeout:     getEnvDuration("GATEWAY_OTEL_TIMEOUT", 5*time.Second),
 		},
 		Governor: GovernorConfig{
 			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),
@@ -380,6 +396,28 @@ func splitCSV(value string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func parseEnvMap(raw string) map[string]string {
+	items := splitCSV(raw)
+	if len(items) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(items))
+	for _, item := range items {
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		out[key] = value
 	}
 	return out
 }

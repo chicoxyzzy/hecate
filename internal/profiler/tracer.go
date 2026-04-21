@@ -1,41 +1,176 @@
 package profiler
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/hecate/agent-runtime/pkg/types"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type Tracer interface {
 	Start(requestID string) *Trace
+	Get(requestID string) (*Trace, bool)
 }
 
 type Trace struct {
 	RequestID string
+	TraceID   string
 	StartedAt time.Time
 
-	mu     sync.Mutex
-	events []types.TraceEvent
+	mu         sync.Mutex
+	events     []types.TraceEvent
+	rootSpanID string
+	spans      map[string]*types.TraceSpan
+	spanOrder  []string
+	liveSpans  map[string]*liveSpan
+	tracer     oteltrace.Tracer
+	rootCtx    context.Context
+	finalized  bool
 }
 
-func NewTrace(requestID string) *Trace {
-	return &Trace{
-		RequestID: requestID,
-		StartedAt: time.Now().UTC(),
-		events:    make([]types.TraceEvent, 0, 8),
+type liveSpan struct {
+	ctx      context.Context
+	span     oteltrace.Span
+	snapshot *types.TraceSpan
+}
+
+type InMemoryTracer struct {
+	mu     sync.Mutex
+	traces []*Trace
+	tracer oteltrace.Tracer
+}
+
+func NewInMemoryTracer(otelTracer oteltrace.Tracer) *InMemoryTracer {
+	return &InMemoryTracer{
+		traces: make([]*Trace, 0, 16),
+		tracer: otelTracer,
 	}
+}
+
+func (t *InMemoryTracer) Start(requestID string) *Trace {
+	trace := NewTrace(requestID, t.tracer)
+
+	t.mu.Lock()
+	t.traces = append(t.traces, trace)
+	t.mu.Unlock()
+
+	return trace
+}
+
+func (t *InMemoryTracer) Get(requestID string) (*Trace, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i := len(t.traces) - 1; i >= 0; i-- {
+		if t.traces[i].RequestID == requestID {
+			return t.traces[i], true
+		}
+	}
+	return nil, false
+}
+
+func NewTrace(requestID string, otelTracer oteltrace.Tracer) *Trace {
+	if otelTracer == nil {
+		otelTracer = sdktrace.NewTracerProvider().Tracer("hecate.profiler")
+	}
+
+	startedAt := time.Now().UTC()
+	rootCtx, rootSpan := otelTracer.Start(
+		context.Background(),
+		"gateway.request",
+		oteltrace.WithTimestamp(startedAt),
+		oteltrace.WithSpanKind(oteltrace.SpanKindServer),
+	)
+	rootSpanID := rootSpan.SpanContext().SpanID().String()
+	traceID := rootSpan.SpanContext().TraceID().String()
+	rootSnapshot := &types.TraceSpan{
+		TraceID:    traceID,
+		SpanID:     rootSpanID,
+		Name:       "gateway.request",
+		Kind:       "server",
+		StartTime:  startedAt,
+		EndTime:    startedAt,
+		Attributes: map[string]any{"service.name": "hecate-gateway"},
+		Events:     make([]types.TraceEvent, 0, 8),
+		StatusCode: "unset",
+	}
+
+	trace := &Trace{
+		RequestID:  requestID,
+		TraceID:    traceID,
+		StartedAt:  startedAt,
+		events:     make([]types.TraceEvent, 0, 16),
+		rootSpanID: rootSpanID,
+		spans:      map[string]*types.TraceSpan{rootSpanID: rootSnapshot},
+		spanOrder:  []string{rootSpanID},
+		liveSpans:  make(map[string]*liveSpan, 8),
+		tracer:     otelTracer,
+		rootCtx:    rootCtx,
+	}
+	trace.liveSpans[rootSpanID] = &liveSpan{
+		ctx:      rootCtx,
+		span:     rootSpan,
+		snapshot: rootSnapshot,
+	}
+	return trace
 }
 
 func (t *Trace) Record(name string, attrs map[string]any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.events = append(t.events, types.TraceEvent{
+	timestamp := time.Now().UTC()
+	event := types.TraceEvent{
 		Name:       name,
-		Timestamp:  time.Now().UTC(),
-		Attributes: attrs,
-	})
+		Timestamp:  timestamp,
+		Attributes: cloneAttributes(attrs),
+	}
+	t.events = append(t.events, event)
+
+	span := t.ensureSpan(spanSpecForEvent(name), timestamp)
+	span.snapshot.Events = append(span.snapshot.Events, event)
+	if span.snapshot.Attributes == nil {
+		span.snapshot.Attributes = map[string]any{}
+	}
+	normalizedAttrs := otelAttributesForEvent(name, event.Attributes)
+	mergeAttributes(span.snapshot.Attributes, normalizedAttrs)
+	span.span.SetAttributes(toOTelAttributes(normalizedAttrs)...)
+	span.span.AddEvent(name, oteltrace.WithTimestamp(timestamp), oteltrace.WithAttributes(toOTelAttributes(event.Attributes)...))
+	if timestamp.After(span.snapshot.EndTime) {
+		span.snapshot.EndTime = timestamp
+	}
+	updateSpanStatus(span.snapshot, span.span, name, event.Attributes)
+
+	root := t.liveSpans[t.rootSpanID]
+	root.snapshot.Events = append(root.snapshot.Events, event)
+	root.span.AddEvent(name, oteltrace.WithTimestamp(timestamp), oteltrace.WithAttributes(toOTelAttributes(event.Attributes)...))
+	if timestamp.After(root.snapshot.EndTime) {
+		root.snapshot.EndTime = timestamp
+	}
+	updateSpanStatus(root.snapshot, root.span, name, event.Attributes)
+}
+
+func (t *Trace) Finalize() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.finalized {
+		return
+	}
+	for _, spanID := range t.spanOrder {
+		live := t.liveSpans[spanID]
+		if live == nil {
+			continue
+		}
+		live.span.End(oteltrace.WithTimestamp(live.snapshot.EndTime))
+	}
+	t.finalized = true
 }
 
 func (t *Trace) Events() []types.TraceEvent {
@@ -47,23 +182,192 @@ func (t *Trace) Events() []types.TraceEvent {
 	return out
 }
 
-type InMemoryTracer struct {
-	mu     sync.Mutex
-	traces []*Trace
+func (t *Trace) Spans() []types.TraceSpan {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	out := make([]types.TraceSpan, 0, len(t.spanOrder))
+	for _, spanID := range t.spanOrder {
+		span := t.spans[spanID]
+		cloned := *span
+		cloned.Attributes = cloneAttributes(span.Attributes)
+		cloned.Events = append([]types.TraceEvent(nil), span.Events...)
+		out = append(out, cloned)
+	}
+	return out
 }
 
-func NewInMemoryTracer() *InMemoryTracer {
-	return &InMemoryTracer{
-		traces: make([]*Trace, 0, 16),
+func (t *Trace) RootSpanID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.rootSpanID
+}
+
+func (t *Trace) ensureSpan(spec spanSpec, timestamp time.Time) *liveSpan {
+	for _, spanID := range t.spanOrder {
+		existing := t.spans[spanID]
+		if existing.Name == spec.name {
+			if timestamp.Before(existing.StartTime) {
+				existing.StartTime = timestamp
+			}
+			return t.liveSpans[spanID]
+		}
+	}
+
+	ctx, span := t.tracer.Start(
+		t.rootCtx,
+		spec.name,
+		oteltrace.WithTimestamp(timestamp),
+		oteltrace.WithSpanKind(toOTelSpanKind(spec.kind)),
+		oteltrace.WithAttributes(toOTelAttributes(spec.attributes)...),
+	)
+	snapshot := &types.TraceSpan{
+		TraceID:      span.SpanContext().TraceID().String(),
+		SpanID:       span.SpanContext().SpanID().String(),
+		ParentSpanID: t.rootSpanID,
+		Name:         spec.name,
+		Kind:         spec.kind,
+		StartTime:    timestamp,
+		EndTime:      timestamp,
+		Attributes:   cloneAttributes(spec.attributes),
+		Events:       make([]types.TraceEvent, 0, 4),
+		StatusCode:   "unset",
+	}
+	t.spans[snapshot.SpanID] = snapshot
+	t.spanOrder = append(t.spanOrder, snapshot.SpanID)
+	live := &liveSpan{
+		ctx:      ctx,
+		span:     span,
+		snapshot: snapshot,
+	}
+	t.liveSpans[snapshot.SpanID] = live
+	return live
+}
+
+type spanSpec struct {
+	name       string
+	kind       string
+	attributes map[string]any
+}
+
+func spanSpecForEvent(name string) spanSpec {
+	switch {
+	case name == "request.received" || name == "request.invalid":
+		return spanSpec{name: "gateway.request.parse", kind: "internal"}
+	case hasPrefix(name, "governor."):
+		return spanSpec{name: "gateway.governor", kind: "internal"}
+	case hasPrefix(name, "cache."):
+		return spanSpec{name: "gateway.cache.exact", kind: "internal", attributes: map[string]any{"hecate.cache.type": "exact"}}
+	case hasPrefix(name, "semantic_cache."):
+		return spanSpec{name: "gateway.cache.semantic", kind: "internal", attributes: map[string]any{"hecate.cache.type": "semantic"}}
+	case hasPrefix(name, "router."):
+		return spanSpec{name: "gateway.router", kind: "internal"}
+	case hasPrefix(name, "provider.call.") || hasPrefix(name, "provider.retry.") || hasPrefix(name, "provider.failover.") || hasPrefix(name, "provider.health."):
+		return spanSpec{name: "gateway.provider", kind: "client"}
+	case name == "usage.normalized":
+		return spanSpec{name: "gateway.usage", kind: "internal"}
+	case name == "cost.calculated":
+		return spanSpec{name: "gateway.cost", kind: "internal"}
+	case name == "response.returned":
+		return spanSpec{name: "gateway.response", kind: "internal"}
+	default:
+		return spanSpec{name: "gateway.runtime", kind: "internal"}
 	}
 }
 
-func (t *InMemoryTracer) Start(requestID string) *Trace {
-	trace := NewTrace(requestID)
+func otelAttributesForEvent(name string, attrs map[string]any) map[string]any {
+	out := make(map[string]any, len(attrs)+2)
+	for key, value := range attrs {
+		out[key] = value
+	}
 
-	t.mu.Lock()
-	t.traces = append(t.traces, trace)
-	t.mu.Unlock()
+	switch name {
+	case "request.received":
+		out["hecate.phase"] = "request"
+	case "cache.hit", "cache.miss":
+		out["hecate.phase"] = "cache"
+	case "router.selected":
+		out["hecate.phase"] = "routing"
+	case "response.returned":
+		out["hecate.phase"] = "response"
+	}
 
-	return trace
+	return out
+}
+
+func updateSpanStatus(snapshot *types.TraceSpan, span oteltrace.Span, eventName string, attrs map[string]any) {
+	if errText, ok := attrs["error.message"].(string); ok && errText != "" {
+		snapshot.StatusCode = "error"
+		snapshot.StatusMessage = errText
+		span.SetStatus(codes.Error, errText)
+		return
+	}
+	if snapshot.StatusCode == "error" {
+		return
+	}
+	if eventName == "response.returned" || hasSuffix(eventName, ".finished") || eventName == "governor.allowed" || eventName == "governor.route_allowed" {
+		snapshot.StatusCode = "ok"
+		span.SetStatus(codes.Ok, "")
+	}
+}
+
+func cloneAttributes(attrs map[string]any) map[string]any {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	return out
+}
+
+func mergeAttributes(dst map[string]any, src map[string]any) {
+	for k, v := range src {
+		dst[k] = v
+	}
+}
+
+func hasPrefix(value, prefix string) bool {
+	return len(value) >= len(prefix) && value[:len(prefix)] == prefix
+}
+
+func hasSuffix(value, suffix string) bool {
+	return len(value) >= len(suffix) && value[len(value)-len(suffix):] == suffix
+}
+
+func toOTelAttributes(attrs map[string]any) []attribute.KeyValue {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make([]attribute.KeyValue, 0, len(attrs))
+	for key, value := range attrs {
+		k := attribute.Key(key)
+		switch v := value.(type) {
+		case string:
+			out = append(out, k.String(v))
+		case bool:
+			out = append(out, k.Bool(v))
+		case int:
+			out = append(out, k.Int(v))
+		case int64:
+			out = append(out, k.Int64(v))
+		case float64:
+			out = append(out, k.Float64(v))
+		default:
+			out = append(out, k.String(fmt.Sprintf("%v", v)))
+		}
+	}
+	return out
+}
+
+func toOTelSpanKind(kind string) oteltrace.SpanKind {
+	switch kind {
+	case "server":
+		return oteltrace.SpanKindServer
+	case "client":
+		return oteltrace.SpanKindClient
+	default:
+		return oteltrace.SpanKindInternal
+	}
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, getBudget, getSession } from "./api";
+import { buildRequestOptions, chatCompletions, getBudget, getSession, getTrace } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -80,6 +80,8 @@ describe("api client", () => {
           headers: {
             "Content-Type": "application/json",
             "X-Request-Id": "req-123",
+            "X-Trace-Id": "trace-123",
+            "X-Span-Id": "span-123",
             "X-Runtime-Provider": "openai",
             "X-Runtime-Provider-Kind": "cloud",
             "X-Runtime-Route-Reason": "explicit_model",
@@ -110,6 +112,8 @@ describe("api client", () => {
     );
 
     expect(result.data.id).toBe("chatcmpl-123");
+    expect(result.headers.traceId).toBe("trace-123");
+    expect(result.headers.spanId).toBe("span-123");
     expect(result.headers.provider).toBe("openai");
     expect(result.headers.routeReason).toBe("explicit_model");
     expect(result.headers.cacheType).toBe("false");
@@ -119,6 +123,43 @@ describe("api client", () => {
     expect(result.headers.attempts).toBe("2");
     expect(result.headers.retries).toBe("1");
     expect(result.headers.fallbackFrom).toBe("ollama");
+  });
+
+  it("fetches a request trace by request id", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        object: "trace",
+        data: {
+          request_id: "req-123",
+          trace_id: "req-123",
+          started_at: "2026-04-21T00:00:00Z",
+          spans: [
+            {
+              trace_id: "req-123",
+              span_id: "span-1",
+              name: "gateway.request",
+              kind: "server",
+              events: [
+                { name: "request.received", timestamp: "2026-04-21T00:00:00Z", attributes: { model: "gpt-4o-mini" } },
+                { name: "response.returned", timestamp: "2026-04-21T00:00:01Z", attributes: { provider: "openai" } },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await getTrace("req-123", "tenant-secret");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/traces?request_id=req-123",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
+    expect(result.data.request_id).toBe("req-123");
+    expect(result.data.spans).toHaveLength(1);
+    expect(result.data.spans?.[0]?.events).toHaveLength(2);
   });
 });
 

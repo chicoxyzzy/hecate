@@ -70,6 +70,38 @@ type ProviderStatusResponse struct {
 	Data   []ProviderStatusResponseItem `json:"data"`
 }
 
+type TraceResponse struct {
+	Object string            `json:"object"`
+	Data   TraceResponseItem `json:"data"`
+}
+
+type TraceResponseItem struct {
+	RequestID string            `json:"request_id"`
+	TraceID   string            `json:"trace_id,omitempty"`
+	StartedAt string            `json:"started_at,omitempty"`
+	Spans     []TraceSpanRecord `json:"spans,omitempty"`
+}
+
+type TraceSpanRecord struct {
+	TraceID       string             `json:"trace_id"`
+	SpanID        string             `json:"span_id"`
+	ParentSpanID  string             `json:"parent_span_id,omitempty"`
+	Name          string             `json:"name"`
+	Kind          string             `json:"kind,omitempty"`
+	StartTime     string             `json:"start_time,omitempty"`
+	EndTime       string             `json:"end_time,omitempty"`
+	Attributes    map[string]any     `json:"attributes,omitempty"`
+	StatusCode    string             `json:"status_code,omitempty"`
+	StatusMessage string             `json:"status_message,omitempty"`
+	Events        []TraceEventRecord `json:"events,omitempty"`
+}
+
+type TraceEventRecord struct {
+	Name       string         `json:"name"`
+	Timestamp  string         `json:"timestamp"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+}
+
 type ProviderStatusResponseItem struct {
 	Name            string   `json:"name"`
 	Kind            string   `json:"kind"`

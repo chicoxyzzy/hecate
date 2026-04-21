@@ -293,6 +293,8 @@ export function PlaygroundPanel(props: PlaygroundPanelProps) {
 
                 <dl>
                   <KV label="Request ID" value={props.runtimeHeaders.requestId} />
+                  <KV label="Trace ID" value={props.runtimeHeaders.traceId || "n/a"} />
+                  <KV label="Span ID" value={props.runtimeHeaders.spanId || "n/a"} />
                   <KV label="Provider Kind" value={props.runtimeHeaders.providerKind} />
                   <KV label="Requested Model" value={props.runtimeHeaders.requestedModel} />
                   <KV label="Resolved Model" value={props.runtimeHeaders.resolvedModel} />

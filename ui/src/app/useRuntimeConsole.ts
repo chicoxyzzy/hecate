@@ -13,6 +13,7 @@ import {
   getModels,
   getProviders,
   getSession,
+  getTrace,
   rotateAPIKey as rotateAPIKeyRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
@@ -33,6 +34,7 @@ import type {
   ProviderStatusResponse,
   RuntimeHeaders,
   SessionResponse,
+  TraceSpanRecord,
 } from "../types/runtime";
 
 const defaultPrompt = "Say hello in one short sentence.";
@@ -71,6 +73,10 @@ export function useRuntimeConsole() {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
   const [runtimeHeaders, setRuntimeHeaders] = useState<RuntimeHeaders | null>(null);
+  const [traceSpans, setTraceSpans] = useState<TraceSpanRecord[]>([]);
+  const [traceStartedAt, setTraceStartedAt] = useState("");
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceError, setTraceError] = useState("");
   const [chatError, setChatError] = useState("");
   const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>("auto");
@@ -244,6 +250,7 @@ export function useRuntimeConsole() {
     event.preventDefault();
     setChatLoading(true);
     setChatError("");
+    setTraceError("");
 
     try {
       const response = await chatCompletions(
@@ -258,6 +265,18 @@ export function useRuntimeConsole() {
 
       setChatResult(response.data);
       setRuntimeHeaders(response.headers);
+      setTraceLoading(true);
+      try {
+        const trace = await getTrace(response.headers.requestId, authToken);
+        setTraceSpans(trace.data.spans ?? []);
+        setTraceStartedAt(trace.data.started_at ?? "");
+      } catch (traceLoadError) {
+        setTraceSpans([]);
+        setTraceStartedAt("");
+        setTraceError(traceLoadError instanceof Error ? traceLoadError.message : "failed to load trace");
+      } finally {
+        setTraceLoading(false);
+      }
 
       try {
         const scopedBudget = await getBudget(
@@ -556,6 +575,10 @@ export function useRuntimeConsole() {
       rotateAPIKeyID,
       rotateAPIKeySecret,
       runtimeHeaders,
+      traceError,
+      traceSpans,
+      traceLoading,
+      traceStartedAt,
       tenant,
       tenantFormID,
       tenantFormModels,

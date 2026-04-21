@@ -7,6 +7,7 @@ import type {
   ProviderStatusResponse,
   RuntimeHeaders,
   SessionResponse,
+  TraceResponse,
 } from "../types/runtime";
 
 type RequestOptions = {
@@ -80,6 +81,10 @@ export async function getProviders(authToken?: string): Promise<ProviderStatusRe
   return fetchJSON<ProviderStatusResponse>("/admin/providers", { authToken });
 }
 
+export async function getTrace(requestID: string, authToken?: string): Promise<TraceResponse> {
+  return fetchJSON<TraceResponse>(`/v1/traces?request_id=${encodeURIComponent(requestID)}`, { authToken });
+}
+
 export async function getBudget(query = "", authToken?: string): Promise<BudgetStatusResponse> {
   return fetchJSON<BudgetStatusResponse>(`/admin/budget${query}`, { authToken });
 }
@@ -142,6 +147,8 @@ export async function chatCompletions(
     data,
     headers: {
       requestId: response.headers.get("X-Request-Id") ?? "",
+      traceId: response.headers.get("X-Trace-Id") ?? "",
+      spanId: response.headers.get("X-Span-Id") ?? "",
       provider: response.headers.get("X-Runtime-Provider") ?? "",
       providerKind: response.headers.get("X-Runtime-Provider-Kind") ?? "",
       routeReason: response.headers.get("X-Runtime-Route-Reason") ?? "",

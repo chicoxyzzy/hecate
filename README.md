@@ -8,7 +8,8 @@ It sits between agents and model providers and gives you a single OpenAI-compati
 
 - OpenAI-compatible API surface:
   - `POST /v1/chat/completions`
-  - `GET /v1/models`
+- `GET /v1/models`
+- `GET /v1/traces?request_id=...`
 - Vendor-neutral provider layer for OpenAI-compatible cloud and local endpoints
 - Rule-based routing with `explicit_or_default` and `local_first`
 - Retry and failover handling for transient provider errors
@@ -81,6 +82,8 @@ Useful response headers:
 - `X-Runtime-Fallback-From`
 - `X-Runtime-Cost-USD`
 - `X-Request-Id`
+- `X-Trace-Id`
+- `X-Span-Id`
 
 ## Quick Start
 
@@ -104,6 +107,11 @@ GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
 GATEWAY_PROVIDER_FAILOVER_ENABLED=true
 GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD=3
 GATEWAY_PROVIDER_HEALTH_COOLDOWN=30s
+GATEWAY_OTEL_ENABLED=false
+GATEWAY_OTEL_ENDPOINT=
+GATEWAY_OTEL_HEADERS=
+GATEWAY_OTEL_SERVICE_NAME=hecate-gateway
+GATEWAY_OTEL_TIMEOUT=5s
 
 OPENAI_PROVIDER_NAME=openai
 OPENAI_PROVIDER_KIND=cloud
@@ -303,6 +311,8 @@ Current UI coverage:
 - model catalog with Cloud and Local grouping
 - provider-aware playground
 - runtime header inspection
+- request trace inspection for the latest playground run
+- trace IDs and span IDs visible in runtime metadata
 - retry/failover visibility in runtime metadata
 - budget inspection and admin mutations
 - tenant and API key management
@@ -323,6 +333,11 @@ GATEWAY_PROVIDER_RETRY_BACKOFF=200ms
 GATEWAY_PROVIDER_FAILOVER_ENABLED=true
 GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD=3
 GATEWAY_PROVIDER_HEALTH_COOLDOWN=30s
+GATEWAY_OTEL_ENABLED=false
+GATEWAY_OTEL_ENDPOINT=
+GATEWAY_OTEL_HEADERS=
+GATEWAY_OTEL_SERVICE_NAME=hecate-gateway
+GATEWAY_OTEL_TIMEOUT=5s
 
 GATEWAY_AUTH_TOKEN=
 GATEWAY_API_KEYS_JSON=
@@ -378,7 +393,7 @@ internal/controlplane Tenant, API-key, and audit-history persistence
 internal/gateway      Core runtime pipeline
 internal/governor     Policy and budget enforcement
 internal/models       Canonical model identity helpers
-internal/profiler     Lightweight tracing
+internal/profiler     OTel-shaped tracing and in-memory trace snapshots
 internal/providers    OpenAI-compatible provider implementations
 internal/router       Routing logic
 internal/storage      Storage helpers such as Redis and Postgres primitives
@@ -407,6 +422,7 @@ Implemented:
 - [x] Shared budgets with memory, Redis, and Postgres storage backends
 - [x] Budget admin mutation endpoints
 - [x] Structured logs, request IDs, and lightweight in-process tracing
+- [x] OpenTelemetry-shaped tracing with OTLP HTTP export via the Go OTel SDK
 - [x] Admin auth, tenant API keys, and tenant-aware restrictions
 - [x] File-, Redis-, and Postgres-backed control plane
 - [x] Control-plane lifecycle operations and audit history
@@ -417,7 +433,6 @@ Next:
 - [ ] Add half-open probing and richer circuit-breaker policies
 - [ ] Expand routing beyond simple rules to include richer policy inputs
 - [ ] Add deeper trace export and richer semantic-cache debugging views in the UI
-- [ ] Add persistent tracing and telemetry export, starting with OpenTelemetry
 - [ ] Add more provider presets and discovery paths on top of the existing generic provider layer
 - [ ] Add background pruning/retention workers for persistent caches
 - [ ] Add budget history, threshold warnings, and better operator UX

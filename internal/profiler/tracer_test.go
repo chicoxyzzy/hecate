@@ -5,7 +5,7 @@ import "testing"
 func TestTraceRecordCreatesEvent(t *testing.T) {
 	t.Parallel()
 
-	trace := NewTrace("req-123")
+	trace := NewTrace("req-123", nil)
 	trace.Record("cache.miss", map[string]any{"key": "abc"})
 
 	events := trace.Events()

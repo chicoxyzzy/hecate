@@ -44,7 +44,26 @@ func main() {
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 
 	pricebook := billing.NewStaticPricebook(cfg.Providers)
-	tracer := profiler.NewInMemoryTracer()
+	otelProvider, err := profiler.NewTracerProvider(
+		context.Background(),
+		cfg.OTel.Enabled,
+		cfg.OTel.Endpoint,
+		cfg.OTel.Headers,
+		cfg.OTel.ServiceName,
+		cfg.OTel.Timeout,
+	)
+	if err != nil {
+		logger.Error("otel tracer provider init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := otelProvider.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("otel tracer provider shutdown failed", slog.Any("error", err))
+		}
+	}()
+	tracer := profiler.NewInMemoryTracer(profiler.NewOTelTracer(otelProvider))
 	cacheStore := buildCacheStore(cfg, logger, postgresClient)
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
@@ -102,6 +121,8 @@ func main() {
 			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
 			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
+			slog.Bool("otel_enabled", cfg.OTel.Enabled),
+			slog.String("otel_endpoint", cfg.OTel.Endpoint),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),
 		)
 

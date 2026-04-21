@@ -79,6 +79,13 @@ type BudgetStatusResult struct {
 	Status types.BudgetStatus
 }
 
+type TraceResult struct {
+	RequestID string
+	TraceID   string
+	StartedAt time.Time
+	Spans     []types.TraceSpan
+}
+
 type ResponseMetadata struct {
 	RequestID               string
 	Provider                string
@@ -100,6 +107,8 @@ type ResponseMetadata struct {
 	AttemptCount            int
 	RetryCount              int
 	FallbackFromProvider    string
+	TraceID                 string
+	SpanID                  string
 }
 
 func NewService(deps Dependencies) *Service {
@@ -122,29 +131,38 @@ func NewService(deps Dependencies) *Service {
 
 func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatResult, error) {
 	trace := s.tracer.Start(req.RequestID)
+	defer trace.Finalize()
 	requestedIdentity := models.BuildIdentity(req.Model, "")
 	trace.Record("request.received", map[string]any{
-		"message_count":   len(req.Messages),
-		"model":           req.Model,
-		"canonical_model": requestedIdentity.CanonicalRequested,
+		"gen_ai.request.message_count": len(req.Messages),
+		"gen_ai.request.model":         req.Model,
+		"hecate.model.canonical":       requestedIdentity.CanonicalRequested,
 	})
 
 	if err := validate(req); err != nil {
-		trace.Record("request.invalid", map[string]any{"error": err.Error()})
+		trace.Record("request.invalid", map[string]any{
+			"error.message": err.Error(),
+			"hecate.phase":  "request",
+		})
 		return nil, fmt.Errorf("%w: %v", errClient, err)
 	}
 
 	if err := s.governor.Check(ctx, req); err != nil {
-		trace.Record("governor.denied", map[string]any{"error": err.Error()})
+		trace.Record("governor.denied", map[string]any{
+			"error.message":          err.Error(),
+			"hecate.governor.result": "denied",
+		})
 		return nil, fmt.Errorf("%w: %v", errDenied, err)
 	}
-	trace.Record("governor.allowed", nil)
+	trace.Record("governor.allowed", map[string]any{
+		"hecate.governor.result": "allowed",
+	})
 
 	rewrittenReq := s.governor.Rewrite(req)
 	if rewrittenReq.Model != req.Model {
 		trace.Record("governor.model_rewrite", map[string]any{
-			"from": req.Model,
-			"to":   rewrittenReq.Model,
+			"gen_ai.request.model.original":  req.Model,
+			"gen_ai.request.model.rewritten": rewrittenReq.Model,
 		})
 	}
 
@@ -154,7 +172,11 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}
 
 	if cached, ok := s.cache.Get(ctx, cacheKey); ok {
-		trace.Record("cache.hit", map[string]any{"key": cacheKey})
+		trace.Record("cache.hit", map[string]any{
+			"hecate.cache.hit":  true,
+			"hecate.cache.type": "exact",
+			"hecate.cache.key":  cacheKey,
+		})
 		identity := models.BuildIdentity(req.Model, cached.Model)
 		providerKind := ""
 		if provider, ok := s.providers.Get(cached.Route.Provider); ok {
@@ -175,6 +197,8 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			CompletionTokens:        cached.Usage.CompletionTokens,
 			TotalTokens:             cached.Usage.TotalTokens,
 			CostMicrosUSD:           cached.Cost.TotalMicrosUSD,
+			TraceID:                 trace.TraceID,
+			SpanID:                  trace.RootSpanID(),
 		}
 		s.recordMetrics(metadata)
 		s.logRequestSummary(metadata)
@@ -184,17 +208,24 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			Trace:    trace,
 		}, nil
 	}
-	trace.Record("cache.miss", map[string]any{"key": cacheKey})
+	trace.Record("cache.miss", map[string]any{
+		"hecate.cache.hit":  false,
+		"hecate.cache.type": "exact",
+		"hecate.cache.key":  cacheKey,
+	})
 
 	decision, err := s.router.Route(ctx, rewrittenReq)
 	if err != nil {
-		trace.Record("router.failed", map[string]any{"error": err.Error()})
+		trace.Record("router.failed", map[string]any{
+			"error.message": err.Error(),
+			"hecate.phase":  "routing",
+		})
 		return nil, fmt.Errorf("route request: %w", err)
 	}
 	trace.Record("router.selected", map[string]any{
-		"provider": decision.Provider,
-		"model":    decision.Model,
-		"reason":   decision.Reason,
+		"gen_ai.provider.name": decision.Provider,
+		"gen_ai.request.model": decision.Model,
+		"hecate.route.reason":  decision.Reason,
 	})
 
 	provider, ok := s.providers.Get(decision.Provider)
@@ -205,22 +236,27 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	estimatedUsage := estimateUsage(rewrittenReq)
 	estimatedCost, err := s.pricebook.Estimate(decision.Provider, decision.Model, estimatedUsage)
 	if err != nil {
-		trace.Record("governor.budget_estimate_failed", map[string]any{"error": err.Error()})
+		trace.Record("governor.budget_estimate_failed", map[string]any{
+			"error.message": err.Error(),
+			"hecate.phase":  "governor",
+		})
 		return nil, fmt.Errorf("estimate preflight cost: %w", err)
 	}
 	if err := s.governor.CheckRoute(ctx, rewrittenReq, decision, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
 		trace.Record("governor.route_denied", map[string]any{
-			"error":                err.Error(),
-			"provider":             decision.Provider,
-			"provider_kind":        string(provider.Kind()),
-			"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+			"error.message":                err.Error(),
+			"gen_ai.provider.name":         decision.Provider,
+			"hecate.provider.kind":         string(provider.Kind()),
+			"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
+			"hecate.governor.route_result": "denied",
 		})
 		return nil, fmt.Errorf("%w: %v", errDenied, err)
 	}
 	trace.Record("governor.route_allowed", map[string]any{
-		"provider":             decision.Provider,
-		"provider_kind":        string(provider.Kind()),
-		"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+		"gen_ai.provider.name":         decision.Provider,
+		"hecate.provider.kind":         string(provider.Kind()),
+		"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
+		"hecate.governor.route_result": "allowed",
 	})
 
 	if s.semantic != nil && s.semanticOptions.Enabled && cache.EligibleForSemanticCache(rewrittenReq, s.semanticOptions.MaxTextChars) {
@@ -232,12 +268,18 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			MaxTextChars:  s.semanticOptions.MaxTextChars,
 		}
 		trace.Record("semantic_cache.lookup_started", map[string]any{
-			"namespace": namespace,
+			"hecate.cache.type":      "semantic",
+			"hecate.semantic.lookup": true,
+			"hecate.semantic.scope":  namespace,
 		})
 		if match, ok := s.semantic.Search(ctx, query); ok {
 			trace.Record("semantic_cache.hit", map[string]any{
-				"namespace":  namespace,
-				"similarity": match.Similarity,
+				"hecate.cache.hit":           true,
+				"hecate.cache.type":          "semantic",
+				"hecate.semantic.scope":      namespace,
+				"hecate.semantic.similarity": match.Similarity,
+				"hecate.semantic.strategy":   match.Strategy,
+				"hecate.semantic.index_type": match.IndexType,
 			})
 			identity := models.BuildIdentity(req.Model, match.Response.Model)
 			metadata := ResponseMetadata{
@@ -258,6 +300,8 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 				CompletionTokens:        match.Response.Usage.CompletionTokens,
 				TotalTokens:             match.Response.Usage.TotalTokens,
 				CostMicrosUSD:           match.Response.Cost.TotalMicrosUSD,
+				TraceID:                 trace.TraceID,
+				SpanID:                  trace.RootSpanID(),
 			}
 			s.recordMetrics(metadata)
 			s.logRequestSummary(metadata)
@@ -268,7 +312,9 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			}, nil
 		}
 		trace.Record("semantic_cache.miss", map[string]any{
-			"namespace": namespace,
+			"hecate.cache.hit":      false,
+			"hecate.cache.type":     "semantic",
+			"hecate.semantic.scope": namespace,
 		})
 	}
 
@@ -282,9 +328,9 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 
 	resp.Route = decision
 	trace.Record("usage.normalized", map[string]any{
-		"prompt_tokens":     resp.Usage.PromptTokens,
-		"completion_tokens": resp.Usage.CompletionTokens,
-		"total_tokens":      resp.Usage.TotalTokens,
+		"gen_ai.usage.input_tokens":  resp.Usage.PromptTokens,
+		"gen_ai.usage.output_tokens": resp.Usage.CompletionTokens,
+		"gen_ai.usage.total_tokens":  resp.Usage.TotalTokens,
 	})
 
 	cost, err := s.pricebook.Estimate(decision.Provider, resp.Model, resp.Usage)
@@ -293,11 +339,17 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 	}
 	resp.Cost = cost
 	trace.Record("cost.calculated", map[string]any{
-		"total_micros_usd": cost.TotalMicrosUSD,
+		"hecate.cost.total_micros_usd":  cost.TotalMicrosUSD,
+		"hecate.cost.input_micros_usd":  cost.InputMicrosUSD,
+		"hecate.cost.output_micros_usd": cost.OutputMicrosUSD,
+		"hecate.cost.cached_micros_usd": cost.CachedInputMicrosUSD,
 	})
 	if err := s.governor.RecordUsage(ctx, rewrittenReq, decision, cost.TotalMicrosUSD); err != nil {
 		s.logger.Warn("budget usage record failed", slog.Any("error", err))
-		trace.Record("governor.usage_record_failed", map[string]any{"error": err.Error()})
+		trace.Record("governor.usage_record_failed", map[string]any{
+			"error.message": err.Error(),
+			"hecate.phase":  "governor",
+		})
 	}
 
 	if err := s.cache.Set(ctx, cacheKey, resp); err != nil {
@@ -306,10 +358,11 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 
 	identity := models.BuildIdentity(req.Model, resp.Model)
 	trace.Record("response.returned", map[string]any{
-		"provider":                  decision.Provider,
-		"model":                     resp.Model,
-		"canonical_requested_model": identity.CanonicalRequested,
-		"canonical_resolved_model":  identity.CanonicalResolved,
+		"gen_ai.provider.name":             decision.Provider,
+		"gen_ai.response.model":            resp.Model,
+		"gen_ai.request.model":             identity.Requested,
+		"hecate.model.requested_canonical": identity.CanonicalRequested,
+		"hecate.model.resolved_canonical":  identity.CanonicalResolved,
 	})
 
 	metadata := ResponseMetadata{
@@ -330,6 +383,8 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 		AttemptCount:            callResult.AttemptCount,
 		RetryCount:              callResult.RetryCount,
 		FallbackFromProvider:    callResult.FallbackFromProvider,
+		TraceID:                 trace.TraceID,
+		SpanID:                  trace.RootSpanID(),
 	}
 	s.recordMetrics(metadata)
 	s.logRequestSummary(metadata)
@@ -342,9 +397,16 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (*ChatR
 			Response:  resp,
 		}); err != nil {
 			s.logger.Warn("semantic cache set failed", slog.Any("error", err))
-			trace.Record("semantic_cache.store_failed", map[string]any{"error": err.Error()})
+			trace.Record("semantic_cache.store_failed", map[string]any{
+				"error.message":         err.Error(),
+				"hecate.cache.type":     "semantic",
+				"hecate.semantic.scope": namespace,
+			})
 		} else {
-			trace.Record("semantic_cache.store_finished", map[string]any{"namespace": namespace})
+			trace.Record("semantic_cache.store_finished", map[string]any{
+				"hecate.cache.type":     "semantic",
+				"hecate.semantic.scope": namespace,
+			})
 		}
 	}
 
@@ -386,14 +448,17 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 		if err != nil {
 			lastErr = fmt.Errorf("estimate preflight cost: %w", err)
 			if index == 0 {
-				trace.Record("governor.budget_estimate_failed", map[string]any{"error": err.Error()})
+				trace.Record("governor.budget_estimate_failed", map[string]any{
+					"error.message": err.Error(),
+					"hecate.phase":  "governor",
+				})
 				return nil, lastErr
 			}
 			trace.Record("provider.failover.skipped", map[string]any{
-				"provider": candidate.Provider,
-				"model":    candidate.Model,
-				"reason":   "cost_estimate_failed",
-				"error":    err.Error(),
+				"gen_ai.provider.name":   candidate.Provider,
+				"gen_ai.request.model":   candidate.Model,
+				"hecate.failover.reason": "cost_estimate_failed",
+				"error.message":          err.Error(),
 			})
 			continue
 		}
@@ -402,20 +467,21 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 			if err := s.governor.CheckRoute(ctx, req, candidate, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
 				lastErr = fmt.Errorf("%w: %v", errDenied, err)
 				trace.Record("provider.failover.skipped", map[string]any{
-					"provider":             candidate.Provider,
-					"model":                candidate.Model,
-					"reason":               "route_denied",
-					"error":                err.Error(),
-					"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+					"gen_ai.provider.name":         candidate.Provider,
+					"gen_ai.request.model":         candidate.Model,
+					"hecate.failover.reason":       "route_denied",
+					"error.message":                err.Error(),
+					"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
 				})
 				continue
 			}
 			trace.Record("provider.failover.selected", map[string]any{
-				"from_provider":        initial.Provider,
-				"to_provider":          candidate.Provider,
-				"model":                candidate.Model,
-				"provider_kind":        string(provider.Kind()),
-				"estimated_micros_usd": estimatedCost.TotalMicrosUSD,
+				"gen_ai.provider.name":          candidate.Provider,
+				"gen_ai.request.model":          candidate.Model,
+				"hecate.provider.kind":          string(provider.Kind()),
+				"hecate.failover.from_provider": initial.Provider,
+				"hecate.failover.to_provider":   candidate.Provider,
+				"hecate.cost.estimated_micros":  estimatedCost.TotalMicrosUSD,
 			})
 		}
 
@@ -423,23 +489,23 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 		for attempt := 1; attempt <= s.resilience.MaxAttempts; attempt++ {
 			totalAttempts++
 			trace.Record("provider.call.started", map[string]any{
-				"provider":        candidate.Provider,
-				"model":           candidate.Model,
-				"attempt":         attempt,
-				"provider_index":  index,
-				"max_attempts":    s.resilience.MaxAttempts,
-				"failover_active": index > 0,
+				"gen_ai.provider.name":      candidate.Provider,
+				"gen_ai.request.model":      candidate.Model,
+				"hecate.retry.attempt":      attempt,
+				"hecate.provider.index":     index,
+				"hecate.retry.max_attempts": s.resilience.MaxAttempts,
+				"hecate.failover.active":    index > 0,
 			})
 
 			start := time.Now()
 			resp, err := provider.Chat(ctx, attemptReq)
 			if err == nil {
 				trace.Record("provider.call.finished", map[string]any{
-					"provider":       candidate.Provider,
-					"model":          candidate.Model,
-					"attempt":        attempt,
-					"provider_index": index,
-					"latency_ms":     time.Since(start).Milliseconds(),
+					"gen_ai.provider.name":       candidate.Provider,
+					"gen_ai.request.model":       candidate.Model,
+					"hecate.retry.attempt":       attempt,
+					"hecate.provider.index":      index,
+					"hecate.provider.latency_ms": time.Since(start).Milliseconds(),
 				})
 				if s.healthTracker != nil {
 					s.healthTracker.RecordSuccess(candidate.Provider)
@@ -456,12 +522,12 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 
 			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
 			trace.Record("provider.call.failed", map[string]any{
-				"provider":       candidate.Provider,
-				"model":          candidate.Model,
-				"attempt":        attempt,
-				"provider_index": index,
-				"error":          err.Error(),
-				"retryable":      providers.IsRetryableError(err),
+				"gen_ai.provider.name":   candidate.Provider,
+				"gen_ai.request.model":   candidate.Model,
+				"hecate.retry.attempt":   attempt,
+				"hecate.provider.index":  index,
+				"error.message":          err.Error(),
+				"hecate.retry.retryable": providers.IsRetryableError(err),
 			})
 
 			if !providers.IsRetryableError(err) {
@@ -474,11 +540,11 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 			totalRetries++
 			backoff := s.retryDelay(attempt)
 			trace.Record("provider.retry.scheduled", map[string]any{
-				"provider":     candidate.Provider,
-				"model":        candidate.Model,
-				"attempt":      attempt,
-				"next_attempt": attempt + 1,
-				"backoff_ms":   backoff.Milliseconds(),
+				"gen_ai.provider.name":      candidate.Provider,
+				"gen_ai.request.model":      candidate.Model,
+				"hecate.retry.attempt":      attempt,
+				"hecate.retry.next_attempt": attempt + 1,
+				"hecate.retry.backoff_ms":   backoff.Milliseconds(),
 			})
 			if err := sleepContext(ctx, backoff); err != nil {
 				return nil, fmt.Errorf("wait for retry backoff: %w", err)
@@ -488,16 +554,18 @@ func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Tra
 		if s.healthTracker != nil && providers.IsRetryableError(lastErr) {
 			s.healthTracker.RecordFailure(candidate.Provider, lastErr)
 			trace.Record("provider.health.degraded", map[string]any{
-				"provider": candidate.Provider,
-				"error":    lastErr.Error(),
+				"gen_ai.provider.name":         candidate.Provider,
+				"error.message":                lastErr.Error(),
+				"hecate.provider.health_state": "degraded",
 			})
 		}
 
 		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
 			trace.Record("provider.failover.triggered", map[string]any{
-				"from_provider": candidate.Provider,
-				"from_model":    candidate.Model,
-				"error":         lastErr.Error(),
+				"gen_ai.provider.name":          candidate.Provider,
+				"gen_ai.request.model":          candidate.Model,
+				"hecate.failover.from_provider": candidate.Provider,
+				"error.message":                 lastErr.Error(),
 			})
 			continue
 		}
@@ -738,6 +806,24 @@ func (s *Service) SetBudgetLimitWithFilter(ctx context.Context, filter governor.
 	return s.BudgetStatusWithFilter(ctx, filter)
 }
 
+func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, error) {
+	if requestID == "" {
+		return nil, fmt.Errorf("%w: request_id is required", errClient)
+	}
+
+	trace, ok := s.tracer.Get(requestID)
+	if !ok {
+		return nil, fmt.Errorf("trace %q not found", requestID)
+	}
+
+	return &TraceResult{
+		RequestID: trace.RequestID,
+		TraceID:   trace.TraceID,
+		StartedAt: trace.StartedAt,
+		Spans:     trace.Spans(),
+	}, nil
+}
+
 func (s *Service) logRequestSummary(metadata ResponseMetadata) {
 	s.logger.Info("gateway_chat_request",
 		slog.String("request_id", metadata.RequestID),
@@ -760,6 +846,8 @@ func (s *Service) logRequestSummary(metadata ResponseMetadata) {
 		slog.Int("attempt_count", metadata.AttemptCount),
 		slog.Int("retry_count", metadata.RetryCount),
 		slog.String("fallback_from_provider", metadata.FallbackFromProvider),
+		slog.String("trace_id", metadata.TraceID),
+		slog.String("span_id", metadata.SpanID),
 	)
 }
 

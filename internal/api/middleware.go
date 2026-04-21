@@ -45,6 +45,8 @@ func LoggingMiddleware(logger *slog.Logger) middleware {
 
 			logger.Info("http_request",
 				slog.String("request_id", RequestIDFromContext(r.Context())),
+				slog.String("trace_id", rw.Header().Get("X-Trace-Id")),
+				slog.String("span_id", rw.Header().Get("X-Span-Id")),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Int("status", rw.status),

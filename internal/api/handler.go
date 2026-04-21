@@ -144,6 +144,78 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorizeAny(r); !ok {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+		return
+	}
+
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
+	if requestID == "" {
+		WriteError(w, http.StatusBadRequest, "invalid_request", "request_id query parameter is required")
+		return
+	}
+
+	result, err := h.service.Trace(r.Context(), requestID)
+	if err != nil {
+		h.logger.Error("trace fetch failed",
+			slog.String("request_id", RequestIDFromContext(r.Context())),
+			slog.String("trace_request_id", requestID),
+			slog.Any("error", err),
+		)
+		if gateway.IsClientError(err) {
+			WriteError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		WriteError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+
+	spans := make([]TraceSpanRecord, 0, len(result.Spans))
+	for _, span := range result.Spans {
+		eventItems := make([]TraceEventRecord, 0, len(span.Events))
+		for _, event := range span.Events {
+			eventItems = append(eventItems, TraceEventRecord{
+				Name:       event.Name,
+				Timestamp:  event.Timestamp.UTC().Format(time.RFC3339Nano),
+				Attributes: event.Attributes,
+			})
+		}
+		item := TraceSpanRecord{
+			TraceID:       span.TraceID,
+			SpanID:        span.SpanID,
+			ParentSpanID:  span.ParentSpanID,
+			Name:          span.Name,
+			Kind:          span.Kind,
+			Attributes:    span.Attributes,
+			StatusCode:    span.StatusCode,
+			StatusMessage: span.StatusMessage,
+			Events:        eventItems,
+		}
+		if !span.StartTime.IsZero() {
+			item.StartTime = span.StartTime.UTC().Format(time.RFC3339Nano)
+		}
+		if !span.EndTime.IsZero() {
+			item.EndTime = span.EndTime.UTC().Format(time.RFC3339Nano)
+		}
+		spans = append(spans, item)
+	}
+
+	payload := TraceResponse{
+		Object: "trace",
+		Data: TraceResponseItem{
+			RequestID: result.RequestID,
+			TraceID:   result.TraceID,
+			Spans:     spans,
+		},
+	}
+	if !result.StartedAt.IsZero() {
+		payload.Data.StartedAt = result.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	WriteJSON(w, http.StatusOK, payload)
+}
+
 func (h *Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorizeAdmin(r); !ok {
 		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
@@ -638,6 +710,8 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("X-Runtime-Model-Canonical", result.Metadata.CanonicalResolvedModel)
 	w.Header().Set("X-Runtime-Cache", strconv.FormatBool(result.Metadata.CacheHit))
 	w.Header().Set("X-Runtime-Cache-Type", result.Metadata.CacheType)
+	w.Header().Set("X-Trace-Id", result.Metadata.TraceID)
+	w.Header().Set("X-Span-Id", result.Metadata.SpanID)
 	if result.Metadata.SemanticStrategy != "" {
 		w.Header().Set("X-Runtime-Semantic-Strategy", result.Metadata.SemanticStrategy)
 	}

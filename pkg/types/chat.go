@@ -96,3 +96,17 @@ type TraceEvent struct {
 	Timestamp  time.Time
 	Attributes map[string]any
 }
+
+type TraceSpan struct {
+	TraceID       string
+	SpanID        string
+	ParentSpanID  string
+	Name          string
+	Kind          string
+	StartTime     time.Time
+	EndTime       time.Time
+	Attributes    map[string]any
+	Events        []TraceEvent
+	StatusCode    string
+	StatusMessage string
+}

@@ -28,6 +28,8 @@ describe("PlaygroundPanel", () => {
         providerScopedModels={[]}
         runtimeHeaders={{
           requestId: "req-1",
+          traceId: "trace-1",
+          spanId: "span-1",
           provider: "ollama",
           providerKind: "local",
           routeReason: "explicit_model",
@@ -86,6 +88,8 @@ describe("PlaygroundPanel", () => {
         providerScopedModels={[]}
         runtimeHeaders={{
           requestId: "req-1",
+          traceId: "trace-1",
+          spanId: "span-1",
           provider: "openai",
           providerKind: "cloud",
           routeReason: "explicit_model",
@@ -141,6 +145,8 @@ describe("PlaygroundPanel", () => {
         providerScopedModels={[]}
         runtimeHeaders={{
           requestId: "req-1",
+          traceId: "trace-1",
+          spanId: "span-1",
           provider: "ollama",
           providerKind: "local",
           routeReason: "explicit_model",
@@ -196,6 +202,8 @@ describe("PlaygroundPanel", () => {
         providerScopedModels={[]}
         runtimeHeaders={{
           requestId: "req-2",
+          traceId: "trace-2",
+          spanId: "span-2",
           provider: "openai",
           providerKind: "cloud",
           routeReason: "default_model_local_first_failover",

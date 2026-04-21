@@ -10,6 +10,7 @@ import { ProviderHealthStrip } from "../components/ProviderHealthStrip";
 import { ProvidersPanel } from "../components/ProvidersPanel";
 import { SessionBadge } from "../components/SessionBadge";
 import { StatCard } from "../components/StatCard";
+import { TracePanel } from "../components/TracePanel";
 import { useRuntimeConsole } from "./useRuntimeConsole";
 
 const inputClassName =
@@ -163,6 +164,13 @@ export default function App() {
                   modelFilter={state.modelFilter}
                   visibleModels={state.visibleModels}
                   onModelFilterChange={actions.setModelFilter}
+                />
+                <TracePanel
+                  error={state.traceError}
+                  loading={state.traceLoading}
+                  requestId={state.runtimeHeaders?.requestId ?? ""}
+                  spans={state.traceSpans}
+                  traceStartedAt={state.traceStartedAt}
                 />
               </div>
             </div>

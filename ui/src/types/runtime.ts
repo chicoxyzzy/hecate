@@ -51,6 +51,36 @@ export type ProviderStatusResponse = {
   data: ProviderRecord[];
 };
 
+export type TraceEventRecord = {
+  name: string;
+  timestamp: string;
+  attributes?: Record<string, unknown>;
+};
+
+export type TraceSpanRecord = {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string;
+  name: string;
+  kind?: string;
+  start_time?: string;
+  end_time?: string;
+  attributes?: Record<string, unknown>;
+  status_code?: string;
+  status_message?: string;
+  events?: TraceEventRecord[];
+};
+
+export type TraceResponse = {
+  object: string;
+  data: {
+    request_id: string;
+    trace_id?: string;
+    started_at?: string;
+    spans?: TraceSpanRecord[];
+  };
+};
+
 export type BudgetRecord = {
   key: string;
   scope: string;
@@ -136,6 +166,8 @@ export type ChatResponse = {
 
 export type RuntimeHeaders = {
   requestId: string;
+  traceId: string;
+  spanId: string;
   provider: string;
   providerKind: string;
   routeReason: string;

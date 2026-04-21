@@ -121,6 +121,95 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.tenant).toBe("team-a");
     });
   });
+
+  it("loads trace data after a successful chat request", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/healthz") {
+        return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      }
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: {
+            authenticated: false,
+            invalid_token: false,
+            role: "anonymous",
+            source: "no_token",
+          },
+        });
+      }
+      if (url === "/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
+        });
+      }
+      if (url === "/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            id: "chatcmpl-123",
+            model: "gpt-4o-mini",
+            choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hello!" } }],
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Request-Id": "req-123",
+              "X-Trace-Id": "trace-123",
+              "X-Span-Id": "span-123",
+              "X-Runtime-Provider": "openai",
+              "X-Runtime-Provider-Kind": "cloud",
+              "X-Runtime-Route-Reason": "explicit_model",
+              "X-Runtime-Requested-Model": "gpt-4o-mini",
+              "X-Runtime-Model": "gpt-4o-mini",
+              "X-Runtime-Cache": "false",
+              "X-Runtime-Cache-Type": "false",
+              "X-Runtime-Attempts": "1",
+              "X-Runtime-Retries": "0",
+              "X-Runtime-Fallback-From": "",
+              "X-Runtime-Cost-USD": "0.000123",
+            },
+          },
+        );
+      }
+      if (url === "/v1/traces?request_id=req-123") {
+        return jsonResponse({
+          object: "trace",
+          data: {
+            request_id: "req-123",
+            trace_id: "req-123",
+            started_at: "2026-04-21T00:00:00Z",
+            spans: [
+              {
+                trace_id: "req-123",
+                span_id: "span-1",
+                name: "gateway.request",
+                kind: "server",
+                events: [{ name: "request.received", timestamp: "2026-04-21T00:00:00Z", attributes: { model: "gpt-4o-mini" } }],
+              },
+            ],
+          },
+        });
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.actions.submitChat({ preventDefault() {} } as never);
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.runtimeHeaders?.requestId).toBe("req-123");
+      expect(result.current.state.traceSpans).toHaveLength(1);
+      expect(result.current.state.traceSpans[0]?.events?.[0]?.name).toBe("request.received");
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {

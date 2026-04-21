@@ -91,6 +91,12 @@ func TestChatCompletionsCachesResponsesAndReturnsRuntimeHeaders(t *testing.T) {
 	if got := first.Header().Get("X-Request-Id"); got == "" {
 		t.Fatal("X-Request-Id = empty, want generated request id")
 	}
+	if got := first.Header().Get("X-Trace-Id"); got == "" {
+		t.Fatal("X-Trace-Id = empty, want trace id")
+	}
+	if got := first.Header().Get("X-Span-Id"); got == "" {
+		t.Fatal("X-Span-Id = empty, want span id")
+	}
 
 	second := performJSONRequest(t, handler, body)
 	if second.Code != http.StatusOK {
@@ -234,6 +240,80 @@ func TestChatCompletionsMapsUpstreamErrors(t *testing.T) {
 	}
 	if payload["error"]["message"] != "rate limit exceeded" {
 		t.Fatalf("error message = %#v, want rate limit exceeded", payload["error"]["message"])
+	}
+}
+
+func TestTraceEndpointReturnsRecordedRequestTimeline(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-123",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Choices: []types.ChatChoice{{
+				Index: 0,
+				Message: types.Message{
+					Role:    "assistant",
+					Content: "Hello!",
+				},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{
+				PromptTokens:     14,
+				CompletionTokens: 2,
+				TotalTokens:      16,
+			},
+		},
+	}
+
+	handler := newTestHTTPHandler(logger, provider)
+	chat := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`)
+	if chat.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, want %d, body=%s", chat.Code, http.StatusOK, chat.Body.String())
+	}
+
+	traceReq := httptest.NewRequest(http.MethodGet, "/v1/traces?request_id="+chat.Header().Get("X-Request-Id"), nil)
+	traceResp := httptest.NewRecorder()
+	handler.ServeHTTP(traceResp, traceReq)
+
+	if traceResp.Code != http.StatusOK {
+		t.Fatalf("trace status = %d, want %d, body=%s", traceResp.Code, http.StatusOK, traceResp.Body.String())
+	}
+
+	var payload TraceResponse
+	if err := json.NewDecoder(bytes.NewReader(traceResp.Body.Bytes())).Decode(&payload); err != nil {
+		t.Fatalf("trace Decode() error = %v", err)
+	}
+	if payload.Object != "trace" {
+		t.Fatalf("object = %q, want trace", payload.Object)
+	}
+	if payload.Data.RequestID == "" {
+		t.Fatal("request_id = empty, want request id")
+	}
+	if payload.Data.TraceID == "" {
+		t.Fatal("trace_id = empty, want trace id")
+	}
+	if len(payload.Data.Spans) == 0 {
+		t.Fatal("spans = empty, want span list")
+	}
+	if payload.Data.Spans[0].Name != "gateway.request" {
+		t.Fatalf("first span = %q, want gateway.request", payload.Data.Spans[0].Name)
+	}
+	if payload.Data.Spans[0].Attributes["service.name"] != "hecate-gateway" {
+		t.Fatalf("root span service.name = %#v, want hecate-gateway", payload.Data.Spans[0].Attributes["service.name"])
+	}
+	foundResponseSpan := false
+	for _, span := range payload.Data.Spans {
+		if span.Name == "gateway.response" {
+			foundResponseSpan = true
+			break
+		}
+	}
+	if !foundResponseSpan {
+		t.Fatalf("missing gateway.response span: %#v", payload.Data.Spans)
 	}
 }
 
@@ -551,7 +631,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 				{Name: "ollama", Kind: "local"},
 			},
 		}),
-		Tracer: profiler.NewInMemoryTracer(),
+		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
 
@@ -633,7 +713,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 				{Name: "ollama", Kind: "local"},
 			},
 		}),
-		Tracer: profiler.NewInMemoryTracer(),
+		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
 
@@ -756,7 +836,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 				{Name: "ollama", Kind: "local"},
 			},
 		}),
-		Tracer: profiler.NewInMemoryTracer(),
+		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{
 		Server: config.ServerConfig{
@@ -1072,7 +1152,7 @@ func TestMetricsExposeChatCacheCostAndProviderHealth(t *testing.T) {
 				{Name: provider.Name(), Kind: string(provider.Kind())},
 			},
 		}),
-		Tracer:  profiler.NewInMemoryTracer(),
+		Tracer:  profiler.NewInMemoryTracer(nil),
 		Metrics: metrics,
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
@@ -1332,7 +1412,7 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
 		}),
-		Tracer:  profiler.NewInMemoryTracer(),
+		Tracer:  profiler.NewInMemoryTracer(nil),
 		Metrics: telemetry.NewMetrics(),
 	})
 
@@ -1389,7 +1469,7 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 				{Name: provider.Name(), Kind: string(provider.Kind())},
 			},
 		}),
-		Tracer:  profiler.NewInMemoryTracer(),
+		Tracer:  profiler.NewInMemoryTracer(nil),
 		Metrics: telemetry.NewMetrics(),
 	})
 
