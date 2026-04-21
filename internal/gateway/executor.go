@@ -114,16 +114,17 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 			start := time.Now()
 			resp, err := provider.Chat(ctx, attemptReq)
+			latency := time.Since(start)
 			if err == nil {
 				recordTrace(trace, "provider.call.finished", "provider", map[string]any{
 					"gen_ai.provider.name":       candidate.Provider,
 					"gen_ai.request.model":       candidate.Model,
 					"hecate.retry.attempt":       attempt,
 					"hecate.provider.index":      index,
-					"hecate.provider.latency_ms": time.Since(start).Milliseconds(),
+					"hecate.provider.latency_ms": latency.Milliseconds(),
 				})
 				if e.healthTracker != nil {
-					e.healthTracker.RecordSuccess(candidate.Provider)
+					e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{Duration: latency})
 				}
 				return &providerCallResult{
 					Response:             resp,
@@ -137,12 +138,19 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 
 			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
 			recordTraceError(trace, "provider.call.failed", "provider", errorKindProviderCallFailed, err, map[string]any{
-				"gen_ai.provider.name":   candidate.Provider,
-				"gen_ai.request.model":   candidate.Model,
-				"hecate.retry.attempt":   attempt,
-				"hecate.provider.index":  index,
-				"hecate.retry.retryable": providers.IsRetryableError(err),
+				"gen_ai.provider.name":       candidate.Provider,
+				"gen_ai.request.model":       candidate.Model,
+				"hecate.retry.attempt":       attempt,
+				"hecate.provider.index":      index,
+				"hecate.retry.retryable":     providers.IsRetryableError(err),
+				"hecate.provider.latency_ms": latency.Milliseconds(),
 			})
+			if e.healthTracker != nil {
+				e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{
+					Duration: latency,
+					Error:    err,
+				})
+			}
 
 			if !providers.IsRetryableError(err) {
 				break
@@ -172,10 +180,9 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 		}
 
 		if e.healthTracker != nil && providers.IsRetryableError(lastErr) {
-			e.healthTracker.RecordFailure(candidate.Provider, lastErr)
 			recordTraceError(trace, "provider.health.degraded", "provider", errorKindProviderHealth, lastErr, map[string]any{
 				"gen_ai.provider.name":         candidate.Provider,
-				"hecate.provider.health_state": "degraded",
+				"hecate.provider.health_state": string(e.healthTracker.State(candidate.Provider).Status),
 			})
 		}
 

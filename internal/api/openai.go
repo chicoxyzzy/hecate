@@ -120,21 +120,49 @@ type BudgetStatusResponse struct {
 }
 
 type BudgetStatusResponseItem struct {
-	Key                string `json:"key"`
-	Scope              string `json:"scope"`
-	Provider           string `json:"provider,omitempty"`
-	Tenant             string `json:"tenant,omitempty"`
-	Backend            string `json:"backend"`
-	LimitSource        string `json:"limit_source"`
-	SpentMicrosUSD     int64  `json:"spent_micros_usd"`
-	SpentUSD           string `json:"spent_usd"`
-	CurrentMicrosUSD   int64  `json:"current_micros_usd"`
-	CurrentUSD         string `json:"current_usd"`
-	MaxMicrosUSD       int64  `json:"max_micros_usd"`
-	MaxUSD             string `json:"max_usd"`
-	RemainingMicrosUSD int64  `json:"remaining_micros_usd"`
-	RemainingUSD       string `json:"remaining_usd"`
-	Enforced           bool   `json:"enforced"`
+	Key                string                `json:"key"`
+	Scope              string                `json:"scope"`
+	Provider           string                `json:"provider,omitempty"`
+	Tenant             string                `json:"tenant,omitempty"`
+	Backend            string                `json:"backend"`
+	LimitSource        string                `json:"limit_source"`
+	SpentMicrosUSD     int64                 `json:"spent_micros_usd"`
+	SpentUSD           string                `json:"spent_usd"`
+	CurrentMicrosUSD   int64                 `json:"current_micros_usd"`
+	CurrentUSD         string                `json:"current_usd"`
+	MaxMicrosUSD       int64                 `json:"max_micros_usd"`
+	MaxUSD             string                `json:"max_usd"`
+	RemainingMicrosUSD int64                 `json:"remaining_micros_usd"`
+	RemainingUSD       string                `json:"remaining_usd"`
+	Enforced           bool                  `json:"enforced"`
+	Warnings           []BudgetWarningRecord `json:"warnings,omitempty"`
+	History            []BudgetHistoryRecord `json:"history,omitempty"`
+}
+
+type BudgetWarningRecord struct {
+	ThresholdPercent   int   `json:"threshold_percent"`
+	ThresholdMicrosUSD int64 `json:"threshold_micros_usd"`
+	CurrentMicrosUSD   int64 `json:"current_micros_usd"`
+	RemainingMicrosUSD int64 `json:"remaining_micros_usd"`
+	Triggered          bool  `json:"triggered"`
+}
+
+type BudgetHistoryRecord struct {
+	Type             string `json:"type"`
+	Scope            string `json:"scope,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Tenant           string `json:"tenant,omitempty"`
+	Model            string `json:"model,omitempty"`
+	RequestID        string `json:"request_id,omitempty"`
+	Actor            string `json:"actor,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	AmountMicrosUSD  int64  `json:"amount_micros_usd"`
+	AmountUSD        string `json:"amount_usd"`
+	BalanceMicrosUSD int64  `json:"balance_micros_usd"`
+	BalanceUSD       string `json:"balance_usd"`
+	LimitMicrosUSD   int64  `json:"limit_micros_usd"`
+	LimitUSD         string `json:"limit_usd"`
+	Timestamp        string `json:"timestamp,omitempty"`
 }
 
 type BudgetResetRequest struct {

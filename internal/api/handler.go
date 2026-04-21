@@ -899,6 +899,41 @@ func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletion
 
 func renderBudgetStatusResponse(result *gateway.BudgetStatusResult) BudgetStatusResponse {
 	status := result.Status
+	warnings := make([]BudgetWarningRecord, 0, len(status.Warnings))
+	for _, warning := range status.Warnings {
+		warnings = append(warnings, BudgetWarningRecord{
+			ThresholdPercent:   warning.ThresholdPercent,
+			ThresholdMicrosUSD: warning.ThresholdMicrosUSD,
+			CurrentMicrosUSD:   warning.CurrentMicrosUSD,
+			RemainingMicrosUSD: warning.RemainingMicrosUSD,
+			Triggered:          warning.Triggered,
+		})
+	}
+
+	history := make([]BudgetHistoryRecord, 0, len(status.History))
+	for _, entry := range status.History {
+		item := BudgetHistoryRecord{
+			Type:             entry.Type,
+			Scope:            entry.Scope,
+			Provider:         entry.Provider,
+			Tenant:           entry.Tenant,
+			Model:            entry.Model,
+			RequestID:        entry.RequestID,
+			Actor:            entry.Actor,
+			Detail:           entry.Detail,
+			AmountMicrosUSD:  entry.AmountMicrosUSD,
+			AmountUSD:        formatUSD(entry.AmountMicrosUSD),
+			BalanceMicrosUSD: entry.BalanceMicrosUSD,
+			BalanceUSD:       formatUSD(entry.BalanceMicrosUSD),
+			LimitMicrosUSD:   entry.LimitMicrosUSD,
+			LimitUSD:         formatUSD(entry.LimitMicrosUSD),
+		}
+		if !entry.Timestamp.IsZero() {
+			item.Timestamp = entry.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		history = append(history, item)
+	}
+
 	return BudgetStatusResponse{
 		Object: "budget_status",
 		Data: BudgetStatusResponseItem{
@@ -917,6 +952,8 @@ func renderBudgetStatusResponse(result *gateway.BudgetStatusResult) BudgetStatus
 			RemainingMicrosUSD: status.RemainingMicrosUSD,
 			RemainingUSD:       formatUSD(status.RemainingMicrosUSD),
 			Enforced:           status.Enforced,
+			Warnings:           warnings,
+			History:            history,
 		},
 	}
 }

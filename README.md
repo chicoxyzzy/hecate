@@ -11,11 +11,13 @@ Current runtime capabilities:
 - OpenAI-compatible provider layer with configurable base URLs
 - cloud and local provider support
 - rule-based routing
+- provider health tracking with cooldown-based recovery states
 - retry and failover for transient upstream errors
 - exact cache
 - semantic cache
 - static cost estimation via a local pricebook
 - budget enforcement
+- budget limit top-ups, resets, warning thresholds, and history
 - tenant-aware auth and restrictions
 - request tracing and structured logs
 - optional OTLP HTTP export for traces, metrics, and logs
@@ -181,21 +183,21 @@ Implemented:
 - [x] OpenAI-compatible chat completions endpoint
 - [x] Unified model catalog across configured providers
 - [x] Cloud and local provider support behind a vendor-neutral provider layer
-- [x] Rule-based routing with retry and failover
+- [x] Rule-based routing with retry, failover, and provider health tracking
 - [x] Exact cache
 - [x] Semantic cache
 - [x] Static pricebook and cost estimation
-- [x] Budget enforcement
+- [x] Budget enforcement with top-ups, resets, warning thresholds, and history
 - [x] Tenant-aware auth and persisted control-plane state
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
 
 Next:
 
-- [ ] Richer circuit-breaker and health-recovery behavior
+- [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
 - [ ] More advanced routing and policy decisions
 - [ ] Better semantic-cache debugging and trace visibility in the UI
-- [ ] Better budget UX, warnings, and history
+- [ ] Better budget UX and trend visibility in the UI
 - [ ] Background retention and pruning workers
 - [ ] More provider presets and discovery paths
 - [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`

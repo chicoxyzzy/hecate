@@ -97,6 +97,30 @@ export type BudgetRecord = {
   remaining_micros_usd: number;
   remaining_usd: string;
   enforced: boolean;
+  warnings?: Array<{
+    threshold_percent: number;
+    threshold_micros_usd: number;
+    current_micros_usd: number;
+    remaining_micros_usd: number;
+    triggered: boolean;
+  }>;
+  history?: Array<{
+    type: string;
+    scope?: string;
+    provider?: string;
+    tenant?: string;
+    model?: string;
+    request_id?: string;
+    actor?: string;
+    detail?: string;
+    amount_micros_usd: number;
+    amount_usd: string;
+    balance_micros_usd: number;
+    balance_usd: string;
+    limit_micros_usd: number;
+    limit_usd: string;
+    timestamp?: string;
+  }>;
 };
 
 export type BudgetStatusResponse = {

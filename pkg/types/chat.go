@@ -67,9 +67,10 @@ type CostBreakdown struct {
 }
 
 type RouteDecision struct {
-	Provider string
-	Model    string
-	Reason   string
+	Provider     string
+	ProviderKind string
+	Model        string
+	Reason       string
 }
 
 type ModelInfo struct {
@@ -105,6 +106,31 @@ type BudgetStatus struct {
 	MaxMicrosUSD       int64
 	RemainingMicrosUSD int64
 	Enforced           bool
+	Warnings           []BudgetWarning
+	History            []BudgetHistoryEntry
+}
+
+type BudgetWarning struct {
+	ThresholdPercent   int
+	ThresholdMicrosUSD int64
+	CurrentMicrosUSD   int64
+	RemainingMicrosUSD int64
+	Triggered          bool
+}
+
+type BudgetHistoryEntry struct {
+	Type             string
+	Scope            string
+	Provider         string
+	Tenant           string
+	Model            string
+	RequestID        string
+	Actor            string
+	Detail           string
+	AmountMicrosUSD  int64
+	BalanceMicrosUSD int64
+	LimitMicrosUSD   int64
+	Timestamp        time.Time
 }
 
 type TraceEvent struct {

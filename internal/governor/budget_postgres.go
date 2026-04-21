@@ -4,13 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
+var budgetIdentifierPattern = regexp.MustCompile(`[^a-z0-9_]+`)
+
 type PostgresBudgetStore struct {
-	db    *sql.DB
-	table string
+	db          *sql.DB
+	table       string
+	eventsTable string
 }
 
 func NewPostgresBudgetStore(ctx context.Context, client *storage.PostgresClient) (*PostgresBudgetStore, error) {
@@ -19,8 +24,9 @@ func NewPostgresBudgetStore(ctx context.Context, client *storage.PostgresClient)
 	}
 
 	store := &PostgresBudgetStore{
-		db:    client.DB(),
-		table: client.QualifiedTable("budget"),
+		db:          client.DB(),
+		table:       client.QualifiedTable("budget"),
+		eventsTable: client.QualifiedTable("budget_events"),
 	}
 	if err := store.migrate(ctx); err != nil {
 		return nil, err
@@ -110,6 +116,103 @@ func (s *PostgresBudgetStore) AddLimit(ctx context.Context, key string, delta in
 	return err
 }
 
+func (s *PostgresBudgetStore) AppendEvent(ctx context.Context, event BudgetEvent) error {
+	if event.Key == "" {
+		return nil
+	}
+
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		INSERT INTO %s (
+			budget_key,
+			event_type,
+			scope,
+			provider,
+			tenant,
+			model,
+			request_id,
+			actor,
+			detail,
+			amount_micros_usd,
+			balance_micros_usd,
+			limit_micros_usd,
+			occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, s.eventsTable),
+		event.Key,
+		event.Type,
+		event.Scope,
+		event.Provider,
+		event.Tenant,
+		event.Model,
+		event.RequestID,
+		event.Actor,
+		event.Detail,
+		event.AmountMicrosUSD,
+		event.BalanceMicrosUSD,
+		event.LimitMicrosUSD,
+		event.OccurredAt,
+	)
+	return err
+}
+
+func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit int) ([]BudgetEvent, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT
+			budget_key,
+			event_type,
+			scope,
+			provider,
+			tenant,
+			model,
+			request_id,
+			actor,
+			detail,
+			amount_micros_usd,
+			balance_micros_usd,
+			limit_micros_usd,
+			occurred_at
+		FROM %s
+		WHERE budget_key = $1
+		ORDER BY occurred_at DESC, id DESC
+		LIMIT $2
+	`, s.eventsTable), key, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]BudgetEvent, 0, limit)
+	for rows.Next() {
+		var event BudgetEvent
+		if err := rows.Scan(
+			&event.Key,
+			&event.Type,
+			&event.Scope,
+			&event.Provider,
+			&event.Tenant,
+			&event.Model,
+			&event.RequestID,
+			&event.Actor,
+			&event.Detail,
+			&event.AmountMicrosUSD,
+			&event.BalanceMicrosUSD,
+			&event.LimitMicrosUSD,
+			&event.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 func (s *PostgresBudgetStore) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
@@ -122,5 +225,46 @@ func (s *PostgresBudgetStore) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate postgres budget store: %w", err)
 	}
+
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			id BIGSERIAL PRIMARY KEY,
+			budget_key TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			scope TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL DEFAULT '',
+			tenant TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			actor TEXT NOT NULL DEFAULT '',
+			detail TEXT NOT NULL DEFAULT '',
+			amount_micros_usd BIGINT NOT NULL DEFAULT 0,
+			balance_micros_usd BIGINT NOT NULL DEFAULT 0,
+			limit_micros_usd BIGINT NOT NULL DEFAULT 0,
+			occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`, s.eventsTable))
+	if err != nil {
+		return fmt.Errorf("migrate postgres budget event store: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE INDEX IF NOT EXISTS "%s"
+		ON %s (budget_key, occurred_at DESC)
+	`, sanitizeBudgetIdentifier(s.table+"_events_budget_key_occurred_at_idx"), s.eventsTable))
+	if err != nil {
+		return fmt.Errorf("migrate postgres budget event index: %w", err)
+	}
 	return nil
+}
+
+func sanitizeBudgetIdentifier(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, `"`, "_")
+	value = budgetIdentifierPattern.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "_")
+	if value == "" {
+		return "budget_events_idx"
+	}
+	return value
 }

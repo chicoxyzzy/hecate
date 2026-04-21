@@ -1244,6 +1244,9 @@ func TestBudgetStatusReturnsCurrentSpend(t *testing.T) {
 	if response.Data.RemainingMicrosUSD != 4_997_000 {
 		t.Fatalf("remaining_micros_usd = %d, want 4997000", response.Data.RemainingMicrosUSD)
 	}
+	if len(response.Data.Warnings) == 0 {
+		t.Fatal("warnings = empty, want configured default warnings")
+	}
 }
 
 func TestBudgetResetSupportsExplicitKey(t *testing.T) {
@@ -1381,6 +1384,15 @@ func TestBudgetTopUpAndSetLimitEndpoints(t *testing.T) {
 	}
 	if limitResponse.Data.MaxMicrosUSD != 500_000 {
 		t.Fatalf("limit max_micros_usd = %d, want 500000", limitResponse.Data.MaxMicrosUSD)
+	}
+	if len(limitResponse.Data.History) != 2 {
+		t.Fatalf("limit history length = %d, want 2", len(limitResponse.Data.History))
+	}
+	if limitResponse.Data.History[0].Type != "set_limit" {
+		t.Fatalf("latest history type = %q, want set_limit", limitResponse.Data.History[0].Type)
+	}
+	if limitResponse.Data.History[1].Type != "top_up" {
+		t.Fatalf("older history type = %q, want top_up", limitResponse.Data.History[1].Type)
 	}
 }
 

@@ -30,13 +30,20 @@ type BudgetFilter struct {
 }
 
 type StaticGovernor struct {
-	config config.GovernorConfig
-	ledger UsageLedger
-	store  BudgetStateStore
+	config  config.GovernorConfig
+	ledger  UsageLedger
+	store   BudgetStateStore
+	history BudgetHistoryStore
 }
 
 func NewStaticGovernor(cfg config.GovernorConfig, ledger UsageLedger, store BudgetStateStore) *StaticGovernor {
-	return &StaticGovernor{config: cfg, ledger: ledger, store: store}
+	var history BudgetHistoryStore
+	if candidate, ok := ledger.(BudgetHistoryStore); ok {
+		history = candidate
+	} else if candidate, ok := store.(BudgetHistoryStore); ok {
+		history = candidate
+	}
+	return &StaticGovernor{config: cfg, ledger: ledger, store: store, history: history}
 }
 
 func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
@@ -138,6 +145,19 @@ func (g *StaticGovernor) RecordUsage(ctx context.Context, req types.ChatRequest,
 	if err := g.ledger.Record(ctx, event); err != nil {
 		return fmt.Errorf("record budget usage for provider %q: %w", decision.Provider, err)
 	}
+	if err := g.appendBudgetEvent(ctx, BudgetEvent{
+		Key:             event.BudgetKey,
+		Type:            "usage",
+		Scope:           g.config.BudgetScope,
+		Provider:        decision.Provider,
+		Tenant:          event.Tenant,
+		Model:           decision.Model,
+		RequestID:       req.RequestID,
+		AmountMicrosUSD: costMicros,
+		OccurredAt:      event.OccurredAt,
+	}); err != nil {
+		return fmt.Errorf("append budget usage history: %w", err)
+	}
 	return nil
 }
 
@@ -175,6 +195,12 @@ func (g *StaticGovernor) BudgetStatus(ctx context.Context, filter BudgetFilter) 
 	status.LimitSource = source
 	status.Enforced = limit > 0
 	status.RemainingMicrosUSD = remainingBudget(limit, spent)
+	status.Warnings = g.buildWarnings(limit, spent)
+	history, err := g.budgetHistory(ctx, resolved.Key, status, g.historyLimit())
+	if err != nil {
+		return types.BudgetStatus{}, fmt.Errorf("read budget history: %w", err)
+	}
+	status.History = history
 	return status, nil
 }
 
@@ -182,8 +208,26 @@ func (g *StaticGovernor) TopUpBudget(ctx context.Context, filter BudgetFilter, d
 	if g.store == nil || deltaMicros <= 0 {
 		return nil
 	}
-	if err := g.store.AddLimit(ctx, g.resolveBudgetFilter(filter).Key, deltaMicros); err != nil {
+	resolved := g.resolveBudgetFilter(filter)
+	if err := g.store.AddLimit(ctx, resolved.Key, deltaMicros); err != nil {
 		return fmt.Errorf("top up budget limit: %w", err)
+	}
+	current, limit, err := g.currentAndLimit(ctx, resolved.Key)
+	if err != nil {
+		return fmt.Errorf("read budget after top up: %w", err)
+	}
+	if err := g.appendBudgetEvent(ctx, BudgetEvent{
+		Key:              resolved.Key,
+		Type:             "top_up",
+		Scope:            resolved.Scope,
+		Provider:         resolved.Provider,
+		Tenant:           resolved.Tenant,
+		AmountMicrosUSD:  deltaMicros,
+		BalanceMicrosUSD: current,
+		LimitMicrosUSD:   limit,
+		OccurredAt:       time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("append top-up history: %w", err)
 	}
 	return nil
 }
@@ -192,8 +236,26 @@ func (g *StaticGovernor) SetBudgetLimit(ctx context.Context, filter BudgetFilter
 	if g.store == nil || limitMicros < 0 {
 		return nil
 	}
-	if err := g.store.SetLimit(ctx, g.resolveBudgetFilter(filter).Key, limitMicros); err != nil {
+	resolved := g.resolveBudgetFilter(filter)
+	if err := g.store.SetLimit(ctx, resolved.Key, limitMicros); err != nil {
 		return fmt.Errorf("set budget limit: %w", err)
+	}
+	current, _, err := g.currentAndLimit(ctx, resolved.Key)
+	if err != nil {
+		return fmt.Errorf("read budget after limit set: %w", err)
+	}
+	if err := g.appendBudgetEvent(ctx, BudgetEvent{
+		Key:              resolved.Key,
+		Type:             "set_limit",
+		Scope:            resolved.Scope,
+		Provider:         resolved.Provider,
+		Tenant:           resolved.Tenant,
+		AmountMicrosUSD:  limitMicros,
+		BalanceMicrosUSD: current,
+		LimitMicrosUSD:   limitMicros,
+		OccurredAt:       time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("append limit history: %w", err)
 	}
 	return nil
 }
@@ -202,8 +264,25 @@ func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) e
 	if g.ledger == nil {
 		return nil
 	}
-	if err := g.ledger.Reset(ctx, g.resolveBudgetFilter(filter).Key); err != nil {
+	resolved := g.resolveBudgetFilter(filter)
+	if err := g.ledger.Reset(ctx, resolved.Key); err != nil {
 		return fmt.Errorf("reset budget state: %w", err)
+	}
+	_, limit, err := g.currentAndLimit(ctx, resolved.Key)
+	if err != nil {
+		return fmt.Errorf("read budget after reset: %w", err)
+	}
+	if err := g.appendBudgetEvent(ctx, BudgetEvent{
+		Key:              resolved.Key,
+		Type:             "reset",
+		Scope:            resolved.Scope,
+		Provider:         resolved.Provider,
+		Tenant:           resolved.Tenant,
+		BalanceMicrosUSD: 0,
+		LimitMicrosUSD:   limit,
+		OccurredAt:       time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("append reset history: %w", err)
 	}
 	return nil
 }
@@ -300,4 +379,116 @@ func (g *StaticGovernor) budgetLimitAndSource(ctx context.Context, key string) (
 		return limit, "store", nil
 	}
 	return g.config.MaxTotalBudgetMicros, "config", nil
+}
+
+func (g *StaticGovernor) appendBudgetEvent(ctx context.Context, event BudgetEvent) error {
+	if g.history == nil {
+		return nil
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	if event.BalanceMicrosUSD == 0 && g.ledger != nil {
+		current, err := g.ledger.Current(ctx, event.Key)
+		if err == nil {
+			event.BalanceMicrosUSD = current
+		}
+	}
+	if event.LimitMicrosUSD == 0 && g.store != nil {
+		limit, err := g.effectiveBudgetLimit(ctx, event.Key)
+		if err == nil {
+			event.LimitMicrosUSD = limit
+		}
+	}
+	return g.history.AppendEvent(ctx, event)
+}
+
+func (g *StaticGovernor) budgetHistory(ctx context.Context, key string, status types.BudgetStatus, limit int) ([]types.BudgetHistoryEntry, error) {
+	if g.history == nil {
+		return nil, nil
+	}
+
+	events, err := g.history.ListEvents(ctx, key, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]types.BudgetHistoryEntry, 0, len(events))
+	for _, event := range events {
+		out = append(out, types.BudgetHistoryEntry{
+			Type:             event.Type,
+			Scope:            event.Scope,
+			Provider:         firstNonEmpty(event.Provider, status.Provider),
+			Tenant:           firstNonEmpty(event.Tenant, status.Tenant),
+			Model:            event.Model,
+			RequestID:        event.RequestID,
+			Actor:            event.Actor,
+			Detail:           event.Detail,
+			AmountMicrosUSD:  event.AmountMicrosUSD,
+			BalanceMicrosUSD: event.BalanceMicrosUSD,
+			LimitMicrosUSD:   event.LimitMicrosUSD,
+			Timestamp:        event.OccurredAt,
+		})
+	}
+	return out, nil
+}
+
+func (g *StaticGovernor) buildWarnings(limit, current int64) []types.BudgetWarning {
+	if limit <= 0 || current < 0 {
+		return nil
+	}
+
+	thresholds := g.config.BudgetWarningThresholds
+	if len(thresholds) == 0 {
+		thresholds = []int{50, 80, 95}
+	}
+
+	out := make([]types.BudgetWarning, 0, len(thresholds))
+	for _, threshold := range thresholds {
+		if threshold <= 0 {
+			continue
+		}
+		thresholdMicros := (limit * int64(threshold)) / 100
+		out = append(out, types.BudgetWarning{
+			ThresholdPercent:   threshold,
+			ThresholdMicrosUSD: thresholdMicros,
+			CurrentMicrosUSD:   current,
+			RemainingMicrosUSD: remainingBudget(limit, current),
+			Triggered:          current >= thresholdMicros,
+		})
+	}
+	return out
+}
+
+func (g *StaticGovernor) historyLimit() int {
+	if g.config.BudgetHistoryLimit <= 0 {
+		return 20
+	}
+	return g.config.BudgetHistoryLimit
+}
+
+func (g *StaticGovernor) currentAndLimit(ctx context.Context, key string) (int64, int64, error) {
+	var current int64
+	if g.ledger != nil {
+		value, err := g.ledger.Current(ctx, key)
+		if err != nil {
+			return 0, 0, err
+		}
+		current = value
+	}
+
+	limit, err := g.effectiveBudgetLimit(ctx, key)
+	if err != nil {
+		return 0, 0, err
+	}
+	return current, limit, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

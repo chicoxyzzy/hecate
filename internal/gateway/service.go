@@ -268,6 +268,7 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		"gen_ai.provider.name": decision.Provider,
 		"gen_ai.request.model": decision.Model,
 		"hecate.route.reason":  decision.Reason,
+		"hecate.provider.kind": decision.ProviderKind,
 	})
 
 	preflight, err := s.preflight.Evaluate(ctx, rewrittenReq, decision)

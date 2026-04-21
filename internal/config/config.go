@@ -71,20 +71,22 @@ type OTelConfig struct {
 }
 
 type GovernorConfig struct {
-	DenyAll              bool
-	MaxPromptTokens      int
-	MaxTotalBudgetMicros int64
-	ModelRewriteTo       string
-	BudgetBackend        string
-	BudgetKey            string
-	BudgetScope          string
-	BudgetTenantFallback string
-	RouteMode            string
-	AllowedProviders     []string
-	DeniedProviders      []string
-	AllowedModels        []string
-	DeniedModels         []string
-	AllowedProviderKinds []string
+	DenyAll                 bool
+	MaxPromptTokens         int
+	MaxTotalBudgetMicros    int64
+	ModelRewriteTo          string
+	BudgetBackend           string
+	BudgetKey               string
+	BudgetScope             string
+	BudgetTenantFallback    string
+	RouteMode               string
+	AllowedProviders        []string
+	DeniedProviders         []string
+	AllowedModels           []string
+	DeniedModels            []string
+	AllowedProviderKinds    []string
+	BudgetWarningThresholds []int
+	BudgetHistoryLimit      int
 }
 
 type CacheConfig struct {
@@ -195,20 +197,22 @@ func LoadFromEnv() Config {
 			LogsTimeout:     getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
 		},
 		Governor: GovernorConfig{
-			DenyAll:              getEnvBool("GATEWAY_DENY_ALL", false),
-			MaxPromptTokens:      getEnvInt("GATEWAY_MAX_PROMPT_TOKENS", 64_000),
-			MaxTotalBudgetMicros: getEnvInt64("GATEWAY_MAX_BUDGET_MICROS_USD", 5_000_000),
-			ModelRewriteTo:       os.Getenv("GATEWAY_MODEL_REWRITE_TO"),
-			BudgetBackend:        getEnv("GATEWAY_BUDGET_BACKEND", "memory"),
-			BudgetKey:            getEnv("GATEWAY_BUDGET_KEY", "global"),
-			BudgetScope:          getEnv("GATEWAY_BUDGET_SCOPE", "global"),
-			BudgetTenantFallback: getEnv("GATEWAY_BUDGET_TENANT_FALLBACK", "anonymous"),
-			RouteMode:            getEnv("GATEWAY_ROUTE_MODE", "any"),
-			AllowedProviders:     splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDERS")),
-			DeniedProviders:      splitCSV(os.Getenv("GATEWAY_DENIED_PROVIDERS")),
-			AllowedModels:        splitCSV(os.Getenv("GATEWAY_ALLOWED_MODELS")),
-			DeniedModels:         splitCSV(os.Getenv("GATEWAY_DENIED_MODELS")),
-			AllowedProviderKinds: splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDER_KINDS")),
+			DenyAll:                 getEnvBool("GATEWAY_DENY_ALL", false),
+			MaxPromptTokens:         getEnvInt("GATEWAY_MAX_PROMPT_TOKENS", 64_000),
+			MaxTotalBudgetMicros:    getEnvInt64("GATEWAY_MAX_BUDGET_MICROS_USD", 5_000_000),
+			ModelRewriteTo:          os.Getenv("GATEWAY_MODEL_REWRITE_TO"),
+			BudgetBackend:           getEnv("GATEWAY_BUDGET_BACKEND", "memory"),
+			BudgetKey:               getEnv("GATEWAY_BUDGET_KEY", "global"),
+			BudgetScope:             getEnv("GATEWAY_BUDGET_SCOPE", "global"),
+			BudgetTenantFallback:    getEnv("GATEWAY_BUDGET_TENANT_FALLBACK", "anonymous"),
+			RouteMode:               getEnv("GATEWAY_ROUTE_MODE", "any"),
+			AllowedProviders:        splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDERS")),
+			DeniedProviders:         splitCSV(os.Getenv("GATEWAY_DENIED_PROVIDERS")),
+			AllowedModels:           splitCSV(os.Getenv("GATEWAY_ALLOWED_MODELS")),
+			DeniedModels:            splitCSV(os.Getenv("GATEWAY_DENIED_MODELS")),
+			AllowedProviderKinds:    splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDER_KINDS")),
+			BudgetWarningThresholds: parseEnvCSVInts(getEnv("GATEWAY_BUDGET_WARNING_THRESHOLDS", "50,80,95")),
+			BudgetHistoryLimit:      getEnvInt("GATEWAY_BUDGET_HISTORY_LIMIT", 20),
 		},
 		Cache: CacheConfig{
 			DefaultTTL: getEnvDuration("GATEWAY_CACHE_TTL", 5*time.Minute),
@@ -414,6 +418,23 @@ func splitCSV(value string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func parseEnvCSVInts(value string) []int {
+	parts := splitCSV(value)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		item, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			continue
+		}
+		out = append(out, item)
 	}
 	return out
 }

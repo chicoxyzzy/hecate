@@ -74,8 +74,10 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 		state := c.healthTracker.State(provider.Name())
 		if !state.Available {
 			entry.Healthy = false
-			entry.Status = "degraded"
+			entry.Status = string(state.Status)
 			entry.Error = providers.FormatHealthStateError(provider.Name(), state)
+		} else if state.Status != "" {
+			entry.Status = string(state.Status)
 		}
 	}
 

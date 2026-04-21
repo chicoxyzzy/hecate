@@ -72,9 +72,10 @@ func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.Ro
 	}
 
 	return types.RouteDecision{
-		Provider: candidate.Name,
-		Model:    candidate.Model,
-		Reason:   candidate.Reason,
+		Provider:     candidate.Name,
+		ProviderKind: string(candidate.Kind),
+		Model:        candidate.Model,
+		Reason:       candidate.Reason,
 	}, nil
 }
 
@@ -118,9 +119,10 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 		seen[key] = struct{}{}
 
 		out = append(out, types.RouteDecision{
-			Provider: provider.Name,
-			Model:    model,
-			Reason:   current.Reason + "_failover",
+			Provider:     provider.Name,
+			ProviderKind: string(provider.Kind),
+			Model:        model,
+			Reason:       current.Reason + "_failover",
 		})
 	}
 
@@ -148,9 +150,10 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 	}
 
 	return types.RouteDecision{
-		Provider: entry.Name,
-		Model:    routedModel,
-		Reason:   reason,
+		Provider:     entry.Name,
+		ProviderKind: string(entry.Kind),
+		Model:        routedModel,
+		Reason:       reason,
 	}, nil
 }
 
