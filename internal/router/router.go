@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -37,7 +38,7 @@ func (r *RuleRouter) SetHealthTracker(tracker providers.HealthTracker) {
 }
 
 func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.RouteDecision, error) {
-	explicitProvider := req.Metadata["provider"]
+	explicitProvider := requestscope.FromChatRequest(req).ProviderHint
 	model := req.Model
 	reason := "explicit_model"
 	if model == "" {
@@ -98,7 +99,7 @@ func (r *RuleRouter) Route(ctx context.Context, req types.ChatRequest) (types.Ro
 }
 
 func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, current types.RouteDecision) []types.RouteDecision {
-	if req.Metadata["provider"] != "" {
+	if requestscope.FromChatRequest(req).ProviderHint != "" {
 		return nil
 	}
 

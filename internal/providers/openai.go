@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -284,7 +285,7 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
-		User:        req.Metadata["user"],
+		User:        requestscope.FromChatRequest(req).User,
 	}
 	for _, msg := range req.Messages {
 		wireReq.Messages = append(wireReq.Messages, openAIChatMessage{

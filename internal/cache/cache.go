@@ -5,11 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/models"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -25,6 +24,7 @@ type KeyBuilder interface {
 type StableKeyBuilder struct{}
 
 func (StableKeyBuilder) Key(req types.ChatRequest) (string, error) {
+	scope := requestscope.FromChatRequest(req)
 	normalized := struct {
 		Model       string          `json:"model"`
 		Messages    []types.Message `json:"messages"`
@@ -36,7 +36,13 @@ func (StableKeyBuilder) Key(req types.ChatRequest) (string, error) {
 		Messages:    req.Messages,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
-		Scope:       buildRequestScope(req.Metadata),
+		Scope: requestScope{
+			ProviderHint:     scope.ProviderHint,
+			Tenant:           scope.Tenant,
+			User:             scope.User,
+			AllowedProviders: append([]string(nil), scope.AllowedProviders...),
+			AllowedModels:    append([]string(nil), scope.AllowedModels...),
+		},
 	}
 
 	payload, err := json.Marshal(normalized)
@@ -54,38 +60,6 @@ type requestScope struct {
 	User             string   `json:"user,omitempty"`
 	AllowedProviders []string `json:"allowed_providers,omitempty"`
 	AllowedModels    []string `json:"allowed_models,omitempty"`
-}
-
-func buildRequestScope(metadata map[string]string) requestScope {
-	return requestScope{
-		ProviderHint:     metadata["provider"],
-		Tenant:           metadata["tenant"],
-		User:             metadata["user"],
-		AllowedProviders: normalizedCSV(metadata["auth_allowed_providers"]),
-		AllowedModels:    normalizedCSV(metadata["auth_allowed_models"]),
-	}
-}
-
-func normalizedCSV(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		out = append(out, part)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-
-	slices.Sort(out)
-	return out
 }
 
 type entry struct {

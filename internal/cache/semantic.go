@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/models"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -148,13 +149,7 @@ func (s *MemorySemanticStore) Set(ctx context.Context, entry SemanticEntry) erro
 }
 
 func BuildSemanticNamespace(req types.ChatRequest, decision types.RouteDecision) string {
-	tenant := strings.TrimSpace(req.Metadata["tenant"])
-	if tenant == "" {
-		tenant = strings.TrimSpace(req.Metadata["user"])
-	}
-	if tenant == "" {
-		tenant = "anonymous"
-	}
+	tenant := requestscope.EffectiveTenant(requestscope.FromChatRequest(req), "anonymous")
 	parts := []string{
 		"tenant:" + tenant,
 		"provider:" + decision.Provider,

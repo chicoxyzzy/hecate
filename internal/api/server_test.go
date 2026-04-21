@@ -643,11 +643,11 @@ func TestNormalizeChatRequestCarriesProviderHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeChatRequest() error = %v", err)
 	}
-	if got.Metadata["provider"] != "ollama" {
-		t.Fatalf("provider metadata = %q, want ollama", got.Metadata["provider"])
+	if got.Scope.ProviderHint != "ollama" {
+		t.Fatalf("provider hint = %q, want ollama", got.Scope.ProviderHint)
 	}
-	if got.Metadata["user"] != "team-a" {
-		t.Fatalf("user metadata = %q, want team-a", got.Metadata["user"])
+	if got.Scope.User != "team-a" {
+		t.Fatalf("scope user = %q, want team-a", got.Scope.User)
 	}
 }
 
@@ -667,8 +667,8 @@ func TestNormalizeChatRequestBindsTenantFromPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeChatRequest() error = %v", err)
 	}
-	if got.Metadata["tenant"] != "team-a" {
-		t.Fatalf("tenant metadata = %q, want team-a", got.Metadata["tenant"])
+	if got.Scope.Tenant != "team-a" {
+		t.Fatalf("scope tenant = %q, want team-a", got.Scope.Tenant)
 	}
 }
 

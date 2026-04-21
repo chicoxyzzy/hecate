@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -54,10 +54,11 @@ func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
 }
 
 func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, providerKind string, estimatedCostMicros int64) error {
-	if allowedProviders := metadataCSV(req.Metadata, "auth_allowed_providers"); len(allowedProviders) > 0 && !slices.Contains(allowedProviders, decision.Provider) {
+	scope := requestscope.FromChatRequest(req)
+	if allowedProviders := scope.AllowedProviders; len(allowedProviders) > 0 && !slices.Contains(allowedProviders, decision.Provider) {
 		return fmt.Errorf("provider %q is not allowed for this api key", decision.Provider)
 	}
-	if allowedModels := metadataCSV(req.Metadata, "auth_allowed_models"); len(allowedModels) > 0 && !slices.Contains(allowedModels, decision.Model) {
+	if allowedModels := scope.AllowedModels; len(allowedModels) > 0 && !slices.Contains(allowedModels, decision.Model) {
 		return fmt.Errorf("model %q is not allowed for this api key", decision.Model)
 	}
 
@@ -219,7 +220,7 @@ func (g *StaticGovernor) budgetKeyForRequest(req types.ChatRequest, decision typ
 	return g.resolveBudgetFilter(BudgetFilter{
 		Scope:    g.config.BudgetScope,
 		Provider: decision.Provider,
-		Tenant:   requestTenant(req, g.config.BudgetTenantFallback),
+		Tenant:   requestscope.EffectiveTenant(requestscope.FromChatRequest(req), g.config.BudgetTenantFallback),
 	}).Key
 }
 
@@ -271,19 +272,6 @@ func (g *StaticGovernor) resolveBudgetFilter(filter BudgetFilter) BudgetFilter {
 	return filter
 }
 
-func requestTenant(req types.ChatRequest, fallback string) string {
-	if req.Metadata["tenant"] != "" {
-		return req.Metadata["tenant"]
-	}
-	if req.Metadata["user"] != "" {
-		return req.Metadata["user"]
-	}
-	if fallback != "" {
-		return fallback
-	}
-	return "anonymous"
-}
-
 func (g *StaticGovernor) effectiveBudgetLimit(ctx context.Context, key string) (int64, error) {
 	limit, _, err := g.budgetLimitAndSource(ctx, key)
 	return limit, err
@@ -301,23 +289,4 @@ func (g *StaticGovernor) budgetLimitAndSource(ctx context.Context, key string) (
 		return limit, "store", nil
 	}
 	return g.config.MaxTotalBudgetMicros, "config", nil
-}
-
-func metadataCSV(metadata map[string]string, key string) []string {
-	if metadata == nil {
-		return nil
-	}
-	raw := strings.TrimSpace(metadata[key])
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }

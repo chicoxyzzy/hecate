@@ -17,6 +17,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -791,22 +792,7 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 		tenant = principal.Tenant
 	}
 
-	metadata := map[string]string{
-		"user":     tenant,
-		"provider": req.Provider,
-	}
-	if tenant != "" {
-		metadata["tenant"] = tenant
-	}
-	if len(principal.AllowedProviders) > 0 {
-		metadata["auth_allowed_providers"] = strings.Join(principal.AllowedProviders, ",")
-	}
-	if len(principal.AllowedModels) > 0 {
-		metadata["auth_allowed_models"] = strings.Join(principal.AllowedModels, ",")
-	}
-	if principal.Role != "" {
-		metadata["auth_role"] = principal.Role
-	}
+	scope := requestscope.Build(principal, tenant, req.Provider)
 
 	return types.ChatRequest{
 		RequestID:   requestID,
@@ -814,7 +800,7 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 		Messages:    messages,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
-		Metadata:    metadata,
+		Scope:       scope,
 	}, nil
 }
 

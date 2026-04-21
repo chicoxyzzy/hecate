@@ -8,7 +8,23 @@ type ChatRequest struct {
 	Messages    []Message
 	MaxTokens   int
 	Temperature float64
-	Metadata    map[string]string
+	Scope       RequestScope
+}
+
+type RequestScope struct {
+	Tenant           string
+	User             string
+	ProviderHint     string
+	AllowedProviders []string
+	AllowedModels    []string
+	Principal        PrincipalContext
+}
+
+type PrincipalContext struct {
+	Role             string
+	Tenant           string
+	AllowedProviders []string
+	AllowedModels    []string
 }
 
 type Message struct {

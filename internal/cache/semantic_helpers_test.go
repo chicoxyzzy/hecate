@@ -12,7 +12,7 @@ func TestBuildSemanticNamespaceFallsBackToAnonymousAndCanonicalModel(t *testing.
 	t.Parallel()
 
 	req := types.ChatRequest{
-		Metadata: map[string]string{},
+		Scope: types.RequestScope{},
 	}
 	decision := types.RouteDecision{
 		Provider: "openai",

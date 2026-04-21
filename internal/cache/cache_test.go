@@ -72,19 +72,19 @@ func TestStableKeyBuilderScopesByTenantAndProviderHint(t *testing.T) {
 		Messages: []types.Message{
 			{Role: "user", Content: "Hello"},
 		},
-		Metadata: map[string]string{
-			"user": "team-a",
+		Scope: types.RequestScope{
+			User: "team-a",
 		},
 	}
 
 	otherTenant := base
-	otherTenant.Metadata = map[string]string{"user": "team-b"}
+	otherTenant.Scope = types.RequestScope{User: "team-b"}
 
 	openAI := base
-	openAI.Metadata = map[string]string{"user": "team-a", "provider": "openai"}
+	openAI.Scope = types.RequestScope{User: "team-a", ProviderHint: "openai"}
 
 	ollama := base
-	ollama.Metadata = map[string]string{"user": "team-a", "provider": "ollama"}
+	ollama.Scope = types.RequestScope{User: "team-a", ProviderHint: "ollama"}
 
 	baseKey, err := builder.Key(base)
 	if err != nil {
@@ -120,15 +120,15 @@ func TestStableKeyBuilderNormalizesAuthAllowlists(t *testing.T) {
 		Messages: []types.Message{
 			{Role: "user", Content: "Hello"},
 		},
-		Metadata: map[string]string{
-			"auth_allowed_providers": "openai,ollama",
-			"auth_allowed_models":    "gpt-4o-mini,llama3.1:8b",
+		Scope: types.RequestScope{
+			AllowedProviders: []string{"openai", "ollama"},
+			AllowedModels:    []string{"gpt-4o-mini", "llama3.1:8b"},
 		},
 	}
 	reqB := reqA
-	reqB.Metadata = map[string]string{
-		"auth_allowed_providers": " ollama , openai ",
-		"auth_allowed_models":    "llama3.1:8b, gpt-4o-mini",
+	reqB.Scope = types.RequestScope{
+		AllowedProviders: []string{" ollama ", " openai "},
+		AllowedModels:    []string{"llama3.1:8b", " gpt-4o-mini"},
 	}
 
 	keyA, err := builder.Key(reqA)

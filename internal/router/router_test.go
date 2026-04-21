@@ -172,8 +172,8 @@ func TestRuleRouterHonorsExplicitProvider(t *testing.T) {
 	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", registry)
 
 	got, err := router.Route(context.Background(), types.ChatRequest{
-		Metadata: map[string]string{
-			"provider": "ollama",
+		Scope: types.RequestScope{
+			ProviderHint: "ollama",
 		},
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "openai", registry)
 
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{
-		Metadata: map[string]string{"provider": "ollama"},
+		Scope: types.RequestScope{ProviderHint: "ollama"},
 	}, types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "explicit_provider"})
 	if len(fallbacks) != 0 {
 		t.Fatalf("Fallbacks() count = %d, want 0 for explicit provider", len(fallbacks))

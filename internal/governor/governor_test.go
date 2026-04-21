@@ -60,8 +60,8 @@ func TestStaticGovernorBudgetTrackingByTenantProvider(t *testing.T) {
 	}, store)
 
 	req := types.ChatRequest{
-		Metadata: map[string]string{
-			"user": "team-a",
+		Scope: types.RequestScope{
+			User: "team-a",
 		},
 	}
 	decision := types.RouteDecision{Provider: "openai", Model: "gpt-4o-mini"}
