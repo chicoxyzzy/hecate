@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -19,44 +20,44 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 					Name:      "router.candidate.considered",
 					Timestamp: now,
 					Attributes: map[string]any{
-						"gen_ai.provider.name":  "ollama",
-						"gen_ai.request.model":  "llama3.1:8b",
-						"hecate.provider.kind":  "local",
-						"hecate.route.reason":   "default_model_local_first",
-						"hecate.provider.index": 0,
+						telemetry.AttrGenAIProviderName:   "ollama",
+						telemetry.AttrGenAIRequestModel:   "llama3.1:8b",
+						telemetry.AttrHecateProviderKind:  "local",
+						telemetry.AttrHecateRouteReason:   "default_model_local_first",
+						telemetry.AttrHecateProviderIndex: 0,
 					},
 				},
 				{
 					Name:      "router.candidate.denied",
 					Timestamp: now.Add(time.Millisecond),
 					Attributes: map[string]any{
-						"gen_ai.provider.name":         "ollama",
-						"gen_ai.request.model":         "llama3.1:8b",
-						"hecate.provider.kind":         "local",
-						"hecate.route.reason":          "default_model_local_first",
-						"hecate.provider.index":        0,
-						"hecate.route.skip_reason":     "route_denied",
-						"error.message":                "budget denied",
-						"hecate.cost.estimated_micros": int64(1200),
+						telemetry.AttrGenAIProviderName:            "ollama",
+						telemetry.AttrGenAIRequestModel:            "llama3.1:8b",
+						telemetry.AttrHecateProviderKind:           "local",
+						telemetry.AttrHecateRouteReason:            "default_model_local_first",
+						telemetry.AttrHecateProviderIndex:          0,
+						telemetry.AttrHecateRouteSkipReason:        "route_denied",
+						telemetry.AttrErrorMessage:                 "budget denied",
+						telemetry.AttrHecateCostEstimatedMicrosUSD: int64(1200),
 					},
 				},
 				{
 					Name:      "router.candidate.selected",
 					Timestamp: now.Add(2 * time.Millisecond),
 					Attributes: map[string]any{
-						"gen_ai.provider.name":         "openai",
-						"gen_ai.request.model":         "gpt-4o-mini",
-						"hecate.provider.kind":         "cloud",
-						"hecate.route.reason":          "default_model_fallback",
-						"hecate.provider.index":        1,
-						"hecate.cost.estimated_micros": int64(2400),
+						telemetry.AttrGenAIProviderName:            "openai",
+						telemetry.AttrGenAIRequestModel:            "gpt-4o-mini",
+						telemetry.AttrHecateProviderKind:           "cloud",
+						telemetry.AttrHecateRouteReason:            "default_model_fallback",
+						telemetry.AttrHecateProviderIndex:          1,
+						telemetry.AttrHecateCostEstimatedMicrosUSD: int64(2400),
 					},
 				},
 				{
 					Name:      "provider.failover.selected",
 					Timestamp: now.Add(3 * time.Millisecond),
 					Attributes: map[string]any{
-						"hecate.failover.from_provider": "ollama",
+						telemetry.AttrHecateFailoverFromProvider: "ollama",
 					},
 				},
 			},

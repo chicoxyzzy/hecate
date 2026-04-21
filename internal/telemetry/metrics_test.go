@@ -30,7 +30,7 @@ func TestMetricsRecordRequestOutcomeProducesOTelMetrics(t *testing.T) {
 	if requests.DataPoints[0].Value != 1 {
 		t.Fatalf("request count = %d, want 1", requests.DataPoints[0].Value)
 	}
-	if got := attrValue(requests.DataPoints[0].Attributes, MetricLabelResult); got != ResultSuccess {
+	if got := attrValue(requests.DataPoints[0].Attributes, AttrHecateResult); got != ResultSuccess {
 		t.Fatalf("result attribute = %q, want %q", got, ResultSuccess)
 	}
 

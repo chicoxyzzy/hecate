@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -34,7 +35,7 @@ func buildRouteDecisionReport(spans []types.TraceSpan) types.RouteDecisionReport
 			}
 		case "provider.failover.selected":
 			if report.FallbackFrom == "" {
-				report.FallbackFrom = stringAttr(event.Attributes, "hecate.failover.from_provider")
+				report.FallbackFrom = stringAttr(event.Attributes, telemetry.AttrHecateFailoverFromProvider)
 			}
 		}
 	}
@@ -65,17 +66,17 @@ func flattenTraceEvents(spans []types.TraceSpan) []types.TraceEvent {
 
 func routeCandidateFromEvent(event types.TraceEvent) types.RouteCandidateReport {
 	return types.RouteCandidateReport{
-		Provider:           stringAttr(event.Attributes, "gen_ai.provider.name"),
-		ProviderKind:       stringAttr(event.Attributes, "hecate.provider.kind"),
-		Model:              stringAttr(event.Attributes, "gen_ai.request.model"),
-		Reason:             stringAttr(event.Attributes, "hecate.route.reason"),
+		Provider:           stringAttr(event.Attributes, telemetry.AttrGenAIProviderName),
+		ProviderKind:       stringAttr(event.Attributes, telemetry.AttrHecateProviderKind),
+		Model:              stringAttr(event.Attributes, telemetry.AttrGenAIRequestModel),
+		Reason:             stringAttr(event.Attributes, telemetry.AttrHecateRouteReason),
 		Outcome:            routeOutcomeFromEvent(event.Name, event.Attributes),
-		SkipReason:         firstNonEmptyString(stringAttr(event.Attributes, "hecate.route.skip_reason"), stringAttr(event.Attributes, "error.message")),
-		HealthStatus:       stringAttr(event.Attributes, "hecate.provider.health_state"),
-		EstimatedMicrosUSD: int64Attr(event.Attributes, "hecate.cost.estimated_micros"),
-		Attempt:            int(int64Attr(event.Attributes, "hecate.retry.attempt")),
-		Index:              int(int64Attr(event.Attributes, "hecate.provider.index")),
-		Detail:             stringAttr(event.Attributes, "error.message"),
+		SkipReason:         firstNonEmptyString(stringAttr(event.Attributes, telemetry.AttrHecateRouteSkipReason), stringAttr(event.Attributes, telemetry.AttrErrorMessage)),
+		HealthStatus:       stringAttr(event.Attributes, telemetry.AttrHecateProviderHealthStatus),
+		EstimatedMicrosUSD: int64Attr(event.Attributes, telemetry.AttrHecateCostEstimatedMicrosUSD),
+		Attempt:            int(int64Attr(event.Attributes, telemetry.AttrHecateRetryAttempt)),
+		Index:              int(int64Attr(event.Attributes, telemetry.AttrHecateProviderIndex)),
+		Detail:             stringAttr(event.Attributes, telemetry.AttrErrorMessage),
 		Timestamp:          event.Timestamp,
 	}
 }
@@ -91,7 +92,7 @@ func routeOutcomeFromEvent(name string, attrs map[string]any) string {
 	case "router.candidate.selected":
 		return "selected"
 	default:
-		if value := stringAttr(attrs, "hecate.route.outcome"); value != "" {
+		if value := stringAttr(attrs, telemetry.AttrHecateRouteOutcome); value != "" {
 			return value
 		}
 		return "unknown"

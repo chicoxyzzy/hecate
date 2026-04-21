@@ -97,7 +97,7 @@ func NewTrace(requestID string, otelTracer oteltrace.Tracer) *Trace {
 		Kind:       "server",
 		StartTime:  startedAt,
 		EndTime:    startedAt,
-		Attributes: map[string]any{"service.name": "hecate-gateway"},
+		Attributes: map[string]any{telemetry.AttrServiceName: "hecate-gateway"},
 		Events:     make([]types.TraceEvent, 0, 8),
 		StatusCode: "unset",
 	}

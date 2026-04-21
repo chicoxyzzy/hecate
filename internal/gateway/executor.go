@@ -191,7 +191,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrGenAIRequestModel:       candidate.Model,
 				telemetry.AttrHecateRetryAttempt:      attempt,
 				telemetry.AttrHecateProviderIndex:     index,
-				"hecate.retry.retryable":              providers.IsRetryableError(err),
+				telemetry.AttrHecateRetryRetryable:    providers.IsRetryableError(err),
 				telemetry.AttrHecateProviderLatencyMS: latency.Milliseconds(),
 			})
 			if e.healthTracker != nil {

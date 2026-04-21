@@ -29,7 +29,7 @@ func NewLoggerWithOTLP(ctx context.Context, level string, opts OTelLogOptions) (
 	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(level)})
 
 	if !opts.Enabled {
-		return slog.New(jsonHandler).With(slog.String("service.name", ServiceName)), func(context.Context) error { return nil }, nil
+		return slog.New(jsonHandler).With(slog.String(AttrServiceName, ServiceName)), func(context.Context) error { return nil }, nil
 	}
 
 	if strings.TrimSpace(opts.ServiceName) == "" {
@@ -69,7 +69,7 @@ func NewLoggerWithOTLP(ctx context.Context, level string, opts OTelLogOptions) (
 		return provider.Shutdown(ctx)
 	}
 
-	return slog.New(handler).With(slog.String("service.name", opts.ServiceName)), shutdown, nil
+	return slog.New(handler).With(slog.String(AttrServiceName, opts.ServiceName)), shutdown, nil
 }
 
 type multiHandler struct {

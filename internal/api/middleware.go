@@ -43,12 +43,12 @@ func LoggingMiddleware(logger *slog.Logger) middleware {
 
 			telemetry.Info(logger, r.Context(), "http.server.request",
 				slog.String("event.name", "http.server.request"),
-				slog.String("trace_id", rw.Header().Get("X-Trace-Id")),
-				slog.String("span_id", rw.Header().Get("X-Span-Id")),
+				slog.String(telemetry.AttrTraceID, rw.Header().Get("X-Trace-Id")),
+				slog.String(telemetry.AttrSpanID, rw.Header().Get("X-Span-Id")),
 				slog.String("http.request.method", r.Method),
 				slog.String("url.path", r.URL.Path),
 				slog.Int("http.response.status_code", rw.status),
-				slog.Int64("hecate.http.duration_ms", time.Since(start).Milliseconds()),
+				slog.Int64(telemetry.AttrHecateHTTPDurationMS, time.Since(start).Milliseconds()),
 			)
 		})
 	}

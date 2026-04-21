@@ -167,7 +167,7 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gateway.trace.fetch.failed",
 			slog.String("event.name", "gateway.trace.fetch.failed"),
-			slog.String("hecate.trace.request_id", requestID),
+			slog.String(telemetry.AttrHecateTraceRequestID, requestID),
 			slog.Any("error", err),
 		)
 		if gateway.IsClientError(err) {
@@ -681,7 +681,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gen_ai.gateway.request.failed",
 			slog.String("event.name", "gen_ai.gateway.request.failed"),
-			slog.String("gen_ai.request.model", internalReq.Model),
+			slog.String(telemetry.AttrGenAIRequestModel, internalReq.Model),
 			slog.Any("error", err),
 		)
 

@@ -391,8 +391,8 @@ func TestTraceEndpointReturnsRecordedRequestTimeline(t *testing.T) {
 	if payload.Data.Spans[0].Name != "gateway.request" {
 		t.Fatalf("first span = %q, want gateway.request", payload.Data.Spans[0].Name)
 	}
-	if payload.Data.Spans[0].Attributes["service.name"] != "hecate-gateway" {
-		t.Fatalf("root span service.name = %#v, want hecate-gateway", payload.Data.Spans[0].Attributes["service.name"])
+	if payload.Data.Spans[0].Attributes[telemetry.AttrServiceName] != "hecate-gateway" {
+		t.Fatalf("root span %s = %#v, want hecate-gateway", telemetry.AttrServiceName, payload.Data.Spans[0].Attributes[telemetry.AttrServiceName])
 	}
 	foundResponseSpan := false
 	for _, span := range payload.Data.Spans {

@@ -152,7 +152,7 @@ func (m *Metrics) RecordRequestOutcome(ctx context.Context, result string, durat
 		return
 	}
 
-	attrs := otmetric.WithAttributes(attribute.String(MetricLabelResult, result))
+	attrs := otmetric.WithAttributes(attribute.String(AttrHecateResult, result))
 	m.requestsTotal.Add(ctx, 1, attrs)
 	m.requestDuration.Record(ctx, duration.Milliseconds(), attrs)
 }
