@@ -25,6 +25,7 @@ type Dependencies struct {
 	Semantic        cache.SemanticStore
 	SemanticOptions SemanticOptions
 	Resilience      ResilienceOptions
+	Executor        ProviderExecutor
 	Router          router.Router
 	Catalog         catalog.Catalog
 	Governor        governor.Governor
@@ -54,6 +55,7 @@ type Service struct {
 	semanticOptions SemanticOptions
 	resilience      ResilienceOptions
 	keyBuilder      cache.KeyBuilder
+	executor        ProviderExecutor
 	router          router.Router
 	catalog         catalog.Catalog
 	governor        governor.Governor
@@ -133,6 +135,17 @@ func NewService(deps Dependencies) *Service {
 	if cat == nil {
 		cat = catalog.NewRegistryCatalog(deps.Providers, deps.HealthTracker)
 	}
+	executor := deps.Executor
+	if executor == nil {
+		executor = NewResilientExecutor(
+			deps.Router,
+			deps.Governor,
+			deps.Providers,
+			deps.HealthTracker,
+			deps.Pricebook,
+			deps.Resilience,
+		)
+	}
 	return &Service{
 		logger:          deps.Logger,
 		cache:           deps.Cache,
@@ -140,6 +153,7 @@ func NewService(deps Dependencies) *Service {
 		semanticOptions: deps.SemanticOptions,
 		resilience:      normalizeResilienceOptions(deps.Resilience),
 		keyBuilder:      cache.StableKeyBuilder{},
+		executor:        executor,
 		router:          deps.Router,
 		catalog:         cat,
 		governor:        deps.Governor,
@@ -374,7 +388,7 @@ func (s *Service) trySemanticCache(ctx context.Context, trace *profiler.Trace, p
 }
 
 func (s *Service) executePlan(ctx context.Context, trace *profiler.Trace, plan *ExecutionPlan) (*ChatResult, error) {
-	callResult, err := s.executeWithResilience(ctx, trace, plan.Request, plan.Route)
+	callResult, err := s.executor.Execute(ctx, trace, plan.Request, plan.Route)
 	if err != nil {
 		return nil, err
 	}
@@ -529,158 +543,6 @@ type providerCallResult struct {
 	FallbackFromProvider string
 }
 
-func (s *Service) executeWithResilience(ctx context.Context, trace *profiler.Trace, req types.ChatRequest, initial types.RouteDecision) (*providerCallResult, error) {
-	candidates := []types.RouteDecision{initial}
-	if s.resilience.FailoverEnabled {
-		candidates = append(candidates, s.router.Fallbacks(ctx, req, initial)...)
-	}
-
-	totalAttempts := 0
-	totalRetries := 0
-	lastErr := error(nil)
-
-	for index, candidate := range candidates {
-		provider, ok := s.providers.Get(candidate.Provider)
-		if !ok {
-			lastErr = fmt.Errorf("provider %q not found", candidate.Provider)
-			continue
-		}
-
-		estimatedUsage := estimateUsage(withResolvedModel(req, candidate.Model))
-		estimatedCost, err := s.pricebook.Estimate(candidate.Provider, candidate.Model, estimatedUsage)
-		if err != nil {
-			lastErr = fmt.Errorf("estimate preflight cost: %w", err)
-			if index == 0 {
-				trace.Record("governor.budget_estimate_failed", map[string]any{
-					"error.message": err.Error(),
-					"hecate.phase":  "governor",
-				})
-				return nil, lastErr
-			}
-			trace.Record("provider.failover.skipped", map[string]any{
-				"gen_ai.provider.name":   candidate.Provider,
-				"gen_ai.request.model":   candidate.Model,
-				"hecate.failover.reason": "cost_estimate_failed",
-				"error.message":          err.Error(),
-			})
-			continue
-		}
-
-		if index > 0 {
-			if err := s.governor.CheckRoute(ctx, req, candidate, string(provider.Kind()), estimatedCost.TotalMicrosUSD); err != nil {
-				lastErr = fmt.Errorf("%w: %v", errDenied, err)
-				trace.Record("provider.failover.skipped", map[string]any{
-					"gen_ai.provider.name":         candidate.Provider,
-					"gen_ai.request.model":         candidate.Model,
-					"hecate.failover.reason":       "route_denied",
-					"error.message":                err.Error(),
-					"hecate.cost.estimated_micros": estimatedCost.TotalMicrosUSD,
-				})
-				continue
-			}
-			trace.Record("provider.failover.selected", map[string]any{
-				"gen_ai.provider.name":          candidate.Provider,
-				"gen_ai.request.model":          candidate.Model,
-				"hecate.provider.kind":          string(provider.Kind()),
-				"hecate.failover.from_provider": initial.Provider,
-				"hecate.failover.to_provider":   candidate.Provider,
-				"hecate.cost.estimated_micros":  estimatedCost.TotalMicrosUSD,
-			})
-		}
-
-		attemptReq := withResolvedModel(req, candidate.Model)
-		for attempt := 1; attempt <= s.resilience.MaxAttempts; attempt++ {
-			totalAttempts++
-			trace.Record("provider.call.started", map[string]any{
-				"gen_ai.provider.name":      candidate.Provider,
-				"gen_ai.request.model":      candidate.Model,
-				"hecate.retry.attempt":      attempt,
-				"hecate.provider.index":     index,
-				"hecate.retry.max_attempts": s.resilience.MaxAttempts,
-				"hecate.failover.active":    index > 0,
-			})
-
-			start := time.Now()
-			resp, err := provider.Chat(ctx, attemptReq)
-			if err == nil {
-				trace.Record("provider.call.finished", map[string]any{
-					"gen_ai.provider.name":       candidate.Provider,
-					"gen_ai.request.model":       candidate.Model,
-					"hecate.retry.attempt":       attempt,
-					"hecate.provider.index":      index,
-					"hecate.provider.latency_ms": time.Since(start).Milliseconds(),
-				})
-				if s.healthTracker != nil {
-					s.healthTracker.RecordSuccess(candidate.Provider)
-				}
-				return &providerCallResult{
-					Response:             resp,
-					Decision:             candidate,
-					Provider:             provider,
-					AttemptCount:         totalAttempts,
-					RetryCount:           totalRetries,
-					FallbackFromProvider: fallbackFrom(initial.Provider, candidate.Provider),
-				}, nil
-			}
-
-			lastErr = fmt.Errorf("provider %s call failed: %w", candidate.Provider, err)
-			trace.Record("provider.call.failed", map[string]any{
-				"gen_ai.provider.name":   candidate.Provider,
-				"gen_ai.request.model":   candidate.Model,
-				"hecate.retry.attempt":   attempt,
-				"hecate.provider.index":  index,
-				"error.message":          err.Error(),
-				"hecate.retry.retryable": providers.IsRetryableError(err),
-			})
-
-			if !providers.IsRetryableError(err) {
-				break
-			}
-			if attempt >= s.resilience.MaxAttempts {
-				break
-			}
-
-			totalRetries++
-			backoff := s.retryDelay(attempt)
-			trace.Record("provider.retry.scheduled", map[string]any{
-				"gen_ai.provider.name":      candidate.Provider,
-				"gen_ai.request.model":      candidate.Model,
-				"hecate.retry.attempt":      attempt,
-				"hecate.retry.next_attempt": attempt + 1,
-				"hecate.retry.backoff_ms":   backoff.Milliseconds(),
-			})
-			if err := sleepContext(ctx, backoff); err != nil {
-				return nil, fmt.Errorf("wait for retry backoff: %w", err)
-			}
-		}
-
-		if s.healthTracker != nil && providers.IsRetryableError(lastErr) {
-			s.healthTracker.RecordFailure(candidate.Provider, lastErr)
-			trace.Record("provider.health.degraded", map[string]any{
-				"gen_ai.provider.name":         candidate.Provider,
-				"error.message":                lastErr.Error(),
-				"hecate.provider.health_state": "degraded",
-			})
-		}
-
-		if index < len(candidates)-1 && providers.IsRetryableError(lastErr) {
-			trace.Record("provider.failover.triggered", map[string]any{
-				"gen_ai.provider.name":          candidate.Provider,
-				"gen_ai.request.model":          candidate.Model,
-				"hecate.failover.from_provider": candidate.Provider,
-				"error.message":                 lastErr.Error(),
-			})
-			continue
-		}
-		break
-	}
-
-	if lastErr == nil {
-		lastErr = errors.New("provider call failed")
-	}
-	return nil, lastErr
-}
-
 func estimateUsage(req types.ChatRequest) types.Usage {
 	promptTokens := 0
 	for _, msg := range req.Messages {
@@ -717,25 +579,6 @@ func normalizeResilienceOptions(options ResilienceOptions) ResilienceOptions {
 		options.RetryBackoff = 200 * time.Millisecond
 	}
 	return options
-}
-
-func (s *Service) retryDelay(attempt int) time.Duration {
-	if attempt <= 1 {
-		return s.resilience.RetryBackoff
-	}
-	return time.Duration(attempt) * s.resilience.RetryBackoff
-}
-
-func sleepContext(ctx context.Context, wait time.Duration) error {
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func (s *Service) MetricsSnapshot(ctx context.Context) (telemetry.Snapshot, telemetry.ProviderHealthSnapshot, error) {
