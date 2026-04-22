@@ -496,7 +496,13 @@ func loadAPIKeysFromEnv() []APIKeyConfig {
 }
 
 func loadProvidersFromEnv() ProvidersConfig {
-	names := splitCSV(getEnv("GATEWAY_PROVIDERS", "openai"))
+	names := splitCSV(os.Getenv("GATEWAY_PROVIDERS"))
+	if len(names) == 0 {
+		names = deriveProviderNamesFromEnv()
+	}
+	if len(names) == 0 {
+		names = []string{"openai"}
+	}
 	items := make([]OpenAICompatibleProviderConfig, 0, len(names))
 	for _, name := range names {
 		cfg, ok := providerConfigFromEnv(name)
@@ -507,6 +513,50 @@ func loadProvidersFromEnv() ProvidersConfig {
 	}
 	normalizeProviders(items)
 	return ProvidersConfig{OpenAICompatible: items}
+}
+
+func deriveProviderNamesFromEnv() []string {
+	const prefix = "PROVIDER_"
+
+	order := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		name, ok := providerNameFromEnvKey(key)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		order = append(order, name)
+	}
+	return order
+}
+
+func providerNameFromEnvKey(key string) (string, bool) {
+	const prefix = "PROVIDER_"
+
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	nameAndField := strings.TrimPrefix(key, prefix)
+	for _, suffix := range []string{"_API_KEY", "_BASE_URL", "_PROTOCOL"} {
+		if strings.HasSuffix(nameAndField, suffix) {
+			name := strings.TrimSuffix(nameAndField, suffix)
+			name = strings.ToLower(name)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return "", false
+			}
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {

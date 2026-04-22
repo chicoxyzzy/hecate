@@ -49,6 +49,8 @@ func (m *ControlPlaneRuntimeManager) Reload(ctx context.Context) error {
 }
 
 func (m *ControlPlaneRuntimeManager) Upsert(ctx context.Context, provider controlplane.Provider, apiKey string) (controlplane.Provider, error) {
+	provider = hydrateControlPlaneProviderDefaults(provider)
+
 	var encryptedSecret *controlplane.ProviderSecret
 	if strings.TrimSpace(apiKey) != "" {
 		if m.cipher == nil {
@@ -157,6 +159,7 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 		if !item.Enabled {
 			continue
 		}
+		item = hydrateControlPlaneProviderDefaults(item)
 		apiKey := ""
 		if item.CredentialID != "" {
 			if m.cipher == nil {
@@ -207,6 +210,48 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 		out = append(out, cfg)
 	}
 	return out, nil
+}
+
+func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) controlplane.Provider {
+	for _, candidate := range []string{provider.ID, provider.Name} {
+		builtIn, ok := config.BuiltInProviderByID(candidate)
+		if !ok {
+			continue
+		}
+		minimalPreset := strings.TrimSpace(provider.Kind) == "" &&
+			strings.TrimSpace(provider.Protocol) == "" &&
+			strings.TrimSpace(provider.BaseURL) == "" &&
+			strings.TrimSpace(provider.APIVersion) == "" &&
+			strings.TrimSpace(provider.DefaultModel) == "" &&
+			len(provider.Models) == 0 &&
+			!provider.AllowAnyModel
+		if strings.TrimSpace(provider.Name) == "" {
+			provider.Name = builtIn.ID
+		}
+		if strings.TrimSpace(provider.Kind) == "" {
+			provider.Kind = builtIn.Kind
+		}
+		if strings.TrimSpace(provider.Protocol) == "" {
+			provider.Protocol = builtIn.Protocol
+		}
+		if strings.TrimSpace(provider.BaseURL) == "" {
+			provider.BaseURL = builtIn.BaseURL
+		}
+		if strings.TrimSpace(provider.APIVersion) == "" {
+			provider.APIVersion = builtIn.APIVersion
+		}
+		if strings.TrimSpace(provider.DefaultModel) == "" {
+			provider.DefaultModel = builtIn.DefaultModel
+		}
+		if len(provider.Models) == 0 {
+			provider.Models = append([]string(nil), builtIn.ExampleModels...)
+		}
+		if minimalPreset {
+			provider.AllowAnyModel = builtIn.AllowAnyModel
+		}
+		return provider
+	}
+	return provider
 }
 
 func (m *ControlPlaneRuntimeManager) snapshot(ctx context.Context) (controlplane.State, error) {

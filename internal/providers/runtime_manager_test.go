@@ -69,6 +69,50 @@ func TestControlPlaneRuntimeManagerUpsertReloadsRegistryAndEncryptsSecrets(t *te
 	}
 }
 
+func TestControlPlaneRuntimeManagerHydratesBuiltInProviderDefaults(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	cipher, err := secrets.NewAESGCMCipher(key)
+	if err != nil {
+		t.Fatalf("NewAESGCMCipher() error = %v", err)
+	}
+
+	manager := NewControlPlaneRuntimeManager(logger, nil, store, cipher)
+	if _, err := manager.Upsert(context.Background(), controlplane.Provider{
+		Name:    "groq",
+		Enabled: true,
+	}, "groq-secret"); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	state, err := store.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(state.Providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(state.Providers))
+	}
+	got := state.Providers[0]
+	if got.BaseURL != "https://api.groq.com/openai/v1" {
+		t.Fatalf("base url = %q, want groq default", got.BaseURL)
+	}
+	if got.Protocol != "openai" {
+		t.Fatalf("protocol = %q, want openai", got.Protocol)
+	}
+	if got.Kind != "cloud" {
+		t.Fatalf("kind = %q, want cloud", got.Kind)
+	}
+	if !got.AllowAnyModel {
+		t.Fatal("allow any model = false, want true from built-in preset")
+	}
+}
+
 type testWriter struct {
 	t *testing.T
 }

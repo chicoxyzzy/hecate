@@ -59,14 +59,13 @@ cp .env.example .env
 
 2. Configure at least one provider in `.env`.
 
-`.env.example` already includes all built-in provider preset names in `GATEWAY_PROVIDERS`.
-For a minimal first run, it is usually easiest to trim that list down to only the providers
-you actually want to use right now.
+`GATEWAY_PROVIDERS` is optional. For built-in providers, Hecate can infer enabled
+providers from core bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or
+`PROVIDER_<NAME>_BASE_URL`.
 
 Example with one cloud provider and one local provider:
 
 ```bash
-GATEWAY_PROVIDERS=openai,ollama
 GATEWAY_DEFAULT_PROVIDER=openai
 GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 
@@ -77,12 +76,14 @@ PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 If you want cloud-only startup, a smaller config is enough:
 
 ```bash
-GATEWAY_PROVIDERS=openai
 GATEWAY_DEFAULT_PROVIDER=openai
 GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
+
+Set `GATEWAY_PROVIDERS` explicitly only when you want to force provider order or
+enable providers that are not discoverable from the core env keys alone.
 
 3. Run the gateway:
 
@@ -108,7 +109,19 @@ The provider layer is vendor-neutral at the gateway boundary. Any upstream expos
 
 Configured provider records tell Hecate how to connect. The model catalog itself is discovered from the provider when possible, rather than treated as hardcoded application state.
 
-Bootstrap env configuration uses `GATEWAY_PROVIDERS=openai,anthropic,groq,gemini,ollama,lmstudio,localai,llamacpp` together with optional `PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or `PROVIDER_OLLAMA_BASE_URL`.
+Bootstrap env configuration uses optional `GATEWAY_PROVIDERS` together with
+`PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or
+`PROVIDER_OLLAMA_BASE_URL`. When `GATEWAY_PROVIDERS` is omitted, Hecate derives
+enabled providers from the core provider envs it finds.
+
+The documented core provider knobs are:
+
+- `PROVIDER_<NAME>_API_KEY`
+- `PROVIDER_<NAME>_BASE_URL`
+- `PROVIDER_<NAME>_DEFAULT_MODEL`
+
+Advanced overrides like `PROTOCOL`, `API_VERSION`, `TIMEOUT`, `MODELS`, and
+`ALLOW_ANY_MODEL` are still supported, but most setups should not need them.
 
 Hecate currently has two real provider implementations under the hood:
 
@@ -137,6 +150,7 @@ The control plane currently supports:
 - tenant management
 - API key management
 - persisted provider management
+- built-in provider default hydration by provider name
 - encrypted provider credential storage
 - enable/disable and rotation flows
 - audit history

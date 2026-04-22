@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"strings"
 	"time"
 )
@@ -141,12 +142,20 @@ func BuiltInProviders() []BuiltInProvider {
 
 func BuiltInProviderByID(name string) (BuiltInProvider, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
+	normalized := builtInProviderLookupKey(name)
 	for _, item := range builtInProviders {
-		if item.ID == name {
+		if item.ID == name || strings.ToLower(item.Name) == name || builtInProviderLookupKey(item.ID) == normalized || builtInProviderLookupKey(item.Name) == normalized {
 			return item, true
 		}
 	}
 	return BuiltInProvider{}, false
+}
+
+var builtInProviderLookupSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
+
+func builtInProviderLookupKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return builtInProviderLookupSanitizer.ReplaceAllString(value, "")
 }
 
 func (p BuiltInProvider) RuntimeConfig(globalDefaultModel string) OpenAICompatibleProviderConfig {

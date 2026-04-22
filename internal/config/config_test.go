@@ -168,4 +168,25 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	if got := anthropic.RuntimeConfig("ignored").DefaultModel; got != "claude-sonnet-4-20250514" {
 		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-20250514", got)
 	}
+
+	if _, ok := BuiltInProviderByID("LM Studio"); !ok {
+		t.Fatal("BuiltInProviderByID(LM Studio) = not found")
+	}
+}
+
+func TestLoadProvidersFromEnvDerivesProvidersFromCoreEnvKeys(t *testing.T) {
+	t.Setenv("GATEWAY_PROVIDERS", "")
+	t.Setenv("PROVIDER_OPENAI_API_KEY", "openai-secret")
+	t.Setenv("PROVIDER_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+
+	cfg := LoadFromEnv()
+	if len(cfg.Providers.OpenAICompatible) != 2 {
+		t.Fatalf("provider count = %d, want 2", len(cfg.Providers.OpenAICompatible))
+	}
+	if cfg.Providers.OpenAICompatible[0].Name != "openai" {
+		t.Fatalf("first provider = %q, want openai", cfg.Providers.OpenAICompatible[0].Name)
+	}
+	if cfg.Providers.OpenAICompatible[1].Name != "ollama" {
+		t.Fatalf("second provider = %q, want ollama", cfg.Providers.OpenAICompatible[1].Name)
+	}
 }
