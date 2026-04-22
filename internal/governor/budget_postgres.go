@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
 )
@@ -211,6 +212,44 @@ func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit 
 		return nil, err
 	}
 	return events, nil
+}
+
+func (s *PostgresBudgetStore) PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := int64(0)
+
+	if maxAge > 0 {
+		result, err := s.db.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE occurred_at < $1`, s.eventsTable),
+			time.Now().Add(-maxAge).UTC(),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("delete aged postgres budget events: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	if maxCount > 0 {
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE id IN (
+				SELECT id
+				FROM (
+					SELECT id,
+					       ROW_NUMBER() OVER (PARTITION BY budget_key ORDER BY occurred_at DESC, id DESC) AS row_num
+					FROM %s
+				) ranked
+				WHERE ranked.row_num > $1
+			)
+		`, s.eventsTable, s.eventsTable), maxCount)
+		if err != nil {
+			return 0, fmt.Errorf("enforce postgres budget event max count: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	return int(deleted), nil
 }
 
 func (s *PostgresBudgetStore) migrate(ctx context.Context) error {

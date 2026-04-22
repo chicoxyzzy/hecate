@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -51,6 +52,41 @@ func (s *MemoryStore) Set(_ context.Context, key string, response *types.ChatRes
 	s.entries[key] = entry{
 		response:  &cloned,
 		expiresAt: time.Now().Add(s.defaultTTL),
+		writtenAt: time.Now().UTC(),
 	}
 	return nil
+}
+
+func (s *MemoryStore) Prune(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	deleted := 0
+	type record struct {
+		key   string
+		entry entry
+	}
+	records := make([]record, 0, len(s.entries))
+	for key, item := range s.entries {
+		if (!item.expiresAt.IsZero() && now.After(item.expiresAt)) || (maxAge > 0 && !item.writtenAt.IsZero() && item.writtenAt.Before(now.Add(-maxAge))) {
+			delete(s.entries, key)
+			deleted++
+			continue
+		}
+		records = append(records, record{key: key, entry: item})
+	}
+
+	if maxCount > 0 && len(records) > maxCount {
+		sort.Slice(records, func(i, j int) bool {
+			return records[i].entry.writtenAt.After(records[j].entry.writtenAt)
+		})
+		for _, item := range records[maxCount:] {
+			delete(s.entries, item.key)
+			deleted++
+		}
+	}
+
+	return deleted, nil
 }

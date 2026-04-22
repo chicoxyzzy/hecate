@@ -131,6 +131,104 @@ export function AdminView({ state, actions }: Props) {
           </div>
         </ShellSection>
 
+        <ShellSection eyebrow="Retention" title="Retention">
+          <div className="two-column-grid">
+            <Surface tone="strong">
+              <div className="stack-md">
+                <TextAreaField
+                  label="Subsystems (comma separated)"
+                  onChange={actions.setRetentionSubsystems}
+                  rows={3}
+                  value={state.retentionSubsystems}
+                  placeholder="trace_snapshots,exact_cache,semantic_cache,budget_events,audit_events"
+                />
+                <p className="body-muted">
+                  Leave empty to run every configured subsystem. Use a comma-separated subset for targeted cleanup passes.
+                </p>
+                {state.retentionError ? <InlineNotice message={state.retentionError} tone="error" /> : null}
+                <div className="action-row">
+                  <ToolbarButton onClick={() => void actions.runRetention()} tone="primary">
+                    {state.retentionLoading ? "Running retention..." : "Run retention"}
+                  </ToolbarButton>
+                  <StatusPill label={state.retentionLastRun ? `Last run ${formatDateTime(state.retentionLastRun.finished_at)}` : "No runs yet"} tone="neutral" />
+                </div>
+              </div>
+            </Surface>
+
+            <Surface>
+              {state.retentionLastRun ? (
+                <div className="stack-md">
+                  <div className="action-row action-row--wide">
+                    <StatusPill label={state.retentionLastRun.trigger} tone="neutral" />
+                    <StatusPill
+                      label={`${state.retentionLastRun.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`}
+                      tone="healthy"
+                    />
+                  </div>
+                  <DefinitionList
+                    items={[
+                      { label: "Started", value: formatDateTime(state.retentionLastRun.started_at) },
+                      { label: "Finished", value: formatDateTime(state.retentionLastRun.finished_at) },
+                      { label: "Subsystems", value: state.retentionLastRun.results.length.toString() },
+                    ]}
+                  />
+                  <div className="trace-inline-grid">
+                    {state.retentionLastRun.results.map((result) => (
+                      <div className="trace-inline-card" key={`${state.retentionLastRun.finished_at}-${result.name}`}>
+                        <p className="trace-inline-card__title">{result.name}</p>
+                        <div className="action-row">
+                          <StatusPill
+                            label={result.error ? "failed" : result.skipped ? "skipped" : `${result.deleted} deleted`}
+                            tone={result.error ? "danger" : result.skipped ? "neutral" : result.deleted > 0 ? "healthy" : "warning"}
+                          />
+                        </div>
+                        <p className="body-muted">
+                          max age {result.max_age || "n/a"} · max count {result.max_count}
+                        </p>
+                        {result.error ? <p className="body-muted">{result.error}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState title="No retention run" detail="Run retention to inspect deleted rows, skipped subsystems, and per-subsystem limits." />
+              )}
+            </Surface>
+          </div>
+
+          <div className="mt-4">
+            <Surface>
+              <div className="stack-sm">
+                <p className="label-muted">Recent retention runs</p>
+                {state.retentionRuns.length ? (
+                  <ul className="budget-history-list">
+                    {state.retentionRuns.map((run, index) => (
+                      <li className="budget-history-item" key={`${run.finished_at}-${index}`}>
+                        <div className="budget-history-item__head">
+                          <div className="action-row">
+                            <strong>{run.trigger}</strong>
+                            <StatusPill label={`${run.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`} tone="healthy" />
+                          </div>
+                          <span className="body-muted">{formatDateTime(run.finished_at)}</span>
+                        </div>
+                        <div className="budget-history-item__body">
+                          {run.results.map((result) => (
+                            <span key={`${run.finished_at}-${result.name}`}>
+                              {result.name}: {result.error ? "failed" : result.skipped ? "skipped" : `${result.deleted} deleted`}
+                            </span>
+                          ))}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState title="No retention history" detail="Recent retention runs in this browser session will appear here." />
+                )}
+              </div>
+            </Surface>
+          </div>
+        </ShellSection>
+
         <ShellSection
           eyebrow="Control plane"
           title="Control plane"

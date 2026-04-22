@@ -205,6 +205,25 @@ export type ControlPlaneResponse = {
   };
 };
 
+export type RetentionRunResultRecord = {
+  name: string;
+  deleted: number;
+  max_age?: string;
+  max_count: number;
+  error?: string;
+  skipped?: boolean;
+};
+
+export type RetentionRunResponse = {
+  object: string;
+  data: {
+    started_at: string;
+    finished_at: string;
+    trigger: string;
+    results: RetentionRunResultRecord[];
+  };
+};
+
 export type ChatResponse = {
   id: string;
   model: string;

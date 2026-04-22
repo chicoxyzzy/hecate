@@ -17,6 +17,7 @@ import (
 type Tracer interface {
 	Start(requestID string) *Trace
 	Get(requestID string) (*Trace, bool)
+	Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
 type Trace struct {
@@ -74,6 +75,29 @@ func (t *InMemoryTracer) Get(requestID string) (*Trace, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (t *InMemoryTracer) Prune(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := time.Now()
+	deleted := 0
+	kept := t.traces[:0]
+	for _, trace := range t.traces {
+		if maxAge > 0 && !trace.StartedAt.IsZero() && trace.StartedAt.Before(now.Add(-maxAge)) {
+			deleted++
+			continue
+		}
+		kept = append(kept, trace)
+	}
+	t.traces = kept
+
+	if maxCount > 0 && len(t.traces) > maxCount {
+		deleted += len(t.traces) - maxCount
+		t.traces = append([]*Trace(nil), t.traces[len(t.traces)-maxCount:]...)
+	}
+	return deleted, nil
 }
 
 func NewTrace(requestID string, otelTracer oteltrace.Tracer) *Trace {

@@ -14,6 +14,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/models"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Pricebook       billing.Pricebook
 	Tracer          profiler.Tracer
 	Metrics         *telemetry.Metrics
+	Retention       *retention.Manager
 }
 
 type SemanticOptions struct {
@@ -64,6 +66,7 @@ type Service struct {
 	governor        governor.Governor
 	tracer          profiler.Tracer
 	metrics         *telemetry.Metrics
+	retention       *retention.Manager
 }
 
 type ChatResult struct {
@@ -90,6 +93,10 @@ type TraceResult struct {
 	StartedAt time.Time
 	Spans     []types.TraceSpan
 	Route     types.RouteDecisionReport
+}
+
+type RetentionResult struct {
+	Run retention.RunResult
 }
 
 type ResponseMetadata struct {
@@ -185,6 +192,7 @@ func NewService(deps Dependencies) *Service {
 		governor:        deps.Governor,
 		tracer:          deps.Tracer,
 		metrics:         deps.Metrics,
+		retention:       deps.Retention,
 	}
 }
 
@@ -503,6 +511,13 @@ func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, er
 		Spans:     spans,
 		Route:     buildRouteDecisionReport(spans),
 	}, nil
+}
+
+func (s *Service) RunRetention(ctx context.Context, req retention.RunRequest) (*RetentionResult, error) {
+	if s.retention == nil {
+		return nil, fmt.Errorf("retention manager is not configured")
+	}
+	return &RetentionResult{Run: s.retention.Run(ctx, req)}, nil
 }
 
 func validate(req types.ChatRequest) error {

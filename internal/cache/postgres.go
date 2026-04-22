@@ -57,6 +57,45 @@ func (s *PostgresStore) CleanupExpired(ctx context.Context) error {
 	return nil
 }
 
+func (s *PostgresStore) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := int64(0)
+
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE expires_at <= NOW()`, s.table)); err != nil {
+		return 0, fmt.Errorf("delete expired postgres exact cache rows: %w", err)
+	}
+
+	if maxAge > 0 {
+		result, err := s.db.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE updated_at < $1`, s.table),
+			time.Now().Add(-maxAge).UTC(),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("delete aged postgres exact cache rows: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	if maxCount > 0 {
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE cache_key IN (
+				SELECT cache_key
+				FROM %s
+				ORDER BY updated_at DESC
+				OFFSET $1
+			)
+		`, s.table, s.table), maxCount)
+		if err != nil {
+			return 0, fmt.Errorf("enforce postgres exact cache max count: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	return int(deleted), nil
+}
+
 func (s *PostgresStore) Set(ctx context.Context, key string, response *types.ChatResponse) error {
 	payload, err := json.Marshal(response)
 	if err != nil {

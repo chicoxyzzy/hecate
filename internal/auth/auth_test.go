@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
@@ -32,6 +33,9 @@ func (f fakeStore) SetAPIKeyEnabled(context.Context, string, bool) (controlplane
 }
 func (f fakeStore) RotateAPIKey(context.Context, string, string) (controlplane.APIKey, error) {
 	return controlplane.APIKey{}, nil
+}
+func (f fakeStore) PruneAuditEvents(context.Context, time.Duration, int) (int, error) {
+	return 0, nil
 }
 func (f fakeStore) DeleteAPIKey(context.Context, string) error { return nil }
 

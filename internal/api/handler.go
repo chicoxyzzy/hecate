@@ -18,6 +18,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/requestscope"
+	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -230,6 +231,62 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, payload)
+}
+
+type RetentionRunRequest struct {
+	Subsystems []string `json:"subsystems"`
+}
+
+func (h *Handler) HandleRetentionRun(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	var req RetentionRunRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid_request", "request body must be valid JSON")
+			return
+		}
+	}
+
+	result, err := h.service.RunRetention(ctx, retention.RunRequest{
+		Trigger:    "manual",
+		Subsystems: req.Subsystems,
+	})
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.retention.run.failed",
+			slog.String("event.name", "gateway.retention.run.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
+		return
+	}
+
+	items := make([]map[string]any, 0, len(result.Run.Results))
+	for _, item := range result.Run.Results {
+		items = append(items, map[string]any{
+			"name":      item.Name,
+			"deleted":   item.Deleted,
+			"max_age":   item.MaxAge.String(),
+			"max_count": item.MaxCount,
+			"error":     item.Error,
+			"skipped":   item.Skipped,
+		})
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "retention_run",
+		"data": map[string]any{
+			"started_at":  result.Run.StartedAt.UTC().Format(time.RFC3339Nano),
+			"finished_at": result.Run.FinishedAt.UTC().Format(time.RFC3339Nano),
+			"trigger":     result.Run.Trigger,
+			"results":     items,
+		},
+	})
 }
 
 func (h *Handler) HandleBudgetStatus(w http.ResponseWriter, r *http.Request) {

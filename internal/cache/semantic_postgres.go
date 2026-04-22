@@ -249,6 +249,48 @@ func (s *PostgresSemanticStore) Set(ctx context.Context, entry SemanticEntry) er
 	return nil
 }
 
+func (s *PostgresSemanticStore) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := int64(0)
+
+	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE expires_at <= NOW()`, s.table))
+	if err != nil {
+		return 0, fmt.Errorf("delete expired postgres semantic cache rows: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	deleted += count
+
+	if maxAge > 0 {
+		result, err = s.db.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE created_at < $1`, s.table),
+			time.Now().Add(-maxAge).UTC(),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("delete aged postgres semantic cache rows: %w", err)
+		}
+		count, _ = result.RowsAffected()
+		deleted += count
+	}
+
+	if maxCount > 0 {
+		result, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE id IN (
+				SELECT id
+				FROM %s
+				ORDER BY created_at DESC
+				OFFSET $1
+			)
+		`, s.table, s.table), maxCount)
+		if err != nil {
+			return 0, fmt.Errorf("enforce postgres semantic cache max count: %w", err)
+		}
+		count, _ = result.RowsAffected()
+		deleted += count
+	}
+
+	return int(deleted), nil
+}
+
 func (s *PostgresSemanticStore) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (

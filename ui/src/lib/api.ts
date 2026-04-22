@@ -8,6 +8,7 @@ import type {
   RuntimeHeaders,
   SessionResponse,
   TraceResponse,
+  RetentionRunResponse,
 } from "../types/runtime";
 
 type RequestOptions = {
@@ -63,6 +64,10 @@ export type ControlPlaneDeletePayload = {
 export type RotateAPIKeyPayload = {
   id: string;
   key: string;
+};
+
+export type RetentionRunPayload = {
+  subsystems: string[];
 };
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -131,6 +136,10 @@ export async function rotateAPIKey(payload: RotateAPIKeyPayload, authToken?: str
 
 export async function deleteAPIKey(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/api-keys/delete", { authToken, method: "POST", body: payload });
+}
+
+export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {
+  return fetchJSON<RetentionRunResponse>("/admin/retention/run", { authToken, method: "POST", body: payload });
 }
 
 export async function chatCompletions(

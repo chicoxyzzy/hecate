@@ -60,6 +60,7 @@ type Store interface {
 	SetAPIKeyEnabled(ctx context.Context, id string, enabled bool) (APIKey, error)
 	RotateAPIKey(ctx context.Context, id, secret string) (APIKey, error)
 	DeleteAPIKey(ctx context.Context, id string) error
+	PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
 type FileStore struct {
@@ -557,6 +558,38 @@ func (s *RedisStore) DeleteAPIKey(ctx context.Context, id string) error {
 	return s.writeState(ctx, state)
 }
 
+func (s *FileStore) PruneAuditEvents(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	deleted := pruneAuditEvents(&s.data, maxAge, maxCount)
+	if deleted == 0 {
+		return 0, nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+func (s *RedisStore) PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	deleted := pruneAuditEvents(&state, maxAge, maxCount)
+	if deleted == 0 {
+		return 0, nil
+	}
+	if err := s.writeState(ctx, state); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func (s *FileStore) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -703,6 +736,31 @@ func appendAuditEvent(state *State, event AuditEvent) {
 	if len(state.Events) > maxAuditEvents {
 		state.Events = append([]AuditEvent(nil), state.Events[len(state.Events)-maxAuditEvents:]...)
 	}
+}
+
+func pruneAuditEvents(state *State, maxAge time.Duration, maxCount int) int {
+	if state == nil {
+		return 0
+	}
+
+	now := time.Now()
+	deleted := 0
+	kept := state.Events[:0]
+	for _, event := range state.Events {
+		if maxAge > 0 && !event.Timestamp.IsZero() && event.Timestamp.Before(now.Add(-maxAge)) {
+			deleted++
+			continue
+		}
+		kept = append(kept, event)
+	}
+	if maxCount > 0 && len(kept) > maxCount {
+		deleted += len(kept) - maxCount
+		kept = append([]AuditEvent(nil), kept[len(kept)-maxCount:]...)
+	} else {
+		kept = append([]AuditEvent(nil), kept...)
+	}
+	state.Events = kept
+	return deleted
 }
 
 func canonicalID(id, name string) string {

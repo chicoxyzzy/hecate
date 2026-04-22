@@ -65,4 +65,5 @@ type requestScope struct {
 type entry struct {
 	response  *types.ChatResponse
 	expiresAt time.Time
+	writtenAt time.Time
 }

@@ -90,6 +90,43 @@ func (c *RedisClient) IncrBy(ctx context.Context, key string, delta int64) (int6
 	return value, nil
 }
 
+func (c *RedisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
+	reply, err := c.run(ctx, "KEYS", pattern)
+	if err != nil {
+		return nil, err
+	}
+	items, ok := reply.([]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected KEYS reply type %T", reply)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		switch value := item.(type) {
+		case []byte:
+			out = append(out, string(value))
+		case string:
+			out = append(out, value)
+		}
+	}
+	return out, nil
+}
+
+func (c *RedisClient) Del(ctx context.Context, keys ...string) (int64, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	args := append([]string{"DEL"}, keys...)
+	reply, err := c.run(ctx, args...)
+	if err != nil {
+		return 0, err
+	}
+	value, ok := reply.(int64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected DEL reply type %T", reply)
+	}
+	return value, nil
+}
+
 func (c *RedisClient) run(ctx context.Context, args ...string) (any, error) {
 	conn, err := c.dial(ctx)
 	if err != nil {
@@ -204,6 +241,27 @@ func readReply(r *bufio.Reader) (any, error) {
 			return nil, err
 		}
 		return buf[:size], nil
+	case '*':
+		line, err := readLine(r)
+		if err != nil {
+			return nil, err
+		}
+		count, err := strconv.Atoi(line)
+		if err != nil {
+			return nil, err
+		}
+		if count == -1 {
+			return nil, ErrNil
+		}
+		out := make([]any, 0, count)
+		for i := 0; i < count; i++ {
+			item, err := readReply(r)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, item)
+		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("unsupported redis reply prefix %q", prefix)
 	}

@@ -15,6 +15,7 @@ import {
   getSession,
   getTrace,
   rotateAPIKey as rotateAPIKeyRequest,
+  runRetention as runRetentionRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
   setBudgetLimit as setBudgetLimitRequest,
@@ -36,6 +37,7 @@ import type {
   SessionResponse,
   TraceResponse,
   TraceSpanRecord,
+  RetentionRunResponse,
 } from "../types/runtime";
 
 const defaultPrompt = "Say hello in one short sentence.";
@@ -107,6 +109,11 @@ export function useRuntimeConsole() {
   const [apiKeyFormModels, setAPIKeyFormModels] = useState("");
   const [rotateAPIKeyID, setRotateAPIKeyID] = useState("");
   const [rotateAPIKeySecret, setRotateAPIKeySecret] = useState("");
+  const [retentionSubsystems, setRetentionSubsystems] = useState("");
+  const [retentionLoading, setRetentionLoading] = useState(false);
+  const [retentionError, setRetentionError] = useState("");
+  const [retentionLastRun, setRetentionLastRun] = useState<RetentionRunResponse["data"] | null>(null);
+  const [retentionRuns, setRetentionRuns] = useState<Array<RetentionRunResponse["data"]>>([]);
 
   const healthyProviders = providers.filter((provider) => provider.healthy).length;
   const localProviders = providers.filter((provider) => provider.kind === "local");
@@ -536,6 +543,28 @@ export function useRuntimeConsole() {
     }
   }
 
+  async function runRetention() {
+    setRetentionError("");
+    setNotice(null);
+    setRetentionLoading(true);
+    try {
+      const payload = await runRetentionRequest(
+        {
+          subsystems: parseCSV(retentionSubsystems),
+        },
+        authToken,
+      );
+      setRetentionLastRun(payload.data);
+      setRetentionRuns((current) => [payload.data, ...current].slice(0, 6));
+      setNotice({ kind: "success", message: "Retention run completed." });
+    } catch (error) {
+      setRetentionError(error instanceof Error ? error.message : "failed to run retention");
+      setNotice({ kind: "error", message: "Failed to run retention." });
+    } finally {
+      setRetentionLoading(false);
+    }
+  }
+
   return {
     state: {
       apiKeyFormID,
@@ -576,6 +605,11 @@ export function useRuntimeConsole() {
       providerFilter,
       providerScopedModels,
       providers,
+      retentionError,
+      retentionLastRun,
+      retentionLoading,
+      retentionRuns,
+      retentionSubsystems,
       rotateAPIKeyID,
       rotateAPIKeySecret,
       runtimeHeaders,
@@ -613,6 +647,7 @@ export function useRuntimeConsole() {
       setModel,
       setModelFilter,
       setProviderFilter,
+      setRetentionSubsystems,
       setRotateAPIKeyID,
       setRotateAPIKeySecret,
       setTenantEnabled,
@@ -622,6 +657,7 @@ export function useRuntimeConsole() {
       setTenantFormName,
       setTenantFormProviders,
       setBudgetLimit,
+      runRetention,
       submitChat,
       topUpBudget,
       upsertAPIKey,

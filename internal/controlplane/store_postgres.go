@@ -264,6 +264,24 @@ func (s *PostgresStore) DeleteAPIKey(ctx context.Context, id string) error {
 	return s.writeState(ctx, state)
 }
 
+func (s *PostgresStore) PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	deleted := pruneAuditEvents(&state, maxAge, maxCount)
+	if deleted == 0 {
+		return 0, nil
+	}
+	if err := s.writeState(ctx, state); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (

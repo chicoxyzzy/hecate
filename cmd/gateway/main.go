@@ -21,6 +21,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
 	"github.com/hecate/agent-runtime/internal/storage"
 	"github.com/hecate/agent-runtime/internal/telemetry"
@@ -112,6 +113,16 @@ func main() {
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
 	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
+	retentionManager := retention.NewManager(
+		logger,
+		cfg.Retention,
+		tracer,
+		tracer,
+		budgetStore,
+		controlPlaneStore,
+		pruneableExactCache(cacheStore),
+		pruneableSemanticCache(semanticStore),
+	)
 	providerCatalog := catalog.NewRegistryCatalog(providerRegistry, healthTracker)
 	routerEngine := router.NewRuleRouter(
 		cfg.Router.DefaultProvider,
@@ -135,7 +146,12 @@ func main() {
 		pricebook,
 		tracer,
 		metrics,
+		retentionManager,
 	))
+
+	retentionCtx, retentionCancel := context.WithCancel(context.Background())
+	defer retentionCancel()
+	go retentionManager.RunLoop(retentionCtx)
 
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore)
 	server := &http.Server{
@@ -157,6 +173,8 @@ func main() {
 			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
 			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
+			slog.Bool("retention_enabled", cfg.Retention.Enabled),
+			slog.Duration("retention_interval", cfg.Retention.Interval),
 			slog.Bool("otel_traces_enabled", cfg.OTel.TracesEnabled),
 			slog.String("otel_traces_endpoint", cfg.OTel.TracesEndpoint),
 			slog.Bool("otel_metrics_enabled", cfg.OTel.MetricsEnabled),
@@ -180,6 +198,7 @@ func main() {
 	defer cancel()
 
 	logger.Info("gateway shutting down")
+	retentionCancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown failed", slog.Any("error", err))
 		os.Exit(1)
@@ -231,6 +250,7 @@ func buildGatewayDependencies(
 	pricebook billing.Pricebook,
 	tracer profiler.Tracer,
 	metrics *telemetry.Metrics,
+	retentionManager *retention.Manager,
 ) gateway.Dependencies {
 	return gateway.Dependencies{
 		Logger:   logger,
@@ -254,7 +274,18 @@ func buildGatewayDependencies(
 		Pricebook:     pricebook,
 		Tracer:        tracer,
 		Metrics:       metrics,
+		Retention:     retentionManager,
 	}
+}
+
+func pruneableExactCache(store cache.Store) retention.CachePruner {
+	pruner, _ := store.(retention.CachePruner)
+	return pruner
+}
+
+func pruneableSemanticCache(store cache.SemanticStore) retention.CachePruner {
+	pruner, _ := store.(retention.CachePruner)
+	return pruner
 }
 
 func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) controlplane.Store {

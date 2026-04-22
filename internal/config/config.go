@@ -15,6 +15,7 @@ type Config struct {
 	OTel      OTelConfig
 	Governor  GovernorConfig
 	Cache     CacheConfig
+	Retention RetentionConfig
 	Postgres  PostgresConfig
 	Providers ProvidersConfig
 	Pricebook PricebookConfig
@@ -111,6 +112,21 @@ type CacheConfig struct {
 	Backend    string
 	Redis      RedisConfig
 	Semantic   SemanticCacheConfig
+}
+
+type RetentionConfig struct {
+	Enabled        bool
+	Interval       time.Duration
+	TraceSnapshots RetentionPolicy
+	BudgetEvents   RetentionPolicy
+	AuditEvents    RetentionPolicy
+	ExactCache     RetentionPolicy
+	SemanticCache  RetentionPolicy
+}
+
+type RetentionPolicy struct {
+	MaxAge   time.Duration
+	MaxCount int
 }
 
 type SemanticCacheConfig struct {
@@ -276,6 +292,15 @@ func LoadFromEnv() Config {
 				PostgresVectorSearchProbes:       getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_SEARCH_PROBES", 10),
 			},
 		},
+		Retention: RetentionConfig{
+			Enabled:        getEnvBool("GATEWAY_RETENTION_ENABLED", false),
+			Interval:       getEnvDuration("GATEWAY_RETENTION_INTERVAL", 15*time.Minute),
+			TraceSnapshots: loadRetentionPolicyFromEnv("GATEWAY_RETENTION_TRACES_", 24*time.Hour, 2000),
+			BudgetEvents:   loadRetentionPolicyFromEnv("GATEWAY_RETENTION_BUDGET_EVENTS_", 30*24*time.Hour, 200),
+			AuditEvents:    loadRetentionPolicyFromEnv("GATEWAY_RETENTION_AUDIT_EVENTS_", 30*24*time.Hour, 500),
+			ExactCache:     loadRetentionPolicyFromEnv("GATEWAY_RETENTION_EXACT_CACHE_", 24*time.Hour, 10_000),
+			SemanticCache:  loadRetentionPolicyFromEnv("GATEWAY_RETENTION_SEMANTIC_CACHE_", 7*24*time.Hour, 10_000),
+		},
 		Postgres: PostgresConfig{
 			DSN:          os.Getenv("POSTGRES_DSN"),
 			Schema:       getEnv("POSTGRES_SCHEMA", "public"),
@@ -286,6 +311,13 @@ func LoadFromEnv() Config {
 		Providers: providersCfg,
 		Pricebook: loadPricebookFromEnv(),
 		LogLevel:  getEnv("LOG_LEVEL", "INFO"),
+	}
+}
+
+func loadRetentionPolicyFromEnv(prefix string, defaultAge time.Duration, defaultCount int) RetentionPolicy {
+	return RetentionPolicy{
+		MaxAge:   getEnvDuration(prefix+"MAX_AGE", defaultAge),
+		MaxCount: getEnvInt(prefix+"MAX_COUNT", defaultCount),
 	}
 }
 

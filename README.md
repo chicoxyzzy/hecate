@@ -21,6 +21,7 @@ Current runtime capabilities:
 - budget limit top-ups, resets, warning thresholds, and history
 - tenant-aware auth and restrictions
 - request tracing and structured logs
+- background retention and pruning with manual admin trigger
 - optional OTLP HTTP export for traces, metrics, and logs
 - React operator UI
 
@@ -189,6 +190,7 @@ Implemented:
 - [x] Semantic cache
 - [x] Static pricebook and cost estimation
 - [x] Budget enforcement with top-ups, resets, warning thresholds, and history
+- [x] Background retention and pruning for traces, cache, budget history, and audit events
 - [x] Tenant-aware auth and persisted control-plane state
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
@@ -200,7 +202,6 @@ Next:
 - [ ] A real pricebook ingestion/update path instead of only seeded static defaults
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI
-- [ ] Background retention and pruning workers
 - [ ] More provider presets and discovery paths
 - [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
 - [ ] Deployment examples for local and production-style environments

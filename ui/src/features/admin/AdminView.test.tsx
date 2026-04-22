@@ -63,4 +63,41 @@ describe("AdminView", () => {
     expect(screen.getByText("Usage")).toBeInTheDocument();
     expect(screen.getByText("req-123")).toBeInTheDocument();
   });
+
+  it("shows retention run results and recent session history", () => {
+    render(
+      <AdminView
+        actions={createRuntimeConsoleActions()}
+        state={createRuntimeConsoleFixture({
+          retentionLastRun: {
+            started_at: "2026-04-22T10:00:00Z",
+            finished_at: "2026-04-22T10:00:05Z",
+            trigger: "manual",
+            results: [
+              { name: "trace_snapshots", deleted: 12, max_age: "24h", max_count: 2000 },
+              { name: "semantic_cache", deleted: 3, max_age: "168h", max_count: 10000 },
+            ],
+          },
+          retentionRuns: [
+            {
+              started_at: "2026-04-22T10:00:00Z",
+              finished_at: "2026-04-22T10:00:05Z",
+              trigger: "manual",
+              results: [
+                { name: "trace_snapshots", deleted: 12, max_age: "24h", max_count: 2000 },
+                { name: "semantic_cache", deleted: 3, max_age: "168h", max_count: 10000 },
+              ],
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getAllByText("Retention").length).toBeGreaterThan(0);
+    expect(screen.getByText("Run retention")).toBeInTheDocument();
+    expect(screen.getByText("Recent retention runs")).toBeInTheDocument();
+    expect(screen.getAllByText("manual").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/trace_snapshots/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/semantic_cache/i).length).toBeGreaterThan(0);
+  });
 });

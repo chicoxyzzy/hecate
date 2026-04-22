@@ -58,8 +58,9 @@ type MemorySemanticStore struct {
 }
 
 type semanticRecord struct {
-	entry  SemanticEntry
-	vector []float64
+	entry    SemanticEntry
+	vector   []float64
+	storedAt time.Time
 }
 
 func NewMemorySemanticStore(defaultTTL time.Duration, maxEntries int, embedder Embedder) *MemorySemanticStore {
@@ -139,13 +140,43 @@ func (s *MemorySemanticStore) Set(ctx context.Context, entry SemanticEntry) erro
 	defer s.mu.Unlock()
 
 	s.entries = append(s.entries, semanticRecord{
-		entry:  entry,
-		vector: append([]float64(nil), vector...),
+		entry:    entry,
+		vector:   append([]float64(nil), vector...),
+		storedAt: time.Now().UTC(),
 	})
 	if len(s.entries) > s.maxEntries {
 		s.entries = append([]semanticRecord(nil), s.entries[len(s.entries)-s.maxEntries:]...)
 	}
 	return nil
+}
+
+func (s *MemorySemanticStore) Prune(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	deleted := 0
+	kept := s.entries[:0]
+	for _, record := range s.entries {
+		if (!record.entry.ExpiresAt.IsZero() && now.After(record.entry.ExpiresAt)) || (maxAge > 0 && !record.storedAt.IsZero() && record.storedAt.Before(now.Add(-maxAge))) {
+			deleted++
+			continue
+		}
+		kept = append(kept, record)
+	}
+	s.entries = kept
+
+	if maxCount > 0 && len(s.entries) > maxCount {
+		deleted += len(s.entries) - maxCount
+		s.entries = append([]semanticRecord(nil), s.entries[len(s.entries)-maxCount:]...)
+	}
+
+	return deleted, nil
+}
+
+func (NoopSemanticStore) Prune(context.Context, time.Duration, int) (int, error) {
+	return 0, nil
 }
 
 func BuildSemanticNamespace(req types.ChatRequest, decision types.RouteDecision) string {

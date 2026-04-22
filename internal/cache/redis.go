@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
@@ -14,6 +15,11 @@ type RedisStore struct {
 	client     *storage.RedisClient
 	prefix     string
 	defaultTTL time.Duration
+}
+
+type redisCacheEnvelope struct {
+	Response  *types.ChatResponse `json:"response"`
+	WrittenAt time.Time           `json:"written_at"`
 }
 
 func NewRedisStore(client *storage.RedisClient, prefix string, defaultTTL time.Duration) *RedisStore {
@@ -33,19 +39,74 @@ func (s *RedisStore) Get(ctx context.Context, key string) (*types.ChatResponse, 
 		return nil, false
 	}
 
-	var response types.ChatResponse
-	if err := json.Unmarshal(payload, &response); err != nil {
+	var envelope redisCacheEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Response == nil {
 		return nil, false
 	}
-	return &response, true
+	return envelope.Response, true
 }
 
 func (s *RedisStore) Set(ctx context.Context, key string, response *types.ChatResponse) error {
-	payload, err := json.Marshal(response)
+	payload, err := json.Marshal(redisCacheEnvelope{
+		Response:  response,
+		WrittenAt: time.Now().UTC(),
+	})
 	if err != nil {
 		return err
 	}
 	return s.client.SetEX(ctx, s.cacheKey(key), s.defaultTTL, payload)
+}
+
+func (s *RedisStore) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	keys, err := s.client.Keys(ctx, s.cacheKey("*"))
+	if err != nil {
+		return 0, err
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	type candidate struct {
+		key       string
+		writtenAt time.Time
+	}
+
+	now := time.Now()
+	deleted := 0
+	candidates := make([]candidate, 0, len(keys))
+	for _, key := range keys {
+		payload, err := s.client.Get(ctx, key)
+		if err != nil {
+			continue
+		}
+		var envelope redisCacheEnvelope
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			continue
+		}
+		if maxAge > 0 && !envelope.WrittenAt.IsZero() && envelope.WrittenAt.Before(now.Add(-maxAge)) {
+			n, err := s.client.Del(ctx, key)
+			if err != nil {
+				return deleted, err
+			}
+			deleted += int(n)
+			continue
+		}
+		candidates = append(candidates, candidate{key: key, writtenAt: envelope.WrittenAt})
+	}
+
+	if maxCount > 0 && len(candidates) > maxCount {
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].writtenAt.After(candidates[j].writtenAt)
+		})
+		for _, item := range candidates[maxCount:] {
+			n, err := s.client.Del(ctx, item.key)
+			if err != nil {
+				return deleted, err
+			}
+			deleted += int(n)
+		}
+	}
+	return deleted, nil
 }
 
 func (s *RedisStore) cacheKey(key string) string {

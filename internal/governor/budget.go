@@ -45,6 +45,7 @@ type BudgetEvent struct {
 type BudgetHistoryStore interface {
 	AppendEvent(ctx context.Context, event BudgetEvent) error
 	ListEvents(ctx context.Context, key string, limit int) ([]BudgetEvent, error)
+	PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
 type BudgetStateStore interface {
@@ -149,6 +150,30 @@ func (s *MemoryBudgetStore) ListEvents(_ context.Context, key string, limit int)
 	return out, nil
 }
 
+func (s *MemoryBudgetStore) PruneEvents(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	deleted := 0
+	for key, events := range s.events {
+		kept := events[:0]
+		for _, event := range events {
+			if maxAge > 0 && !event.OccurredAt.IsZero() && event.OccurredAt.Before(now.Add(-maxAge)) {
+				deleted++
+				continue
+			}
+			kept = append(kept, event)
+		}
+		if maxCount > 0 && len(kept) > maxCount {
+			deleted += len(kept) - maxCount
+			kept = append([]BudgetEvent(nil), kept[len(kept)-maxCount:]...)
+		}
+		s.events[key] = append([]BudgetEvent(nil), kept...)
+	}
+	return deleted, nil
+}
+
 type RedisBudgetStore struct {
 	client *storage.RedisClient
 	prefix string
@@ -244,6 +269,45 @@ func (s *RedisBudgetStore) ListEvents(ctx context.Context, key string, limit int
 		out = append(out, events[i])
 	}
 	return out, nil
+}
+
+func (s *RedisBudgetStore) PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	keys, err := s.client.Keys(ctx, s.redisKey("*:history"))
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	deleted := 0
+	for _, redisKey := range keys {
+		payload, err := s.client.Get(ctx, redisKey)
+		if err != nil {
+			continue
+		}
+		var events []BudgetEvent
+		if err := json.Unmarshal(payload, &events); err != nil {
+			continue
+		}
+		kept := events[:0]
+		for _, event := range events {
+			if maxAge > 0 && !event.OccurredAt.IsZero() && event.OccurredAt.Before(now.Add(-maxAge)) {
+				deleted++
+				continue
+			}
+			kept = append(kept, event)
+		}
+		if maxCount > 0 && len(kept) > maxCount {
+			deleted += len(kept) - maxCount
+			kept = append([]BudgetEvent(nil), kept[len(kept)-maxCount:]...)
+		}
+		next, err := json.Marshal(kept)
+		if err != nil {
+			return deleted, err
+		}
+		if err := s.client.Set(ctx, redisKey, next); err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
 }
 
 func (s *RedisBudgetStore) redisKey(key string) string {
