@@ -36,19 +36,21 @@ type APIKey struct {
 }
 
 type Provider struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Kind          string    `json:"kind"`
-	Protocol      string    `json:"protocol"`
-	BaseURL       string    `json:"base_url"`
-	APIVersion    string    `json:"api_version,omitempty"`
-	DefaultModel  string    `json:"default_model,omitempty"`
-	Models        []string  `json:"models,omitempty"`
-	AllowAnyModel bool      `json:"allow_any_model"`
-	Enabled       bool      `json:"enabled"`
-	CredentialID  string    `json:"credential_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	PresetID       string    `json:"preset_id,omitempty"`
+	Kind           string    `json:"kind"`
+	Protocol       string    `json:"protocol"`
+	BaseURL        string    `json:"base_url"`
+	APIVersion     string    `json:"api_version,omitempty"`
+	DefaultModel   string    `json:"default_model,omitempty"`
+	Models         []string  `json:"models,omitempty"`
+	AllowAnyModel  bool      `json:"allow_any_model"`
+	ExplicitFields []string  `json:"explicit_fields,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	CredentialID   string    `json:"credential_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitempty"`
 }
 
 type ProviderSecret struct {
@@ -730,19 +732,21 @@ func cloneState(state State) State {
 	}
 	for _, provider := range state.Providers {
 		out.Providers = append(out.Providers, Provider{
-			ID:            provider.ID,
-			Name:          provider.Name,
-			Kind:          provider.Kind,
-			Protocol:      provider.Protocol,
-			BaseURL:       provider.BaseURL,
-			APIVersion:    provider.APIVersion,
-			DefaultModel:  provider.DefaultModel,
-			Models:        append([]string(nil), provider.Models...),
-			AllowAnyModel: provider.AllowAnyModel,
-			Enabled:       provider.Enabled,
-			CredentialID:  provider.CredentialID,
-			CreatedAt:     provider.CreatedAt,
-			UpdatedAt:     provider.UpdatedAt,
+			ID:             provider.ID,
+			Name:           provider.Name,
+			PresetID:       provider.PresetID,
+			Kind:           provider.Kind,
+			Protocol:       provider.Protocol,
+			BaseURL:        provider.BaseURL,
+			APIVersion:     provider.APIVersion,
+			DefaultModel:   provider.DefaultModel,
+			Models:         append([]string(nil), provider.Models...),
+			AllowAnyModel:  provider.AllowAnyModel,
+			ExplicitFields: append([]string(nil), provider.ExplicitFields...),
+			Enabled:        provider.Enabled,
+			CredentialID:   provider.CredentialID,
+			CreatedAt:      provider.CreatedAt,
+			UpdatedAt:      provider.UpdatedAt,
 		})
 	}
 	for _, secret := range state.ProviderSecrets {

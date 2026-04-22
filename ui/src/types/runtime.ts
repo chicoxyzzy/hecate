@@ -297,6 +297,7 @@ export type ControlPlaneAPIKeyRecord = {
 export type ControlPlaneProviderRecord = {
   id: string;
   name: string;
+  preset_id?: string;
   kind: string;
   protocol: string;
   base_url: string;
@@ -304,6 +305,8 @@ export type ControlPlaneProviderRecord = {
   default_model?: string;
   models?: string[];
   allow_any_model: boolean;
+  explicit_fields?: string[];
+  inherited_fields?: string[];
   enabled: boolean;
   credential_configured: boolean;
   credential_preview?: string;

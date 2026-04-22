@@ -1226,6 +1226,65 @@ func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	}
 }
 
+func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := store.UpsertProvider(context.Background(), controlplane.Provider{
+		Name:           "groq",
+		PresetID:       "groq",
+		Kind:           "cloud",
+		Protocol:       "openai",
+		BaseURL:        "https://api.groq.com/openai/v1",
+		DefaultModel:   "openai/gpt-oss-20b",
+		AllowAnyModel:  true,
+		ExplicitFields: []string{"default_model"},
+		Enabled:        true,
+	}, &controlplane.ProviderSecret{
+		ProviderID:      "groq",
+		APIKeyEncrypted: "encrypted",
+		APIKeyPreview:   "gr...ret",
+	}); err != nil {
+		t.Fatalf("UpsertProvider() error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	}, governor.NewMemoryBudgetStore(), store)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response ControlPlaneResponse
+	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(response.Data.Providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(response.Data.Providers))
+	}
+	got := response.Data.Providers[0]
+	if got.PresetID != "groq" {
+		t.Fatalf("preset_id = %q, want groq", got.PresetID)
+	}
+	if len(got.ExplicitFields) != 1 || got.ExplicitFields[0] != "default_model" {
+		t.Fatalf("explicit_fields = %#v, want [default_model]", got.ExplicitFields)
+	}
+	if len(got.InheritedFields) == 0 {
+		t.Fatal("inherited_fields = empty, want inherited built-in defaults")
+	}
+}
+
 func TestControlPlaneLifecycleEndpoints(t *testing.T) {
 	t.Parallel()
 

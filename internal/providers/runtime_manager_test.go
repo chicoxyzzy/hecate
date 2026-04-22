@@ -111,6 +111,54 @@ func TestControlPlaneRuntimeManagerHydratesBuiltInProviderDefaults(t *testing.T)
 	if !got.AllowAnyModel {
 		t.Fatal("allow any model = false, want true from built-in preset")
 	}
+	if got.PresetID != "groq" {
+		t.Fatalf("preset id = %q, want groq", got.PresetID)
+	}
+}
+
+func TestControlPlaneRuntimeManagerPreservesExistingOverridesOnMinimalUpdate(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	cipher, err := secrets.NewAESGCMCipher(key)
+	if err != nil {
+		t.Fatalf("NewAESGCMCipher() error = %v", err)
+	}
+
+	manager := NewControlPlaneRuntimeManager(logger, nil, store, cipher)
+	if _, err := manager.Upsert(context.Background(), controlplane.Provider{
+		Name:           "groq",
+		DefaultModel:   "openai/gpt-oss-20b",
+		ExplicitFields: []string{"default_model"},
+		Enabled:        true,
+	}, "groq-secret"); err != nil {
+		t.Fatalf("initial Upsert() error = %v", err)
+	}
+
+	if _, err := manager.Upsert(context.Background(), controlplane.Provider{
+		ID:      "groq",
+		Name:    "groq",
+		Enabled: true,
+	}, ""); err != nil {
+		t.Fatalf("minimal Upsert() error = %v", err)
+	}
+
+	state, err := store.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	got := state.Providers[0]
+	if got.DefaultModel != "openai/gpt-oss-20b" {
+		t.Fatalf("default model = %q, want preserved explicit override", got.DefaultModel)
+	}
+	if len(got.ExplicitFields) != 1 || got.ExplicitFields[0] != "default_model" {
+		t.Fatalf("explicit fields = %#v, want [default_model]", got.ExplicitFields)
+	}
 }
 
 type testWriter struct {

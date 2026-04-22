@@ -624,20 +624,23 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
     setNotice(null);
     try {
+      const payload = buildProviderUpsertPayload({
+        presetID: providerFormPresetID,
+        id: providerFormID,
+        name: providerFormName,
+        kind: providerFormKind,
+        protocol: providerFormProtocol,
+        baseURL: providerFormBaseURL,
+        apiVersion: providerFormAPIVersion,
+        defaultModel: providerFormDefaultModel,
+        models: parseCSV(providerFormModels),
+        allowAnyModel: providerFormAllowAnyModel === "true",
+        enabled: providerFormEnabled === "true",
+        key: providerFormSecret,
+        presets: providerPresets,
+      });
       await upsertProviderRequest(
-        {
-          id: providerFormID,
-          name: providerFormName,
-          kind: providerFormKind,
-          protocol: providerFormProtocol,
-          base_url: providerFormBaseURL,
-          api_version: providerFormAPIVersion,
-          default_model: providerFormDefaultModel,
-          models: parseCSV(providerFormModels),
-          allow_any_model: providerFormAllowAnyModel === "true",
-          enabled: providerFormEnabled === "true",
-          key: providerFormSecret,
-        },
+        payload,
         authToken,
       );
       setProviderFormSecret("");
@@ -1017,6 +1020,85 @@ export function useRuntimeConsole() {
       dismissNotice: () => setNotice(null),
     },
   };
+}
+
+function buildProviderUpsertPayload(args: {
+  presetID: string;
+  id: string;
+  name: string;
+  kind: string;
+  protocol: string;
+  baseURL: string;
+  apiVersion: string;
+  defaultModel: string;
+  models: string[];
+  allowAnyModel: boolean;
+  enabled: boolean;
+  key: string;
+  presets: ProviderPresetRecord[];
+}) {
+  const payload: {
+    id: string;
+    name: string;
+    preset_id?: string;
+    kind?: string;
+    protocol?: string;
+    base_url?: string;
+    api_version?: string;
+    default_model?: string;
+    models?: string[];
+    allow_any_model?: boolean;
+    enabled: boolean;
+    key: string;
+  } = {
+    id: args.id,
+    name: args.name,
+    enabled: args.enabled,
+    key: args.key,
+  };
+
+  const preset = args.presets.find((entry) => entry.id === args.presetID);
+  if (!preset) {
+    payload.kind = args.kind;
+    payload.protocol = args.protocol;
+    payload.base_url = args.baseURL;
+    if (args.apiVersion) {
+      payload.api_version = args.apiVersion;
+    }
+    if (args.defaultModel) {
+      payload.default_model = args.defaultModel;
+    }
+    if (args.models.length > 0) {
+      payload.models = args.models;
+    }
+    payload.allow_any_model = args.allowAnyModel;
+    return payload;
+  }
+
+  payload.preset_id = preset.id;
+  if (args.kind && args.kind !== preset.kind) {
+    payload.kind = args.kind;
+  }
+  if (args.protocol && args.protocol !== preset.protocol) {
+    payload.protocol = args.protocol;
+  }
+  if (args.baseURL && args.baseURL !== preset.base_url) {
+    payload.base_url = args.baseURL;
+  }
+  if (args.apiVersion && args.apiVersion !== (preset.api_version ?? "")) {
+    payload.api_version = args.apiVersion;
+  }
+  if (args.defaultModel) {
+    payload.default_model = args.defaultModel;
+  }
+  if (args.models.length > 0) {
+    payload.models = args.models;
+  }
+  const presetAllowAnyModel = preset.kind !== "local";
+  if (args.allowAnyModel !== presetAllowAnyModel) {
+    payload.allow_any_model = args.allowAnyModel;
+  }
+  return payload;
 }
 
 function deriveChatSessionTitle(message: string): string {

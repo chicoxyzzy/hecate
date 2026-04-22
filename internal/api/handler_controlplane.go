@@ -2,8 +2,10 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 )
 
@@ -283,18 +285,42 @@ func (h *Handler) HandleControlPlaneUpsertProvider(w http.ResponseWriter, r *htt
 		return
 	}
 
-	provider, err := h.providerRuntime.Upsert(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), controlplane.Provider{
-		ID:            req.ID,
-		Name:          req.Name,
-		Kind:          req.Kind,
-		Protocol:      req.Protocol,
-		BaseURL:       req.BaseURL,
-		APIVersion:    req.APIVersion,
-		DefaultModel:  req.DefaultModel,
-		Models:        req.Models,
-		AllowAnyModel: req.AllowAnyModel,
-		Enabled:       req.Enabled,
-	}, req.Key)
+	providerInput := controlplane.Provider{
+		ID:       req.ID,
+		Name:     req.Name,
+		PresetID: req.PresetID,
+		Enabled:  req.Enabled,
+	}
+	if req.Kind != nil {
+		providerInput.Kind = *req.Kind
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "kind")
+	}
+	if req.Protocol != nil {
+		providerInput.Protocol = *req.Protocol
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "protocol")
+	}
+	if req.BaseURL != nil {
+		providerInput.BaseURL = *req.BaseURL
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "base_url")
+	}
+	if req.APIVersion != nil {
+		providerInput.APIVersion = *req.APIVersion
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "api_version")
+	}
+	if req.DefaultModel != nil {
+		providerInput.DefaultModel = *req.DefaultModel
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "default_model")
+	}
+	if req.Models != nil {
+		providerInput.Models = req.Models
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "models")
+	}
+	if req.AllowAnyModel != nil {
+		providerInput.AllowAnyModel = *req.AllowAnyModel
+		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "allow_any_model")
+	}
+
+	provider, err := h.providerRuntime.Upsert(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), providerInput, req.Key)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
@@ -426,17 +452,21 @@ func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAud
 }
 
 func renderControlPlaneProvider(provider controlplane.Provider, secrets []controlplane.ProviderSecret) ControlPlaneProviderRecord {
+	inheritedFields := controlPlaneInheritedFields(provider)
 	record := ControlPlaneProviderRecord{
-		ID:            provider.ID,
-		Name:          provider.Name,
-		Kind:          provider.Kind,
-		Protocol:      provider.Protocol,
-		BaseURL:       provider.BaseURL,
-		APIVersion:    provider.APIVersion,
-		DefaultModel:  provider.DefaultModel,
-		Models:        provider.Models,
-		AllowAnyModel: provider.AllowAnyModel,
-		Enabled:       provider.Enabled,
+		ID:              provider.ID,
+		Name:            provider.Name,
+		PresetID:        provider.PresetID,
+		Kind:            provider.Kind,
+		Protocol:        provider.Protocol,
+		BaseURL:         provider.BaseURL,
+		APIVersion:      provider.APIVersion,
+		DefaultModel:    provider.DefaultModel,
+		Models:          provider.Models,
+		AllowAnyModel:   provider.AllowAnyModel,
+		ExplicitFields:  append([]string(nil), provider.ExplicitFields...),
+		InheritedFields: inheritedFields,
+		Enabled:         provider.Enabled,
 	}
 	for _, secret := range secrets {
 		if secret.ProviderID == provider.ID {
@@ -452,6 +482,47 @@ func renderControlPlaneProvider(provider controlplane.Provider, secrets []contro
 		record.UpdatedAt = provider.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 	return record
+}
+
+func controlPlaneInheritedFields(provider controlplane.Provider) []string {
+	builtIn, ok := config.BuiltInProviderByID(firstNonEmpty(provider.PresetID, provider.Name, provider.ID))
+	if !ok {
+		return nil
+	}
+
+	explicit := make(map[string]struct{}, len(provider.ExplicitFields))
+	for _, field := range provider.ExplicitFields {
+		explicit[field] = struct{}{}
+	}
+
+	var inherited []string
+	maybeAppend := func(field string, condition bool) {
+		if !condition {
+			return
+		}
+		if _, ok := explicit[field]; ok {
+			return
+		}
+		inherited = append(inherited, field)
+	}
+
+	maybeAppend("kind", provider.Kind == builtIn.Kind)
+	maybeAppend("protocol", provider.Protocol == builtIn.Protocol)
+	maybeAppend("base_url", provider.BaseURL == builtIn.BaseURL)
+	maybeAppend("api_version", provider.APIVersion == builtIn.APIVersion)
+	maybeAppend("default_model", provider.DefaultModel == builtIn.DefaultModel)
+	maybeAppend("allow_any_model", provider.AllowAnyModel == builtIn.AllowAnyModel)
+	maybeAppend("models", slices.Equal(provider.Models, builtIn.ExampleModels))
+	return inherited
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func previewSecret(secret string) string {

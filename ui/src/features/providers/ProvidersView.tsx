@@ -182,6 +182,7 @@ export function ProvidersView({ state, actions }: Props) {
                         <div className="data-row__primary">
                           <div className="action-row">
                             <strong>{provider.name}</strong>
+                            {provider.preset_id ? <StatusPill label={`preset ${provider.preset_id}`} tone="neutral" /> : null}
                             <StatusPill label={provider.kind} tone={provider.kind === "local" ? "warning" : "neutral"} />
                             <StatusPill label={provider.protocol} tone="neutral" />
                             <StatusPill label={provider.enabled ? "enabled" : "disabled"} tone={provider.enabled ? "healthy" : "warning"} />
@@ -192,6 +193,16 @@ export function ProvidersView({ state, actions }: Props) {
                             {provider.default_model ? ` • default ${provider.default_model}` : ""}
                             {provider.models?.length ? ` • ${provider.models.length} configured model(s)` : ""}
                           </p>
+                          {provider.inherited_fields?.length ? (
+                            <p className="body-muted">
+                              Inherits: {provider.inherited_fields.join(", ")}
+                            </p>
+                          ) : null}
+                          {provider.explicit_fields?.length ? (
+                            <p className="body-muted">
+                              Overrides: {provider.explicit_fields.join(", ")}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="data-row__secondary">
                           <ToolbarButton onClick={() => actions.setRotateProviderID(provider.id)}>Select</ToolbarButton>

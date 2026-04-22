@@ -49,6 +49,13 @@ func (m *ControlPlaneRuntimeManager) Reload(ctx context.Context) error {
 }
 
 func (m *ControlPlaneRuntimeManager) Upsert(ctx context.Context, provider controlplane.Provider, apiKey string) (controlplane.Provider, error) {
+	state, err := m.snapshot(ctx)
+	if err != nil {
+		return controlplane.Provider{}, err
+	}
+	if existing := findControlPlaneProvider(state.Providers, provider.ID, provider.Name); existing != nil {
+		provider = mergeProviderWithExisting(provider, *existing)
+	}
 	provider = hydrateControlPlaneProviderDefaults(provider)
 
 	var encryptedSecret *controlplane.ProviderSecret
@@ -74,10 +81,6 @@ func (m *ControlPlaneRuntimeManager) Upsert(ctx context.Context, provider contro
 		provider.Protocol = "openai"
 	}
 	if provider.Kind == string(KindCloud) && encryptedSecret == nil {
-		state, err := m.snapshot(ctx)
-		if err != nil {
-			return controlplane.Provider{}, err
-		}
 		existing := findControlPlaneProvider(state.Providers, provider.ID, provider.Name)
 		if existing == nil || !providerHasSecret(state, existing.ID) {
 			return controlplane.Provider{}, fmt.Errorf("cloud providers require an api key")
@@ -218,6 +221,10 @@ func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) control
 		if !ok {
 			continue
 		}
+		if strings.TrimSpace(provider.PresetID) == "" {
+			provider.PresetID = builtIn.ID
+		}
+		provider.ExplicitFields = normalizeFieldNames(provider.ExplicitFields)
 		minimalPreset := strings.TrimSpace(provider.Kind) == "" &&
 			strings.TrimSpace(provider.Protocol) == "" &&
 			strings.TrimSpace(provider.BaseURL) == "" &&
@@ -252,6 +259,60 @@ func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) control
 		return provider
 	}
 	return provider
+}
+
+func normalizeFieldNames(fields []string) []string {
+	out := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		out = append(out, field)
+	}
+	return out
+}
+
+func mergeProviderWithExisting(next, existing controlplane.Provider) controlplane.Provider {
+	explicit := make(map[string]struct{}, len(next.ExplicitFields))
+	for _, field := range next.ExplicitFields {
+		explicit[field] = struct{}{}
+	}
+
+	if strings.TrimSpace(next.Name) == "" {
+		next.Name = existing.Name
+	}
+	if strings.TrimSpace(next.PresetID) == "" {
+		next.PresetID = existing.PresetID
+	}
+	if _, ok := explicit["kind"]; !ok && strings.TrimSpace(next.Kind) == "" {
+		next.Kind = existing.Kind
+	}
+	if _, ok := explicit["protocol"]; !ok && strings.TrimSpace(next.Protocol) == "" {
+		next.Protocol = existing.Protocol
+	}
+	if _, ok := explicit["base_url"]; !ok && strings.TrimSpace(next.BaseURL) == "" {
+		next.BaseURL = existing.BaseURL
+	}
+	if _, ok := explicit["api_version"]; !ok && strings.TrimSpace(next.APIVersion) == "" {
+		next.APIVersion = existing.APIVersion
+	}
+	if _, ok := explicit["default_model"]; !ok && strings.TrimSpace(next.DefaultModel) == "" {
+		next.DefaultModel = existing.DefaultModel
+	}
+	if _, ok := explicit["models"]; !ok && len(next.Models) == 0 {
+		next.Models = append([]string(nil), existing.Models...)
+	}
+	if _, ok := explicit["allow_any_model"]; !ok {
+		next.AllowAnyModel = existing.AllowAnyModel
+	}
+	next.ExplicitFields = normalizeFieldNames(append(append([]string(nil), existing.ExplicitFields...), next.ExplicitFields...))
+	return next
 }
 
 func (m *ControlPlaneRuntimeManager) snapshot(ctx context.Context) (controlplane.State, error) {

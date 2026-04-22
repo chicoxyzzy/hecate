@@ -77,13 +77,14 @@ export type RotateAPIKeyPayload = {
 export type ProviderUpsertPayload = {
   id: string;
   name: string;
-  kind: string;
-  protocol: string;
-  base_url: string;
-  api_version: string;
-  default_model: string;
-  models: string[];
-  allow_any_model: boolean;
+  preset_id?: string;
+  kind?: string;
+  protocol?: string;
+  base_url?: string;
+  api_version?: string;
+  default_model?: string;
+  models?: string[];
+  allow_any_model?: boolean;
   enabled: boolean;
   key: string;
 };

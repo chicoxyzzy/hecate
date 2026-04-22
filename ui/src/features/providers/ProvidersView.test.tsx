@@ -100,4 +100,54 @@ describe("ProvidersView", () => {
     expect(screen.getByLabelText("Models (comma separated)")).toBeInTheDocument();
     expect(screen.getByLabelText("Allow any model")).toBeInTheDocument();
   });
+
+  it("shows inherited defaults and explicit overrides for managed providers", () => {
+    render(
+      <ProvidersView
+        actions={createRuntimeConsoleActions()}
+        state={createRuntimeConsoleFixture({
+          session: {
+            kind: "admin",
+            label: "Admin",
+            capabilities: [],
+            isAdmin: true,
+            isAuthenticated: true,
+            role: "admin",
+            name: "Admin",
+            tenant: "",
+            source: "token",
+            keyID: "",
+            allowedProviders: [],
+            allowedModels: [],
+          },
+          controlPlane: {
+            backend: "file",
+            tenants: [],
+            api_keys: [],
+            events: [],
+            providers: [
+              {
+                id: "groq",
+                name: "groq",
+                preset_id: "groq",
+                kind: "cloud",
+                protocol: "openai",
+                base_url: "https://api.groq.com/openai/v1",
+                default_model: "llama-3.3-70b-versatile",
+                allow_any_model: true,
+                inherited_fields: ["kind", "protocol", "base_url"],
+                explicit_fields: ["default_model"],
+                enabled: true,
+                credential_configured: true,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("preset groq")).toBeInTheDocument();
+    expect(screen.getByText(/Inherits: kind, protocol, base_url/i)).toBeInTheDocument();
+    expect(screen.getByText(/Overrides: default_model/i)).toBeInTheDocument();
+  });
 });
