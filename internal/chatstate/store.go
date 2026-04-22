@@ -26,6 +26,8 @@ type Store interface {
 	GetSession(ctx context.Context, id string) (types.ChatSession, bool, error)
 	ListSessions(ctx context.Context, filter Filter) ([]types.ChatSession, error)
 	AppendTurn(ctx context.Context, sessionID string, turn types.ChatSessionTurn) (types.ChatSession, error)
+	DeleteSession(ctx context.Context, id string) error
+	UpdateSession(ctx context.Context, id string, title string) (types.ChatSession, error)
 }
 
 type MemoryStore struct {
@@ -98,6 +100,29 @@ func (s *MemoryStore) AppendTurn(_ context.Context, sessionID string, turn types
 	session.Turns = append(session.Turns, turn)
 	session.UpdatedAt = turn.CreatedAt
 	s.sessions[sessionID] = session
+	return cloneSession(session), nil
+}
+
+func (s *MemoryStore) DeleteSession(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return fmt.Errorf("chat session %q not found", id)
+	}
+	delete(s.sessions, id)
+	return nil
+}
+
+func (s *MemoryStore) UpdateSession(_ context.Context, id string, title string) (types.ChatSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[id]
+	if !ok {
+		return types.ChatSession{}, fmt.Errorf("chat session %q not found", id)
+	}
+	session.Title = title
+	session.UpdatedAt = time.Now().UTC()
+	s.sessions[id] = session
 	return cloneSession(session), nil
 }
 
@@ -185,6 +210,32 @@ func (s *FileStore) AppendTurn(_ context.Context, sessionID string, turn types.C
 	session.Turns = append(session.Turns, turn)
 	session.UpdatedAt = turn.CreatedAt
 	s.sessions[sessionID] = session
+	if err := s.persistLocked(); err != nil {
+		return types.ChatSession{}, err
+	}
+	return cloneSession(session), nil
+}
+
+func (s *FileStore) DeleteSession(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return fmt.Errorf("chat session %q not found", id)
+	}
+	delete(s.sessions, id)
+	return s.persistLocked()
+}
+
+func (s *FileStore) UpdateSession(_ context.Context, id string, title string) (types.ChatSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[id]
+	if !ok {
+		return types.ChatSession{}, fmt.Errorf("chat session %q not found", id)
+	}
+	session.Title = title
+	session.UpdatedAt = time.Now().UTC()
+	s.sessions[id] = session
 	if err := s.persistLocked(); err != nil {
 		return types.ChatSession{}, err
 	}
@@ -380,6 +431,36 @@ func (s *PostgresStore) AppendTurn(ctx context.Context, sessionID string, turn t
 		return types.ChatSession{}, fmt.Errorf("update postgres chat session timestamp: %w", err)
 	}
 	return s.loadSession(ctx, sessionID)
+}
+
+func (s *PostgresStore) DeleteSession(ctx context.Context, id string) error {
+	if _, err := s.client.DB().ExecContext(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.turnsTable),
+		id,
+	); err != nil {
+		return fmt.Errorf("delete postgres chat session turns: %w", err)
+	}
+	if _, err := s.client.DB().ExecContext(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.sessionsTable),
+		id,
+	); err != nil {
+		return fmt.Errorf("delete postgres chat session: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateSession(ctx context.Context, id string, title string) (types.ChatSession, error) {
+	now := time.Now().UTC()
+	if _, err := s.client.DB().ExecContext(
+		ctx,
+		fmt.Sprintf(`UPDATE %s SET title = $1, updated_at = $2 WHERE id = $3`, s.sessionsTable),
+		title, now, id,
+	); err != nil {
+		return types.ChatSession{}, fmt.Errorf("update postgres chat session: %w", err)
+	}
+	return s.loadSession(ctx, id)
 }
 
 func (s *PostgresStore) migrate(ctx context.Context) error {

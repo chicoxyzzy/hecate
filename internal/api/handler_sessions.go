@@ -139,6 +139,88 @@ func (h *Handler) HandleChatSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleDeleteChatSession(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "session id is required")
+		return
+	}
+
+	result, err := h.service.GetChatSession(ctx, id)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, errCodeInvalidRequest, "chat session not found")
+		return
+	}
+	if !principal.IsAdmin() && principal.Tenant != "" && result.Session.Tenant != principal.Tenant {
+		WriteError(w, http.StatusForbidden, errCodeForbidden, "chat session is outside the active tenant scope")
+		return
+	}
+
+	if err := h.service.DeleteChatSession(ctx, id); err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.chat.sessions.delete.failed",
+			slog.String("event.name", "gateway.chat.sessions.delete.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) HandleUpdateChatSession(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "session id is required")
+		return
+	}
+
+	var req UpdateChatSessionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "title is required")
+		return
+	}
+
+	existing, err := h.service.GetChatSession(ctx, id)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, errCodeInvalidRequest, "chat session not found")
+		return
+	}
+	if !principal.IsAdmin() && principal.Tenant != "" && existing.Session.Tenant != principal.Tenant {
+		WriteError(w, http.StatusForbidden, errCodeForbidden, "chat session is outside the active tenant scope")
+		return
+	}
+
+	updated, err := h.service.UpdateChatSessionTitle(ctx, id, title)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.chat.sessions.update.failed",
+			slog.String("event.name", "gateway.chat.sessions.update.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, ChatSessionResponse{
+		Object: "chat_session",
+		Data:   renderChatSession(updated.Session),
+	})
+}
+
 func renderChatSessionSummary(session types.ChatSession) ChatSessionSummaryItem {
 	item := ChatSessionSummaryItem{
 		ID:        session.ID,

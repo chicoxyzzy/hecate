@@ -12,6 +12,8 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/chat/sessions", handler.HandleChatSessions)
 	mux.HandleFunc("POST /v1/chat/sessions", handler.HandleCreateChatSession)
 	mux.HandleFunc("GET /v1/chat/sessions/{id}", handler.HandleChatSession)
+	mux.HandleFunc("PATCH /v1/chat/sessions/{id}", handler.HandleUpdateChatSession)
+	mux.HandleFunc("DELETE /v1/chat/sessions/{id}", handler.HandleDeleteChatSession)
 	mux.HandleFunc("GET /v1/traces", handler.HandleTrace)
 	mux.HandleFunc("GET /admin/retention/runs", handler.HandleRetentionRuns)
 	mux.HandleFunc("POST /admin/retention/run", handler.HandleRetentionRun)

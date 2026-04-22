@@ -18,7 +18,7 @@ import type {
 
 type RequestOptions = {
   authToken?: string;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
 };
 
@@ -119,6 +119,14 @@ export async function createChatSession(payload: CreateChatSessionPayload, authT
 
 export async function getChatSession(id: string, authToken?: string): Promise<ChatSessionResponse> {
   return fetchJSON<ChatSessionResponse>(`/v1/chat/sessions/${encodeURIComponent(id)}`, { authToken });
+}
+
+export async function deleteChatSession(id: string, authToken?: string): Promise<void> {
+  await fetchJSON<unknown>(`/v1/chat/sessions/${encodeURIComponent(id)}`, { authToken, method: "DELETE" });
+}
+
+export async function updateChatSession(id: string, title: string, authToken?: string): Promise<ChatSessionResponse> {
+  return fetchJSON<ChatSessionResponse>(`/v1/chat/sessions/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { title } });
 }
 
 export async function getRequestLedger(authToken?: string, limit = 20): Promise<RequestLedgerResponse> {
@@ -231,6 +239,9 @@ export async function fetchJSON<T>(url: string, options: RequestOptions = {}): P
   const response = await fetch(url, buildRequestOptions(options));
   if (!response.ok) {
     throw new Error(await errorMessage(response, "request failed"));
+  }
+  if (response.status === 204) {
+    return undefined as T;
   }
   return (await response.json()) as T;
 }

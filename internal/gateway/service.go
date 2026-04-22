@@ -604,6 +604,24 @@ func (s *Service) ListChatSessions(ctx context.Context, filter chatstate.Filter)
 	return &ChatSessionListResult{Sessions: sessions}, nil
 }
 
+func (s *Service) DeleteChatSession(ctx context.Context, id string) error {
+	if s.chatSessions == nil {
+		return fmt.Errorf("chat session store not configured")
+	}
+	return s.chatSessions.DeleteSession(ctx, id)
+}
+
+func (s *Service) UpdateChatSessionTitle(ctx context.Context, id string, title string) (*ChatSessionResult, error) {
+	if s.chatSessions == nil {
+		return nil, fmt.Errorf("chat session store not configured")
+	}
+	session, err := s.chatSessions.UpdateSession(ctx, id, title)
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSessionResult{Session: session}, nil
+}
+
 func (s *Service) RecordChatTurn(ctx context.Context, sessionID string, req types.ChatRequest, result *ChatResult) (*ChatSessionResult, error) {
 	if s.chatSessions == nil || sessionID == "" || result == nil || result.Response == nil {
 		return nil, nil

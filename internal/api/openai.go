@@ -62,6 +62,10 @@ type CreateChatSessionRequest struct {
 	Title string `json:"title"`
 }
 
+type UpdateChatSessionRequest struct {
+	Title string `json:"title"`
+}
+
 type SessionResponseItem struct {
 	Authenticated    bool     `json:"authenticated"`
 	InvalidToken     bool     `json:"invalid_token"`

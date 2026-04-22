@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatUsd } from "../../lib/format";
 import { describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
@@ -13,6 +14,16 @@ type Props = {
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const routeReport = state.traceRoute;
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+
+  function handleRenameCommit(id: string) {
+    const trimmed = editingTitle.trim();
+    if (trimmed && trimmed !== state.chatSessions.find((s) => s.id === id)?.title) {
+      void actions.renameChatSession(id, trimmed);
+    }
+    setEditingId(null);
+  }
 
   return (
     <div className="workspace-grid">
@@ -23,7 +34,7 @@ export function PlaygroundView({ state, actions }: Props) {
               <div className="stack-sm">
                 <div className="action-row action-row--wide">
                   <StatusPill label={state.activeChatSession ? state.activeChatSession.title : "Unsaved draft"} tone="neutral" />
-                  {state.activeChatSession ? <StatusPill label={`${state.activeChatSession.turns.length} turns`} tone="healthy" /> : null}
+                  {state.activeChatSession ? <StatusPill label={`${(state.activeChatSession.turns?.length ?? 0)} turns`} tone="healthy" /> : null}
                 </div>
                 <div className="action-row">
                   <ToolbarButton onClick={() => void actions.createChatSession()} tone="primary">
@@ -34,23 +45,59 @@ export function PlaygroundView({ state, actions }: Props) {
                 {state.chatSessions.length ? (
                   <div className="trace-inline-grid">
                     {state.chatSessions.map((chatSession) => (
-                      <button
-                        className={state.activeChatSessionID === chatSession.id ? "trace-inline-card trace-inline-card--active" : "trace-inline-card"}
+                      <div
+                        className={state.activeChatSessionID === chatSession.id ? "trace-inline-card trace-inline-card--active session-card" : "trace-inline-card session-card"}
                         key={chatSession.id}
-                        onClick={() => void actions.selectChatSession(chatSession.id)}
-                        type="button"
                       >
-                        <div className="action-row action-row--wide">
-                          <p className="trace-inline-card__title">{chatSession.title}</p>
-                          {chatSession.last_provider ? <StatusPill label={chatSession.last_provider} tone="neutral" /> : null}
+                        <div className="session-card__header">
+                          {editingId === chatSession.id ? (
+                            <input
+                              autoFocus
+                              className="session-card__rename-input"
+                              onBlur={() => handleRenameCommit(chatSession.id)}
+                              onChange={(e) => setEditingTitle(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameCommit(chatSession.id);
+                                if (e.key === "Escape") setEditingId(null);
+                              }}
+                              type="text"
+                              value={editingTitle}
+                            />
+                          ) : (
+                            <button
+                              className="session-card__title"
+                              onClick={() => { setEditingId(chatSession.id); setEditingTitle(chatSession.title); }}
+                              title="Click to rename"
+                              type="button"
+                            >
+                              {chatSession.title}
+                            </button>
+                          )}
+                          <button
+                            className="session-card__delete"
+                            onClick={() => void actions.deleteChatSession(chatSession.id)}
+                            title="Delete session"
+                            type="button"
+                          >
+                            ×
+                          </button>
                         </div>
-                        <p className="body-muted">
-                          {chatSession.turn_count} turns
-                          {chatSession.updated_at ? ` · ${formatDateTime(chatSession.updated_at)}` : ""}
-                        </p>
-                        {chatSession.last_model ? <p className="body-muted">{chatSession.last_model}</p> : null}
-                        {chatSession.last_cost_usd ? <p className="body-muted">Last turn {formatUsd(chatSession.last_cost_usd)}</p> : null}
-                      </button>
+                        <button
+                          className="session-card__body"
+                          onClick={() => void actions.selectChatSession(chatSession.id)}
+                          type="button"
+                        >
+                          <div className="action-row">
+                            {chatSession.last_provider ? <StatusPill label={chatSession.last_provider} tone="neutral" /> : null}
+                          </div>
+                          <p className="body-muted">
+                            {chatSession.turn_count} turns
+                            {chatSession.updated_at ? ` · ${formatDateTime(chatSession.updated_at)}` : ""}
+                          </p>
+                          {chatSession.last_model ? <p className="body-muted">{chatSession.last_model}</p> : null}
+                          {chatSession.last_cost_usd ? <p className="body-muted">Last turn {formatUsd(chatSession.last_cost_usd)}</p> : null}
+                        </button>
+                      </div>
                     ))}
                   </div>
                 ) : (

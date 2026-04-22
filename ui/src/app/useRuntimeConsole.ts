@@ -6,6 +6,8 @@ import { filterModelsByKind, filterModelsByProvider, parseCSV, usdToMicros } fro
 import {
   chatCompletions,
   createChatSession as createChatSessionRequest,
+  deleteChatSession as deleteChatSessionRequest,
+  updateChatSession as updateChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
@@ -723,6 +725,33 @@ export function useRuntimeConsole() {
     setTraceError("");
   }
 
+  async function deleteChatSession(id: string) {
+    try {
+      await deleteChatSessionRequest(id, authToken);
+      setChatSessions((current) => current.filter((s) => s.id !== id));
+      if (activeChatSessionID === id) {
+        startNewChat();
+      }
+      setNotice({ kind: "success", message: "Session deleted." });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Failed to delete session." });
+    }
+  }
+
+  async function renameChatSession(id: string, title: string) {
+    try {
+      const payload = await updateChatSessionRequest(id, title, authToken);
+      setChatSessions((current) =>
+        current.map((s) => (s.id === id ? { ...s, title: payload.data.title } : s)),
+      );
+      if (activeChatSessionID === id) {
+        setActiveChatSession((current) => (current ? { ...current, title: payload.data.title } : current));
+      }
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Failed to rename session." });
+    }
+  }
+
   return {
     state: {
       apiKeyFormID,
@@ -793,6 +822,8 @@ export function useRuntimeConsole() {
       deleteAPIKey,
       deleteTenant,
       createChatSession,
+      deleteChatSession,
+      renameChatSession,
       loadDashboard,
       resetBudget,
       rotateAPIKey,
