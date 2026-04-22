@@ -235,7 +235,6 @@ type ProviderPresetResponseItem struct {
 	DocsURL             string   `json:"docs_url,omitempty"`
 	Description         string   `json:"description,omitempty"`
 	EnvSnippet          string   `json:"env_snippet,omitempty"`
-	ProviderJSONSnippet string   `json:"provider_json_snippet,omitempty"`
 }
 
 type BudgetStatusResponse struct {

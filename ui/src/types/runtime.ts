@@ -124,7 +124,6 @@ export type ProviderPresetRecord = {
   docs_url?: string;
   description?: string;
   env_snippet?: string;
-  provider_json_snippet?: string;
 };
 
 export type ProviderPresetResponse = {

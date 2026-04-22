@@ -61,21 +61,12 @@ cp .env.example .env
 Example with one cloud provider and one local provider:
 
 ```bash
+GATEWAY_PROVIDERS=openai,ollama
 GATEWAY_DEFAULT_PROVIDER=openai
 GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 
-OPENAI_PROVIDER_NAME=openai
-OPENAI_PROVIDER_KIND=cloud
-OPENAI_BASE_URL=https://api.openai.com
-OPENAI_API_KEY=your_api_key_here
-OPENAI_DEFAULT_MODEL=gpt-4o-mini
-
-LOCAL_PROVIDER_ENABLED=true
-LOCAL_PROVIDER_NAME=ollama
-LOCAL_PROVIDER_KIND=local
-LOCAL_PROVIDER_BASE_URL=http://127.0.0.1:11434
-LOCAL_PROVIDER_DEFAULT_MODEL=llama3.1:8b
-LOCAL_PROVIDER_MODELS=llama3.1:8b,llama3.2:3b
+PROVIDER_OPENAI_API_KEY=your_api_key_here
+PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 ```
 
 3. Run the gateway:
@@ -101,6 +92,8 @@ Default addresses:
 The provider layer is vendor-neutral at the gateway boundary. Any upstream exposing an OpenAI-compatible API can be integrated through configuration.
 
 Configured provider records tell Hecate how to connect. The model catalog itself is discovered from the provider when possible, rather than treated as hardcoded application state.
+
+Bootstrap env configuration uses `GATEWAY_PROVIDERS=openai,ollama,...` together with optional `PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or `PROVIDER_OLLAMA_BASE_URL`.
 
 This includes local runtimes such as:
 

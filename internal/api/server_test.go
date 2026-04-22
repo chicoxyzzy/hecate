@@ -936,7 +936,7 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 		if item.ID == "anthropic" && item.Protocol == "anthropic" && item.EnvSnippet != "" {
 			foundAnthropic = true
 		}
-		if item.ID == "ollama" && item.Kind == "local" && item.ProviderJSONSnippet != "" {
+		if item.ID == "ollama" && item.Kind == "local" && item.EnvSnippet != "" {
 			foundOllama = true
 		}
 	}

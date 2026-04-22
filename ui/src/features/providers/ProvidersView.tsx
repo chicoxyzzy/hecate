@@ -22,7 +22,7 @@ export function ProvidersView({ state, actions }: Props) {
           <div className="stack-sm">
             <Surface>
               <p className="body-muted">
-                Generate copy-ready `.env` blocks or `GATEWAY_PROVIDERS_JSON` entries for common cloud and local runtimes. Presets do not mutate running config yet; they speed up setup and restart-based configuration.
+                Generate copy-ready `.env` blocks for common cloud and local runtimes. Presets use `GATEWAY_PROVIDERS` with `PROVIDER_<NAME>_*` overrides so onboarding stays readable.
               </p>
             </Surface>
 
@@ -290,11 +290,6 @@ function renderPresetGroup(
                 {preset.env_snippet ? (
                   <ToolbarButton onClick={() => void actions.copyCommand(preset.env_snippet!)}>
                     {state.copiedCommand === preset.env_snippet ? "Copied env" : "Copy env"}
-                  </ToolbarButton>
-                ) : null}
-                {preset.provider_json_snippet ? (
-                  <ToolbarButton onClick={() => void actions.copyCommand(preset.provider_json_snippet!)}>
-                    {state.copiedCommand === preset.provider_json_snippet ? "Copied JSON" : "Copy JSON"}
                   </ToolbarButton>
                 ) : null}
                 {state.session.isAdmin ? (

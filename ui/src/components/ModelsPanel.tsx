@@ -85,7 +85,7 @@ export function ModelsPanel(props: ModelsPanelProps) {
       {props.localModels.length === 0 ? (
         <div className="model-no-local" style={{ marginTop: "1rem" }}>
           No local models are currently registered. In your current runtime config, this usually means the local provider is not enabled.
-          Check `LOCAL_PROVIDER_ENABLED=true` and confirm a local provider base URL and model list are configured.
+          Check `GATEWAY_PROVIDERS=...,...,ollama` and confirm any needed `PROVIDER_OLLAMA_*` overrides are configured.
         </div>
       ) : null}
 

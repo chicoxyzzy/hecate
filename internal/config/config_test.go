@@ -122,3 +122,27 @@ func TestSplitCSVTrimsAndDropsEmptyValues(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadProvidersFromEnvUsesGenericProviderPrefixes(t *testing.T) {
+	t.Setenv("GATEWAY_PROVIDERS", "openai,ollama,anthropic")
+	t.Setenv("PROVIDER_OPENAI_API_KEY", "openai-secret")
+	t.Setenv("PROVIDER_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("PROVIDER_ANTHROPIC_API_KEY", "anthropic-secret")
+
+	cfg := LoadFromEnv()
+	if len(cfg.Providers.OpenAICompatible) != 3 {
+		t.Fatalf("provider count = %d, want 3", len(cfg.Providers.OpenAICompatible))
+	}
+	if cfg.Providers.OpenAICompatible[0].Name != "openai" {
+		t.Fatalf("first provider = %q, want openai", cfg.Providers.OpenAICompatible[0].Name)
+	}
+	if cfg.Providers.OpenAICompatible[0].APIKey != "openai-secret" {
+		t.Fatalf("openai api key = %q, want openai-secret", cfg.Providers.OpenAICompatible[0].APIKey)
+	}
+	if cfg.Providers.OpenAICompatible[1].Kind != "local" {
+		t.Fatalf("ollama kind = %q, want local", cfg.Providers.OpenAICompatible[1].Kind)
+	}
+	if cfg.Providers.OpenAICompatible[2].Protocol != "anthropic" {
+		t.Fatalf("anthropic protocol = %q, want anthropic", cfg.Providers.OpenAICompatible[2].Protocol)
+	}
+}

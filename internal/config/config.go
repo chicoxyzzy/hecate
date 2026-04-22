@@ -496,66 +496,146 @@ func loadAPIKeysFromEnv() []APIKeyConfig {
 }
 
 func loadProvidersFromEnv() ProvidersConfig {
-	if raw := getEnv("GATEWAY_PROVIDERS_JSON", ""); raw != "" {
-		var providersCfg []OpenAICompatibleProviderConfig
-		if err := json.Unmarshal([]byte(raw), &providersCfg); err == nil && len(providersCfg) > 0 {
-			normalizeProviders(providersCfg)
-			return ProvidersConfig{OpenAICompatible: providersCfg}
+	names := splitCSV(getEnv("GATEWAY_PROVIDERS", "openai"))
+	items := make([]OpenAICompatibleProviderConfig, 0, len(names))
+	for _, name := range names {
+		cfg, ok := providerConfigFromEnv(name)
+		if !ok {
+			continue
 		}
+		items = append(items, cfg)
 	}
-
-	items := make([]OpenAICompatibleProviderConfig, 0, 2)
-	items = append(items, OpenAICompatibleProviderConfig{
-		Name:          getEnv("OPENAI_PROVIDER_NAME", "openai"),
-		Kind:          getEnv("OPENAI_PROVIDER_KIND", "cloud"),
-		Protocol:      getEnv("OPENAI_PROVIDER_PROTOCOL", "openai"),
-		BaseURL:       getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
-		APIKey:        getEnv("OPENAI_API_KEY", ""),
-		APIVersion:    getEnv("OPENAI_API_VERSION", ""),
-		Timeout:       getEnvDuration("OPENAI_TIMEOUT", 30*time.Second),
-		StubMode:      getEnvBool("OPENAI_STUB_MODE", true),
-		StubResponse:  getEnv("OPENAI_STUB_RESPONSE", "Stubbed response from the AI Agent Runtime MVP."),
-		DefaultModel:  getEnv("OPENAI_DEFAULT_MODEL", getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini")),
-		Models:        splitCSV(getEnv("OPENAI_MODELS", "")),
-		AllowAnyModel: getEnvBool("OPENAI_ALLOW_ANY_MODEL", true),
-	})
-
-	if getEnvBool("LOCAL_PROVIDER_ENABLED", false) {
-		items = append(items, OpenAICompatibleProviderConfig{
-			Name:          getEnv("LOCAL_PROVIDER_NAME", "local"),
-			Kind:          getEnv("LOCAL_PROVIDER_KIND", "local"),
-			Protocol:      getEnv("LOCAL_PROVIDER_PROTOCOL", "openai"),
-			BaseURL:       getEnv("LOCAL_PROVIDER_BASE_URL", "http://127.0.0.1:11434"),
-			APIKey:        getEnv("LOCAL_PROVIDER_API_KEY", ""),
-			APIVersion:    getEnv("LOCAL_PROVIDER_API_VERSION", ""),
-			Timeout:       getEnvDuration("LOCAL_PROVIDER_TIMEOUT", 30*time.Second),
-			StubMode:      getEnvBool("LOCAL_PROVIDER_STUB_MODE", false),
-			StubResponse:  getEnv("LOCAL_PROVIDER_STUB_RESPONSE", "Stubbed local provider response."),
-			DefaultModel:  getEnv("LOCAL_PROVIDER_DEFAULT_MODEL", ""),
-			Models:        splitCSV(getEnv("LOCAL_PROVIDER_MODELS", "")),
-			AllowAnyModel: getEnvBool("LOCAL_PROVIDER_ALLOW_ANY_MODEL", false),
-		})
-	}
-
-	if getEnvBool("ANTHROPIC_PROVIDER_ENABLED", false) || getEnv("ANTHROPIC_API_KEY", "") != "" {
-		items = append(items, OpenAICompatibleProviderConfig{
-			Name:          getEnv("ANTHROPIC_PROVIDER_NAME", "anthropic"),
-			Kind:          getEnv("ANTHROPIC_PROVIDER_KIND", "cloud"),
-			Protocol:      getEnv("ANTHROPIC_PROVIDER_PROTOCOL", "anthropic"),
-			BaseURL:       getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			APIKey:        getEnv("ANTHROPIC_API_KEY", ""),
-			APIVersion:    getEnv("ANTHROPIC_API_VERSION", "2023-06-01"),
-			Timeout:       getEnvDuration("ANTHROPIC_TIMEOUT", 30*time.Second),
-			StubMode:      getEnvBool("ANTHROPIC_STUB_MODE", false),
-			StubResponse:  getEnv("ANTHROPIC_STUB_RESPONSE", "Stubbed Anthropic response."),
-			DefaultModel:  getEnv("ANTHROPIC_DEFAULT_MODEL", "claude-sonnet-4-20250514"),
-			Models:        splitCSV(getEnv("ANTHROPIC_MODELS", "")),
-			AllowAnyModel: getEnvBool("ANTHROPIC_ALLOW_ANY_MODEL", true),
-		})
-	}
-
 	normalizeProviders(items)
 	return ProvidersConfig{OpenAICompatible: items}
+}
+
+func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return OpenAICompatibleProviderConfig{}, false
+	}
+
+	cfg := providerDefaults(name)
+	prefix := providerEnvPrefix(name)
+
+	cfg.Name = getEnv(prefix+"NAME", cfg.Name)
+	cfg.Kind = getEnv(prefix+"KIND", cfg.Kind)
+	cfg.Protocol = getEnv(prefix+"PROTOCOL", cfg.Protocol)
+	cfg.BaseURL = getEnv(prefix+"BASE_URL", cfg.BaseURL)
+	cfg.APIKey = getEnv(prefix+"API_KEY", cfg.APIKey)
+	cfg.APIVersion = getEnv(prefix+"API_VERSION", cfg.APIVersion)
+	cfg.Timeout = getEnvDuration(prefix+"TIMEOUT", cfg.Timeout)
+	cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
+	cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
+	cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)
+	cfg.Models = splitCSV(getEnv(prefix+"MODELS", strings.Join(cfg.Models, ",")))
+	cfg.AllowAnyModel = getEnvBool(prefix+"ALLOW_ANY_MODEL", cfg.AllowAnyModel)
+
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return OpenAICompatibleProviderConfig{}, false
+	}
+	return cfg, true
+}
+
+func providerDefaults(name string) OpenAICompatibleProviderConfig {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "openai":
+		return OpenAICompatibleProviderConfig{
+			Name:          "openai",
+			Kind:          "cloud",
+			Protocol:      "openai",
+			BaseURL:       "https://api.openai.com",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
+			DefaultModel:  getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"),
+			AllowAnyModel: true,
+		}
+	case "anthropic":
+		return OpenAICompatibleProviderConfig{
+			Name:          "anthropic",
+			Kind:          "cloud",
+			Protocol:      "anthropic",
+			BaseURL:       "https://api.anthropic.com",
+			APIVersion:    "2023-06-01",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed Anthropic response.",
+			AllowAnyModel: true,
+		}
+	case "groq":
+		return OpenAICompatibleProviderConfig{
+			Name:          "groq",
+			Kind:          "cloud",
+			Protocol:      "openai",
+			BaseURL:       "https://api.groq.com/openai/v1",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
+			AllowAnyModel: true,
+		}
+	case "gemini":
+		return OpenAICompatibleProviderConfig{
+			Name:          "gemini",
+			Kind:          "cloud",
+			Protocol:      "openai",
+			BaseURL:       "https://generativelanguage.googleapis.com/v1beta/openai",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
+			AllowAnyModel: true,
+		}
+	case "ollama":
+		return OpenAICompatibleProviderConfig{
+			Name:          "ollama",
+			Kind:          "local",
+			Protocol:      "openai",
+			BaseURL:       "http://127.0.0.1:11434/v1",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed local provider response.",
+			AllowAnyModel: false,
+		}
+	case "lmstudio":
+		return OpenAICompatibleProviderConfig{
+			Name:          "lmstudio",
+			Kind:          "local",
+			Protocol:      "openai",
+			BaseURL:       "http://127.0.0.1:1234/v1",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed local provider response.",
+			AllowAnyModel: false,
+		}
+	case "localai", "llamacpp":
+		return OpenAICompatibleProviderConfig{
+			Name:          strings.ToLower(strings.TrimSpace(name)),
+			Kind:          "local",
+			Protocol:      "openai",
+			BaseURL:       "http://127.0.0.1:8080/v1",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed local provider response.",
+			AllowAnyModel: false,
+		}
+	default:
+		return OpenAICompatibleProviderConfig{
+			Name:          name,
+			Kind:          "cloud",
+			Protocol:      "openai",
+			Timeout:       30 * time.Second,
+			StubMode:      false,
+			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
+			AllowAnyModel: true,
+		}
+	}
+}
+
+func providerEnvPrefix(name string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, ".", "_")
+	return "PROVIDER_" + normalized + "_"
 }
 
 func normalizeProviders(items []OpenAICompatibleProviderConfig) {
