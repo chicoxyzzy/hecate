@@ -1,3 +1,5 @@
+import { useMemo, useState } from "react";
+
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatRelativeCount } from "../../lib/format";
 import { EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
@@ -8,8 +10,26 @@ type Props = {
 };
 
 export function ProvidersView({ state, actions }: Props) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const cloudPresets = state.providerPresets.filter((preset) => preset.kind === "cloud");
   const localPresets = state.providerPresets.filter((preset) => preset.kind === "local");
+  const selectedPreset = useMemo(
+    () => state.providerPresets.find((preset) => preset.id === state.providerFormPresetID) ?? null,
+    [state.providerFormPresetID, state.providerPresets],
+  );
+  const usingCustomProvider = !selectedPreset;
+  const showAdvanced = usingCustomProvider || advancedOpen;
+  const presetAllowAnyModel = selectedPreset ? (selectedPreset.kind === "local" ? "false" : "true") : "";
+  const presetSummary = selectedPreset
+    ? [
+        selectedPreset.kind,
+        selectedPreset.protocol,
+        selectedPreset.base_url,
+        selectedPreset.default_model ? `default ${selectedPreset.default_model}` : "",
+      ]
+        .filter(Boolean)
+        .join(" • ")
+    : "";
 
   return (
     <div className="workspace-grid">
@@ -22,7 +42,7 @@ export function ProvidersView({ state, actions }: Props) {
           <div className="stack-sm">
             <Surface>
               <p className="body-muted">
-                Generate copy-ready `.env` blocks for common cloud and local runtimes. Presets use `GATEWAY_PROVIDERS` with `PROVIDER_<NAME>_*` overrides so onboarding stays readable.
+                Use presets to generate startup env snippets for the few values you need on first run. Day-two provider management belongs in the control plane below.
               </p>
             </Surface>
 
@@ -41,46 +61,110 @@ export function ProvidersView({ state, actions }: Props) {
           <ShellSection eyebrow="Control plane" title="Managed providers">
             <div className="stack-sm">
               <Surface tone="strong">
-                <div className="form-grid">
-                  <SelectField label="Preset" onChange={actions.populateProviderFormFromPreset} value={state.providerFormPresetID}>
-                    <option value="">Custom provider</option>
-                    {state.providerPresets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name}
-                      </option>
-                    ))}
-                  </SelectField>
-                  <TextField label="Provider id" onChange={actions.setProviderFormID} value={state.providerFormID} />
-                  <TextField label="Provider name" onChange={actions.setProviderFormName} value={state.providerFormName} />
-                  <SelectField label="Kind" onChange={actions.setProviderFormKind} value={state.providerFormKind}>
-                    <option value="cloud">cloud</option>
-                    <option value="local">local</option>
-                  </SelectField>
-                  <SelectField label="Protocol" onChange={actions.setProviderFormProtocol} value={state.providerFormProtocol}>
-                    <option value="openai">openai</option>
-                    <option value="anthropic">anthropic</option>
-                  </SelectField>
-                  <TextField label="Base URL" onChange={actions.setProviderFormBaseURL} value={state.providerFormBaseURL} />
-                  <TextField label="API version" onChange={actions.setProviderFormAPIVersion} value={state.providerFormAPIVersion} />
-                  <TextField label="Default model" onChange={actions.setProviderFormDefaultModel} value={state.providerFormDefaultModel} />
-                  <SelectField label="Allow any model" onChange={actions.setProviderFormAllowAnyModel} value={state.providerFormAllowAnyModel}>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </SelectField>
-                  <SelectField label="Enabled" onChange={actions.setProviderFormEnabled} value={state.providerFormEnabled}>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </SelectField>
-                </div>
                 <div className="stack-sm">
-                  <TextAreaField label="Models (comma separated)" onChange={actions.setProviderFormModels} rows={3} value={state.providerFormModels} />
-                  <TextField label="API key or token" onChange={actions.setProviderFormSecret} value={state.providerFormSecret} />
+                  <div className="action-row">
+                    <strong>{usingCustomProvider ? "Custom provider" : "Preset-backed provider"}</strong>
+                    {selectedPreset ? <StatusPill label={selectedPreset.name} tone={selectedPreset.kind === "local" ? "warning" : "healthy"} /> : null}
+                    {selectedPreset ? <StatusPill label={selectedPreset.protocol} tone="neutral" /> : null}
+                  </div>
+                  <p className="body-muted">
+                    Start with the minimum durable config. Built-in presets hydrate protocol, base URL, API version, and provider defaults automatically. Use advanced settings only when you need to override them.
+                  </p>
+                  {selectedPreset ? (
+                    <Surface>
+                      <div className="stack-sm">
+                        <p className="body-muted">
+                          <strong>{selectedPreset.name}</strong>
+                          {selectedPreset.description ? ` — ${selectedPreset.description}` : ""}
+                        </p>
+                        <p className="body-muted">{presetSummary}</p>
+                        {selectedPreset.example_models && selectedPreset.example_models.length > 0 ? (
+                          <div className="action-row">
+                            {selectedPreset.example_models.map((model) => (
+                              <span className="mono-chip" key={`${selectedPreset.id}-${model}`}>
+                                {model}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </Surface>
+                  ) : null}
+                  <div className="form-grid">
+                    <SelectField label="Preset" onChange={actions.populateProviderFormFromPreset} value={state.providerFormPresetID}>
+                      <option value="">Custom provider</option>
+                      {state.providerPresets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </SelectField>
+                    <TextField label="Provider id" onChange={actions.setProviderFormID} value={state.providerFormID} />
+                    <TextField label="Provider name" onChange={actions.setProviderFormName} value={state.providerFormName} />
+                    <TextField label="Default model override" onChange={actions.setProviderFormDefaultModel} value={state.providerFormDefaultModel} />
+                    <TextField label="API key or token" onChange={actions.setProviderFormSecret} value={state.providerFormSecret} />
+                    <SelectField label="Enabled" onChange={actions.setProviderFormEnabled} value={state.providerFormEnabled}>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </SelectField>
+                    {usingCustomProvider ? (
+                      <>
+                        <SelectField label="Kind" onChange={actions.setProviderFormKind} value={state.providerFormKind}>
+                          <option value="cloud">cloud</option>
+                          <option value="local">local</option>
+                        </SelectField>
+                        <SelectField label="Protocol" onChange={actions.setProviderFormProtocol} value={state.providerFormProtocol}>
+                          <option value="openai">openai</option>
+                          <option value="anthropic">anthropic</option>
+                        </SelectField>
+                        <TextField label="Base URL" onChange={actions.setProviderFormBaseURL} value={state.providerFormBaseURL} />
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="action-row">
+                    <ToolbarButton onClick={() => setAdvancedOpen((current) => !current)}>
+                      {showAdvanced ? "Hide advanced" : "Show advanced"}
+                    </ToolbarButton>
+                  </div>
+                  {showAdvanced ? (
+                    <Surface>
+                      <div className="stack-sm">
+                        <p className="body-muted">
+                          Advanced fields let you override transport and discovery behavior. Most preset-backed providers should work without changing any of this.
+                        </p>
+                        <div className="form-grid">
+                          {!usingCustomProvider ? (
+                            <>
+                              <SelectField label="Kind override" onChange={actions.setProviderFormKind} value={state.providerFormKind}>
+                                <option value="cloud">cloud</option>
+                                <option value="local">local</option>
+                              </SelectField>
+                              <SelectField label="Protocol override" onChange={actions.setProviderFormProtocol} value={state.providerFormProtocol}>
+                                <option value="openai">openai</option>
+                                <option value="anthropic">anthropic</option>
+                              </SelectField>
+                              <TextField label="Base URL override" onChange={actions.setProviderFormBaseURL} value={state.providerFormBaseURL} />
+                            </>
+                          ) : null}
+                          <TextField label="API version" onChange={actions.setProviderFormAPIVersion} value={state.providerFormAPIVersion} />
+                          <SelectField label="Allow any model" onChange={actions.setProviderFormAllowAnyModel} value={state.providerFormAllowAnyModel}>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </SelectField>
+                        </div>
+                        <TextAreaField label="Models (comma separated)" onChange={actions.setProviderFormModels} rows={3} value={state.providerFormModels} />
+                      </div>
+                    </Surface>
+                  ) : null}
                   <p className="body-muted">
                     Secrets are write-only. They are encrypted before persistence and never returned to the UI after save.
                   </p>
                   <p className="body-muted">
-                    Leave model fields blank to use the provider's live catalog discovery. Hecate will prefer upstream model discovery over preset example lists.
+                    Leave model fields blank to use the provider's live catalog discovery. Hecate will prefer upstream discovery over configured example lists when possible.
                   </p>
+                  {!usingCustomProvider && state.providerFormAllowAnyModel !== presetAllowAnyModel ? (
+                    <InlineNotice message="Allow-any-model is overridden from the preset default." tone="warning" />
+                  ) : null}
                   {state.controlPlaneError ? <InlineNotice message={state.controlPlaneError} tone="error" /> : null}
                   <div className="action-row">
                     <ToolbarButton onClick={() => void actions.upsertProvider()} tone="primary">
@@ -122,7 +206,7 @@ export function ProvidersView({ state, actions }: Props) {
                     ))}
                   </div>
                 ) : (
-                  <EmptyState title="No managed providers" detail="Save a preset or custom provider to persist it in the control plane." />
+                  <EmptyState title="No managed providers" detail="Save a preset or a custom provider here to persist provider config beyond startup env." />
                 )}
               </Surface>
 
@@ -271,6 +355,7 @@ function renderPresetGroup(
                   {preset.description} Base URL: <code>{preset.base_url}</code>
                   {preset.default_model ? ` • Default model: ${preset.default_model}` : ""}
                 </p>
+                <p className="body-muted">Startup env only. Save the preset into managed providers if you want durable control-plane state.</p>
                 {preset.example_models && preset.example_models.length > 0 ? (
                   <div className="action-row">
                     {preset.example_models.map((model) => (
