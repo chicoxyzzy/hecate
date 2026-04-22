@@ -11,6 +11,14 @@ type Props = {
   actions: RuntimeConsoleViewModel["actions"];
 };
 
+function formatToolArgs(args: string): string {
+  try {
+    return JSON.stringify(JSON.parse(args), null, 2);
+  } catch {
+    return args;
+  }
+}
+
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const routeReport = state.traceRoute;
@@ -248,6 +256,46 @@ export function PlaygroundView({ state, actions }: Props) {
                     {state.streamingContent}
                     <span className="streaming-cursor" />
                   </div>
+                </div>
+              ) : state.pendingToolCalls.length > 0 ? (
+                <div className="stack-md">
+                  <div className="action-row">
+                    <StatusPill label="Tool calls" tone="neutral" />
+                    <StatusPill label={`${state.pendingToolCalls.length} pending`} tone="warning" />
+                  </div>
+                  <p className="body-muted">The model wants to call these functions. Fill in the results and continue.</p>
+                  <div className="stack-sm">
+                    {state.pendingToolCalls.map((tc, i) => (
+                      <div className="tool-call-card" key={tc.id}>
+                        <div className="tool-call-card__header">
+                          <span className="tool-call-card__name">{tc.name}</span>
+                          <span className="tool-call-card__id">{tc.id}</span>
+                        </div>
+                        <pre className="tool-call-card__args">{formatToolArgs(tc.arguments)}</pre>
+                        <label className="field">
+                          <span className="field__label">Result</span>
+                          <textarea
+                            className="field__input"
+                            onChange={(e) => actions.updateToolResult(i, e.target.value)}
+                            placeholder="Enter the tool result (string or JSON)"
+                            rows={3}
+                            value={tc.result}
+                          />
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="action-row">
+                    <button
+                      className="toolbar-button toolbar-button--primary"
+                      disabled={state.chatLoading || state.pendingToolCalls.some((tc) => !tc.result.trim())}
+                      onClick={() => void actions.submitToolResults()}
+                      type="button"
+                    >
+                      {state.chatLoading ? "Running…" : "Submit tool results"}
+                    </button>
+                  </div>
+                  {state.chatError ? <p className="body-muted" style={{ color: "var(--danger)" }}>{state.chatError}</p> : null}
                 </div>
               ) : state.chatResult ? (
                 <div className="stack-md">

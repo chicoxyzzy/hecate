@@ -29,16 +29,18 @@ type ErrorPayload = {
   };
 };
 
+export type ChatMessage =
+  | { role: "user" | "system"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }
+  | { role: "tool"; content: string; tool_call_id: string };
+
 export type ChatCompletionPayload = {
   model: string;
   provider: string;
   session_id?: string;
   session_title?: string;
   user: string;
-  messages: Array<{
-    role: string;
-    content: string;
-  }>;
+  messages: ChatMessage[];
 };
 
 export type TenantUpsertPayload = {
@@ -221,11 +223,13 @@ export async function getRetentionRuns(authToken?: string, limit = 10): Promise<
   return fetchJSON<RetentionRunsResponse>(`/admin/retention/runs?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
+type StreamedToolCall = { id: string; name: string; arguments: string };
+
 export async function chatCompletionsStream(
   payload: ChatCompletionPayload,
   authToken: string | undefined,
   onChunk: (delta: string) => void,
-): Promise<{ headers: RuntimeHeaders }> {
+): Promise<{ headers: RuntimeHeaders; finishReason: string; toolCalls: StreamedToolCall[] }> {
   const response = await fetch(
     "/v1/chat/completions",
     buildRequestOptions({ authToken, method: "POST", body: { ...payload, stream: true } }),
@@ -257,6 +261,9 @@ export async function chatCompletionsStream(
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let finishReason = "stop";
+  // Accumulate tool call argument deltas indexed by tool_call index.
+  const tcAccum: Record<number, { id: string; name: string; arguments: string }> = {};
 
   while (true) {
     const { done, value } = await reader.read();
@@ -269,22 +276,53 @@ export async function chatCompletionsStream(
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const raw = line.slice(6).trim();
-      if (raw === "[DONE]") return { headers };
+      if (raw === "[DONE]") {
+        const toolCalls = Object.values(tcAccum);
+        return { headers, finishReason, toolCalls };
+      }
       try {
         const chunk = JSON.parse(raw) as {
-          choices?: Array<{ delta?: { content?: string } }>;
+          choices?: Array<{
+            delta?: {
+              content?: string;
+              tool_calls?: Array<{
+                index: number;
+                id?: string;
+                type?: string;
+                function?: { name?: string; arguments?: string };
+              }>;
+            };
+            finish_reason?: string | null;
+          }>;
           error?: { message?: string };
         };
         if (chunk.error?.message) throw new Error(chunk.error.message);
-        const delta = chunk.choices?.[0]?.delta?.content;
-        if (delta) onChunk(delta);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+
+        const delta = choice.delta;
+        if (delta?.content) onChunk(delta.content);
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (!tcAccum[tc.index]) {
+              tcAccum[tc.index] = { id: "", name: "", arguments: "" };
+            }
+            if (tc.id) tcAccum[tc.index].id = tc.id;
+            if (tc.function?.name) tcAccum[tc.index].name = tc.function.name;
+            if (tc.function?.arguments) tcAccum[tc.index].arguments += tc.function.arguments;
+          }
+        }
       } catch (parseError) {
         if (parseError instanceof Error && parseError.message !== "JSON") throw parseError;
       }
     }
   }
 
-  return { headers };
+  const toolCalls = Object.values(tcAccum);
+  return { headers, finishReason, toolCalls };
 }
 
 export async function chatCompletions(

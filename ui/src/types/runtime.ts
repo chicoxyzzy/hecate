@@ -58,8 +58,9 @@ export type ChatSessionTurnRecord = {
   };
   assistant_message: {
     role: string;
-    content: string;
+    content: string | null;
     name?: string;
+    tool_calls?: ToolCall[];
   };
   requested_provider?: string;
   provider: string;
@@ -363,6 +364,17 @@ export type RetentionRunsResponse = {
   data: RetentionRunData[];
 };
 
+export type ToolCallFunction = {
+  name: string;
+  arguments: string;
+};
+
+export type ToolCall = {
+  id: string;
+  type: string;
+  function: ToolCallFunction;
+};
+
 export type ChatResponse = {
   id: string;
   model: string;
@@ -371,7 +383,8 @@ export type ChatResponse = {
     finish_reason: string;
     message: {
       role: string;
-      content: string;
+      content: string | null;
+      tool_calls?: ToolCall[];
     };
   }>;
   usage?: {

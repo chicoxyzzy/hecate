@@ -97,6 +97,10 @@ export function useRuntimeConsole() {
   const [chatLoading, setChatLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
+  // pendingToolCalls: model responded with tool_calls; waiting for user to fill results.
+  const [pendingToolCalls, setPendingToolCalls] = useState<Array<{ id: string; name: string; arguments: string; result: string }>>([]);
+  // Thread of messages that preceded the pending tool calls (history + user message + assistant tool_calls message).
+  const [pendingThread, setPendingThread] = useState<import("../lib/api").ChatMessage[] | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSessionsResponse["data"]>([]);
   const [activeChatSessionID, setActiveChatSessionID] = useState("");
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionRecord | null>(null);
@@ -390,11 +394,31 @@ export function useRuntimeConsole() {
 
       let fullContent = "";
       setStreamingContent("");
+      setPendingToolCalls([]);
+      setPendingThread(null);
       const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
         fullContent += delta;
         setStreamingContent(fullContent);
       });
       setStreamingContent(null);
+      setRuntimeHeaders(response.headers);
+
+      if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
+        // Build the thread for the continuation: history + user msg + assistant tool_call msg.
+        const assistantMsg: import("../lib/api").ChatMessage = {
+          role: "assistant",
+          content: fullContent || null,
+          tool_calls: response.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        };
+        setPendingThread([...chatPayload.messages, assistantMsg]);
+        setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
+        // Don't clear message or set chatResult — stay in tool-call mode.
+        return;
+      }
 
       // Build a synthetic ChatResponse from the streamed content so the rest
       // of the UI (trace, budget, session refresh) works without changes.
@@ -406,7 +430,6 @@ export function useRuntimeConsole() {
       };
 
       setChatResult(syntheticResult);
-      setRuntimeHeaders(response.headers);
       setMessage("");
       setTraceLoading(true);
       try {
@@ -458,6 +481,82 @@ export function useRuntimeConsole() {
       }
     } catch (submitError) {
       setChatError(submitError instanceof Error ? submitError.message : "unknown request error");
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  function updateToolResult(index: number, result: string) {
+    setPendingToolCalls((prev) => prev.map((tc, i) => (i === index ? { ...tc, result } : tc)));
+  }
+
+  async function submitToolResults() {
+    if (!pendingThread || pendingToolCalls.length === 0) return;
+    setChatLoading(true);
+    setChatError("");
+
+    const toolMessages: import("../lib/api").ChatMessage[] = pendingToolCalls.map((tc) => ({
+      role: "tool" as const,
+      content: tc.result,
+      tool_call_id: tc.id,
+    }));
+
+    const messages: import("../lib/api").ChatMessage[] = [...pendingThread, ...toolMessages];
+    const chatPayload = {
+      model,
+      provider: providerFilter === "auto" ? "" : providerFilter,
+      session_id: activeChatSessionID || undefined,
+      user: tenant,
+      messages,
+    };
+
+    try {
+      let fullContent = "";
+      setStreamingContent("");
+      const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
+        fullContent += delta;
+        setStreamingContent(fullContent);
+      });
+      setStreamingContent(null);
+      setRuntimeHeaders(response.headers);
+
+      if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
+        // Another round of tool calls.
+        const assistantMsg: import("../lib/api").ChatMessage = {
+          role: "assistant",
+          content: fullContent || null,
+          tool_calls: response.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        };
+        setPendingThread([...messages, assistantMsg]);
+        setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
+        return;
+      }
+
+      setPendingToolCalls([]);
+      setPendingThread(null);
+      setChatResult({
+        id: response.headers.requestId || "stream",
+        model: response.headers.resolvedModel || model,
+        choices: [{ index: 0, message: { role: "assistant", content: fullContent }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
+
+      try {
+        const trace = await getTrace(response.headers.requestId, authToken);
+        setTraceSpans(trace.data.spans ?? []);
+        setTraceRoute(trace.data.route ?? null);
+        setTraceStartedAt(trace.data.started_at ?? "");
+      } catch {
+        setTraceSpans([]);
+        setTraceRoute(null);
+        setTraceStartedAt("");
+      }
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setChatLoading(false);
     }
@@ -910,6 +1009,7 @@ export function useRuntimeConsole() {
       chatLoading,
       streamingContent,
       chatResult,
+      pendingToolCalls,
       chatSessions,
       cloudModels,
       cloudProviders,
@@ -1028,6 +1128,8 @@ export function useRuntimeConsole() {
       selectChatSession,
       startNewChat,
       submitChat,
+      submitToolResults,
+      updateToolResult,
       topUpBudget,
       upsertAPIKey,
       upsertProvider,
@@ -1128,12 +1230,15 @@ function deriveChatSessionTitle(message: string): string {
   return `${normalized.slice(0, 45)}...`;
 }
 
-function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): Array<{ role: string; content: string }> {
-  const history =
-    activeSession?.turns?.flatMap((turn) => [
-      { role: turn.user_message.role, content: turn.user_message.content },
-      { role: turn.assistant_message.role, content: turn.assistant_message.content },
-    ]) ?? [];
+function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): import("../lib/api").ChatMessage[] {
+  const history: import("../lib/api").ChatMessage[] =
+    activeSession?.turns?.flatMap((turn) => {
+      const user: import("../lib/api").ChatMessage = { role: "user", content: turn.user_message.content ?? "" };
+      const assistant: import("../lib/api").ChatMessage = turn.assistant_message.tool_calls?.length
+        ? { role: "assistant", content: turn.assistant_message.content ?? null, tool_calls: turn.assistant_message.tool_calls }
+        : { role: "assistant", content: turn.assistant_message.content ?? "" };
+      return [user, assistant];
+    }) ?? [];
   return [...history, { role: "user", content: message }];
 }
 
