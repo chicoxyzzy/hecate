@@ -11,6 +11,9 @@ type Props = {
 
 export function TraceWorkbench({ loading, error, spans, traceStartedAt }: Props) {
   const timeline = buildTraceTimeline(spans, traceStartedAt);
+  const routingEvents = timeline.filter((event) => event.phase === "routing");
+  const providerEvents = timeline.filter((event) => event.phase === "provider");
+  const responseEvents = timeline.filter((event) => event.phase === "response" || event.phase === "usage");
 
   return (
     <ShellSection eyebrow="Execution" title="Trace">
@@ -25,6 +28,30 @@ export function TraceWorkbench({ loading, error, spans, traceStartedAt }: Props)
                 <StatusPill label={`${spans.length} span${spans.length === 1 ? "" : "s"}`} tone="neutral" />
                 <StatusPill label={`${timeline.length} event${timeline.length === 1 ? "" : "s"}`} tone="neutral" />
                 {traceStartedAt ? <StatusPill label={`started ${new Date(traceStartedAt).toLocaleTimeString()}`} tone="neutral" /> : null}
+              </div>
+
+              <div className="trace-highlight-grid">
+                <div className="trace-highlight-card">
+                  <span>Routing</span>
+                  <strong>{routingEvents.at(-1)?.name || "No routing events"}</strong>
+                  <p className="body-muted">
+                    {routingEvents.length > 0 ? `${routingEvents.length} routing checkpoints recorded` : "The trace did not emit routing checkpoints."}
+                  </p>
+                </div>
+                <div className="trace-highlight-card">
+                  <span>Provider path</span>
+                  <strong>{providerEvents.at(-1)?.name || "No provider events"}</strong>
+                  <p className="body-muted">
+                    {providerEvents.length > 0 ? `${providerEvents.length} provider transitions recorded` : "No provider start/finish events were captured."}
+                  </p>
+                </div>
+                <div className="trace-highlight-card">
+                  <span>Completion</span>
+                  <strong>{responseEvents.at(-1)?.name || "No response event"}</strong>
+                  <p className="body-muted">
+                    {responseEvents.length > 0 ? `${responseEvents.length} usage or response checkpoints recorded` : "The trace ended without explicit usage/response markers."}
+                  </p>
+                </div>
               </div>
 
               <div className="trace-timeline">
@@ -42,7 +69,7 @@ export function TraceWorkbench({ loading, error, spans, traceStartedAt }: Props)
                       <DefinitionList
                         compact
                         items={Object.entries(event.attributes)
-                          .slice(0, 6)
+                          .slice(0, 4)
                           .map(([key, value]) => ({
                             label: formatTraceAttributeKey(key),
                             value: formatTraceAttributeValue(value),

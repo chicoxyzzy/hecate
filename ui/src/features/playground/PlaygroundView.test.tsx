@@ -54,9 +54,9 @@ describe("PlaygroundView", () => {
             requestedModel: "gpt-4o-mini",
             resolvedModel: "gpt-4o-mini",
             cache: "false",
-            cacheType: "",
-            semanticStrategy: "",
-            semanticIndex: "",
+            cacheType: "false",
+            semanticStrategy: "postgres_pgvector",
+            semanticIndex: "hnsw",
             semanticSimilarity: "",
             attempts: "2",
             retries: "1",
@@ -77,6 +77,7 @@ describe("PlaygroundView", () => {
                 reason: "default_model_local_first",
                 outcome: "denied",
                 skip_reason: "route_denied",
+                health_status: "open",
                 estimated_usd: "0.000000",
               },
               {
@@ -85,6 +86,7 @@ describe("PlaygroundView", () => {
                 model: "gpt-4o-mini",
                 reason: "default_model_local_first_failover",
                 outcome: "selected",
+                health_status: "half_open",
                 estimated_usd: "0.000012",
                 retry_count: 1,
                 attempt: 2,
@@ -109,7 +111,12 @@ describe("PlaygroundView", () => {
               span_id: "span-1",
               name: "gateway.request",
               status_code: "ok",
-              events: [{ name: "router.selected", timestamp: "2026-04-21T10:00:00Z", attributes: { "gen_ai.provider.name": "openai" } }],
+              events: [
+                { name: "router.selected", timestamp: "2026-04-21T10:00:00Z", attributes: { "gen_ai.provider.name": "openai" } },
+                { name: "semantic_cache.lookup_started", timestamp: "2026-04-21T10:00:00Z", attributes: { "hecate.semantic.scope": "tenant:team-a/model:gpt-4o-mini" } },
+                { name: "semantic_cache.miss", timestamp: "2026-04-21T10:00:00Z", attributes: { "hecate.semantic.scope": "tenant:team-a/model:gpt-4o-mini" } },
+                { name: "semantic_cache.store_finished", timestamp: "2026-04-21T10:00:01Z" },
+              ],
             },
           ],
         })}
@@ -117,12 +124,18 @@ describe("PlaygroundView", () => {
     );
 
     expect(screen.getByText("gateway.request")).toBeInTheDocument();
-    expect(screen.getByText("router.selected")).toBeInTheDocument();
+    expect(screen.getAllByText("router.selected").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Default Model local first failover").length).toBeGreaterThan(0);
-    expect(screen.getByText(/fallback from ollama/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Recovered via half-open provider probe").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Recovery probe").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Circuit open").length).toBeGreaterThan(0);
     expect(screen.getByText("Route decision tree")).toBeInTheDocument();
     expect(screen.getByText("Failover chain")).toBeInTheDocument();
+    expect(screen.getByText("Semantic cache")).toBeInTheDocument();
+    expect(screen.getAllByText("Semantic lookup miss").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Writeback stored").length).toBeGreaterThan(0);
     expect(screen.getByText("route_denied")).toBeInTheDocument();
     expect(screen.getByText("Provider Retry Exhausted")).toBeInTheDocument();
+    expect(screen.getByText("Provider path")).toBeInTheDocument();
   });
 });

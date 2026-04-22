@@ -175,7 +175,7 @@ export function PlaygroundView({ state, actions }: Props) {
           </div>
         </ShellSection>
 
-        <RouteWorkbench route={routeReport} runtimeHeaders={state.runtimeHeaders} />
+        <RouteWorkbench route={routeReport} runtimeHeaders={state.runtimeHeaders} spans={state.traceSpans} />
       </div>
 
       <aside className="workspace-rail">

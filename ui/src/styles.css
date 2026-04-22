@@ -470,6 +470,107 @@ textarea {
   list-style: none;
 }
 
+.route-summary,
+.route-summary__headline,
+.route-summary__title-row,
+.route-summary__cluster,
+.route-summary__health,
+.semantic-inspector,
+.semantic-inspector__head,
+.semantic-inspector__title-row,
+.trace-highlight-grid {
+  display: grid;
+}
+
+.route-summary {
+  gap: 1rem;
+}
+
+.route-summary__headline {
+  grid-template-columns: minmax(0, 1.35fr) minmax(15rem, 0.9fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.route-summary__title-row {
+  gap: 0.28rem;
+}
+
+.route-summary__title {
+  margin: 0;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.semantic-inspector {
+  gap: 1rem;
+}
+
+.semantic-inspector__head {
+  grid-template-columns: minmax(0, 1.35fr) minmax(10rem, 0.65fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.semantic-inspector__title-row {
+  gap: 0.28rem;
+}
+
+.route-summary__cluster {
+  gap: 0.65rem;
+}
+
+.route-summary__metric,
+.route-health-stat,
+.semantic-inspector__metric,
+.trace-highlight-card {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.route-summary__metric span,
+.route-health-stat span,
+.semantic-inspector__metric span,
+.trace-highlight-card span {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-family:
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    monospace;
+}
+
+.route-summary__metric strong,
+.route-health-stat strong,
+.semantic-inspector__metric strong,
+.trace-highlight-card strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.route-summary__health {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.trace-highlight-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.trace-highlight-card {
+  min-height: 8rem;
+}
+
 .budget-history-item__head,
 .trace-timeline__meta,
 .budget-history-item__body {
@@ -810,7 +911,11 @@ textarea {
   .two-column-grid,
   .form-grid,
   .form-grid--triple,
-  .trace-inline-grid {
+  .trace-inline-grid,
+  .route-summary__headline,
+  .route-summary__health,
+  .semantic-inspector__head,
+  .trace-highlight-grid {
     grid-template-columns: 1fr;
   }
 

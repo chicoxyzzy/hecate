@@ -3,6 +3,8 @@ package router
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/providers"
@@ -29,6 +31,8 @@ type routeCandidate struct {
 	Kind     providers.Kind
 	Model    string
 	Reason   string
+	Status   string
+	Healthy  bool
 }
 
 func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, catalog catalog.Catalog) *RuleRouter {
@@ -95,7 +99,7 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 		if provider.Name == current.Provider {
 			continue
 		}
-		if !provider.Healthy {
+		if !isRoutableProvider(provider) {
 			continue
 		}
 
@@ -122,9 +126,13 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 			Provider:     provider.Name,
 			ProviderKind: string(provider.Kind),
 			Model:        model,
-			Reason:       current.Reason + "_failover",
+			Reason:       routeReasonForHealth(current.Reason+"_failover", provider.Status),
 		})
 	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		return candidateRank(routeStatusFromReason(out[i].Reason)) < candidateRank(routeStatusFromReason(out[j].Reason))
+	})
 
 	return out
 }
@@ -153,7 +161,7 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 		Provider:     entry.Name,
 		ProviderKind: string(entry.Kind),
 		Model:        routedModel,
-		Reason:       reason,
+		Reason:       routeReasonForHealth(reason, entry.Status),
 	}, nil
 }
 
@@ -166,66 +174,36 @@ func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) 
 			if entry.Kind != providers.KindLocal {
 				continue
 			}
-			if !entry.Healthy || !supportsModel(entry, model) {
+			if !isRoutableCandidate(entry, model) {
 				continue
 			}
-			candidates = append(candidates, routeCandidate{
-				Provider: entry.Provider,
-				Name:     entry.Name,
-				Kind:     entry.Kind,
-				Model:    model,
-				Reason:   "explicit_model_local_first",
-			})
+			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_local_first"))
 		}
 		if entry, ok := r.namedSupportingProvider(ctx, r.fallbackProvider, model); ok {
-			candidates = append(candidates, routeCandidate{
-				Provider: entry.Provider,
-				Name:     entry.Name,
-				Kind:     entry.Kind,
-				Model:    model,
-				Reason:   "explicit_model_fallback",
-			})
+			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_fallback"))
 		}
 		for _, entry := range entries {
 			if entry.Kind != providers.KindCloud {
 				continue
 			}
-			if !entry.Healthy || !supportsModel(entry, model) {
+			if !isRoutableCandidate(entry, model) {
 				continue
 			}
-			candidates = append(candidates, routeCandidate{
-				Provider: entry.Provider,
-				Name:     entry.Name,
-				Kind:     entry.Kind,
-				Model:    model,
-				Reason:   "explicit_model_fallback",
-			})
+			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_fallback"))
 		}
-		return dedupeCandidates(candidates)
+		return orderCandidates(dedupeCandidates(candidates))
 	}
 
 	if entry, ok := r.namedSupportingProvider(ctx, r.defaultProvider, model); ok {
-		candidates = append(candidates, routeCandidate{
-			Provider: entry.Provider,
-			Name:     entry.Name,
-			Kind:     entry.Kind,
-			Model:    model,
-			Reason:   "explicit_model",
-		})
+		candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model"))
 	}
 	for _, entry := range entries {
-		if !entry.Healthy || !supportsModel(entry, model) {
+		if !isRoutableCandidate(entry, model) {
 			continue
 		}
-		candidates = append(candidates, routeCandidate{
-			Provider: entry.Provider,
-			Name:     entry.Name,
-			Kind:     entry.Kind,
-			Model:    model,
-			Reason:   "explicit_model",
-		})
+		candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model"))
 	}
-	return dedupeCandidates(candidates)
+	return orderCandidates(dedupeCandidates(candidates))
 }
 
 func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []routeCandidate {
@@ -233,76 +211,51 @@ func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []rout
 	candidates := make([]routeCandidate, 0, len(entries)+2)
 
 	if r.strategy == "local_first" {
-		skippedUnhealthyLocal := false
+		skippedPreferredLocal := false
 		for _, entry := range entries {
 			if entry.Kind != providers.KindLocal {
 				continue
 			}
-			if !entry.Healthy {
-				skippedUnhealthyLocal = true
+			if !isRoutableProvider(entry) {
+				skippedPreferredLocal = true
 				continue
 			}
 
 			if localModel := entry.DefaultModel; localModel != "" {
-				candidates = append(candidates, routeCandidate{
-					Provider: entry.Provider,
-					Name:     entry.Name,
-					Kind:     entry.Kind,
-					Model:    localModel,
-					Reason:   "default_model_local_first",
-				})
+				candidates = append(candidates, newRouteCandidate(entry, localModel, "default_model_local_first"))
 				continue
 			}
 			if supportsModel(entry, model) {
-				candidates = append(candidates, routeCandidate{
-					Provider: entry.Provider,
-					Name:     entry.Name,
-					Kind:     entry.Kind,
-					Model:    model,
-					Reason:   "default_model_local_first",
-				})
+				candidates = append(candidates, newRouteCandidate(entry, model, "default_model_local_first"))
 			}
 		}
 		if entry, ok := r.namedProvider(ctx, r.fallbackProvider); ok {
 			reason := "default_model_fallback"
-			if skippedUnhealthyLocal {
-				reason = "default_model_fallback_unhealthy_local"
+			if skippedPreferredLocal {
+				reason = "default_model_fallback_local_unavailable"
 			}
 			routedModel := entry.DefaultModel
 			if routedModel == "" {
 				routedModel = model
 			}
-			candidates = append(candidates, routeCandidate{
-				Provider: entry.Provider,
-				Name:     entry.Name,
-				Kind:     entry.Kind,
-				Model:    routedModel,
-				Reason:   reason,
-			})
+			candidates = append(candidates, newRouteCandidate(entry, routedModel, reason))
 		}
 	}
 
-	skippedDegraded := false
+	skippedPreferredDefault := false
 	if entry, ok := r.catalog.Get(ctx, r.defaultProvider); ok {
-		if !entry.Healthy {
-			skippedDegraded = true
+		if !isRoutableProvider(entry) {
+			skippedPreferredDefault = true
 		} else {
 			routedModel := entry.DefaultModel
 			if routedModel == "" {
 				routedModel = model
 			}
-			candidates = append(candidates, routeCandidate{
-				Provider: entry.Provider,
-				Name:     entry.Name,
-				Kind:     entry.Kind,
-				Model:    routedModel,
-				Reason:   "default_model",
-			})
+			candidates = append(candidates, newRouteCandidate(entry, routedModel, "default_model"))
 		}
 	}
 	for _, entry := range entries {
-		if !entry.Healthy {
-			skippedDegraded = true
+		if !isRoutableProvider(entry) {
 			continue
 		}
 		routedModel := entry.DefaultModel
@@ -310,19 +263,13 @@ func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []rout
 			continue
 		}
 		reason := "default_model"
-		if skippedDegraded {
-			reason = "default_model_fallback_degraded_provider"
+		if skippedPreferredDefault {
+			reason = "default_model_fallback_default_unavailable"
 		}
-		candidates = append(candidates, routeCandidate{
-			Provider: entry.Provider,
-			Name:     entry.Name,
-			Kind:     entry.Kind,
-			Model:    routedModel,
-			Reason:   reason,
-		})
+		candidates = append(candidates, newRouteCandidate(entry, routedModel, reason))
 	}
 
-	return dedupeCandidates(candidates)
+	return orderCandidates(dedupeCandidates(candidates))
 }
 
 func (r *RuleRouter) selectCandidate(candidates []routeCandidate) (routeCandidate, bool) {
@@ -354,7 +301,7 @@ func (r *RuleRouter) namedProvider(ctx context.Context, name string) (catalog.En
 		return catalog.Entry{}, false
 	}
 	entry, ok := r.catalog.Get(ctx, name)
-	if !ok || !entry.Healthy {
+	if !ok || !isRoutableProvider(entry) {
 		return catalog.Entry{}, false
 	}
 	return entry, true
@@ -403,4 +350,75 @@ func (r *RuleRouter) orderedFallbackProviders() []catalog.Entry {
 	}
 
 	return candidates
+}
+
+func newRouteCandidate(entry catalog.Entry, model, reason string) routeCandidate {
+	return routeCandidate{
+		Provider: entry.Provider,
+		Name:     entry.Name,
+		Kind:     entry.Kind,
+		Model:    model,
+		Reason:   routeReasonForHealth(reason, entry.Status),
+		Status:   entry.Status,
+		Healthy:  entry.Healthy,
+	}
+}
+
+func isRoutableCandidate(entry catalog.Entry, model string) bool {
+	return isRoutableProvider(entry) && supportsModel(entry, model)
+}
+
+func isRoutableProvider(entry catalog.Entry) bool {
+	status := strings.TrimSpace(entry.Status)
+	if status == string(providers.HealthStatusOpen) {
+		return false
+	}
+	if entry.Healthy {
+		return true
+	}
+	return status == string(providers.HealthStatusHalfOpen)
+}
+
+func routeReasonForHealth(baseReason, status string) string {
+	switch status {
+	case string(providers.HealthStatusHalfOpen):
+		return baseReason + "_half_open_recovery"
+	case string(providers.HealthStatusDegraded):
+		return baseReason + "_degraded"
+	default:
+		return baseReason
+	}
+}
+
+func candidateRank(status string) int {
+	switch status {
+	case "", string(providers.HealthStatusHealthy):
+		return 0
+	case string(providers.HealthStatusHalfOpen):
+		return 1
+	case string(providers.HealthStatusDegraded):
+		return 2
+	default:
+		return 3
+	}
+}
+
+func orderCandidates(candidates []routeCandidate) []routeCandidate {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		leftRank := candidateRank(candidates[i].Status)
+		rightRank := candidateRank(candidates[j].Status)
+		return leftRank < rightRank
+	})
+	return candidates
+}
+
+func routeStatusFromReason(reason string) string {
+	switch {
+	case strings.HasSuffix(reason, "_half_open_recovery"):
+		return string(providers.HealthStatusHalfOpen)
+	case strings.HasSuffix(reason, "_degraded"):
+		return string(providers.HealthStatusDegraded)
+	default:
+		return string(providers.HealthStatusHealthy)
+	}
 }

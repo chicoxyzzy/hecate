@@ -617,7 +617,7 @@ func TestChatCompletionsSkipsDegradedProviderAfterTransientFailures(t *testing.T
 	if got := second.Header().Get("X-Runtime-Provider"); got != "openai" {
 		t.Fatalf("second X-Runtime-Provider = %q, want openai", got)
 	}
-	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model_fallback_unhealthy_local" && got != "default_model_fallback_degraded_provider" {
+	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model_fallback_local_unavailable" && got != "default_model_fallback_unhealthy_local" && got != "default_model_fallback_degraded_provider" {
 		t.Fatalf("second X-Runtime-Route-Reason = %q, want degraded fallback reason", got)
 	}
 	if localProvider.CallCount() != 1 {

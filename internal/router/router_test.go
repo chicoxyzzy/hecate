@@ -91,6 +91,20 @@ type fakeProvider struct {
 	capabilitiesErr error
 }
 
+type staticHealthTracker struct {
+	states map[string]providers.HealthState
+}
+
+func (t staticHealthTracker) Observe(string, providers.HealthObservation) {}
+func (t staticHealthTracker) RecordSuccess(string)                        {}
+func (t staticHealthTracker) RecordFailure(string, error)                 {}
+func (t staticHealthTracker) State(provider string) providers.HealthState {
+	if state, ok := t.states[provider]; ok {
+		return state
+	}
+	return providers.HealthState{Available: true, Status: providers.HealthStatusHealthy}
+}
+
 func (p *fakeProvider) Name() string         { return p.name }
 func (p *fakeProvider) Kind() providers.Kind { return p.kind }
 func (p *fakeProvider) DefaultModel() string { return p.defaultModel }
@@ -213,8 +227,8 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 	if got.Provider != "openai" {
 		t.Fatalf("Route() provider = %q, want openai", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_unhealthy_local" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_unhealthy_local", got.Reason)
+	if got.Reason != "default_model_fallback_local_unavailable" {
+		t.Fatalf("Route() reason = %q, want default_model_fallback_local_unavailable", got.Reason)
 	}
 }
 
@@ -280,8 +294,8 @@ func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_degraded_provider" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_degraded_provider", got.Reason)
+	if got.Reason != "default_model_fallback_default_unavailable" {
+		t.Fatalf("Route() reason = %q, want default_model_fallback_default_unavailable", got.Reason)
 	}
 }
 
@@ -342,8 +356,8 @@ func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testi
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_degraded_provider" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_degraded_provider", got.Reason)
+	if got.Reason != "default_model_fallback_default_unavailable" {
+		t.Fatalf("Route() reason = %q, want default_model_fallback_default_unavailable", got.Reason)
 	}
 }
 
@@ -367,5 +381,81 @@ func TestRuleRouterFallbacksSkipDegradedProviders(t *testing.T) {
 	}
 	if fallbacks[0].Provider != "anthropic" {
 		t.Fatalf("Fallbacks()[0] provider = %q, want anthropic", fallbacks[0].Provider)
+	}
+}
+
+func TestRuleRouterPrefersHealthyOverHalfOpen(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+	)
+	tracker := staticHealthTracker{states: map[string]providers.HealthState{
+		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
+	}}
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, tracker))
+
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic healthy provider ahead of half_open default", got.Provider)
+	}
+}
+
+func TestRuleRouterUsesHalfOpenRecoveryWhenNoHealthyAlternativeExists(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+	)
+	tracker := staticHealthTracker{states: map[string]providers.HealthState{
+		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
+	}}
+
+	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, tracker))
+
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "openai" {
+		t.Fatalf("Route() provider = %q, want openai half_open recovery route", got.Provider)
+	}
+	if got.Reason != "default_model_half_open_recovery" {
+		t.Fatalf("Route() reason = %q, want default_model_half_open_recovery", got.Reason)
+	}
+}
+
+func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+		&fakeProvider{name: "gemini", kind: providers.KindCloud, defaultModel: "gemini-flash", supportedModels: []string{"gemini-flash"}},
+	)
+	tracker := staticHealthTracker{states: map[string]providers.HealthState{
+		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
+	}}
+
+	router := NewRuleRouter("anthropic", "claude-sonnet", "explicit_or_default", "openai", catalog.NewRegistryCatalog(registry, tracker))
+
+	current := types.RouteDecision{Provider: "gemini", Model: "gemini-flash", Reason: "default_model"}
+	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
+	if len(fallbacks) < 2 {
+		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
+	}
+	if fallbacks[0].Provider != "anthropic" {
+		t.Fatalf("Fallbacks()[0] provider = %q, want healthy anthropic first", fallbacks[0].Provider)
+	}
+	if fallbacks[1].Provider != "openai" {
+		t.Fatalf("Fallbacks()[1] provider = %q, want half_open openai second", fallbacks[1].Provider)
+	}
+	if fallbacks[1].Reason != "default_model_failover_half_open_recovery" {
+		t.Fatalf("Fallbacks()[1] reason = %q, want half_open recovery failover reason", fallbacks[1].Reason)
 	}
 }

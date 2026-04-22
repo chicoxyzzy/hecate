@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSemanticCacheInsight,
   budgetConsumedPercent,
   buildTraceTimeline,
   describeCachePath,
@@ -15,7 +16,7 @@ import {
   routeOutcomeTone,
   usdToMicros,
 } from "./runtime-utils";
-import type { ModelRecord, ProviderRecord, TraceSpanRecord } from "../types/runtime";
+import type { ModelRecord, ProviderRecord, RuntimeHeaders, TraceSpanRecord } from "../types/runtime";
 
 const models: ModelRecord[] = [
   { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } },
@@ -26,6 +27,26 @@ const providers: ProviderRecord[] = [
   { name: "openai", kind: "cloud", healthy: true, status: "healthy", default_model: "gpt-4o-mini" },
   { name: "ollama", kind: "local", healthy: false, status: "open", default_model: "llama3.1:8b" },
 ];
+
+const semanticHeaders: RuntimeHeaders = {
+  requestId: "req-1",
+  traceId: "trace-1",
+  spanId: "span-1",
+  provider: "ollama",
+  providerKind: "local",
+  routeReason: "default_model_local_first",
+  requestedModel: "llama3.1:8b",
+  resolvedModel: "llama3.1:8b",
+  cache: "true",
+  cacheType: "semantic",
+  semanticStrategy: "postgres_pgvector",
+  semanticIndex: "hnsw",
+  semanticSimilarity: "0.982",
+  attempts: "1",
+  retries: "0",
+  fallbackFrom: "",
+  costUsd: "0.000000",
+};
 
 describe("runtime-utils", () => {
   it("converts usd strings to micros", () => {
@@ -80,29 +101,82 @@ describe("runtime-utils", () => {
 
   it("describes cache path from runtime headers", () => {
     expect(
-      describeCachePath({
-        requestId: "req-1",
-        traceId: "trace-1",
-        spanId: "span-1",
-        provider: "ollama",
-        providerKind: "local",
-        routeReason: "default_model_local_first",
-        requestedModel: "llama3.1:8b",
-        resolvedModel: "llama3.1:8b",
-        cache: "true",
-        cacheType: "semantic",
-        semanticStrategy: "postgres_pgvector",
-        semanticIndex: "hnsw",
-        semanticSimilarity: "0.982",
-        attempts: "1",
-        retries: "0",
-        fallbackFrom: "",
-        costUsd: "0.000000",
-      }),
+      describeCachePath(semanticHeaders),
     ).toEqual(
       expect.objectContaining({
         title: "Semantic cache hit",
         tone: "healthy",
+      }),
+    );
+  });
+
+  it("builds a semantic cache insight for hit and miss/writeback flows", () => {
+    const hitInsight = buildSemanticCacheInsight(semanticHeaders, [
+      {
+        trace_id: "trace-1",
+        span_id: "span-1",
+        name: "gateway.request",
+        events: [
+          {
+            name: "semantic_cache.hit",
+            timestamp: "2026-04-21T10:00:00Z",
+            attributes: {
+              "hecate.semantic.scope": "tenant:team-a/model:llama3.1:8b",
+              "hecate.semantic.strategy": "postgres_pgvector",
+              "hecate.semantic.index_type": "hnsw",
+              "hecate.semantic.similarity": 0.982,
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(hitInsight).toEqual(
+      expect.objectContaining({
+        title: "Semantic cache hit",
+        similarity: "98.2%",
+        writebackStatus: "Writeback not needed",
+      }),
+    );
+
+    const missInsight = buildSemanticCacheInsight(
+      {
+        ...semanticHeaders,
+        cache: "false",
+        cacheType: "false",
+        semanticStrategy: "",
+        semanticIndex: "",
+        semanticSimilarity: "",
+      },
+      [
+        {
+          trace_id: "trace-1",
+          span_id: "span-1",
+          name: "gateway.request",
+          events: [
+            {
+              name: "semantic_cache.lookup_started",
+              timestamp: "2026-04-21T10:00:00Z",
+              attributes: { "hecate.semantic.scope": "tenant:team-a/model:llama3.1:8b" },
+            },
+            {
+              name: "semantic_cache.miss",
+              timestamp: "2026-04-21T10:00:01Z",
+              attributes: { "hecate.semantic.scope": "tenant:team-a/model:llama3.1:8b" },
+            },
+            {
+              name: "semantic_cache.store_finished",
+              timestamp: "2026-04-21T10:00:02Z",
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(missInsight).toEqual(
+      expect.objectContaining({
+        title: "Semantic lookup miss",
+        writebackStatus: "Writeback stored",
       }),
     );
   });
