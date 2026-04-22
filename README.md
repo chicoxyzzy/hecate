@@ -1,10 +1,10 @@
 # Hecate
 
-Hecate is a Go-based LLM gateway for AI-agent workloads.
+Hecate is a Go-based LLM gateway and control plane for AI-agent workloads.
 
-Today, Hecate sits at the model-call layer: it exposes an OpenAI-compatible API, routes requests across cloud and local OpenAI-compatible providers, applies budget and policy checks, supports exact and semantic cache paths, records traces and structured logs, and provides a small operator UI.
+It sits between agents and model providers to handle routing, caching, policy enforcement, cost tracking, and observability across cloud and local runtimes. At the gateway boundary, Hecate exposes an OpenAI-compatible API; underneath, it currently supports OpenAI-compatible upstreams and Anthropic's native Messages API.
 
-Hecate can already be used by agent systems as the gateway in front of their model traffic. It is not yet a full agent runtime with built-in sandboxed tool execution. That is a future direction, not current functionality.
+Today, Hecate is production-shaped at the model gateway layer: provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and a small operator UI are all implemented. It is not yet a full agent runtime with sandboxed tool execution; that remains a future track.
 
 Current runtime capabilities:
 
@@ -58,6 +58,10 @@ cp .env.example .env
 
 2. Configure at least one provider in `.env`.
 
+`.env.example` already includes all built-in provider preset names in `GATEWAY_PROVIDERS`.
+For a minimal first run, it is usually easiest to trim that list down to only the providers
+you actually want to use right now.
+
 Example with one cloud provider and one local provider:
 
 ```bash
@@ -67,6 +71,16 @@ GATEWAY_DEFAULT_MODEL=gpt-4o-mini
 
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+```
+
+If you want cloud-only startup, a smaller config is enough:
+
+```bash
+GATEWAY_PROVIDERS=openai
+GATEWAY_DEFAULT_PROVIDER=openai
+GATEWAY_DEFAULT_MODEL=gpt-4o-mini
+
+PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
 
 3. Run the gateway:
@@ -93,7 +107,14 @@ The provider layer is vendor-neutral at the gateway boundary. Any upstream expos
 
 Configured provider records tell Hecate how to connect. The model catalog itself is discovered from the provider when possible, rather than treated as hardcoded application state.
 
-Bootstrap env configuration uses `GATEWAY_PROVIDERS=openai,ollama,...` together with optional `PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or `PROVIDER_OLLAMA_BASE_URL`.
+Bootstrap env configuration uses `GATEWAY_PROVIDERS=openai,anthropic,groq,gemini,ollama,lmstudio,localai,llamacpp` together with optional `PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or `PROVIDER_OLLAMA_BASE_URL`.
+
+Hecate currently has two real provider implementations under the hood:
+
+- OpenAI-compatible upstreams
+- Anthropic native Messages API upstreams
+
+The built-in provider names are presets on top of those transports.
 
 This includes local runtimes such as:
 
