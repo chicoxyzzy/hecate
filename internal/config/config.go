@@ -515,7 +515,7 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 
-	cfg := providerDefaults(name)
+	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"))
 	prefix := providerEnvPrefix(name)
 
 	cfg.Name = getEnv(prefix+"NAME", cfg.Name)
@@ -537,97 +537,18 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 	return cfg, true
 }
 
-func providerDefaults(name string) OpenAICompatibleProviderConfig {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "openai":
-		return OpenAICompatibleProviderConfig{
-			Name:          "openai",
-			Kind:          "cloud",
-			Protocol:      "openai",
-			BaseURL:       "https://api.openai.com",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
-			DefaultModel:  getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"),
-			AllowAnyModel: true,
-		}
-	case "anthropic":
-		return OpenAICompatibleProviderConfig{
-			Name:          "anthropic",
-			Kind:          "cloud",
-			Protocol:      "anthropic",
-			BaseURL:       "https://api.anthropic.com",
-			APIVersion:    "2023-06-01",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed Anthropic response.",
-			AllowAnyModel: true,
-		}
-	case "groq":
-		return OpenAICompatibleProviderConfig{
-			Name:          "groq",
-			Kind:          "cloud",
-			Protocol:      "openai",
-			BaseURL:       "https://api.groq.com/openai/v1",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
-			AllowAnyModel: true,
-		}
-	case "gemini":
-		return OpenAICompatibleProviderConfig{
-			Name:          "gemini",
-			Kind:          "cloud",
-			Protocol:      "openai",
-			BaseURL:       "https://generativelanguage.googleapis.com/v1beta/openai",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
-			AllowAnyModel: true,
-		}
-	case "ollama":
-		return OpenAICompatibleProviderConfig{
-			Name:          "ollama",
-			Kind:          "local",
-			Protocol:      "openai",
-			BaseURL:       "http://127.0.0.1:11434/v1",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed local provider response.",
-			AllowAnyModel: false,
-		}
-	case "lmstudio":
-		return OpenAICompatibleProviderConfig{
-			Name:          "lmstudio",
-			Kind:          "local",
-			Protocol:      "openai",
-			BaseURL:       "http://127.0.0.1:1234/v1",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed local provider response.",
-			AllowAnyModel: false,
-		}
-	case "localai", "llamacpp":
-		return OpenAICompatibleProviderConfig{
-			Name:          strings.ToLower(strings.TrimSpace(name)),
-			Kind:          "local",
-			Protocol:      "openai",
-			BaseURL:       "http://127.0.0.1:8080/v1",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed local provider response.",
-			AllowAnyModel: false,
-		}
-	default:
-		return OpenAICompatibleProviderConfig{
-			Name:          name,
-			Kind:          "cloud",
-			Protocol:      "openai",
-			Timeout:       30 * time.Second,
-			StubMode:      false,
-			StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
-			AllowAnyModel: true,
-		}
+func providerDefaults(name, globalDefaultModel string) OpenAICompatibleProviderConfig {
+	if builtIn, ok := BuiltInProviderByID(name); ok {
+		return builtIn.RuntimeConfig(globalDefaultModel)
+	}
+	return OpenAICompatibleProviderConfig{
+		Name:          strings.ToLower(strings.TrimSpace(name)),
+		Kind:          "cloud",
+		Protocol:      "openai",
+		Timeout:       30 * time.Second,
+		StubMode:      false,
+		StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
+		AllowAnyModel: true,
 	}
 }
 

@@ -929,6 +929,9 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	if len(response.Data) < 4 {
 		t.Fatalf("preset count = %d, want at least 4", len(response.Data))
 	}
+	if len(response.Data) != len(config.BuiltInProviders()) {
+		t.Fatalf("preset count = %d, want %d built-in presets", len(response.Data), len(config.BuiltInProviders()))
+	}
 
 	foundAnthropic := false
 	foundOllama := false

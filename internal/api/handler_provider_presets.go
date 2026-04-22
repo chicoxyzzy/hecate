@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/hecate/agent-runtime/internal/config"
 )
 
 type providerPreset struct {
@@ -48,112 +50,24 @@ func (h *Handler) HandleProviderPresets(w http.ResponseWriter, r *http.Request) 
 }
 
 func providerPresets() []providerPreset {
-	return []providerPreset{
-		newProviderPreset(
-			"openai",
-			"OpenAI",
-			"cloud",
-			"openai",
-			"https://api.openai.com",
-			"PROVIDER_OPENAI_API_KEY",
-			"",
-			"gpt-4o-mini",
-			[]string{"gpt-4o-mini", "gpt-4.1-mini"},
-			"https://platform.openai.com/docs/api-reference/chat",
-			"Default cloud preset using the OpenAI-compatible Chat Completions API.",
-		),
-		newProviderPreset(
-			"anthropic",
-			"Anthropic",
-			"cloud",
-			"anthropic",
-			"https://api.anthropic.com",
-			"PROVIDER_ANTHROPIC_API_KEY",
-			"2023-06-01",
-			"claude-sonnet-4-20250514",
-			[]string{"claude-sonnet-4-20250514", "claude-haiku-3-5-20241022"},
-			"https://docs.anthropic.com/en/api/messages",
-			"Native Anthropic Messages API preset. This uses Hecate's Anthropic protocol path instead of OpenAI-compat mode.",
-		),
-		newProviderPreset(
-			"groq",
-			"Groq",
-			"cloud",
-			"openai",
-			"https://api.groq.com/openai/v1",
-			"PROVIDER_GROQ_API_KEY",
-			"",
-			"llama-3.3-70b-versatile",
-			[]string{"llama-3.3-70b-versatile", "openai/gpt-oss-20b"},
-			"https://console.groq.com/docs/openai",
-			"OpenAI-compatible preset for Groq's low-latency inference API.",
-		),
-		newProviderPreset(
-			"gemini",
-			"Gemini",
-			"cloud",
-			"openai",
-			"https://generativelanguage.googleapis.com/v1beta/openai",
-			"PROVIDER_GEMINI_API_KEY",
-			"",
-			"gemini-2.5-flash",
-			[]string{"gemini-2.5-flash", "gemini-2.5-pro"},
-			"https://ai.google.dev/gemini-api/docs/openai",
-			"OpenAI-compatible preset for Gemini through Google's compatibility layer.",
-		),
-		newProviderPreset(
-			"ollama",
-			"Ollama",
-			"local",
-			"openai",
-			"http://127.0.0.1:11434/v1",
-			"",
-			"",
-			"llama3.1:8b",
-			[]string{"llama3.1:8b", "qwen2.5:7b"},
-			"https://github.com/ollama/ollama/blob/main/docs/openai.md",
-			"Local preset for Ollama's OpenAI-compatible endpoint.",
-		),
-		newProviderPreset(
-			"lmstudio",
-			"LM Studio",
-			"local",
-			"openai",
-			"http://127.0.0.1:1234/v1",
-			"",
-			"",
-			"local-model",
-			[]string{"local-model"},
-			"https://lmstudio.ai/docs/app/api/endpoints/openai",
-			"Local preset for LM Studio's OpenAI-compatible server.",
-		),
-		newProviderPreset(
-			"localai",
-			"LocalAI",
-			"local",
-			"openai",
-			"http://127.0.0.1:8080/v1",
-			"",
-			"",
-			"local-model",
-			[]string{"local-model"},
-			"https://localai.io/features/openai-functions/",
-			"Local preset for LocalAI's OpenAI-compatible API surface.",
-		),
-		newProviderPreset(
-			"llamacpp",
-			"llama.cpp server",
-			"local",
-			"openai",
-			"http://127.0.0.1:8080/v1",
-			"",
-			"",
-			"local-model",
-			[]string{"local-model"},
-			"https://github.com/ggerganov/llama.cpp/tree/master/examples/server",
-			"Local preset for llama.cpp-compatible OpenAI endpoints.",
-		),
+	items := config.BuiltInProviders()
+	out := make([]providerPreset, 0, len(items))
+	for _, item := range items {
+		out = append(out, newProviderPreset(
+			item.ID,
+			item.Name,
+			item.Kind,
+			item.Protocol,
+			item.BaseURL,
+			item.APIKeyEnv,
+			item.APIVersion,
+			item.DefaultModel,
+			item.ExampleModels,
+			item.DocsURL,
+			item.Description,
+		))
 	}
+	return out
 }
 
 func newProviderPreset(id, name, kind, protocol, baseURL, apiKeyEnv, apiVersion, defaultModel string, exampleModels []string, docsURL, description string) providerPreset {

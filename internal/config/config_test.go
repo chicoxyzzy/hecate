@@ -146,3 +146,26 @@ func TestLoadProvidersFromEnvUsesGenericProviderPrefixes(t *testing.T) {
 		t.Fatalf("anthropic protocol = %q, want anthropic", cfg.Providers.OpenAICompatible[2].Protocol)
 	}
 }
+
+func TestBuiltInProviderCatalogDefaults(t *testing.T) {
+	t.Parallel()
+
+	openai, ok := BuiltInProviderByID("openai")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(openai) = not found")
+	}
+	if got := openai.RuntimeConfig("gpt-4.1-mini").DefaultModel; got != "gpt-4.1-mini" {
+		t.Fatalf("openai default model = %q, want overridden global default", got)
+	}
+
+	anthropic, ok := BuiltInProviderByID("anthropic")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(anthropic) = not found")
+	}
+	if anthropic.Protocol != "anthropic" {
+		t.Fatalf("anthropic protocol = %q, want anthropic", anthropic.Protocol)
+	}
+	if got := anthropic.RuntimeConfig("ignored").DefaultModel; got != "claude-sonnet-4-20250514" {
+		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-20250514", got)
+	}
+}
