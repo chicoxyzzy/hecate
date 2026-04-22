@@ -1,12 +1,14 @@
 package api
 
 type OpenAIChatCompletionRequest struct {
-	Model       string              `json:"model"`
-	Provider    string              `json:"provider,omitempty"`
-	Messages    []OpenAIChatMessage `json:"messages"`
-	MaxTokens   int                 `json:"max_tokens,omitempty"`
-	Temperature float64             `json:"temperature,omitempty"`
-	User        string              `json:"user,omitempty"`
+	Model        string              `json:"model"`
+	Provider     string              `json:"provider,omitempty"`
+	SessionID    string              `json:"session_id,omitempty"`
+	SessionTitle string              `json:"session_title,omitempty"`
+	Messages     []OpenAIChatMessage `json:"messages"`
+	MaxTokens    int                 `json:"max_tokens,omitempty"`
+	Temperature  float64             `json:"temperature,omitempty"`
+	User         string              `json:"user,omitempty"`
 }
 
 type OpenAIChatMessage struct {
@@ -46,6 +48,20 @@ type SessionResponse struct {
 	Data   SessionResponseItem `json:"data"`
 }
 
+type ChatSessionsResponse struct {
+	Object string                   `json:"object"`
+	Data   []ChatSessionSummaryItem `json:"data"`
+}
+
+type ChatSessionResponse struct {
+	Object string          `json:"object"`
+	Data   ChatSessionItem `json:"data"`
+}
+
+type CreateChatSessionRequest struct {
+	Title string `json:"title"`
+}
+
 type SessionResponseItem struct {
 	Authenticated    bool     `json:"authenticated"`
 	InvalidToken     bool     `json:"invalid_token"`
@@ -56,6 +72,48 @@ type SessionResponseItem struct {
 	KeyID            string   `json:"key_id,omitempty"`
 	AllowedProviders []string `json:"allowed_providers,omitempty"`
 	AllowedModels    []string `json:"allowed_models,omitempty"`
+}
+
+type ChatSessionSummaryItem struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Tenant        string `json:"tenant,omitempty"`
+	User          string `json:"user,omitempty"`
+	TurnCount     int    `json:"turn_count"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+	LastModel     string `json:"last_model,omitempty"`
+	LastProvider  string `json:"last_provider,omitempty"`
+	LastCostUSD   string `json:"last_cost_usd,omitempty"`
+	LastRequestID string `json:"last_request_id,omitempty"`
+}
+
+type ChatSessionItem struct {
+	ID        string                `json:"id"`
+	Title     string                `json:"title"`
+	Tenant    string                `json:"tenant,omitempty"`
+	User      string                `json:"user,omitempty"`
+	CreatedAt string                `json:"created_at,omitempty"`
+	UpdatedAt string                `json:"updated_at,omitempty"`
+	Turns     []ChatSessionTurnItem `json:"turns,omitempty"`
+}
+
+type ChatSessionTurnItem struct {
+	ID                string            `json:"id"`
+	RequestID         string            `json:"request_id"`
+	UserMessage       OpenAIChatMessage `json:"user_message"`
+	AssistantMessage  OpenAIChatMessage `json:"assistant_message"`
+	RequestedProvider string            `json:"requested_provider,omitempty"`
+	Provider          string            `json:"provider"`
+	ProviderKind      string            `json:"provider_kind,omitempty"`
+	RequestedModel    string            `json:"requested_model,omitempty"`
+	Model             string            `json:"model"`
+	CostMicrosUSD     int64             `json:"cost_micros_usd"`
+	CostUSD           string            `json:"cost_usd"`
+	PromptTokens      int               `json:"prompt_tokens"`
+	CompletionTokens  int               `json:"completion_tokens"`
+	TotalTokens       int               `json:"total_tokens"`
+	CreatedAt         string            `json:"created_at,omitempty"`
 }
 
 type OpenAIModelData struct {
@@ -160,21 +218,49 @@ type BudgetStatusResponse struct {
 	Data   BudgetStatusResponseItem `json:"data"`
 }
 
+type AccountSummaryResponse struct {
+	Object string                     `json:"object"`
+	Data   AccountSummaryResponseItem `json:"data"`
+}
+
+type RequestLedgerResponse struct {
+	Object string                `json:"object"`
+	Data   []BudgetHistoryRecord `json:"data"`
+}
+
+type AccountSummaryResponseItem struct {
+	Account   BudgetStatusResponseItem     `json:"account"`
+	Estimates []AccountModelEstimateRecord `json:"estimates"`
+}
+
+type AccountModelEstimateRecord struct {
+	Provider                        string `json:"provider"`
+	ProviderKind                    string `json:"provider_kind"`
+	Model                           string `json:"model"`
+	Default                         bool   `json:"default,omitempty"`
+	DiscoverySource                 string `json:"discovery_source,omitempty"`
+	Priced                          bool   `json:"priced"`
+	InputMicrosUSDPerMillionTokens  int64  `json:"input_micros_usd_per_million_tokens"`
+	OutputMicrosUSDPerMillionTokens int64  `json:"output_micros_usd_per_million_tokens"`
+	EstimatedRemainingPromptTokens  int64  `json:"estimated_remaining_prompt_tokens"`
+	EstimatedRemainingOutputTokens  int64  `json:"estimated_remaining_output_tokens"`
+}
+
 type BudgetStatusResponseItem struct {
 	Key                string                `json:"key"`
 	Scope              string                `json:"scope"`
 	Provider           string                `json:"provider,omitempty"`
 	Tenant             string                `json:"tenant,omitempty"`
 	Backend            string                `json:"backend"`
-	LimitSource        string                `json:"limit_source"`
-	SpentMicrosUSD     int64                 `json:"spent_micros_usd"`
-	SpentUSD           string                `json:"spent_usd"`
-	CurrentMicrosUSD   int64                 `json:"current_micros_usd"`
-	CurrentUSD         string                `json:"current_usd"`
-	MaxMicrosUSD       int64                 `json:"max_micros_usd"`
-	MaxUSD             string                `json:"max_usd"`
-	RemainingMicrosUSD int64                 `json:"remaining_micros_usd"`
-	RemainingUSD       string                `json:"remaining_usd"`
+	BalanceSource      string                `json:"balance_source"`
+	DebitedMicrosUSD   int64                 `json:"debited_micros_usd"`
+	DebitedUSD         string                `json:"debited_usd"`
+	CreditedMicrosUSD  int64                 `json:"credited_micros_usd"`
+	CreditedUSD        string                `json:"credited_usd"`
+	BalanceMicrosUSD   int64                 `json:"balance_micros_usd"`
+	BalanceUSD         string                `json:"balance_usd"`
+	AvailableMicrosUSD int64                 `json:"available_micros_usd"`
+	AvailableUSD       string                `json:"available_usd"`
 	Enforced           bool                  `json:"enforced"`
 	Warnings           []BudgetWarningRecord `json:"warnings,omitempty"`
 	History            []BudgetHistoryRecord `json:"history,omitempty"`
@@ -183,27 +269,32 @@ type BudgetStatusResponseItem struct {
 type BudgetWarningRecord struct {
 	ThresholdPercent   int   `json:"threshold_percent"`
 	ThresholdMicrosUSD int64 `json:"threshold_micros_usd"`
-	CurrentMicrosUSD   int64 `json:"current_micros_usd"`
-	RemainingMicrosUSD int64 `json:"remaining_micros_usd"`
+	BalanceMicrosUSD   int64 `json:"balance_micros_usd"`
+	AvailableMicrosUSD int64 `json:"available_micros_usd"`
 	Triggered          bool  `json:"triggered"`
 }
 
 type BudgetHistoryRecord struct {
-	Type             string `json:"type"`
-	Scope            string `json:"scope,omitempty"`
-	Provider         string `json:"provider,omitempty"`
-	Tenant           string `json:"tenant,omitempty"`
-	Model            string `json:"model,omitempty"`
-	RequestID        string `json:"request_id,omitempty"`
-	Actor            string `json:"actor,omitempty"`
-	Detail           string `json:"detail,omitempty"`
-	AmountMicrosUSD  int64  `json:"amount_micros_usd"`
-	AmountUSD        string `json:"amount_usd"`
-	BalanceMicrosUSD int64  `json:"balance_micros_usd"`
-	BalanceUSD       string `json:"balance_usd"`
-	LimitMicrosUSD   int64  `json:"limit_micros_usd"`
-	LimitUSD         string `json:"limit_usd"`
-	Timestamp        string `json:"timestamp,omitempty"`
+	Type              string `json:"type"`
+	Scope             string `json:"scope,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	Tenant            string `json:"tenant,omitempty"`
+	Model             string `json:"model,omitempty"`
+	RequestID         string `json:"request_id,omitempty"`
+	Actor             string `json:"actor,omitempty"`
+	Detail            string `json:"detail,omitempty"`
+	AmountMicrosUSD   int64  `json:"amount_micros_usd"`
+	AmountUSD         string `json:"amount_usd"`
+	BalanceMicrosUSD  int64  `json:"balance_micros_usd"`
+	BalanceUSD        string `json:"balance_usd"`
+	CreditedMicrosUSD int64  `json:"credited_micros_usd"`
+	CreditedUSD       string `json:"credited_usd"`
+	DebitedMicrosUSD  int64  `json:"debited_micros_usd"`
+	DebitedUSD        string `json:"debited_usd"`
+	PromptTokens      int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int    `json:"completion_tokens,omitempty"`
+	TotalTokens       int    `json:"total_tokens,omitempty"`
+	Timestamp         string `json:"timestamp,omitempty"`
 }
 
 type RetentionRunData struct {
@@ -249,12 +340,12 @@ type BudgetTopUpRequest struct {
 	AmountMicrosUSD int64  `json:"amount_micros_usd"`
 }
 
-type BudgetLimitRequest struct {
-	Key            string `json:"key"`
-	Scope          string `json:"scope"`
-	Provider       string `json:"provider"`
-	Tenant         string `json:"tenant"`
-	LimitMicrosUSD int64  `json:"limit_micros_usd"`
+type BudgetBalanceRequest struct {
+	Key              string `json:"key"`
+	Scope            string `json:"scope"`
+	Provider         string `json:"provider"`
+	Tenant           string `json:"tenant"`
+	BalanceMicrosUSD int64  `json:"balance_micros_usd"`
 }
 
 type ControlPlaneResponse struct {

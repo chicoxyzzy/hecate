@@ -1,5 +1,5 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import { formatUsd } from "../../lib/format";
+import { formatDateTime, formatUsd } from "../../lib/format";
 import { describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
 import { RouteWorkbench } from "./RouteWorkbench";
 import { TraceWorkbench } from "./TraceWorkbench";
@@ -17,6 +17,81 @@ export function PlaygroundView({ state, actions }: Props) {
   return (
     <div className="workspace-grid">
       <div className="workspace-main">
+        <ShellSection eyebrow="Chat sessions" title="Session">
+          <div className="two-column-grid">
+            <Surface>
+              <div className="stack-sm">
+                <div className="action-row action-row--wide">
+                  <StatusPill label={state.activeChatSession ? state.activeChatSession.title : "Unsaved draft"} tone="neutral" />
+                  {state.activeChatSession ? <StatusPill label={`${state.activeChatSession.turns.length} turns`} tone="healthy" /> : null}
+                </div>
+                <div className="action-row">
+                  <ToolbarButton onClick={() => void actions.createChatSession()} tone="primary">
+                    Create session
+                  </ToolbarButton>
+                  <ToolbarButton onClick={actions.startNewChat}>New draft</ToolbarButton>
+                </div>
+                {state.chatSessions.length ? (
+                  <div className="trace-inline-grid">
+                    {state.chatSessions.map((chatSession) => (
+                      <button
+                        className={state.activeChatSessionID === chatSession.id ? "trace-inline-card trace-inline-card--active" : "trace-inline-card"}
+                        key={chatSession.id}
+                        onClick={() => void actions.selectChatSession(chatSession.id)}
+                        type="button"
+                      >
+                        <div className="action-row action-row--wide">
+                          <p className="trace-inline-card__title">{chatSession.title}</p>
+                          {chatSession.last_provider ? <StatusPill label={chatSession.last_provider} tone="neutral" /> : null}
+                        </div>
+                        <p className="body-muted">
+                          {chatSession.turn_count} turns
+                          {chatSession.updated_at ? ` · ${formatDateTime(chatSession.updated_at)}` : ""}
+                        </p>
+                        {chatSession.last_model ? <p className="body-muted">{chatSession.last_model}</p> : null}
+                        {chatSession.last_cost_usd ? <p className="body-muted">Last turn {formatUsd(chatSession.last_cost_usd)}</p> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState title="No saved sessions" detail="Create a session to persist a transcript with provider, model, and spend per turn." />
+                )}
+              </div>
+            </Surface>
+
+            <Surface>
+              {state.activeChatSession?.turns.length ? (
+                <div className="stack-sm">
+                  {state.activeChatSession.turns.map((turn) => (
+                    <div className="budget-history-item" key={turn.id}>
+                      <div className="budget-history-item__head">
+                        <div className="action-row">
+                          <StatusPill label={turn.provider} tone={turn.provider_kind === "local" ? "healthy" : "neutral"} />
+                          <StatusPill label={turn.model} tone="neutral" />
+                          <StatusPill label={formatUsd(turn.cost_usd)} tone="warning" />
+                        </div>
+                        <span className="body-muted">{formatDateTime(turn.created_at)}</span>
+                      </div>
+                      <div className="stack-sm">
+                        <div className="response-preview">{turn.user_message.content}</div>
+                        <div className="response-preview response-preview--large">{turn.assistant_message.content}</div>
+                      </div>
+                      <div className="budget-history-item__body">
+                        <span>Prompt {turn.prompt_tokens}</span>
+                        <span>Completion {turn.completion_tokens}</span>
+                        <span>Total {turn.total_tokens}</span>
+                        {turn.request_id ? <span>{turn.request_id}</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No transcript yet" detail="The active chat session will build a persisted transcript here as you send requests." />
+              )}
+            </Surface>
+          </div>
+        </ShellSection>
+
         <ShellSection
           eyebrow="Request workspace"
           title="Request"
@@ -100,6 +175,7 @@ export function PlaygroundView({ state, actions }: Props) {
                 <ToolbarButton disabled={state.chatLoading || !state.model || !state.message.trim()} tone="primary" type="submit">
                   {state.chatLoading ? "Running request..." : "Run through Hecate"}
                 </ToolbarButton>
+                <StatusPill label={state.activeChatSession ? `Session: ${state.activeChatSession.title}` : "No active session"} tone="neutral" />
                 <StatusPill label={state.providerFilter === "auto" ? "Route mode: auto" : `Pinned: ${state.providerFilter}`} tone="neutral" />
                 <StatusPill
                   label={state.session.kind === "tenant" ? `Tenant locked: ${state.session.tenant}` : "Tenant can be overridden"}

@@ -12,6 +12,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/telemetry"
+	"github.com/hecate/agent-runtime/pkg/types"
 )
 
 func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +164,85 @@ func (h *Handler) HandleBudgetStatus(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, renderBudgetStatusResponse(result))
 }
 
+func (h *Handler) HandleAccountSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	filter := budgetFilterFromRequest(r)
+	result, err := h.service.AccountSummaryWithFilter(ctx, filter)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.accounts.summary.failed",
+			slog.String("event.name", "gateway.accounts.summary.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	estimates := make([]AccountModelEstimateRecord, 0, len(result.Estimates))
+	for _, estimate := range result.Estimates {
+		estimates = append(estimates, AccountModelEstimateRecord{
+			Provider:                        estimate.Provider,
+			ProviderKind:                    estimate.ProviderKind,
+			Model:                           estimate.Model,
+			Default:                         estimate.Default,
+			DiscoverySource:                 estimate.DiscoverySource,
+			Priced:                          estimate.Priced,
+			InputMicrosUSDPerMillionTokens:  estimate.InputMicrosUSDPerMillionTokens,
+			OutputMicrosUSDPerMillionTokens: estimate.OutputMicrosUSDPerMillionTokens,
+			EstimatedRemainingPromptTokens:  estimate.EstimatedRemainingPromptTokens,
+			EstimatedRemainingOutputTokens:  estimate.EstimatedRemainingOutputTokens,
+		})
+	}
+
+	WriteJSON(w, http.StatusOK, AccountSummaryResponse{
+		Object: "account_summary",
+		Data: AccountSummaryResponseItem{
+			Account:   renderBudgetStatusRecord(result.Status),
+			Estimates: estimates,
+		},
+	})
+}
+
+func (h *Handler) HandleRequestLedger(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "limit query parameter must be a non-negative integer")
+			return
+		}
+		if value > 200 {
+			value = 200
+		}
+		limit = value
+	}
+
+	result, err := h.service.RequestLedger(ctx, limit)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.requests.ledger.failed",
+			slog.String("event.name", "gateway.requests.ledger.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, RequestLedgerResponse{
+		Object: "request_ledger",
+		Data:   renderBudgetHistoryRecords(result.Entries),
+	})
+}
+
 func (h *Handler) HandleBudgetReset(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {
@@ -242,17 +322,17 @@ func (h *Handler) HandleBudgetSetLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := h.contextWithPrincipal(r.Context(), principal)
 
-	var limitReq BudgetLimitRequest
-	if !decodeJSON(w, r, &limitReq) {
+	var balanceReq BudgetBalanceRequest
+	if !decodeJSON(w, r, &balanceReq) {
 		return
 	}
-	if limitReq.LimitMicrosUSD < 0 {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "limit_micros_usd must be zero or greater")
+	if balanceReq.BalanceMicrosUSD < 0 {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "balance_micros_usd must be zero or greater")
 		return
 	}
 
-	filter := budgetFilterFromMutation(limitReq.Key, limitReq.Scope, limitReq.Provider, limitReq.Tenant)
-	result, err := h.service.SetBudgetLimitWithFilter(ctx, filter, limitReq.LimitMicrosUSD)
+	filter := budgetFilterFromMutation(balanceReq.Key, balanceReq.Scope, balanceReq.Provider, balanceReq.Tenant)
+	result, err := h.service.SetBudgetBalanceWithFilter(ctx, filter, balanceReq.BalanceMicrosUSD)
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gateway.budget.limit_set.failed",
 			slog.String("event.name", "gateway.budget.limit_set.failed"),
@@ -291,64 +371,75 @@ func renderRetentionRunData(startedAt, finishedAt, trigger, actor, requestID str
 }
 
 func renderBudgetStatusResponse(result *gateway.BudgetStatusResult) BudgetStatusResponse {
-	status := result.Status
+	return BudgetStatusResponse{
+		Object: "budget_status",
+		Data:   renderBudgetStatusRecord(result.Status),
+	}
+}
+
+func renderBudgetStatusRecord(status types.BudgetStatus) BudgetStatusResponseItem {
 	warnings := make([]BudgetWarningRecord, 0, len(status.Warnings))
 	for _, warning := range status.Warnings {
 		warnings = append(warnings, BudgetWarningRecord{
 			ThresholdPercent:   warning.ThresholdPercent,
 			ThresholdMicrosUSD: warning.ThresholdMicrosUSD,
-			CurrentMicrosUSD:   warning.CurrentMicrosUSD,
-			RemainingMicrosUSD: warning.RemainingMicrosUSD,
+			BalanceMicrosUSD:   warning.BalanceMicrosUSD,
+			AvailableMicrosUSD: warning.AvailableMicrosUSD,
 			Triggered:          warning.Triggered,
 		})
 	}
 
-	history := make([]BudgetHistoryRecord, 0, len(status.History))
-	for _, entry := range status.History {
+	return BudgetStatusResponseItem{
+		Key:                status.Key,
+		Scope:              status.Scope,
+		Provider:           status.Provider,
+		Tenant:             status.Tenant,
+		Backend:            status.Backend,
+		BalanceSource:      status.BalanceSource,
+		DebitedMicrosUSD:   status.DebitedMicrosUSD,
+		DebitedUSD:         formatUSD(status.DebitedMicrosUSD),
+		CreditedMicrosUSD:  status.CreditedMicrosUSD,
+		CreditedUSD:        formatUSD(status.CreditedMicrosUSD),
+		BalanceMicrosUSD:   status.BalanceMicrosUSD,
+		BalanceUSD:         formatUSD(status.BalanceMicrosUSD),
+		AvailableMicrosUSD: status.AvailableMicrosUSD,
+		AvailableUSD:       formatUSD(status.AvailableMicrosUSD),
+		Enforced:           status.Enforced,
+		Warnings:           warnings,
+		History:            renderBudgetHistoryRecords(status.History),
+	}
+}
+
+func renderBudgetHistoryRecords(entries []types.BudgetHistoryEntry) []BudgetHistoryRecord {
+	history := make([]BudgetHistoryRecord, 0, len(entries))
+	for _, entry := range entries {
 		item := BudgetHistoryRecord{
-			Type:             entry.Type,
-			Scope:            entry.Scope,
-			Provider:         entry.Provider,
-			Tenant:           entry.Tenant,
-			Model:            entry.Model,
-			RequestID:        entry.RequestID,
-			Actor:            entry.Actor,
-			Detail:           entry.Detail,
-			AmountMicrosUSD:  entry.AmountMicrosUSD,
-			AmountUSD:        formatUSD(entry.AmountMicrosUSD),
-			BalanceMicrosUSD: entry.BalanceMicrosUSD,
-			BalanceUSD:       formatUSD(entry.BalanceMicrosUSD),
-			LimitMicrosUSD:   entry.LimitMicrosUSD,
-			LimitUSD:         formatUSD(entry.LimitMicrosUSD),
+			Type:              entry.Type,
+			Scope:             entry.Scope,
+			Provider:          entry.Provider,
+			Tenant:            entry.Tenant,
+			Model:             entry.Model,
+			RequestID:         entry.RequestID,
+			Actor:             entry.Actor,
+			Detail:            entry.Detail,
+			AmountMicrosUSD:   entry.AmountMicrosUSD,
+			AmountUSD:         formatUSD(entry.AmountMicrosUSD),
+			BalanceMicrosUSD:  entry.BalanceMicrosUSD,
+			BalanceUSD:        formatUSD(entry.BalanceMicrosUSD),
+			CreditedMicrosUSD: entry.CreditedMicrosUSD,
+			CreditedUSD:       formatUSD(entry.CreditedMicrosUSD),
+			DebitedMicrosUSD:  entry.DebitedMicrosUSD,
+			DebitedUSD:        formatUSD(entry.DebitedMicrosUSD),
+			PromptTokens:      entry.PromptTokens,
+			CompletionTokens:  entry.CompletionTokens,
+			TotalTokens:       entry.TotalTokens,
 		}
 		if !entry.Timestamp.IsZero() {
 			item.Timestamp = entry.Timestamp.UTC().Format(time.RFC3339Nano)
 		}
 		history = append(history, item)
 	}
-
-	return BudgetStatusResponse{
-		Object: "budget_status",
-		Data: BudgetStatusResponseItem{
-			Key:                status.Key,
-			Scope:              status.Scope,
-			Provider:           status.Provider,
-			Tenant:             status.Tenant,
-			Backend:            status.Backend,
-			LimitSource:        status.LimitSource,
-			SpentMicrosUSD:     status.SpentMicrosUSD,
-			SpentUSD:           formatUSD(status.SpentMicrosUSD),
-			CurrentMicrosUSD:   status.CurrentMicrosUSD,
-			CurrentUSD:         formatUSD(status.CurrentMicrosUSD),
-			MaxMicrosUSD:       status.MaxMicrosUSD,
-			MaxUSD:             formatUSD(status.MaxMicrosUSD),
-			RemainingMicrosUSD: status.RemainingMicrosUSD,
-			RemainingUSD:       formatUSD(status.RemainingMicrosUSD),
-			Enforced:           status.Enforced,
-			Warnings:           warnings,
-			History:            history,
-		},
-	}
+	return history
 }
 
 func budgetFilterFromMutation(key, scope, provider, tenant string) governor.BudgetFilter {
@@ -369,4 +460,3 @@ func budgetFilterFromRequest(r *http.Request) governor.BudgetFilter {
 		Tenant:   query.Get("tenant"),
 	}
 }
-

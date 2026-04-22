@@ -15,10 +15,11 @@ import (
 type Governor interface {
 	Check(ctx context.Context, req types.ChatRequest) error
 	CheckRoute(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, providerKind string, estimatedCostMicros int64) error
-	RecordUsage(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, costMicros int64) error
+	RecordUsage(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, usage types.Usage, costMicros int64) error
 	BudgetStatus(ctx context.Context, filter BudgetFilter) (types.BudgetStatus, error)
+	RecentBudgetHistory(ctx context.Context, limit int) ([]types.BudgetHistoryEntry, error)
 	TopUpBudget(ctx context.Context, filter BudgetFilter, deltaMicros int64) error
-	SetBudgetLimit(ctx context.Context, filter BudgetFilter, limitMicros int64) error
+	SetBudgetBalance(ctx context.Context, filter BudgetFilter, balanceMicros int64) error
 	ResetBudget(ctx context.Context, filter BudgetFilter) error
 	Rewrite(req types.ChatRequest) types.ChatRequest
 }
@@ -32,22 +33,20 @@ type BudgetFilter struct {
 
 type StaticGovernor struct {
 	config  config.GovernorConfig
-	ledger  UsageLedger
-	store   BudgetStateStore
+	store   AccountStore
 	history BudgetHistoryStore
 	rules   []policy.Rule
 }
 
-func NewStaticGovernor(cfg config.GovernorConfig, ledger UsageLedger, store BudgetStateStore) *StaticGovernor {
+func NewStaticGovernor(cfg config.GovernorConfig, store AccountStore, historyStore BudgetHistoryStore) *StaticGovernor {
 	var history BudgetHistoryStore
-	if candidate, ok := ledger.(BudgetHistoryStore); ok {
-		history = candidate
+	if historyStore != nil {
+		history = historyStore
 	} else if candidate, ok := store.(BudgetHistoryStore); ok {
 		history = candidate
 	}
 	return &StaticGovernor{
 		config:  cfg,
-		ledger:  ledger,
 		store:   store,
 		history: history,
 		rules:   policy.FromConfig(cfg.PolicyRules),
@@ -118,35 +117,23 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 
 	budgetKey := g.budgetKeyForRequest(req, decision)
 	if g.store != nil {
-		limit, err := g.effectiveBudgetLimit(ctx, budgetKey)
+		balance, enforced, err := g.effectiveBudgetBalance(ctx, budgetKey)
 		if err != nil {
-			return fmt.Errorf("read budget limit: %w", err)
+			return fmt.Errorf("read budget balance: %w", err)
 		}
-		if limit <= 0 {
-			_ = req
+		if !enforced {
 			return nil
 		}
-
-		current, err := g.ledger.Current(ctx, budgetKey)
-		if err != nil {
-			return fmt.Errorf("read budget state: %w", err)
-		}
-		if current+estimatedCostMicros > limit {
-			return fmt.Errorf(
-				"estimated request budget %d would exceed limit %d (current=%d)",
-				estimatedCostMicros,
-				limit,
-				current,
-			)
+		if estimatedCostMicros > balance {
+			return fmt.Errorf("estimated request cost %d would exceed account balance %d", estimatedCostMicros, balance)
 		}
 	}
 
-	_ = req
 	return nil
 }
 
-func (g *StaticGovernor) RecordUsage(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, costMicros int64) error {
-	if g.ledger == nil || costMicros <= 0 {
+func (g *StaticGovernor) RecordUsage(ctx context.Context, req types.ChatRequest, decision types.RouteDecision, usage types.Usage, costMicros int64) error {
+	if g.store == nil || costMicros <= 0 {
 		return nil
 	}
 	event := UsageEvent{
@@ -155,22 +142,40 @@ func (g *StaticGovernor) RecordUsage(ctx context.Context, req types.ChatRequest,
 		Tenant:     requestscope.EffectiveTenant(requestscope.Normalize(req.Scope), g.config.BudgetTenantFallback),
 		Provider:   decision.Provider,
 		Model:      decision.Model,
+		Usage:      usage,
 		CostMicros: costMicros,
 		OccurredAt: time.Now().UTC(),
 	}
-	if err := g.ledger.Record(ctx, event); err != nil {
+	if _, exists, err := g.store.Snapshot(ctx, event.BudgetKey); err != nil {
+		return fmt.Errorf("read budget account before debit: %w", err)
+	} else if !exists {
+		if g.config.MaxTotalBudgetMicros <= 0 {
+			return nil
+		}
+		if _, err := g.store.Credit(ctx, event.BudgetKey, g.config.MaxTotalBudgetMicros); err != nil {
+			return fmt.Errorf("initialize budget account: %w", err)
+		}
+	}
+	account, err := g.store.Debit(ctx, event)
+	if err != nil {
 		return fmt.Errorf("record budget usage for provider %q: %w", decision.Provider, err)
 	}
 	if err := g.appendBudgetEvent(ctx, BudgetEvent{
-		Key:             event.BudgetKey,
-		Type:            "usage",
-		Scope:           g.config.BudgetScope,
-		Provider:        decision.Provider,
-		Tenant:          event.Tenant,
-		Model:           decision.Model,
-		RequestID:       req.RequestID,
-		AmountMicrosUSD: costMicros,
-		OccurredAt:      event.OccurredAt,
+		Key:               event.BudgetKey,
+		Type:              "debit",
+		Scope:             g.config.BudgetScope,
+		Provider:          decision.Provider,
+		Tenant:            event.Tenant,
+		Model:             decision.Model,
+		RequestID:         req.RequestID,
+		AmountMicrosUSD:   costMicros,
+		BalanceMicrosUSD:  account.BalanceMicrosUSD,
+		CreditedMicrosUSD: account.CreditedMicrosUSD,
+		DebitedMicrosUSD:  account.DebitedMicrosUSD,
+		PromptTokens:      usage.PromptTokens,
+		CompletionTokens:  usage.CompletionTokens,
+		TotalTokens:       usage.TotalTokens,
+		OccurredAt:        event.OccurredAt,
 	}); err != nil {
 		return fmt.Errorf("append budget usage history: %w", err)
 	}
@@ -185,33 +190,39 @@ func (g *StaticGovernor) BudgetStatus(ctx context.Context, filter BudgetFilter) 
 		Provider: resolved.Provider,
 		Tenant:   resolved.Tenant,
 		Backend:  g.config.BudgetBackend,
-		Enforced: true,
 	}
 	if g.store == nil {
 		if status.Backend == "" {
 			status.Backend = "none"
 		}
-		status.MaxMicrosUSD = g.config.MaxTotalBudgetMicros
-		status.LimitSource = "config"
-		status.Enforced = status.MaxMicrosUSD > 0
+		status.BalanceMicrosUSD = g.config.MaxTotalBudgetMicros
+		status.AvailableMicrosUSD = g.config.MaxTotalBudgetMicros
+		status.CreditedMicrosUSD = g.config.MaxTotalBudgetMicros
+		status.BalanceSource = "config"
+		status.Enforced = status.BalanceMicrosUSD > 0
 		return status, nil
 	}
 
-	spent, err := g.ledger.Current(ctx, resolved.Key)
+	account, exists, err := g.store.Snapshot(ctx, resolved.Key)
 	if err != nil {
-		return types.BudgetStatus{}, fmt.Errorf("read budget spent: %w", err)
+		return types.BudgetStatus{}, fmt.Errorf("read budget account: %w", err)
 	}
-	limit, source, err := g.budgetLimitAndSource(ctx, resolved.Key)
-	if err != nil {
-		return types.BudgetStatus{}, fmt.Errorf("read budget limit: %w", err)
+	if !exists && g.config.MaxTotalBudgetMicros > 0 {
+		account = AccountState{
+			Key:               resolved.Key,
+			BalanceMicrosUSD:  g.config.MaxTotalBudgetMicros,
+			CreditedMicrosUSD: g.config.MaxTotalBudgetMicros,
+		}
+		status.BalanceSource = "config"
+	} else {
+		status.BalanceSource = "store"
 	}
-	status.SpentMicrosUSD = spent
-	status.CurrentMicrosUSD = spent
-	status.MaxMicrosUSD = limit
-	status.LimitSource = source
-	status.Enforced = limit > 0
-	status.RemainingMicrosUSD = remainingBudget(limit, spent)
-	status.Warnings = g.buildWarnings(limit, spent)
+	status.DebitedMicrosUSD = account.DebitedMicrosUSD
+	status.CreditedMicrosUSD = account.CreditedMicrosUSD
+	status.BalanceMicrosUSD = account.BalanceMicrosUSD
+	status.AvailableMicrosUSD = account.BalanceMicrosUSD
+	status.Enforced = status.BalanceMicrosUSD > 0 || status.CreditedMicrosUSD > 0 || g.config.MaxTotalBudgetMicros > 0
+	status.Warnings = g.buildWarnings(account.CreditedMicrosUSD, account.BalanceMicrosUSD)
 	history, err := g.budgetHistory(ctx, resolved.Key, status, g.historyLimit())
 	if err != nil {
 		return types.BudgetStatus{}, fmt.Errorf("read budget history: %w", err)
@@ -220,73 +231,97 @@ func (g *StaticGovernor) BudgetStatus(ctx context.Context, filter BudgetFilter) 
 	return status, nil
 }
 
+func (g *StaticGovernor) RecentBudgetHistory(ctx context.Context, limit int) ([]types.BudgetHistoryEntry, error) {
+	if g.history == nil {
+		return nil, nil
+	}
+	events, err := g.history.ListRecentEvents(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.BudgetHistoryEntry, 0, len(events))
+	for _, event := range events {
+		out = append(out, types.BudgetHistoryEntry{
+			Type:              event.Type,
+			Scope:             event.Scope,
+			Provider:          event.Provider,
+			Tenant:            event.Tenant,
+			Model:             event.Model,
+			RequestID:         event.RequestID,
+			Actor:             event.Actor,
+			Detail:            event.Detail,
+			AmountMicrosUSD:   event.AmountMicrosUSD,
+			BalanceMicrosUSD:  event.BalanceMicrosUSD,
+			CreditedMicrosUSD: event.CreditedMicrosUSD,
+			DebitedMicrosUSD:  event.DebitedMicrosUSD,
+			PromptTokens:      event.PromptTokens,
+			CompletionTokens:  event.CompletionTokens,
+			TotalTokens:       event.TotalTokens,
+			Timestamp:         event.OccurredAt,
+		})
+	}
+	return out, nil
+}
+
 func (g *StaticGovernor) TopUpBudget(ctx context.Context, filter BudgetFilter, deltaMicros int64) error {
 	if g.store == nil || deltaMicros <= 0 {
 		return nil
 	}
 	resolved := g.resolveBudgetFilter(filter)
-	if err := g.store.AddLimit(ctx, resolved.Key, deltaMicros); err != nil {
-		return fmt.Errorf("top up budget limit: %w", err)
-	}
-	current, limit, err := g.currentAndLimit(ctx, resolved.Key)
+	account, err := g.store.Credit(ctx, resolved.Key, deltaMicros)
 	if err != nil {
-		return fmt.Errorf("read budget after top up: %w", err)
+		return fmt.Errorf("top up budget balance: %w", err)
 	}
 	if err := g.appendBudgetEvent(ctx, BudgetEvent{
-		Key:              resolved.Key,
-		Type:             "top_up",
-		Scope:            resolved.Scope,
-		Provider:         resolved.Provider,
-		Tenant:           resolved.Tenant,
-		AmountMicrosUSD:  deltaMicros,
-		BalanceMicrosUSD: current,
-		LimitMicrosUSD:   limit,
-		OccurredAt:       time.Now().UTC(),
+		Key:               resolved.Key,
+		Type:              "top_up",
+		Scope:             resolved.Scope,
+		Provider:          resolved.Provider,
+		Tenant:            resolved.Tenant,
+		AmountMicrosUSD:   deltaMicros,
+		BalanceMicrosUSD:  account.BalanceMicrosUSD,
+		CreditedMicrosUSD: account.CreditedMicrosUSD,
+		DebitedMicrosUSD:  account.DebitedMicrosUSD,
+		OccurredAt:        time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("append top-up history: %w", err)
 	}
 	return nil
 }
 
-func (g *StaticGovernor) SetBudgetLimit(ctx context.Context, filter BudgetFilter, limitMicros int64) error {
-	if g.store == nil || limitMicros < 0 {
+func (g *StaticGovernor) SetBudgetBalance(ctx context.Context, filter BudgetFilter, balanceMicros int64) error {
+	if g.store == nil || balanceMicros < 0 {
 		return nil
 	}
 	resolved := g.resolveBudgetFilter(filter)
-	if err := g.store.SetLimit(ctx, resolved.Key, limitMicros); err != nil {
-		return fmt.Errorf("set budget limit: %w", err)
-	}
-	current, _, err := g.currentAndLimit(ctx, resolved.Key)
+	account, err := g.store.SetBalance(ctx, resolved.Key, balanceMicros)
 	if err != nil {
-		return fmt.Errorf("read budget after limit set: %w", err)
+		return fmt.Errorf("set budget balance: %w", err)
 	}
 	if err := g.appendBudgetEvent(ctx, BudgetEvent{
-		Key:              resolved.Key,
-		Type:             "set_limit",
-		Scope:            resolved.Scope,
-		Provider:         resolved.Provider,
-		Tenant:           resolved.Tenant,
-		AmountMicrosUSD:  limitMicros,
-		BalanceMicrosUSD: current,
-		LimitMicrosUSD:   limitMicros,
-		OccurredAt:       time.Now().UTC(),
+		Key:               resolved.Key,
+		Type:              "set_balance",
+		Scope:             resolved.Scope,
+		Provider:          resolved.Provider,
+		Tenant:            resolved.Tenant,
+		AmountMicrosUSD:   balanceMicros,
+		BalanceMicrosUSD:  account.BalanceMicrosUSD,
+		CreditedMicrosUSD: account.CreditedMicrosUSD,
+		DebitedMicrosUSD:  account.DebitedMicrosUSD,
+		OccurredAt:        time.Now().UTC(),
 	}); err != nil {
-		return fmt.Errorf("append limit history: %w", err)
+		return fmt.Errorf("append balance history: %w", err)
 	}
 	return nil
 }
 
 func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) error {
-	if g.ledger == nil {
+	if g.store == nil {
 		return nil
 	}
 	resolved := g.resolveBudgetFilter(filter)
-	if err := g.ledger.Reset(ctx, resolved.Key); err != nil {
+	if err := g.store.Reset(ctx, resolved.Key); err != nil {
 		return fmt.Errorf("reset budget state: %w", err)
-	}
-	_, limit, err := g.currentAndLimit(ctx, resolved.Key)
-	if err != nil {
-		return fmt.Errorf("read budget after reset: %w", err)
 	}
 	if err := g.appendBudgetEvent(ctx, BudgetEvent{
 		Key:              resolved.Key,
@@ -295,7 +330,6 @@ func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) e
 		Provider:         resolved.Provider,
 		Tenant:           resolved.Tenant,
 		BalanceMicrosUSD: 0,
-		LimitMicrosUSD:   limit,
 		OccurredAt:       time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("append reset history: %w", err)
@@ -314,17 +348,6 @@ func (g *StaticGovernor) Rewrite(req types.ChatRequest) types.ChatRequest {
 	}
 	req.Model = g.config.ModelRewriteTo
 	return req
-}
-
-func remainingBudget(limit, current int64) int64 {
-	if limit <= 0 {
-		return 0
-	}
-	remaining := limit - current
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
 }
 
 func (g *StaticGovernor) budgetKeyForRequest(req types.ChatRequest, decision types.RouteDecision) string {
@@ -383,23 +406,18 @@ func (g *StaticGovernor) resolveBudgetFilter(filter BudgetFilter) BudgetFilter {
 	return filter
 }
 
-func (g *StaticGovernor) effectiveBudgetLimit(ctx context.Context, key string) (int64, error) {
-	limit, _, err := g.budgetLimitAndSource(ctx, key)
-	return limit, err
-}
-
-func (g *StaticGovernor) budgetLimitAndSource(ctx context.Context, key string) (int64, string, error) {
-	if g.store == nil {
-		return g.config.MaxTotalBudgetMicros, "config", nil
-	}
-	limit, err := g.store.Limit(ctx, key)
+func (g *StaticGovernor) effectiveBudgetBalance(ctx context.Context, key string) (int64, bool, error) {
+	account, exists, err := g.store.Snapshot(ctx, key)
 	if err != nil {
-		return 0, "", err
+		return 0, false, err
 	}
-	if limit > 0 {
-		return limit, "store", nil
+	if exists {
+		return account.BalanceMicrosUSD, true, nil
 	}
-	return g.config.MaxTotalBudgetMicros, "config", nil
+	if g.config.MaxTotalBudgetMicros > 0 {
+		return g.config.MaxTotalBudgetMicros, true, nil
+	}
+	return 0, false, nil
 }
 
 func (g *StaticGovernor) appendBudgetEvent(ctx context.Context, event BudgetEvent) error {
@@ -409,16 +427,18 @@ func (g *StaticGovernor) appendBudgetEvent(ctx context.Context, event BudgetEven
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
 	}
-	if event.BalanceMicrosUSD == 0 && g.ledger != nil {
-		current, err := g.ledger.Current(ctx, event.Key)
+	if g.store != nil && (event.BalanceMicrosUSD == 0 || event.CreditedMicrosUSD == 0 || event.DebitedMicrosUSD == 0) {
+		account, _, err := g.store.Snapshot(ctx, event.Key)
 		if err == nil {
-			event.BalanceMicrosUSD = current
-		}
-	}
-	if event.LimitMicrosUSD == 0 && g.store != nil {
-		limit, err := g.effectiveBudgetLimit(ctx, event.Key)
-		if err == nil {
-			event.LimitMicrosUSD = limit
+			if event.BalanceMicrosUSD == 0 {
+				event.BalanceMicrosUSD = account.BalanceMicrosUSD
+			}
+			if event.CreditedMicrosUSD == 0 {
+				event.CreditedMicrosUSD = account.CreditedMicrosUSD
+			}
+			if event.DebitedMicrosUSD == 0 {
+				event.DebitedMicrosUSD = account.DebitedMicrosUSD
+			}
 		}
 	}
 	return g.history.AppendEvent(ctx, event)
@@ -437,25 +457,29 @@ func (g *StaticGovernor) budgetHistory(ctx context.Context, key string, status t
 	out := make([]types.BudgetHistoryEntry, 0, len(events))
 	for _, event := range events {
 		out = append(out, types.BudgetHistoryEntry{
-			Type:             event.Type,
-			Scope:            event.Scope,
-			Provider:         firstNonEmpty(event.Provider, status.Provider),
-			Tenant:           firstNonEmpty(event.Tenant, status.Tenant),
-			Model:            event.Model,
-			RequestID:        event.RequestID,
-			Actor:            event.Actor,
-			Detail:           event.Detail,
-			AmountMicrosUSD:  event.AmountMicrosUSD,
-			BalanceMicrosUSD: event.BalanceMicrosUSD,
-			LimitMicrosUSD:   event.LimitMicrosUSD,
-			Timestamp:        event.OccurredAt,
+			Type:              event.Type,
+			Scope:             event.Scope,
+			Provider:          firstNonEmpty(event.Provider, status.Provider),
+			Tenant:            firstNonEmpty(event.Tenant, status.Tenant),
+			Model:             event.Model,
+			RequestID:         event.RequestID,
+			Actor:             event.Actor,
+			Detail:            event.Detail,
+			AmountMicrosUSD:   event.AmountMicrosUSD,
+			BalanceMicrosUSD:  event.BalanceMicrosUSD,
+			CreditedMicrosUSD: event.CreditedMicrosUSD,
+			DebitedMicrosUSD:  event.DebitedMicrosUSD,
+			PromptTokens:      event.PromptTokens,
+			CompletionTokens:  event.CompletionTokens,
+			TotalTokens:       event.TotalTokens,
+			Timestamp:         event.OccurredAt,
 		})
 	}
 	return out, nil
 }
 
-func (g *StaticGovernor) buildWarnings(limit, current int64) []types.BudgetWarning {
-	if limit <= 0 || current < 0 {
+func (g *StaticGovernor) buildWarnings(credited, balance int64) []types.BudgetWarning {
+	if credited <= 0 || balance < 0 {
 		return nil
 	}
 
@@ -469,13 +493,13 @@ func (g *StaticGovernor) buildWarnings(limit, current int64) []types.BudgetWarni
 		if threshold <= 0 {
 			continue
 		}
-		thresholdMicros := (limit * int64(threshold)) / 100
+		thresholdMicros := (credited * int64(threshold)) / 100
 		out = append(out, types.BudgetWarning{
 			ThresholdPercent:   threshold,
 			ThresholdMicrosUSD: thresholdMicros,
-			CurrentMicrosUSD:   current,
-			RemainingMicrosUSD: remainingBudget(limit, current),
-			Triggered:          current >= thresholdMicros,
+			BalanceMicrosUSD:   balance,
+			AvailableMicrosUSD: balance,
+			Triggered:          balance <= thresholdMicros,
 		})
 	}
 	return out
@@ -486,23 +510,6 @@ func (g *StaticGovernor) historyLimit() int {
 		return 20
 	}
 	return g.config.BudgetHistoryLimit
-}
-
-func (g *StaticGovernor) currentAndLimit(ctx context.Context, key string) (int64, int64, error) {
-	var current int64
-	if g.ledger != nil {
-		value, err := g.ledger.Current(ctx, key)
-		if err != nil {
-			return 0, 0, err
-		}
-		current = value
-	}
-
-	limit, err := g.effectiveBudgetLimit(ctx, key)
-	if err != nil {
-		return 0, 0, err
-	}
-	return current, limit, nil
 }
 
 func firstNonEmpty(values ...string) string {

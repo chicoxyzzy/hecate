@@ -10,6 +10,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
 	"github.com/hecate/agent-runtime/internal/catalog"
+	"github.com/hecate/agent-runtime/internal/chatstate"
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/models"
 	"github.com/hecate/agent-runtime/internal/profiler"
@@ -39,6 +40,7 @@ type Dependencies struct {
 	Tracer          profiler.Tracer
 	Metrics         *telemetry.Metrics
 	Retention       *retention.Manager
+	ChatSessions    chatstate.Store
 }
 
 type SemanticOptions struct {
@@ -67,6 +69,8 @@ type Service struct {
 	tracer          profiler.Tracer
 	metrics         *telemetry.Metrics
 	retention       *retention.Manager
+	pricebook       billing.Pricebook
+	chatSessions    chatstate.Store
 }
 
 type ChatResult struct {
@@ -87,12 +91,29 @@ type BudgetStatusResult struct {
 	Status types.BudgetStatus
 }
 
+type AccountSummaryResult struct {
+	Status    types.BudgetStatus
+	Estimates []types.AccountModelEstimate
+}
+
+type RequestLedgerResult struct {
+	Entries []types.BudgetHistoryEntry
+}
+
 type TraceResult struct {
 	RequestID string
 	TraceID   string
 	StartedAt time.Time
 	Spans     []types.TraceSpan
 	Route     types.RouteDecisionReport
+}
+
+type ChatSessionResult struct {
+	Session types.ChatSession
+}
+
+type ChatSessionListResult struct {
+	Sessions []types.ChatSession
 }
 
 type RetentionResult struct {
@@ -197,6 +218,8 @@ func NewService(deps Dependencies) *Service {
 		tracer:          deps.Tracer,
 		metrics:         deps.Metrics,
 		retention:       deps.Retention,
+		pricebook:       deps.Pricebook,
+		chatSessions:    deps.ChatSessions,
 	}
 }
 
@@ -490,11 +513,132 @@ func (s *Service) TopUpBudgetWithFilter(ctx context.Context, filter governor.Bud
 	return s.BudgetStatusWithFilter(ctx, filter)
 }
 
-func (s *Service) SetBudgetLimitWithFilter(ctx context.Context, filter governor.BudgetFilter, limitMicros int64) (*BudgetStatusResult, error) {
-	if err := s.governor.SetBudgetLimit(ctx, filter, limitMicros); err != nil {
+func (s *Service) SetBudgetBalanceWithFilter(ctx context.Context, filter governor.BudgetFilter, balanceMicros int64) (*BudgetStatusResult, error) {
+	if err := s.governor.SetBudgetBalance(ctx, filter, balanceMicros); err != nil {
 		return nil, err
 	}
 	return s.BudgetStatusWithFilter(ctx, filter)
+}
+
+func (s *Service) AccountSummaryWithFilter(ctx context.Context, filter governor.BudgetFilter) (*AccountSummaryResult, error) {
+	status, err := s.governor.BudgetStatus(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := s.catalog.Snapshot(ctx)
+	estimates := make([]types.AccountModelEstimate, 0, 16)
+	for _, entry := range entries {
+		if filter.Provider != "" && entry.Name != filter.Provider {
+			continue
+		}
+		for _, model := range entry.Models {
+			price, ok := s.pricebook.Lookup(entry.Name, model)
+			estimate := types.AccountModelEstimate{
+				Provider:                        entry.Name,
+				ProviderKind:                    string(entry.Kind),
+				Model:                           model,
+				Default:                         model == entry.DefaultModel,
+				DiscoverySource:                 entry.DiscoverySource,
+				Priced:                          ok,
+				InputMicrosUSDPerMillionTokens:  price.InputMicrosUSDPerMillionTokens,
+				OutputMicrosUSDPerMillionTokens: price.OutputMicrosUSDPerMillionTokens,
+			}
+			if price.InputMicrosUSDPerMillionTokens > 0 && status.AvailableMicrosUSD > 0 {
+				estimate.EstimatedRemainingPromptTokens = status.AvailableMicrosUSD * 1_000_000 / price.InputMicrosUSDPerMillionTokens
+			}
+			if price.OutputMicrosUSDPerMillionTokens > 0 && status.AvailableMicrosUSD > 0 {
+				estimate.EstimatedRemainingOutputTokens = status.AvailableMicrosUSD * 1_000_000 / price.OutputMicrosUSDPerMillionTokens
+			}
+			estimates = append(estimates, estimate)
+		}
+	}
+
+	return &AccountSummaryResult{
+		Status:    status,
+		Estimates: estimates,
+	}, nil
+}
+
+func (s *Service) RequestLedger(ctx context.Context, limit int) (*RequestLedgerResult, error) {
+	entries, err := s.governor.RecentBudgetHistory(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &RequestLedgerResult{Entries: entries}, nil
+}
+
+func (s *Service) CreateChatSession(ctx context.Context, session types.ChatSession) (*ChatSessionResult, error) {
+	if s.chatSessions == nil {
+		return nil, fmt.Errorf("chat session store is not configured")
+	}
+	created, err := s.chatSessions.CreateSession(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSessionResult{Session: created}, nil
+}
+
+func (s *Service) GetChatSession(ctx context.Context, id string) (*ChatSessionResult, error) {
+	if s.chatSessions == nil {
+		return nil, fmt.Errorf("chat session store is not configured")
+	}
+	session, ok, err := s.chatSessions.GetSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("chat session %q not found", id)
+	}
+	return &ChatSessionResult{Session: session}, nil
+}
+
+func (s *Service) ListChatSessions(ctx context.Context, filter chatstate.Filter) (*ChatSessionListResult, error) {
+	if s.chatSessions == nil {
+		return &ChatSessionListResult{Sessions: nil}, nil
+	}
+	sessions, err := s.chatSessions.ListSessions(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSessionListResult{Sessions: sessions}, nil
+}
+
+func (s *Service) RecordChatTurn(ctx context.Context, sessionID string, req types.ChatRequest, result *ChatResult) (*ChatSessionResult, error) {
+	if s.chatSessions == nil || sessionID == "" || result == nil || result.Response == nil {
+		return nil, nil
+	}
+	userMessage := types.Message{Role: "user"}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			userMessage = req.Messages[i]
+			break
+		}
+	}
+	assistantMessage := types.Message{Role: "assistant"}
+	if len(result.Response.Choices) > 0 {
+		assistantMessage = result.Response.Choices[0].Message
+	}
+	session, err := s.chatSessions.AppendTurn(ctx, sessionID, types.ChatSessionTurn{
+		ID:                req.RequestID,
+		RequestID:         req.RequestID,
+		UserMessage:       userMessage,
+		AssistantMessage:  assistantMessage,
+		RequestedProvider: req.Scope.ProviderHint,
+		Provider:          result.Metadata.Provider,
+		ProviderKind:      result.Metadata.ProviderKind,
+		RequestedModel:    req.Model,
+		Model:             result.Metadata.Model,
+		CostMicrosUSD:     result.Metadata.CostMicrosUSD,
+		PromptTokens:      result.Metadata.PromptTokens,
+		CompletionTokens:  result.Metadata.CompletionTokens,
+		TotalTokens:       result.Metadata.TotalTokens,
+		CreatedAt:         result.Response.CreatedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSessionResult{Session: session}, nil
 }
 
 func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, error) {

@@ -18,7 +18,7 @@ type BudgetPanelProps = {
 export function BudgetPanel(props: BudgetPanelProps) {
   return (
     <Panel
-      eyebrow="Budget"
+      eyebrow="Account"
       title="Current scope"
       actions={
         <button
@@ -33,9 +33,9 @@ export function BudgetPanel(props: BudgetPanelProps) {
       {props.budget ? (
         <>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <BudgetHeroCard label="Remaining" value={props.budget.remaining_usd} tone="emerald" />
-            <BudgetHeroCard label="Spent" value={props.budget.spent_usd} tone="amber" />
-            <BudgetHeroCard label="Max" value={props.budget.max_usd} tone="slate" />
+            <BudgetHeroCard label="Balance" value={props.budget.balance_usd} tone="emerald" />
+            <BudgetHeroCard label="Debited" value={props.budget.debited_usd} tone="amber" />
+            <BudgetHeroCard label="Credited" value={props.budget.credited_usd} tone="slate" />
           </div>
 
           <div className="mt-4 rounded-2xl bg-slate-50/90 p-4">
@@ -46,7 +46,7 @@ export function BudgetPanel(props: BudgetPanelProps) {
               {props.budget.provider ? ` · provider ${props.budget.provider}` : ""}
             </p>
             <p className="mt-1 text-sm text-slate-600">
-              Backend: {props.budget.backend} · Limit source: {props.budget.limit_source}
+              Backend: {props.budget.backend} · Balance source: {props.budget.balance_source}
             </p>
           </div>
 
@@ -56,12 +56,12 @@ export function BudgetPanel(props: BudgetPanelProps) {
             <KV label="Tenant" value={props.budget.tenant} />
             <KV label="Provider" value={props.budget.provider} />
             <KV label="Backend" value={props.budget.backend} />
-            <KV label="Limit Source" value={props.budget.limit_source} />
+            <KV label="Balance Source" value={props.budget.balance_source} />
           </dl>
         </>
       ) : (
         <div className="mt-4 rounded-2xl border border-slate-200/80 bg-slate-50/90 px-4 py-4 text-sm text-slate-600">
-          Budget details will appear here for admin sessions with budget access.
+          Account details will appear here for admin sessions with budget access.
         </div>
       )}
 
@@ -85,7 +85,7 @@ export function BudgetPanel(props: BudgetPanelProps) {
         </label>
 
         <label>
-          <span className="mb-2 block text-sm text-slate-600">Set absolute limit (USD)</span>
+          <span className="mb-2 block text-sm text-slate-600">Set balance (USD)</span>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
               className={props.inputClassName}
@@ -97,7 +97,7 @@ export function BudgetPanel(props: BudgetPanelProps) {
               onClick={() => void props.onSetLimit()}
               type="button"
             >
-              Set limit
+              Set balance
             </button>
           </div>
         </label>

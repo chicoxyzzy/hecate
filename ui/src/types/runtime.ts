@@ -34,6 +34,66 @@ export type SessionResponse = {
   };
 };
 
+export type ChatSessionSummaryRecord = {
+  id: string;
+  title: string;
+  tenant?: string;
+  user?: string;
+  turn_count: number;
+  created_at?: string;
+  updated_at?: string;
+  last_model?: string;
+  last_provider?: string;
+  last_cost_usd?: string;
+  last_request_id?: string;
+};
+
+export type ChatSessionTurnRecord = {
+  id: string;
+  request_id: string;
+  user_message: {
+    role: string;
+    content: string;
+    name?: string;
+  };
+  assistant_message: {
+    role: string;
+    content: string;
+    name?: string;
+  };
+  requested_provider?: string;
+  provider: string;
+  provider_kind?: string;
+  requested_model?: string;
+  model: string;
+  cost_micros_usd: number;
+  cost_usd: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  created_at?: string;
+};
+
+export type ChatSessionRecord = {
+  id: string;
+  title: string;
+  tenant?: string;
+  user?: string;
+  created_at?: string;
+  updated_at?: string;
+  turns: ChatSessionTurnRecord[];
+};
+
+export type ChatSessionsResponse = {
+  object: string;
+  data: ChatSessionSummaryRecord[];
+};
+
+export type ChatSessionResponse = {
+  object: string;
+  data: ChatSessionRecord;
+};
+
 export type ProviderRecord = {
   name: string;
   kind: string;
@@ -122,21 +182,21 @@ export type BudgetRecord = {
   provider?: string;
   tenant?: string;
   backend: string;
-  limit_source: string;
-  spent_micros_usd: number;
-  spent_usd: string;
-  current_micros_usd: number;
-  current_usd: string;
-  max_micros_usd: number;
-  max_usd: string;
-  remaining_micros_usd: number;
-  remaining_usd: string;
+  balance_source: string;
+  debited_micros_usd: number;
+  debited_usd: string;
+  credited_micros_usd: number;
+  credited_usd: string;
+  balance_micros_usd: number;
+  balance_usd: string;
+  available_micros_usd: number;
+  available_usd: string;
   enforced: boolean;
   warnings?: Array<{
     threshold_percent: number;
     threshold_micros_usd: number;
-    current_micros_usd: number;
-    remaining_micros_usd: number;
+    balance_micros_usd: number;
+    available_micros_usd: number;
     triggered: boolean;
   }>;
   history?: Array<{
@@ -152,8 +212,13 @@ export type BudgetRecord = {
     amount_usd: string;
     balance_micros_usd: number;
     balance_usd: string;
-    limit_micros_usd: number;
-    limit_usd: string;
+    credited_micros_usd: number;
+    credited_usd: string;
+    debited_micros_usd: number;
+    debited_usd: string;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
     timestamp?: string;
   }>;
 };
@@ -161,6 +226,30 @@ export type BudgetRecord = {
 export type BudgetStatusResponse = {
   object: string;
   data: BudgetRecord;
+};
+
+export type AccountSummaryResponse = {
+  object: string;
+  data: {
+    account: BudgetRecord;
+    estimates: Array<{
+      provider: string;
+      provider_kind: string;
+      model: string;
+      default?: boolean;
+      discovery_source?: string;
+      priced: boolean;
+      input_micros_usd_per_million_tokens: number;
+      output_micros_usd_per_million_tokens: number;
+      estimated_remaining_prompt_tokens: number;
+      estimated_remaining_output_tokens: number;
+    }>;
+  };
+};
+
+export type RequestLedgerResponse = {
+  object: string;
+  data: NonNullable<BudgetRecord["history"]>;
 };
 
 export type ControlPlaneTenantRecord = {

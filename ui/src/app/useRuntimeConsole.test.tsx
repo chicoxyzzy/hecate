@@ -34,6 +34,12 @@ describe("useRuntimeConsole", () => {
       if (url.startsWith("/admin/retention/runs")) {
         return unauthorizedResponse();
       }
+      if (url.startsWith("/admin/accounts/summary")) {
+        return unauthorizedResponse();
+      }
+      if (url.startsWith("/v1/chat/sessions")) {
+        return unauthorizedResponse();
+      }
       return unauthorizedResponse();
     });
   });
@@ -109,6 +115,12 @@ describe("useRuntimeConsole", () => {
       if (url.startsWith("/admin/retention/runs")) {
         return unauthorizedResponse();
       }
+      if (url.startsWith("/admin/accounts/summary")) {
+        return unauthorizedResponse();
+      }
+      if (url.startsWith("/v1/chat/sessions")) {
+        return unauthorizedResponse();
+      }
       return unauthorizedResponse();
     });
 
@@ -153,6 +165,65 @@ describe("useRuntimeConsole", () => {
       }
       if (url.startsWith("/admin/retention/runs")) {
         return unauthorizedResponse();
+      }
+      if (url.startsWith("/admin/accounts/summary")) {
+        return unauthorizedResponse();
+      }
+      if (url === "/v1/chat/sessions") {
+        return jsonResponse({
+          object: "chat_session",
+          data: {
+            id: "chat_123",
+            title: "Say hello in one short sentence.",
+            turns: [],
+            created_at: "2026-04-21T00:00:00Z",
+            updated_at: "2026-04-21T00:00:00Z",
+          },
+        });
+      }
+      if (url === "/v1/chat/sessions?limit=20") {
+        return jsonResponse({
+          object: "chat_sessions",
+          data: [
+            {
+              id: "chat_123",
+              title: "Say hello in one short sentence.",
+              turn_count: 1,
+              last_model: "gpt-4o-mini",
+              last_provider: "openai",
+              last_cost_usd: "0.000123",
+              updated_at: "2026-04-21T00:00:01Z",
+            },
+          ],
+        });
+      }
+      if (url === "/v1/chat/sessions/chat_123") {
+        return jsonResponse({
+          object: "chat_session",
+          data: {
+            id: "chat_123",
+            title: "Say hello in one short sentence.",
+            turns: [
+              {
+                id: "req-123",
+                request_id: "req-123",
+                user_message: { role: "user", content: "Say hello in one short sentence." },
+                assistant_message: { role: "assistant", content: "Hello!" },
+                provider: "openai",
+                provider_kind: "cloud",
+                model: "gpt-4o-mini",
+                cost_micros_usd: 123,
+                cost_usd: "0.000123",
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                total_tokens: 12,
+                created_at: "2026-04-21T00:00:01Z",
+              },
+            ],
+            created_at: "2026-04-21T00:00:00Z",
+            updated_at: "2026-04-21T00:00:01Z",
+          },
+        });
       }
       if (url === "/v1/chat/completions") {
         return new Response(
@@ -232,6 +303,7 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.traceSpans).toHaveLength(1);
       expect(result.current.state.traceRoute?.final_provider).toBe("openai");
       expect(result.current.state.traceSpans[0]?.events?.[0]?.name).toBe("request.received");
+      expect(result.current.state.activeChatSession?.turns).toHaveLength(1);
     });
   });
 
@@ -281,6 +353,43 @@ describe("useRuntimeConsole", () => {
       if (url === "/admin/control-plane") {
         return jsonResponse({ object: "control_plane", data: { backend: "file", tenants: [], api_keys: [], events: [] } });
       }
+      if (url === "/admin/accounts/summary") {
+        return jsonResponse({
+          object: "account_summary",
+          data: {
+            account: {
+              key: "global",
+              scope: "global",
+              backend: "memory",
+              balance_source: "config",
+              debited_micros_usd: 250000,
+              debited_usd: "0.250000",
+              credited_micros_usd: 1000000,
+              credited_usd: "1.000000",
+              balance_micros_usd: 750000,
+              balance_usd: "0.750000",
+              available_micros_usd: 750000,
+              available_usd: "0.750000",
+              enforced: true,
+            },
+            estimates: [
+              {
+                provider: "openai",
+                provider_kind: "cloud",
+                model: "gpt-4o-mini",
+                priced: true,
+                input_micros_usd_per_million_tokens: 150000,
+                output_micros_usd_per_million_tokens: 600000,
+                estimated_remaining_prompt_tokens: 5000000,
+                estimated_remaining_output_tokens: 1250000,
+              },
+            ],
+          },
+        });
+      }
+      if (url === "/v1/chat/sessions?limit=20") {
+        return jsonResponse({ object: "chat_sessions", data: [] });
+      }
       if (url === "/admin/retention/runs?limit=10") {
         return jsonResponse({
           object: "retention_runs",
@@ -311,6 +420,7 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.retentionRuns).toHaveLength(1);
       expect(result.current.state.retentionLastRun?.request_id).toBe("req-1");
       expect(result.current.state.retentionLastRun?.actor).toBe("admin:req-1");
+      expect(result.current.state.accountSummary?.estimates).toHaveLength(1);
     });
   });
 });

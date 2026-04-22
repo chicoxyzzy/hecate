@@ -32,12 +32,12 @@ export function AdminView({ state, actions }: Props) {
                   <div className="stack-sm">
                     <div className="action-row">
                       <StatusPill label={describeBudgetScope(state.budget)} tone="neutral" />
-                      <StatusPill label={`${budgetPercent}% used`} tone={budgetPercent >= 90 ? "danger" : budgetPercent >= 70 ? "warning" : "healthy"} />
+                      <StatusPill label={`${budgetPercent}% debited`} tone={budgetPercent >= 90 ? "danger" : budgetPercent >= 70 ? "warning" : "healthy"} />
                     </div>
                     <div className="metric-grid metric-grid--compact">
-                      <BudgetMetric label="Current" value={formatUsd(state.budget.current_usd)} />
-                      <BudgetMetric label="Remaining" value={formatUsd(state.budget.remaining_usd)} />
-                      <BudgetMetric label="Limit" value={formatUsd(state.budget.max_usd)} />
+                      <BudgetMetric label="Balance" value={formatUsd(state.budget.balance_usd)} />
+                      <BudgetMetric label="Debited" value={formatUsd(state.budget.debited_usd)} />
+                      <BudgetMetric label="Credited" value={formatUsd(state.budget.credited_usd)} />
                     </div>
                   </div>
 
@@ -46,7 +46,7 @@ export function AdminView({ state, actions }: Props) {
                       { label: "Scope", value: state.budget.scope },
                       { label: "Key", value: state.budget.key },
                       { label: "Backend", value: state.budget.backend },
-                      { label: "Limit source", value: state.budget.limit_source },
+                      { label: "Balance source", value: state.budget.balance_source },
                       { label: "Provider", value: state.budget.provider || "n/a" },
                       { label: "Tenant", value: state.budget.tenant || "n/a" },
                     ]}
@@ -63,7 +63,7 @@ export function AdminView({ state, actions }: Props) {
                               <span className="body-muted">{formatUsd((warning.threshold_micros_usd / 1_000_000).toFixed(6))}</span>
                             </div>
                             <p className="body-muted">
-                              {warning.triggered ? "Threshold reached for current scope." : "Threshold not reached yet."}
+                              {warning.triggered ? "Low-balance threshold reached for current scope." : "Balance is above this threshold."}
                             </p>
                           </div>
                         ))}
@@ -81,15 +81,15 @@ export function AdminView({ state, actions }: Props) {
             <Surface tone="strong">
               <div className="stack-md">
                 <TextField label="Top-up amount (USD)" onChange={actions.setBudgetAmountUsd} value={state.budgetAmountUsd} />
-                <TextField label="Budget limit (USD)" onChange={actions.setBudgetLimitUsd} value={state.budgetLimitUsd} />
+                <TextField label="Set balance (USD)" onChange={actions.setBudgetLimitUsd} value={state.budgetLimitUsd} />
                 {state.budgetActionError ? <InlineNotice message={state.budgetActionError} tone="error" /> : null}
                 <div className="action-row">
                   <ToolbarButton onClick={() => void actions.topUpBudget()} tone="primary">
-                    Top up budget
+                    Top up balance
                   </ToolbarButton>
-                  <ToolbarButton onClick={() => void actions.setBudgetLimit()}>Set limit</ToolbarButton>
+                  <ToolbarButton onClick={() => void actions.setBudgetLimit()}>Set balance</ToolbarButton>
                   <ToolbarButton onClick={() => void actions.resetBudget()} tone="danger">
-                    Reset usage
+                    Reset account
                   </ToolbarButton>
                 </div>
               </div>
@@ -99,7 +99,42 @@ export function AdminView({ state, actions }: Props) {
           <div className="mt-4">
             <Surface>
               <div className="stack-sm">
-                <p className="label-muted">Budget history</p>
+                <p className="label-muted">Recent request debits</p>
+                {state.requestLedger.length ? (
+                  <ul className="budget-history-list">
+                    {state.requestLedger.map((entry, index) => (
+                      <li className="budget-history-item" key={`${entry.timestamp}-${entry.request_id}-${index}`}>
+                        <div className="budget-history-item__head">
+                          <div className="action-row">
+                            <strong>{entry.model || renderBudgetHistoryLabel(entry.type)}</strong>
+                            <StatusPill label={entry.provider || "unknown provider"} tone="neutral" />
+                            {entry.tenant ? <StatusPill label={entry.tenant} tone="neutral" /> : null}
+                          </div>
+                          <span className="body-muted">{formatDateTime(entry.timestamp)}</span>
+                        </div>
+                        <div className="budget-history-item__body">
+                          {entry.request_id ? <span>{entry.request_id}</span> : null}
+                          <span>{formatUsd(entry.amount_usd)}</span>
+                          {typeof entry.prompt_tokens === "number" && entry.prompt_tokens > 0 ? <span>Prompt {entry.prompt_tokens}</span> : null}
+                          {typeof entry.completion_tokens === "number" && entry.completion_tokens > 0 ? <span>Completion {entry.completion_tokens}</span> : null}
+                          {typeof entry.total_tokens === "number" && entry.total_tokens > 0 ? <span>Total {entry.total_tokens}</span> : null}
+                          <span>Balance {formatUsd(entry.balance_usd)}</span>
+                        </div>
+                        {entry.detail ? <p className="body-muted">{entry.detail}</p> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState title="No recent request debits" detail="Recent debit events across accounts will appear here after requests are served." />
+                )}
+              </div>
+            </Surface>
+          </div>
+
+          <div className="mt-4">
+            <Surface>
+              <div className="stack-sm">
+                <p className="label-muted">Account ledger</p>
                 {state.budget?.history?.length ? (
                   <ul className="budget-history-list">
                     {state.budget.history.map((entry, index) => (
@@ -115,8 +150,10 @@ export function AdminView({ state, actions }: Props) {
                         <div className="budget-history-item__body">
                           <span>{formatUsd(entry.amount_usd)}</span>
                           <span>Balance {formatUsd(entry.balance_usd)}</span>
-                          <span>Limit {formatUsd(entry.limit_usd)}</span>
+                          <span>Credited {formatUsd(entry.credited_usd)}</span>
+                          <span>Debited {formatUsd(entry.debited_usd)}</span>
                           {entry.model ? <span>{entry.model}</span> : null}
+                          {typeof entry.total_tokens === "number" && entry.total_tokens > 0 ? <span>{entry.total_tokens} tokens</span> : null}
                           {entry.actor ? <span>{entry.actor}</span> : null}
                         </div>
                         {entry.detail ? <p className="body-muted">{entry.detail}</p> : null}
@@ -124,7 +161,37 @@ export function AdminView({ state, actions }: Props) {
                     ))}
                   </ul>
                 ) : (
-                  <EmptyState title="No history" detail="Top-ups, resets, limit changes, and usage entries will appear here." />
+                  <EmptyState title="No ledger history" detail="Top-ups, debits, balance resets, and manual balance changes will appear here." />
+                )}
+              </div>
+            </Surface>
+          </div>
+
+          <div className="mt-4">
+            <Surface>
+              <div className="stack-sm">
+                <p className="label-muted">Model balance estimates</p>
+                {state.accountSummary?.estimates?.length ? (
+                  <div className="trace-inline-grid">
+                    {state.accountSummary.estimates.slice(0, 24).map((estimate) => (
+                      <div className="trace-inline-card" key={`${estimate.provider}-${estimate.model}`}>
+                        <div className="action-row action-row--wide">
+                          <p className="trace-inline-card__title">{estimate.model}</p>
+                          <StatusPill label={estimate.provider} tone={estimate.provider_kind === "local" ? "healthy" : "neutral"} />
+                        </div>
+                        <p className="body-muted">
+                          {estimate.priced ? "Priced from current pricebook" : "No explicit pricebook entry"}
+                        </p>
+                        <div className="stack-sm">
+                          <span className="body-muted">Prompt tokens left: {estimate.estimated_remaining_prompt_tokens.toLocaleString()}</span>
+                          <span className="body-muted">Output tokens left: {estimate.estimated_remaining_output_tokens.toLocaleString()}</span>
+                        </div>
+                        {estimate.default ? <StatusPill label="default" tone="neutral" /> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState title="No model estimates" detail="Model-level token estimates will appear when account balance and pricebook data are available." />
                 )}
               </div>
             </Surface>
@@ -378,12 +445,12 @@ function renderBudgetHistoryLabel(value: string): string {
   switch (value) {
     case "top_up":
       return "Top up";
-    case "set_limit":
-      return "Set limit";
+    case "set_balance":
+      return "Set balance";
     case "reset":
       return "Reset";
-    case "usage":
-      return "Usage";
+    case "debit":
+      return "Debit";
     default:
       return value;
   }

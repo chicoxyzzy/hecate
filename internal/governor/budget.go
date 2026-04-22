@@ -3,12 +3,21 @@ package governor
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
+	"github.com/hecate/agent-runtime/pkg/types"
 )
+
+type AccountState struct {
+	Key               string    `json:"key"`
+	BalanceMicrosUSD  int64     `json:"balance_micros_usd"`
+	CreditedMicrosUSD int64     `json:"credited_micros_usd"`
+	DebitedMicrosUSD  int64     `json:"debited_micros_usd"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
 
 type UsageEvent struct {
 	BudgetKey  string
@@ -16,106 +25,119 @@ type UsageEvent struct {
 	Tenant     string
 	Provider   string
 	Model      string
+	Usage      types.Usage
 	CostMicros int64
 	OccurredAt time.Time
 }
 
-type UsageLedger interface {
-	Current(ctx context.Context, key string) (int64, error)
-	Record(ctx context.Context, event UsageEvent) error
+type AccountStore interface {
+	Snapshot(ctx context.Context, key string) (AccountState, bool, error)
+	Debit(ctx context.Context, event UsageEvent) (AccountState, error)
+	Credit(ctx context.Context, key string, delta int64) (AccountState, error)
+	SetBalance(ctx context.Context, key string, value int64) (AccountState, error)
 	Reset(ctx context.Context, key string) error
 }
 
 type BudgetEvent struct {
-	Key              string    `json:"key"`
-	Type             string    `json:"type"`
-	Scope            string    `json:"scope,omitempty"`
-	Provider         string    `json:"provider,omitempty"`
-	Tenant           string    `json:"tenant,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	RequestID        string    `json:"request_id,omitempty"`
-	Actor            string    `json:"actor,omitempty"`
-	Detail           string    `json:"detail,omitempty"`
-	AmountMicrosUSD  int64     `json:"amount_micros_usd"`
-	BalanceMicrosUSD int64     `json:"balance_micros_usd"`
-	LimitMicrosUSD   int64     `json:"limit_micros_usd"`
-	OccurredAt       time.Time `json:"occurred_at"`
+	Key               string    `json:"key"`
+	Type              string    `json:"type"`
+	Scope             string    `json:"scope,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	Tenant            string    `json:"tenant,omitempty"`
+	Model             string    `json:"model,omitempty"`
+	RequestID         string    `json:"request_id,omitempty"`
+	Actor             string    `json:"actor,omitempty"`
+	Detail            string    `json:"detail,omitempty"`
+	AmountMicrosUSD   int64     `json:"amount_micros_usd"`
+	BalanceMicrosUSD  int64     `json:"balance_micros_usd"`
+	CreditedMicrosUSD int64     `json:"credited_micros_usd"`
+	DebitedMicrosUSD  int64     `json:"debited_micros_usd"`
+	PromptTokens      int       `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int       `json:"completion_tokens,omitempty"`
+	TotalTokens       int       `json:"total_tokens,omitempty"`
+	OccurredAt        time.Time `json:"occurred_at"`
 }
 
 type BudgetHistoryStore interface {
 	AppendEvent(ctx context.Context, event BudgetEvent) error
 	ListEvents(ctx context.Context, key string, limit int) ([]BudgetEvent, error)
+	ListRecentEvents(ctx context.Context, limit int) ([]BudgetEvent, error)
 	PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
-type BudgetStateStore interface {
-	Limit(ctx context.Context, key string) (int64, error)
-	SetLimit(ctx context.Context, key string, value int64) error
-	AddLimit(ctx context.Context, key string, delta int64) error
-}
-
 type BudgetStore interface {
-	UsageLedger
-	BudgetStateStore
+	AccountStore
 	BudgetHistoryStore
 }
 
 type MemoryBudgetStore struct {
-	mu     sync.Mutex
-	spent  map[string]int64
-	limits map[string]int64
-	events map[string][]BudgetEvent
+	mu       sync.Mutex
+	accounts map[string]AccountState
+	events   map[string][]BudgetEvent
 }
 
 func NewMemoryBudgetStore() *MemoryBudgetStore {
 	return &MemoryBudgetStore{
-		spent:  make(map[string]int64),
-		limits: make(map[string]int64),
-		events: make(map[string][]BudgetEvent),
+		accounts: make(map[string]AccountState),
+		events:   make(map[string][]BudgetEvent),
 	}
 }
 
-func (s *MemoryBudgetStore) Current(_ context.Context, key string) (int64, error) {
+func (s *MemoryBudgetStore) Snapshot(_ context.Context, key string) (AccountState, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.spent[key], nil
+	account, ok := s.accounts[key]
+	return account, ok, nil
 }
 
-func (s *MemoryBudgetStore) Record(_ context.Context, event UsageEvent) error {
+func (s *MemoryBudgetStore) Debit(_ context.Context, event UsageEvent) (AccountState, error) {
 	if event.BudgetKey == "" || event.CostMicros <= 0 {
-		return nil
+		return AccountState{Key: event.BudgetKey}, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.spent[event.BudgetKey] += event.CostMicros
-	return nil
+	account := s.accounts[event.BudgetKey]
+	account.Key = event.BudgetKey
+	account.BalanceMicrosUSD -= event.CostMicros
+	account.DebitedMicrosUSD += event.CostMicros
+	account.UpdatedAt = nowUTC(event.OccurredAt)
+	s.accounts[event.BudgetKey] = account
+	return account, nil
+}
+
+func (s *MemoryBudgetStore) Credit(_ context.Context, key string, delta int64) (AccountState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	account := s.accounts[key]
+	account.Key = key
+	account.BalanceMicrosUSD += delta
+	if delta > 0 {
+		account.CreditedMicrosUSD += delta
+	}
+	account.UpdatedAt = time.Now().UTC()
+	s.accounts[key] = account
+	return account, nil
 }
 
 func (s *MemoryBudgetStore) Reset(_ context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.spent, key)
+	s.accounts[key] = AccountState{
+		Key:       key,
+		UpdatedAt: time.Now().UTC(),
+	}
 	return nil
 }
 
-func (s *MemoryBudgetStore) Limit(_ context.Context, key string) (int64, error) {
+func (s *MemoryBudgetStore) SetBalance(_ context.Context, key string, value int64) (AccountState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.limits[key], nil
-}
-
-func (s *MemoryBudgetStore) SetLimit(_ context.Context, key string, value int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.limits[key] = value
-	return nil
-}
-
-func (s *MemoryBudgetStore) AddLimit(_ context.Context, key string, delta int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.limits[key] += delta
-	return nil
+	account := s.accounts[key]
+	account.Key = key
+	account.BalanceMicrosUSD = value
+	account.UpdatedAt = time.Now().UTC()
+	s.accounts[key] = account
+	return account, nil
 }
 
 func (s *MemoryBudgetStore) AppendEvent(_ context.Context, event BudgetEvent) error {
@@ -147,6 +169,23 @@ func (s *MemoryBudgetStore) ListEvents(_ context.Context, key string, limit int)
 	for i := len(events) - 1; i >= 0 && len(out) < limit; i-- {
 		out = append(out, events[i])
 	}
+	return out, nil
+}
+
+func (s *MemoryBudgetStore) ListRecentEvents(_ context.Context, limit int) ([]BudgetEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	all := make([]BudgetEvent, 0, 32)
+	for _, events := range s.events {
+		all = append(all, events...)
+	}
+	sortBudgetEventsDesc(all)
+	if limit <= 0 || limit > len(all) {
+		limit = len(all)
+	}
+	out := make([]BudgetEvent, limit)
+	copy(out, all[:limit])
 	return out, nil
 }
 
@@ -183,55 +222,66 @@ func NewRedisBudgetStore(client *storage.RedisClient, prefix string) *RedisBudge
 	return &RedisBudgetStore{client: client, prefix: prefix}
 }
 
-func (s *RedisBudgetStore) Current(ctx context.Context, key string) (int64, error) {
-	payload, err := s.client.Get(ctx, s.spentKey(key))
+func (s *RedisBudgetStore) Snapshot(ctx context.Context, key string) (AccountState, bool, error) {
+	payload, err := s.client.Get(ctx, s.accountKey(key))
 	if err != nil {
 		if err == storage.ErrNil {
-			return 0, nil
+			return AccountState{}, false, nil
 		}
-		return 0, err
+		return AccountState{}, false, err
 	}
-	value, err := strconv.ParseInt(string(payload), 10, 64)
-	if err != nil {
-		return 0, err
+	var account AccountState
+	if err := json.Unmarshal(payload, &account); err != nil {
+		return AccountState{}, false, err
 	}
-	return value, nil
+	return account, true, nil
 }
 
-func (s *RedisBudgetStore) Record(ctx context.Context, event UsageEvent) error {
+func (s *RedisBudgetStore) Debit(ctx context.Context, event UsageEvent) (AccountState, error) {
 	if event.BudgetKey == "" || event.CostMicros <= 0 {
-		return nil
+		return AccountState{Key: event.BudgetKey}, nil
 	}
-	_, err := s.client.IncrBy(ctx, s.spentKey(event.BudgetKey), event.CostMicros)
-	return err
+	account, _, err := s.Snapshot(ctx, event.BudgetKey)
+	if err != nil {
+		return AccountState{}, err
+	}
+	account.Key = event.BudgetKey
+	account.BalanceMicrosUSD -= event.CostMicros
+	account.DebitedMicrosUSD += event.CostMicros
+	account.UpdatedAt = nowUTC(event.OccurredAt)
+	return account, s.writeAccount(ctx, account)
+}
+
+func (s *RedisBudgetStore) Credit(ctx context.Context, key string, delta int64) (AccountState, error) {
+	account, _, err := s.Snapshot(ctx, key)
+	if err != nil {
+		return AccountState{}, err
+	}
+	account.Key = key
+	account.BalanceMicrosUSD += delta
+	if delta > 0 {
+		account.CreditedMicrosUSD += delta
+	}
+	account.UpdatedAt = time.Now().UTC()
+	return account, s.writeAccount(ctx, account)
+}
+
+func (s *RedisBudgetStore) SetBalance(ctx context.Context, key string, value int64) (AccountState, error) {
+	account, _, err := s.Snapshot(ctx, key)
+	if err != nil {
+		return AccountState{}, err
+	}
+	account.Key = key
+	account.BalanceMicrosUSD = value
+	account.UpdatedAt = time.Now().UTC()
+	return account, s.writeAccount(ctx, account)
 }
 
 func (s *RedisBudgetStore) Reset(ctx context.Context, key string) error {
-	return s.client.SetEX(ctx, s.spentKey(key), 0, []byte("0"))
-}
-
-func (s *RedisBudgetStore) Limit(ctx context.Context, key string) (int64, error) {
-	payload, err := s.client.Get(ctx, s.limitKey(key))
-	if err != nil {
-		if err == storage.ErrNil {
-			return 0, nil
-		}
-		return 0, err
-	}
-	value, err := strconv.ParseInt(string(payload), 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return value, nil
-}
-
-func (s *RedisBudgetStore) SetLimit(ctx context.Context, key string, value int64) error {
-	return s.client.SetEX(ctx, s.limitKey(key), 0, []byte(strconv.FormatInt(value, 10)))
-}
-
-func (s *RedisBudgetStore) AddLimit(ctx context.Context, key string, delta int64) error {
-	_, err := s.client.IncrBy(ctx, s.limitKey(key), delta)
-	return err
+	return s.writeAccount(ctx, AccountState{
+		Key:       key,
+		UpdatedAt: time.Now().UTC(),
+	})
 }
 
 func (s *RedisBudgetStore) AppendEvent(ctx context.Context, event BudgetEvent) error {
@@ -268,6 +318,32 @@ func (s *RedisBudgetStore) ListEvents(ctx context.Context, key string, limit int
 	for i := len(events) - 1; i >= 0 && len(out) < limit; i-- {
 		out = append(out, events[i])
 	}
+	return out, nil
+}
+
+func (s *RedisBudgetStore) ListRecentEvents(ctx context.Context, limit int) ([]BudgetEvent, error) {
+	keys, err := s.client.Keys(ctx, s.redisKey("*:history"))
+	if err != nil {
+		return nil, err
+	}
+	all := make([]BudgetEvent, 0, 32)
+	for _, redisKey := range keys {
+		payload, err := s.client.Get(ctx, redisKey)
+		if err != nil {
+			continue
+		}
+		var events []BudgetEvent
+		if err := json.Unmarshal(payload, &events); err != nil {
+			continue
+		}
+		all = append(all, events...)
+	}
+	sortBudgetEventsDesc(all)
+	if limit <= 0 || limit > len(all) {
+		limit = len(all)
+	}
+	out := make([]BudgetEvent, limit)
+	copy(out, all[:limit])
 	return out, nil
 }
 
@@ -317,16 +393,20 @@ func (s *RedisBudgetStore) redisKey(key string) string {
 	return s.prefix + ":budget:" + key
 }
 
-func (s *RedisBudgetStore) spentKey(key string) string {
-	return s.redisKey(key) + ":spent"
-}
-
-func (s *RedisBudgetStore) limitKey(key string) string {
-	return s.redisKey(key) + ":limit"
+func (s *RedisBudgetStore) accountKey(key string) string {
+	return s.redisKey(key) + ":account"
 }
 
 func (s *RedisBudgetStore) historyKey(key string) string {
 	return s.redisKey(key) + ":history"
+}
+
+func (s *RedisBudgetStore) writeAccount(ctx context.Context, account AccountState) error {
+	payload, err := json.Marshal(account)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, s.accountKey(account.Key), payload)
 }
 
 func (s *RedisBudgetStore) readEvents(ctx context.Context, key string) ([]BudgetEvent, error) {
@@ -343,4 +423,17 @@ func (s *RedisBudgetStore) readEvents(ctx context.Context, key string) ([]Budget
 		return nil, err
 	}
 	return events, nil
+}
+
+func nowUTC(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Now().UTC()
+	}
+	return value.UTC()
+}
+
+func sortBudgetEventsDesc(events []BudgetEvent) {
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].OccurredAt.After(events[j].OccurredAt)
+	})
 }

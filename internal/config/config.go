@@ -12,6 +12,7 @@ type Config struct {
 	Server    ServerConfig
 	Router    RouterConfig
 	Provider  ProviderConfig
+	Chat      ChatConfig
 	OTel      OTelConfig
 	Governor  GovernorConfig
 	Cache     CacheConfig
@@ -53,6 +54,13 @@ type ProviderConfig struct {
 	FailoverEnabled bool
 	HealthThreshold int
 	HealthCooldown  time.Duration
+}
+
+type ChatConfig struct {
+	SessionsBackend string
+	SessionsFile    string
+	SessionsKey     string
+	SessionLimit    int
 }
 
 type OTelSignalConfig struct {
@@ -187,8 +195,10 @@ type ModelPriceConfig struct {
 type OpenAICompatibleProviderConfig struct {
 	Name          string        `json:"name"`
 	Kind          string        `json:"kind"`
+	Protocol      string        `json:"protocol"`
 	BaseURL       string        `json:"base_url"`
 	APIKey        string        `json:"api_key"`
+	APIVersion    string        `json:"api_version"`
 	Timeout       time.Duration `json:"timeout"`
 	StubMode      bool          `json:"stub_mode"`
 	StubResponse  string        `json:"stub_response"`
@@ -220,6 +230,12 @@ func LoadFromEnv() Config {
 			FailoverEnabled: getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
 			HealthThreshold: getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
 			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
+		},
+		Chat: ChatConfig{
+			SessionsBackend: getEnv("GATEWAY_CHAT_SESSIONS_BACKEND", "memory"),
+			SessionsFile:    getEnv("GATEWAY_CHAT_SESSIONS_FILE", ""),
+			SessionsKey:     getEnv("GATEWAY_CHAT_SESSIONS_KEY", "chat-sessions"),
+			SessionLimit:    getEnvInt("GATEWAY_CHAT_SESSIONS_LIMIT", 50),
 		},
 		OTel: OTelConfig{
 			ServiceName:     getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
@@ -432,6 +448,23 @@ func defaultPricebookConfig() PricebookConfig {
 				Provider: "openai",
 				Model:    "text-moderation-latest",
 			},
+			// Seeded from Anthropic's published pricing/docs as of 2026-04-22.
+			// Claude Sonnet 4: $3 / MTok input, $15 / MTok output, $0.30 / MTok cache reads.
+			{
+				Provider:                             "anthropic",
+				Model:                                "claude-sonnet-4-20250514",
+				InputMicrosUSDPerMillionTokens:       3_000_000,
+				OutputMicrosUSDPerMillionTokens:      15_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 300_000,
+			},
+			// Claude Haiku 3.5: $0.80 / MTok input, $4 / MTok output, $0.08 / MTok cache reads.
+			{
+				Provider:                             "anthropic",
+				Model:                                "claude-haiku-3-5-20241022",
+				InputMicrosUSDPerMillionTokens:       800_000,
+				OutputMicrosUSDPerMillionTokens:      4_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 80_000,
+			},
 		},
 	}
 }
@@ -473,8 +506,10 @@ func loadProvidersFromEnv() ProvidersConfig {
 	items = append(items, OpenAICompatibleProviderConfig{
 		Name:          getEnv("OPENAI_PROVIDER_NAME", "openai"),
 		Kind:          getEnv("OPENAI_PROVIDER_KIND", "cloud"),
+		Protocol:      getEnv("OPENAI_PROVIDER_PROTOCOL", "openai"),
 		BaseURL:       getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
 		APIKey:        getEnv("OPENAI_API_KEY", ""),
+		APIVersion:    getEnv("OPENAI_API_VERSION", ""),
 		Timeout:       getEnvDuration("OPENAI_TIMEOUT", 30*time.Second),
 		StubMode:      getEnvBool("OPENAI_STUB_MODE", true),
 		StubResponse:  getEnv("OPENAI_STUB_RESPONSE", "Stubbed response from the AI Agent Runtime MVP."),
@@ -487,14 +522,33 @@ func loadProvidersFromEnv() ProvidersConfig {
 		items = append(items, OpenAICompatibleProviderConfig{
 			Name:          getEnv("LOCAL_PROVIDER_NAME", "local"),
 			Kind:          getEnv("LOCAL_PROVIDER_KIND", "local"),
+			Protocol:      getEnv("LOCAL_PROVIDER_PROTOCOL", "openai"),
 			BaseURL:       getEnv("LOCAL_PROVIDER_BASE_URL", "http://127.0.0.1:11434"),
 			APIKey:        getEnv("LOCAL_PROVIDER_API_KEY", ""),
+			APIVersion:    getEnv("LOCAL_PROVIDER_API_VERSION", ""),
 			Timeout:       getEnvDuration("LOCAL_PROVIDER_TIMEOUT", 30*time.Second),
 			StubMode:      getEnvBool("LOCAL_PROVIDER_STUB_MODE", false),
 			StubResponse:  getEnv("LOCAL_PROVIDER_STUB_RESPONSE", "Stubbed local provider response."),
 			DefaultModel:  getEnv("LOCAL_PROVIDER_DEFAULT_MODEL", ""),
 			Models:        splitCSV(getEnv("LOCAL_PROVIDER_MODELS", "")),
 			AllowAnyModel: getEnvBool("LOCAL_PROVIDER_ALLOW_ANY_MODEL", false),
+		})
+	}
+
+	if getEnvBool("ANTHROPIC_PROVIDER_ENABLED", false) || getEnv("ANTHROPIC_API_KEY", "") != "" {
+		items = append(items, OpenAICompatibleProviderConfig{
+			Name:          getEnv("ANTHROPIC_PROVIDER_NAME", "anthropic"),
+			Kind:          getEnv("ANTHROPIC_PROVIDER_KIND", "cloud"),
+			Protocol:      getEnv("ANTHROPIC_PROVIDER_PROTOCOL", "anthropic"),
+			BaseURL:       getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			APIKey:        getEnv("ANTHROPIC_API_KEY", ""),
+			APIVersion:    getEnv("ANTHROPIC_API_VERSION", "2023-06-01"),
+			Timeout:       getEnvDuration("ANTHROPIC_TIMEOUT", 30*time.Second),
+			StubMode:      getEnvBool("ANTHROPIC_STUB_MODE", false),
+			StubResponse:  getEnv("ANTHROPIC_STUB_RESPONSE", "Stubbed Anthropic response."),
+			DefaultModel:  getEnv("ANTHROPIC_DEFAULT_MODEL", "claude-sonnet-4-20250514"),
+			Models:        splitCSV(getEnv("ANTHROPIC_MODELS", "")),
+			AllowAnyModel: getEnvBool("ANTHROPIC_ALLOW_ANY_MODEL", true),
 		})
 	}
 
@@ -509,6 +563,9 @@ func normalizeProviders(items []OpenAICompatibleProviderConfig) {
 		}
 		if items[i].Kind == "" {
 			items[i].Kind = "cloud"
+		}
+		if items[i].Protocol == "" {
+			items[i].Protocol = "openai"
 		}
 		if items[i].Timeout == 0 {
 			items[i].Timeout = 30 * time.Second

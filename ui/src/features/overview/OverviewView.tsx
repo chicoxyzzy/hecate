@@ -127,6 +127,32 @@ export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
             </Surface>
           </div>
         </ShellSection>
+
+        <ShellSection eyebrow="Runtime balance" title="Model runway">
+          <Surface>
+            {state.accountSummary?.estimates?.length ? (
+              <div className="trace-inline-grid">
+                {state.accountSummary.estimates.slice(0, 12).map((estimate) => (
+                  <div className="trace-inline-card" key={`${estimate.provider}-${estimate.model}`}>
+                    <div className="action-row action-row--wide">
+                      <p className="trace-inline-card__title">{estimate.model}</p>
+                      <StatusPill label={estimate.provider} tone={estimate.provider_kind === "local" ? "healthy" : "neutral"} />
+                    </div>
+                    <p className="body-muted">
+                      {estimate.priced ? "Pricebook-backed estimate" : "No explicit pricebook entry"}
+                    </p>
+                    <div className="stack-sm">
+                      <span className="body-muted">Prompt tokens left: {estimate.estimated_remaining_prompt_tokens.toLocaleString()}</span>
+                      <span className="body-muted">Output tokens left: {estimate.estimated_remaining_output_tokens.toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No balance runway" detail="Admin account summary data is required to estimate remaining tokens by provider and model." />
+            )}
+          </Surface>
+        </ShellSection>
       </div>
 
       <aside className="workspace-rail">
@@ -176,6 +202,31 @@ export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
               <EmptyState title="No issues" detail="Local providers look healthy." />
             </Surface>
           )}
+        </ShellSection>
+
+        <ShellSection eyebrow="Chats" title="Recent sessions">
+          <Surface>
+            {state.chatSessions.length ? (
+              <div className="stack-sm">
+                {state.chatSessions.slice(0, 5).map((chatSession) => (
+                  <div className="budget-history-item" key={chatSession.id}>
+                    <div className="budget-history-item__head">
+                      <strong>{chatSession.title}</strong>
+                      <span className="body-muted">{chatSession.updated_at ? formatDateTime(chatSession.updated_at) : "No activity yet"}</span>
+                    </div>
+                    <div className="budget-history-item__body">
+                      <span>{chatSession.turn_count} turns</span>
+                      {chatSession.last_provider ? <span>{chatSession.last_provider}</span> : null}
+                      {chatSession.last_model ? <span>{chatSession.last_model}</span> : null}
+                      {chatSession.last_cost_usd ? <span>{formatUsd(chatSession.last_cost_usd)}</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No chat sessions" detail="Saved chat sessions will appear here after the first persisted conversation." />
+            )}
+          </Surface>
         </ShellSection>
       </aside>
     </div>

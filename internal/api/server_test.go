@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
 	"github.com/hecate/agent-runtime/internal/catalog"
+	"github.com/hecate/agent-runtime/internal/chatstate"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
@@ -1257,13 +1259,16 @@ func TestControlPlaneLifecycleEndpoints(t *testing.T) {
 	}
 }
 
-func TestBudgetStatusReturnsCurrentSpend(t *testing.T) {
+func TestBudgetStatusReturnsCurrentBalance(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.Record(context.Background(), governor.UsageEvent{BudgetKey: "global", CostMicros: 3_000}); err != nil {
-		t.Fatalf("Record() error = %v", err)
+	if _, err := budgetStore.Credit(context.Background(), "global", 5_000_000); err != nil {
+		t.Fatalf("Credit() error = %v", err)
+	}
+	if _, err := budgetStore.Debit(context.Background(), governor.UsageEvent{BudgetKey: "global", CostMicros: 3_000}); err != nil {
+		t.Fatalf("Debit() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1292,11 +1297,11 @@ func TestBudgetStatusReturnsCurrentSpend(t *testing.T) {
 	if response.Data.Key != "global" {
 		t.Fatalf("key = %q, want global", response.Data.Key)
 	}
-	if response.Data.CurrentMicrosUSD != 3_000 {
-		t.Fatalf("current_micros_usd = %d, want 3000", response.Data.CurrentMicrosUSD)
+	if response.Data.BalanceMicrosUSD != 4_997_000 {
+		t.Fatalf("balance_micros_usd = %d, want 4997000", response.Data.BalanceMicrosUSD)
 	}
-	if response.Data.RemainingMicrosUSD != 4_997_000 {
-		t.Fatalf("remaining_micros_usd = %d, want 4997000", response.Data.RemainingMicrosUSD)
+	if response.Data.DebitedMicrosUSD != 3_000 {
+		t.Fatalf("debited_micros_usd = %d, want 3000", response.Data.DebitedMicrosUSD)
 	}
 	if len(response.Data.Warnings) == 0 {
 		t.Fatal("warnings = empty, want configured default warnings")
@@ -1308,8 +1313,11 @@ func TestBudgetResetSupportsExplicitKey(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.Record(context.Background(), governor.UsageEvent{BudgetKey: "team-a", CostMicros: 9_999}); err != nil {
-		t.Fatalf("Record() error = %v", err)
+	if _, err := budgetStore.Credit(context.Background(), "team-a", 20_000); err != nil {
+		t.Fatalf("Credit() error = %v", err)
+	}
+	if _, err := budgetStore.Debit(context.Background(), governor.UsageEvent{BudgetKey: "team-a", CostMicros: 9_999}); err != nil {
+		t.Fatalf("Debit() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1336,8 +1344,8 @@ func TestBudgetResetSupportsExplicitKey(t *testing.T) {
 	if response.Data.Key != "team-a" {
 		t.Fatalf("key = %q, want team-a", response.Data.Key)
 	}
-	if response.Data.CurrentMicrosUSD != 0 {
-		t.Fatalf("current_micros_usd = %d, want 0", response.Data.CurrentMicrosUSD)
+	if response.Data.BalanceMicrosUSD != 0 {
+		t.Fatalf("balance_micros_usd = %d, want 0", response.Data.BalanceMicrosUSD)
 	}
 }
 
@@ -1346,11 +1354,14 @@ func TestBudgetStatusSupportsTenantProviderScope(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	budgetStore := governor.NewMemoryBudgetStore()
-	if err := budgetStore.Record(context.Background(), governor.UsageEvent{
+	if _, err := budgetStore.Credit(context.Background(), "global:tenant:team-a:provider:ollama", 10_000); err != nil {
+		t.Fatalf("Credit() error = %v", err)
+	}
+	if _, err := budgetStore.Debit(context.Background(), governor.UsageEvent{
 		BudgetKey:  "global:tenant:team-a:provider:ollama",
 		CostMicros: 7_500,
 	}); err != nil {
-		t.Fatalf("Record() error = %v", err)
+		t.Fatalf("Debit() error = %v", err)
 	}
 
 	handler := newBudgetTestHandler(logger, config.GovernorConfig{
@@ -1383,8 +1394,8 @@ func TestBudgetStatusSupportsTenantProviderScope(t *testing.T) {
 	if response.Data.Tenant != "team-a" {
 		t.Fatalf("tenant = %q, want team-a", response.Data.Tenant)
 	}
-	if response.Data.CurrentMicrosUSD != 7_500 {
-		t.Fatalf("current_micros_usd = %d, want 7500", response.Data.CurrentMicrosUSD)
+	if response.Data.BalanceMicrosUSD != 2_500 {
+		t.Fatalf("balance_micros_usd = %d, want 2500", response.Data.BalanceMicrosUSD)
 	}
 }
 
@@ -1416,14 +1427,14 @@ func TestBudgetTopUpAndSetLimitEndpoints(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(topUpRecorder.Body.Bytes())).Decode(&topUpResponse); err != nil {
 		t.Fatalf("topup Decode() error = %v", err)
 	}
-	if topUpResponse.Data.MaxMicrosUSD != 2_000_000 {
-		t.Fatalf("topup max_micros_usd = %d, want 2000000", topUpResponse.Data.MaxMicrosUSD)
+	if topUpResponse.Data.BalanceMicrosUSD != 2_000_000 {
+		t.Fatalf("topup balance_micros_usd = %d, want 2000000", topUpResponse.Data.BalanceMicrosUSD)
 	}
-	if topUpResponse.Data.LimitSource != "store" {
-		t.Fatalf("topup limit_source = %q, want store", topUpResponse.Data.LimitSource)
+	if topUpResponse.Data.BalanceSource != "store" {
+		t.Fatalf("topup balance_source = %q, want store", topUpResponse.Data.BalanceSource)
 	}
 
-	limitReq := httptest.NewRequest(http.MethodPost, "/admin/budget/limit", strings.NewReader(`{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","limit_micros_usd":500000}`))
+	limitReq := httptest.NewRequest(http.MethodPost, "/admin/budget/limit", strings.NewReader(`{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","balance_micros_usd":500000}`))
 	limitReq.Header.Set("Content-Type", "application/json")
 	limitRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(limitRecorder, limitReq)
@@ -1436,17 +1447,212 @@ func TestBudgetTopUpAndSetLimitEndpoints(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(limitRecorder.Body.Bytes())).Decode(&limitResponse); err != nil {
 		t.Fatalf("limit Decode() error = %v", err)
 	}
-	if limitResponse.Data.MaxMicrosUSD != 500_000 {
-		t.Fatalf("limit max_micros_usd = %d, want 500000", limitResponse.Data.MaxMicrosUSD)
+	if limitResponse.Data.BalanceMicrosUSD != 500_000 {
+		t.Fatalf("limit balance_micros_usd = %d, want 500000", limitResponse.Data.BalanceMicrosUSD)
 	}
 	if len(limitResponse.Data.History) != 2 {
 		t.Fatalf("limit history length = %d, want 2", len(limitResponse.Data.History))
 	}
-	if limitResponse.Data.History[0].Type != "set_limit" {
-		t.Fatalf("latest history type = %q, want set_limit", limitResponse.Data.History[0].Type)
+	if limitResponse.Data.History[0].Type != "set_balance" {
+		t.Fatalf("latest history type = %q, want set_balance", limitResponse.Data.History[0].Type)
 	}
 	if limitResponse.Data.History[1].Type != "top_up" {
 		t.Fatalf("older history type = %q, want top_up", limitResponse.Data.History[1].Type)
+	}
+}
+
+func TestAccountSummaryReturnsModelEstimates(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	budgetStore := governor.NewMemoryBudgetStore()
+	if _, err := budgetStore.Credit(context.Background(), "global", 1_000_000); err != nil {
+		t.Fatalf("Credit() error = %v", err)
+	}
+
+	handler := newBudgetTestHandler(logger, config.GovernorConfig{
+		MaxPromptTokens:      64_000,
+		MaxTotalBudgetMicros: 1_000_000,
+		BudgetBackend:        "memory",
+		BudgetKey:            "global",
+		BudgetScope:          "global",
+	}, budgetStore)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/accounts/summary", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response AccountSummaryResponse
+	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if response.Object != "account_summary" {
+		t.Fatalf("object = %q, want account_summary", response.Object)
+	}
+	if response.Data.Account.BalanceMicrosUSD != 1_000_000 {
+		t.Fatalf("balance_micros_usd = %d, want 1000000", response.Data.Account.BalanceMicrosUSD)
+	}
+	if len(response.Data.Estimates) == 0 {
+		t.Fatal("estimates = empty, want model estimates")
+	}
+}
+
+func TestRequestLedgerReturnsRecentBudgetEvents(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	budgetStore := governor.NewMemoryBudgetStore()
+	now := time.Now().UTC()
+	if err := budgetStore.AppendEvent(context.Background(), governor.BudgetEvent{
+		Key:               "global:tenant:team-a:provider:openai",
+		Type:              "debit",
+		Scope:             "tenant_provider",
+		Provider:          "openai",
+		Tenant:            "team-a",
+		Model:             "gpt-4o-mini",
+		RequestID:         "req-newer",
+		AmountMicrosUSD:   3200,
+		BalanceMicrosUSD:  996800,
+		CreditedMicrosUSD: 1_000_000,
+		DebitedMicrosUSD:  3200,
+		PromptTokens:      12,
+		CompletionTokens:  4,
+		TotalTokens:       16,
+		OccurredAt:        now,
+	}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if err := budgetStore.AppendEvent(context.Background(), governor.BudgetEvent{
+		Key:               "global:tenant:team-b:provider:ollama",
+		Type:              "debit",
+		Scope:             "tenant_provider",
+		Provider:          "ollama",
+		Tenant:            "team-b",
+		Model:             "llama3.1:8b",
+		RequestID:         "req-older",
+		AmountMicrosUSD:   0,
+		BalanceMicrosUSD:  500_000,
+		CreditedMicrosUSD: 500_000,
+		DebitedMicrosUSD:  0,
+		PromptTokens:      20,
+		CompletionTokens:  5,
+		TotalTokens:       25,
+		OccurredAt:        now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	handler := newBudgetTestHandler(logger, config.GovernorConfig{
+		MaxPromptTokens:      64_000,
+		MaxTotalBudgetMicros: 1_000_000,
+		BudgetBackend:        "memory",
+		BudgetKey:            "global",
+		BudgetScope:          "global",
+	}, budgetStore)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/requests?limit=1", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response RequestLedgerResponse
+	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if response.Object != "request_ledger" {
+		t.Fatalf("object = %q, want request_ledger", response.Object)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("entries = %d, want 1", len(response.Data))
+	}
+	if response.Data[0].RequestID != "req-newer" {
+		t.Fatalf("request_id = %q, want req-newer", response.Data[0].RequestID)
+	}
+	if response.Data[0].Model != "gpt-4o-mini" {
+		t.Fatalf("model = %q, want gpt-4o-mini", response.Data[0].Model)
+	}
+}
+
+func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "anthropic",
+		capabilities: providers.Capabilities{
+			Name:         "anthropic",
+			Kind:         providers.KindCloud,
+			DefaultModel: "claude-sonnet-4-20250514",
+			Models:       []string{"claude-sonnet-4-20250514"},
+		},
+		response: &types.ChatResponse{
+			ID:        "msg_123",
+			Model:     "claude-sonnet-4-20250514",
+			CreatedAt: time.Now().UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "Hello from Claude."}, FinishReason: "end_turn"}},
+			Usage:     types.Usage{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16},
+		},
+	}
+
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{provider}, config.Config{
+		Router: config.RouterConfig{
+			DefaultProvider: "anthropic",
+			DefaultModel:    "claude-sonnet-4-20250514",
+			Strategy:        "explicit_or_default",
+		},
+	})
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/sessions", strings.NewReader(`{"title":"Claude debugging"}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created ChatSessionResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Data.ID == "" {
+		t.Fatal("session id = empty, want session id")
+	}
+
+	chatBody := fmt.Sprintf(`{"model":"claude-sonnet-4-20250514","provider":"anthropic","session_id":"%s","messages":[{"role":"user","content":"Say hello."}]}`, created.Data.ID)
+	chatRecorder := performJSONRequest(t, handler, chatBody)
+	if chatRecorder.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, want %d, body=%s", chatRecorder.Code, http.StatusOK, chatRecorder.Body.String())
+	}
+
+	sessionRecorder := httptest.NewRecorder()
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/v1/chat/sessions/"+created.Data.ID, nil)
+	handler.ServeHTTP(sessionRecorder, sessionRequest)
+	if sessionRecorder.Code != http.StatusOK {
+		t.Fatalf("get session status = %d, want %d, body=%s", sessionRecorder.Code, http.StatusOK, sessionRecorder.Body.String())
+	}
+
+	var session ChatSessionResponse
+	if err := json.NewDecoder(bytes.NewReader(sessionRecorder.Body.Bytes())).Decode(&session); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(session.Data.Turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(session.Data.Turns))
+	}
+	if session.Data.Turns[0].Provider != "anthropic" {
+		t.Fatalf("provider = %q, want anthropic", session.Data.Turns[0].Provider)
+	}
+	if session.Data.Turns[0].Model != "claude-sonnet-4-20250514" {
+		t.Fatalf("model = %q, want Claude model", session.Data.Turns[0].Model)
+	}
+	if session.Data.Turns[0].UserMessage.Content != "Say hello." {
+		t.Fatalf("user content = %q, want original prompt", session.Data.Turns[0].UserMessage.Content)
 	}
 }
 
@@ -1524,9 +1730,10 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
 		}, pricebookConfigForTests(items)),
-		Tracer:    profiler.NewInMemoryTracer(nil),
-		Metrics:   telemetry.NewMetrics(),
-		Retention: retentionManager,
+		Tracer:       profiler.NewInMemoryTracer(nil),
+		Metrics:      telemetry.NewMetrics(),
+		Retention:    retentionManager,
+		ChatSessions: chatstate.NewMemoryStore(),
 	})
 
 	cfg.Governor = governorCfg
@@ -1607,8 +1814,9 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 				{Name: provider.Name(), Kind: string(provider.Kind())},
 			},
 		}, pricebookConfigForTests([]providers.Provider{provider})),
-		Tracer:  profiler.NewInMemoryTracer(nil),
-		Metrics: telemetry.NewMetrics(),
+		Tracer:       profiler.NewInMemoryTracer(nil),
+		Metrics:      telemetry.NewMetrics(),
+		ChatSessions: chatstate.NewMemoryStore(),
 	})
 
 	handler := NewHandler(cfg, logger, service, cpStore)

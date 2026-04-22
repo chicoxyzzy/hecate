@@ -82,7 +82,7 @@ func (f *DefaultResponseFinalizer) FinalizeExecution(ctx context.Context, trace 
 		telemetry.AttrHecateCostCachedMicrosUSD: cost.CachedInputMicrosUSD,
 	})
 
-	if err := f.governor.RecordUsage(ctx, plan.Request, decision, cost.TotalMicrosUSD); err != nil {
+	if err := f.governor.RecordUsage(ctx, plan.Request, decision, resp.Usage, cost.TotalMicrosUSD); err != nil {
 		telemetry.Warn(f.logger, ctx, "gateway.budget.usage_record.failed",
 			slog.String("event.name", "gateway.budget.usage_record.failed"),
 			slog.Any("error", err),

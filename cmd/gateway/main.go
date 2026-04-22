@@ -17,6 +17,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/cache"
 	"github.com/hecate/agent-runtime/internal/catalog"
+	"github.com/hecate/agent-runtime/internal/chatstate"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
@@ -85,7 +86,12 @@ func main() {
 
 	providerList := make([]providers.Provider, 0, len(cfg.Providers.OpenAICompatible))
 	for _, providerCfg := range cfg.Providers.OpenAICompatible {
-		providerList = append(providerList, providers.NewOpenAICompatibleProvider(providerCfg, logger))
+		switch strings.ToLower(strings.TrimSpace(providerCfg.Protocol)) {
+		case "anthropic":
+			providerList = append(providerList, providers.NewAnthropicProvider(providerCfg, logger))
+		default:
+			providerList = append(providerList, providers.NewOpenAICompatibleProvider(providerCfg, logger))
+		}
 	}
 	providerRegistry := providers.NewRegistry(providerList...)
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
@@ -114,6 +120,7 @@ func main() {
 	cacheStore := buildCacheStore(cfg, logger, postgresClient)
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
+	chatSessionStore := buildChatSessionStore(cfg, logger, postgresClient)
 	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
 	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient)
 	retentionManager := retention.NewManager(
@@ -151,6 +158,7 @@ func main() {
 		tracer,
 		metrics,
 		retentionManager,
+		chatSessionStore,
 	))
 
 	retentionCtx, retentionCancel := context.WithCancel(context.Background())
@@ -255,6 +263,7 @@ func buildGatewayDependencies(
 	tracer profiler.Tracer,
 	metrics *telemetry.Metrics,
 	retentionManager *retention.Manager,
+	chatSessionStore chatstate.Store,
 ) gateway.Dependencies {
 	return gateway.Dependencies{
 		Logger:   logger,
@@ -279,6 +288,7 @@ func buildGatewayDependencies(
 		Tracer:        tracer,
 		Metrics:       metrics,
 		Retention:     retentionManager,
+		ChatSessions:  chatSessionStore,
 	}
 }
 
@@ -516,7 +526,38 @@ func postgresRequired(cfg config.Config) bool {
 	return cfg.Cache.Backend == "postgres" ||
 		cfg.Cache.Semantic.Backend == "postgres" ||
 		cfg.Governor.BudgetBackend == "postgres" ||
-		cfg.Server.ControlPlaneBackend == "postgres"
+		cfg.Server.ControlPlaneBackend == "postgres" ||
+		cfg.Chat.SessionsBackend == "postgres"
+}
+
+func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {
+	switch cfg.Chat.SessionsBackend {
+	case "file":
+		path := chatSessionFilePath(cfg.Chat.SessionsFile)
+		store, err := chatstate.NewFileStore(path)
+		if err != nil {
+			logger.Error("chat session store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	case "postgres":
+		store, err := chatstate.NewPostgresStore(context.Background(), postgresClient)
+		if err != nil {
+			logger.Error("chat session store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	default:
+		return chatstate.NewMemoryStore()
+	}
+}
+
+func chatSessionFilePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "chat-sessions.json"
+	}
+	return path
 }
 
 func retentionHistoryFilePath(path string) string {

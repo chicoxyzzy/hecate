@@ -21,7 +21,7 @@ func TestDefaultResponseFinalizerFinalizeExecution(t *testing.T) {
 	store := governor.NewMemoryBudgetStore()
 	finalizer := NewDefaultResponseFinalizer(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		governor.NewStaticGovernor(config.GovernorConfig{BudgetKey: "global"}, store, store),
+		governor.NewStaticGovernor(config.GovernorConfig{BudgetKey: "global", MaxTotalBudgetMicros: 1_000_000}, store, store),
 		billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
 				{
@@ -75,11 +75,11 @@ func TestDefaultResponseFinalizerFinalizeExecution(t *testing.T) {
 		t.Fatal("cost_micros_usd = 0, want non-zero")
 	}
 
-	status, err := store.Current(context.Background(), "global")
+	account, _, err := store.Snapshot(context.Background(), "global")
 	if err != nil {
-		t.Fatalf("Current() error = %v", err)
+		t.Fatalf("Snapshot() error = %v", err)
 	}
-	if status == 0 {
+	if account.DebitedMicrosUSD == 0 {
 		t.Fatal("budget usage not recorded")
 	}
 }

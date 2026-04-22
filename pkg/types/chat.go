@@ -3,12 +3,14 @@ package types
 import "time"
 
 type ChatRequest struct {
-	RequestID   string
-	Model       string
-	Messages    []Message
-	MaxTokens   int
-	Temperature float64
-	Scope       RequestScope
+	RequestID    string
+	SessionID    string
+	SessionTitle string
+	Model        string
+	Messages     []Message
+	MaxTokens    int
+	Temperature  float64
+	Scope        RequestScope
 }
 
 type RequestScope struct {
@@ -100,11 +102,11 @@ type BudgetStatus struct {
 	Provider           string
 	Tenant             string
 	Backend            string
-	LimitSource        string
-	SpentMicrosUSD     int64
-	CurrentMicrosUSD   int64
-	MaxMicrosUSD       int64
-	RemainingMicrosUSD int64
+	BalanceSource      string
+	DebitedMicrosUSD   int64
+	CreditedMicrosUSD  int64
+	BalanceMicrosUSD   int64
+	AvailableMicrosUSD int64
 	Enforced           bool
 	Warnings           []BudgetWarning
 	History            []BudgetHistoryEntry
@@ -113,24 +115,68 @@ type BudgetStatus struct {
 type BudgetWarning struct {
 	ThresholdPercent   int
 	ThresholdMicrosUSD int64
-	CurrentMicrosUSD   int64
-	RemainingMicrosUSD int64
+	BalanceMicrosUSD   int64
+	AvailableMicrosUSD int64
 	Triggered          bool
 }
 
 type BudgetHistoryEntry struct {
-	Type             string
-	Scope            string
-	Provider         string
-	Tenant           string
-	Model            string
-	RequestID        string
-	Actor            string
-	Detail           string
-	AmountMicrosUSD  int64
-	BalanceMicrosUSD int64
-	LimitMicrosUSD   int64
-	Timestamp        time.Time
+	Type              string
+	Scope             string
+	Provider          string
+	Tenant            string
+	Model             string
+	RequestID         string
+	Actor             string
+	Detail            string
+	AmountMicrosUSD   int64
+	BalanceMicrosUSD  int64
+	CreditedMicrosUSD int64
+	DebitedMicrosUSD  int64
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	Timestamp         time.Time
+}
+
+type ChatSession struct {
+	ID        string
+	Title     string
+	Tenant    string
+	User      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Turns     []ChatSessionTurn
+}
+
+type ChatSessionTurn struct {
+	ID                string
+	RequestID         string
+	UserMessage       Message
+	AssistantMessage  Message
+	RequestedProvider string
+	Provider          string
+	ProviderKind      string
+	RequestedModel    string
+	Model             string
+	CostMicrosUSD     int64
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	CreatedAt         time.Time
+}
+
+type AccountModelEstimate struct {
+	Provider                        string
+	ProviderKind                    string
+	Model                           string
+	Default                         bool
+	DiscoverySource                 string
+	Priced                          bool
+	InputMicrosUSDPerMillionTokens  int64
+	OutputMicrosUSDPerMillionTokens int64
+	EstimatedRemainingPromptTokens  int64
+	EstimatedRemainingOutputTokens  int64
 }
 
 type RouteDecisionReport struct {

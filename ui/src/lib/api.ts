@@ -1,10 +1,14 @@
 import type {
   BudgetStatusResponse,
+  AccountSummaryResponse,
   ChatResponse,
+  ChatSessionResponse,
+  ChatSessionsResponse,
   ControlPlaneResponse,
   HealthResponse,
   ModelResponse,
   ProviderStatusResponse,
+  RequestLedgerResponse,
   RuntimeHeaders,
   SessionResponse,
   TraceResponse,
@@ -27,6 +31,8 @@ type ErrorPayload = {
 export type ChatCompletionPayload = {
   model: string;
   provider: string;
+  session_id?: string;
+  session_title?: string;
   user: string;
   messages: Array<{
     role: string;
@@ -71,6 +77,10 @@ export type RetentionRunPayload = {
   subsystems: string[];
 };
 
+export type CreateChatSessionPayload = {
+  title: string;
+};
+
 export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>("/healthz");
 }
@@ -93,6 +103,26 @@ export async function getTrace(requestID: string, authToken?: string): Promise<T
 
 export async function getBudget(query = "", authToken?: string): Promise<BudgetStatusResponse> {
   return fetchJSON<BudgetStatusResponse>(`/admin/budget${query}`, { authToken });
+}
+
+export async function getAccountSummary(query = "", authToken?: string): Promise<AccountSummaryResponse> {
+  return fetchJSON<AccountSummaryResponse>(`/admin/accounts/summary${query}`, { authToken });
+}
+
+export async function getChatSessions(authToken?: string, limit = 20): Promise<ChatSessionsResponse> {
+  return fetchJSON<ChatSessionsResponse>(`/v1/chat/sessions?limit=${encodeURIComponent(String(limit))}`, { authToken });
+}
+
+export async function createChatSession(payload: CreateChatSessionPayload, authToken?: string): Promise<ChatSessionResponse> {
+  return fetchJSON<ChatSessionResponse>("/v1/chat/sessions", { authToken, method: "POST", body: payload });
+}
+
+export async function getChatSession(id: string, authToken?: string): Promise<ChatSessionResponse> {
+  return fetchJSON<ChatSessionResponse>(`/v1/chat/sessions/${encodeURIComponent(id)}`, { authToken });
+}
+
+export async function getRequestLedger(authToken?: string, limit = 20): Promise<RequestLedgerResponse> {
+  return fetchJSON<RequestLedgerResponse>(`/admin/requests?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
 export async function resetBudget(payload: Record<string, unknown>, authToken?: string): Promise<BudgetStatusResponse> {

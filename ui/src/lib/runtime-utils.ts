@@ -401,10 +401,10 @@ export function findProvider(providers: ProviderRecord[], providerName?: string)
 }
 
 export function budgetConsumedPercent(budget?: BudgetRecord | null): number {
-  if (!budget || budget.max_micros_usd <= 0) {
+  if (!budget || budget.credited_micros_usd <= 0) {
     return 0;
   }
-  return Math.max(0, Math.min(100, Math.round((budget.current_micros_usd / budget.max_micros_usd) * 100)));
+  return Math.max(0, Math.min(100, Math.round((budget.debited_micros_usd / budget.credited_micros_usd) * 100)));
 }
 
 export function tracePhaseFromEvent(name: string): TraceTimelineItem["phase"] {

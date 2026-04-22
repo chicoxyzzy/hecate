@@ -5,13 +5,18 @@ import type { LocalProviderIssue } from "../lib/provider-issues";
 import { filterModelsByKind, filterModelsByProvider, parseCSV, usdToMicros } from "../lib/runtime-utils";
 import {
   chatCompletions,
+  createChatSession as createChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
   deleteTenant as deleteTenantRequest,
+  getAccountSummary,
   getBudget,
+  getChatSession,
+  getChatSessions,
   getControlPlane,
   getHealth,
   getModels,
   getProviders,
+  getRequestLedger,
   getRetentionRuns,
   getSession,
   getTrace,
@@ -27,13 +32,17 @@ import {
 } from "../lib/api";
 import type {
   BudgetStatusResponse,
+  AccountSummaryResponse,
   ChatResponse,
+  ChatSessionRecord,
+  ChatSessionsResponse,
   ControlPlaneResponse,
   HealthResponse,
   ModelFilter,
   ModelResponse,
   ProviderFilter,
   ProviderStatusResponse,
+  RequestLedgerResponse,
   RuntimeHeaders,
   SessionResponse,
   TraceResponse,
@@ -67,6 +76,8 @@ export function useRuntimeConsole() {
   const [models, setModels] = useState<ModelResponse["data"]>([]);
   const [providers, setProviders] = useState<ProviderStatusResponse["data"]>([]);
   const [budget, setBudget] = useState<BudgetStatusResponse["data"] | null>(null);
+  const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse["data"] | null>(null);
+  const [requestLedger, setRequestLedger] = useState<RequestLedgerResponse["data"]>([]);
   const [controlPlane, setControlPlane] = useState<ControlPlaneResponse["data"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -76,6 +87,9 @@ export function useRuntimeConsole() {
   const [message, setMessage] = useState(defaultPrompt);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSessionsResponse["data"]>([]);
+  const [activeChatSessionID, setActiveChatSessionID] = useState("");
+  const [activeChatSession, setActiveChatSession] = useState<ChatSessionRecord | null>(null);
   const [runtimeHeaders, setRuntimeHeaders] = useState<RuntimeHeaders | null>(null);
   const [traceSpans, setTraceSpans] = useState<TraceSpanRecord[]>([]);
   const [traceRoute, setTraceRoute] = useState<TraceResponse["data"]["route"] | null>(null);
@@ -145,6 +159,10 @@ export function useRuntimeConsole() {
     if (storedAuthToken) {
       setAuthToken(storedAuthToken);
     }
+    const storedChatSessionID = window.localStorage.getItem("hecate.chatSessionID");
+    if (storedChatSessionID) {
+      setActiveChatSessionID(storedChatSessionID);
+    }
   }, []);
 
   useEffect(() => {
@@ -154,6 +172,14 @@ export function useRuntimeConsole() {
   useEffect(() => {
     window.localStorage.setItem("hecate.authToken", authToken);
   }, [authToken]);
+
+  useEffect(() => {
+    if (activeChatSessionID) {
+      window.localStorage.setItem("hecate.chatSessionID", activeChatSessionID);
+      return;
+    }
+    window.localStorage.removeItem("hecate.chatSessionID");
+  }, [activeChatSessionID]);
 
   useEffect(() => {
     if (!notice) {
@@ -205,12 +231,15 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
 
     try {
-      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
+      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, accountSummaryResult, chatSessionsResult, requestLedgerResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
         getHealth(),
         getSession(authToken),
         getModels(authToken),
         getProviders(authToken),
         getBudget("", authToken),
+        getAccountSummary("", authToken),
+        getChatSessions(authToken, 20),
+        getRequestLedger(authToken, 20),
         getControlPlane(authToken),
         getRetentionRuns(authToken, 10),
       ]);
@@ -245,6 +274,39 @@ export function useRuntimeConsole() {
         setBudget(null);
       }
 
+      if (accountSummaryResult.status === "fulfilled") {
+        setAccountSummary(accountSummaryResult.value.data);
+      } else if (accountSummaryResult.reason instanceof Error && accountSummaryResult.reason.message === "missing or invalid bearer token") {
+        setAccountSummary(null);
+      }
+
+      if (chatSessionsResult.status === "fulfilled") {
+        const sessions = chatSessionsResult.value.data ?? [];
+        setChatSessions(sessions);
+        const selectedSessionID = sessions.some((entry) => entry.id === activeChatSessionID) ? activeChatSessionID : sessions[0]?.id ?? "";
+        setActiveChatSessionID(selectedSessionID);
+        if (selectedSessionID) {
+          try {
+            const sessionResult = await getChatSession(selectedSessionID, authToken);
+            setActiveChatSession(sessionResult.data);
+          } catch {
+            setActiveChatSession(null);
+          }
+        } else {
+          setActiveChatSession(null);
+        }
+      } else if (chatSessionsResult.reason instanceof Error && chatSessionsResult.reason.message === "missing or invalid bearer token") {
+        setChatSessions([]);
+        setActiveChatSession(null);
+        setActiveChatSessionID("");
+      }
+
+      if (requestLedgerResult.status === "fulfilled") {
+        setRequestLedger(requestLedgerResult.value.data ?? []);
+      } else if (requestLedgerResult.reason instanceof Error && requestLedgerResult.reason.message === "missing or invalid bearer token") {
+        setRequestLedger([]);
+      }
+
       if (controlPlaneResult.status === "fulfilled") {
         setControlPlane(controlPlaneResult.value.data);
       } else if (controlPlaneResult.reason instanceof Error && controlPlaneResult.reason.message === "missing or invalid bearer token") {
@@ -272,18 +334,35 @@ export function useRuntimeConsole() {
     setTraceError("");
 
     try {
+      let sessionID = activeChatSessionID;
+      if (!sessionID) {
+        const createdSession = await createChatSessionRequest(
+          {
+            title: deriveChatSessionTitle(message),
+          },
+          authToken,
+        );
+        sessionID = createdSession.data.id;
+        setActiveChatSessionID(sessionID);
+        setActiveChatSession(createdSession.data);
+        setChatSessions((current) => [renderChatSessionSummary(createdSession.data), ...current.filter((entry) => entry.id !== createdSession.data.id)]);
+      }
+
+      const messages = buildMessagesForSubmission(activeChatSession, message);
       const response = await chatCompletions(
         {
           model,
           provider: providerFilter === "auto" ? "" : providerFilter,
+          session_id: sessionID,
           user: tenant,
-          messages: [{ role: "user", content: message }],
+          messages,
         },
         authToken,
       );
 
       setChatResult(response.data);
       setRuntimeHeaders(response.headers);
+      setMessage("");
       setTraceLoading(true);
       try {
         const trace = await getTrace(response.headers.requestId, authToken);
@@ -308,6 +387,30 @@ export function useRuntimeConsole() {
       } catch {
         // Tenant-key users may not be authorized for admin budget views.
       }
+
+      try {
+        const [sessionsResult, sessionResult] = await Promise.all([
+          getChatSessions(authToken, 20),
+          getChatSession(sessionID, authToken),
+        ]);
+        setChatSessions(sessionsResult.data ?? []);
+        setActiveChatSession(sessionResult.data);
+      } catch {
+        // Keep the primary request flow resilient.
+      }
+
+      if (session.isAdmin) {
+        try {
+          const [accountSummaryResult, requestLedgerResult] = await Promise.all([
+            getAccountSummary("", authToken),
+            getRequestLedger(authToken, 20),
+          ]);
+          setAccountSummary(accountSummaryResult.data);
+          setRequestLedger(requestLedgerResult.data ?? []);
+        } catch {
+          // Keep chat responsive even if admin-only refresh paths fail.
+        }
+      }
     } catch (submitError) {
       setChatError(submitError instanceof Error ? submitError.message : "unknown request error");
     } finally {
@@ -327,7 +430,7 @@ export function useRuntimeConsole() {
     }
 
     try {
-      const payload = await resetBudgetRequest(
+      await resetBudgetRequest(
         {
           scope: budget.scope,
           provider: budget.provider,
@@ -336,7 +439,7 @@ export function useRuntimeConsole() {
         },
         authToken,
       );
-      setBudget(payload.data);
+      await loadDashboard();
       setNotice({ kind: "success", message: "Budget usage reset." });
       return;
     } catch {
@@ -358,7 +461,7 @@ export function useRuntimeConsole() {
     }
 
     try {
-      const payload = await topUpBudgetRequest(
+      await topUpBudgetRequest(
         {
           scope: budget.scope,
           provider: budget.provider,
@@ -368,7 +471,7 @@ export function useRuntimeConsole() {
         },
         authToken,
       );
-      setBudget(payload.data);
+      await loadDashboard();
       setNotice({ kind: "success", message: "Budget topped up." });
       return;
     } catch (error) {
@@ -390,17 +493,17 @@ export function useRuntimeConsole() {
     }
 
     try {
-      const payload = await setBudgetLimitRequest(
+      await setBudgetLimitRequest(
         {
           scope: budget.scope,
           provider: budget.provider,
           tenant: budget.tenant,
           key: budget.scope === "custom" ? budget.key : "",
-          limit_micros_usd: limitMicrosUSD,
+          balance_micros_usd: limitMicrosUSD,
         },
         authToken,
       );
-      setBudget(payload.data);
+      await loadDashboard();
       setNotice({ kind: "success", message: "Budget limit updated." });
       return;
     } catch (error) {
@@ -575,6 +678,51 @@ export function useRuntimeConsole() {
     }
   }
 
+  async function createChatSession() {
+    setNotice(null);
+    try {
+      const payload = await createChatSessionRequest(
+        {
+          title: deriveChatSessionTitle(message),
+        },
+        authToken,
+      );
+      setActiveChatSessionID(payload.data.id);
+      setActiveChatSession(payload.data);
+      setChatSessions((current) => [renderChatSessionSummary(payload.data), ...current.filter((entry) => entry.id !== payload.data.id)]);
+      setNotice({ kind: "success", message: "Chat session created." });
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "failed to create chat session");
+      setNotice({ kind: "error", message: "Failed to create chat session." });
+    }
+  }
+
+  async function selectChatSession(id: string) {
+    setActiveChatSessionID(id);
+    if (!id) {
+      setActiveChatSession(null);
+      return;
+    }
+    try {
+      const payload = await getChatSession(id, authToken);
+      setActiveChatSession(payload.data);
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "failed to load chat session");
+    }
+  }
+
+  function startNewChat() {
+    setActiveChatSessionID("");
+    setActiveChatSession(null);
+    setChatResult(null);
+    setRuntimeHeaders(null);
+    setTraceSpans([]);
+    setTraceRoute(null);
+    setTraceStartedAt("");
+    setChatError("");
+    setTraceError("");
+  }
+
   return {
     state: {
       apiKeyFormID,
@@ -586,12 +734,15 @@ export function useRuntimeConsole() {
       apiKeyFormTenant,
       authToken,
       budget,
+      accountSummary,
+      requestLedger,
       budgetActionError,
       budgetAmountUsd,
       budgetLimitUsd,
       chatError,
       chatLoading,
       chatResult,
+      chatSessions,
       cloudModels,
       cloudProviders,
       controlPlane,
@@ -615,6 +766,8 @@ export function useRuntimeConsole() {
       providerFilter,
       providerScopedModels,
       providers,
+      activeChatSession,
+      activeChatSessionID,
       retentionError,
       retentionLastRun,
       retentionLoading,
@@ -639,6 +792,7 @@ export function useRuntimeConsole() {
       copyCommand,
       deleteAPIKey,
       deleteTenant,
+      createChatSession,
       loadDashboard,
       resetBudget,
       rotateAPIKey,
@@ -668,6 +822,8 @@ export function useRuntimeConsole() {
       setTenantFormProviders,
       setBudgetLimit,
       runRetention,
+      selectChatSession,
+      startNewChat,
       submitChat,
       topUpBudget,
       upsertAPIKey,
@@ -675,6 +831,43 @@ export function useRuntimeConsole() {
       clearAuthToken: () => setAuthToken(""),
       dismissNotice: () => setNotice(null),
     },
+  };
+}
+
+function deriveChatSessionTitle(message: string): string {
+  const normalized = message.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "New chat";
+  }
+  if (normalized.length <= 48) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 45)}...`;
+}
+
+function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): Array<{ role: string; content: string }> {
+  const history =
+    activeSession?.turns.flatMap((turn) => [
+      { role: turn.user_message.role, content: turn.user_message.content },
+      { role: turn.assistant_message.role, content: turn.assistant_message.content },
+    ]) ?? [];
+  return [...history, { role: "user", content: message }];
+}
+
+function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsResponse["data"][number] {
+  const lastTurn = session.turns[session.turns.length - 1];
+  return {
+    id: session.id,
+    title: session.title,
+    tenant: session.tenant,
+    user: session.user,
+    turn_count: session.turns.length,
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+    last_model: lastTurn?.model,
+    last_provider: lastTurn?.provider,
+    last_cost_usd: lastTurn?.cost_usd,
+    last_request_id: lastTurn?.request_id,
   };
 }
 
