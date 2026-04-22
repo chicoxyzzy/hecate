@@ -36,7 +36,7 @@ Storage backends currently used in different subsystems:
 ## Architecture
 
 ```text
-client
+clienthello
   -> auth
   -> governor
   -> router

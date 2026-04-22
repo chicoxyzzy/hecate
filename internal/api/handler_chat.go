@@ -102,10 +102,42 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
 	messages := make([]types.Message, 0, len(req.Messages))
 	for _, msg := range req.Messages {
-		messages = append(messages, types.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-			Name:    msg.Name,
+		content := ""
+		if msg.Content != nil {
+			content = *msg.Content
+		}
+		m := types.Message{
+			Role:       msg.Role,
+			Content:    content,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
+		}
+		if len(msg.ToolCalls) > 0 {
+			m.ToolCalls = make([]types.ToolCall, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				m.ToolCalls = append(m.ToolCalls, types.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: types.ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		}
+		messages = append(messages, m)
+	}
+
+	tools := make([]types.Tool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		tools = append(tools, types.Tool{
+			Type: t.Type,
+			Function: types.ToolFunction{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+				Strict:      t.Function.Strict,
+			},
 		})
 	}
 
@@ -128,19 +160,38 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 		Temperature:  req.Temperature,
 		MaxTokens:    req.MaxTokens,
 		Scope:        scope,
+		Tools:        tools,
+		ToolChoice:   req.ToolChoice,
 	}, nil
 }
 
 func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletionResponse {
 	choices := make([]OpenAIChatCompletionChoice, 0, len(resp.Choices))
 	for _, choice := range resp.Choices {
+		msg := OpenAIChatMessage{
+			Role: choice.Message.Role,
+			Name: choice.Message.Name,
+		}
+		if len(choice.Message.ToolCalls) > 0 {
+			// null content is correct when tool_calls are present
+			msg.ToolCalls = make([]OpenAIToolCall, 0, len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, OpenAIToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: OpenAIToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		} else {
+			c := choice.Message.Content
+			msg.Content = &c
+		}
 		choices = append(choices, OpenAIChatCompletionChoice{
-			Index: choice.Index,
-			Message: OpenAIChatMessage{
-				Role:    choice.Message.Role,
-				Content: choice.Message.Content,
-				Name:    choice.Message.Name,
-			},
+			Index:        choice.Index,
+			Message:      msg,
 			FinishReason: choice.FinishReason,
 		})
 	}
@@ -157,6 +208,31 @@ func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletion
 			TotalTokens:      resp.Usage.TotalTokens,
 		},
 	}
+}
+
+func messageToWire(msg types.Message) OpenAIChatMessage {
+	wire := OpenAIChatMessage{
+		Role:       msg.Role,
+		Name:       msg.Name,
+		ToolCallID: msg.ToolCallID,
+	}
+	if len(msg.ToolCalls) > 0 {
+		wire.ToolCalls = make([]OpenAIToolCall, 0, len(msg.ToolCalls))
+		for _, tc := range msg.ToolCalls {
+			wire.ToolCalls = append(wire.ToolCalls, OpenAIToolCall{
+				ID:   tc.ID,
+				Type: tc.Type,
+				Function: OpenAIToolCallFunction{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+	} else {
+		c := msg.Content
+		wire.Content = &c
+	}
+	return wire
 }
 
 func modelAllowedForPrincipal(principal auth.Principal, provider, model string) bool {

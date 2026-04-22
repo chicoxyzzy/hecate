@@ -33,12 +33,39 @@ type openAIChatCompletionRequest struct {
 	MaxTokens   int                 `json:"max_tokens,omitempty"`
 	Temperature float64             `json:"temperature,omitempty"`
 	User        string              `json:"user,omitempty"`
+	Tools       []openAITool        `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
+}
+
+type openAITool struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIToolCallFunction `json:"function"`
+}
+
+type openAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role       string           `json:"role"`
+	Content    *string          `json:"content"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {
@@ -307,13 +334,45 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		User:        requestscope.Normalize(req.Scope).User,
+		ToolChoice:  req.ToolChoice,
 	}
 	for _, msg := range req.Messages {
-		wireReq.Messages = append(wireReq.Messages, openAIChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-			Name:    msg.Name,
-		})
+		wireMsg := openAIChatMessage{
+			Role:       msg.Role,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
+		}
+		if len(msg.ToolCalls) > 0 {
+			wireMsg.ToolCalls = make([]openAIToolCall, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				wireMsg.ToolCalls = append(wireMsg.ToolCalls, openAIToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: openAIToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		} else {
+			c := msg.Content
+			wireMsg.Content = &c
+		}
+		wireReq.Messages = append(wireReq.Messages, wireMsg)
+	}
+	if len(req.Tools) > 0 {
+		wireReq.Tools = make([]openAITool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			wireReq.Tools = append(wireReq.Tools, openAITool{
+				Type: t.Type,
+				Function: openAIToolFunction{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					Parameters:  t.Function.Parameters,
+					Strict:      t.Function.Strict,
+				},
+			})
+		}
 	}
 
 	payload, err := json.Marshal(wireReq)
@@ -348,13 +407,32 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 
 	choices := make([]types.ChatChoice, 0, len(wireResp.Choices))
 	for _, choice := range wireResp.Choices {
+		content := ""
+		if choice.Message.Content != nil {
+			content = *choice.Message.Content
+		}
+		m := types.Message{
+			Role:       choice.Message.Role,
+			Content:    content,
+			Name:       choice.Message.Name,
+			ToolCallID: choice.Message.ToolCallID,
+		}
+		if len(choice.Message.ToolCalls) > 0 {
+			m.ToolCalls = make([]types.ToolCall, 0, len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				m.ToolCalls = append(m.ToolCalls, types.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: types.ToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		}
 		choices = append(choices, types.ChatChoice{
-			Index: choice.Index,
-			Message: types.Message{
-				Role:    choice.Message.Role,
-				Content: choice.Message.Content,
-				Name:    choice.Message.Name,
-			},
+			Index:        choice.Index,
+			Message:      m,
 			FinishReason: choice.FinishReason,
 		})
 	}

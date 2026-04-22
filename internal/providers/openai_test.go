@@ -41,7 +41,7 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 		if wireReq.Model != "gpt-4o-mini" {
 			return nil, fmt.Errorf("model = %q, want %q", wireReq.Model, "gpt-4o-mini")
 		}
-		if len(wireReq.Messages) != 1 || wireReq.Messages[0].Content != "hello" {
+		if len(wireReq.Messages) != 1 || wireReq.Messages[0].Content == nil || *wireReq.Messages[0].Content != "hello" {
 			return nil, fmt.Errorf("messages = %#v, want one hello message", wireReq.Messages)
 		}
 
@@ -54,7 +54,7 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 					Index: 0,
 					Message: openAIChatMessage{
 						Role:    "assistant",
-						Content: "world",
+						Content: strPtr("world"),
 					},
 					FinishReason: "stop",
 				},
@@ -259,3 +259,5 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
+
+func strPtr(s string) *string { return &s }

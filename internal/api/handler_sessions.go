@@ -263,8 +263,8 @@ func renderChatSession(session types.ChatSession) ChatSessionItem {
 		record := ChatSessionTurnItem{
 			ID:                turn.ID,
 			RequestID:         turn.RequestID,
-			UserMessage:       OpenAIChatMessage(turn.UserMessage),
-			AssistantMessage:  OpenAIChatMessage(turn.AssistantMessage),
+			UserMessage:       messageToWire(turn.UserMessage),
+			AssistantMessage:  messageToWire(turn.AssistantMessage),
 			RequestedProvider: turn.RequestedProvider,
 			Provider:          turn.Provider,
 			ProviderKind:      turn.ProviderKind,

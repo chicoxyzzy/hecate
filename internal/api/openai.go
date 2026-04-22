@@ -1,5 +1,7 @@
 package api
 
+import "encoding/json"
+
 type OpenAIChatCompletionRequest struct {
 	Model        string              `json:"model"`
 	Provider     string              `json:"provider,omitempty"`
@@ -9,12 +11,39 @@ type OpenAIChatCompletionRequest struct {
 	MaxTokens    int                 `json:"max_tokens,omitempty"`
 	Temperature  float64             `json:"temperature,omitempty"`
 	User         string              `json:"user,omitempty"`
+	Tools        []OpenAITool        `json:"tools,omitempty"`
+	ToolChoice   json.RawMessage     `json:"tool_choice,omitempty"`
+}
+
+type OpenAITool struct {
+	Type     string              `json:"type"`
+	Function OpenAIToolFunction  `json:"function"`
+}
+
+type OpenAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+type OpenAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function OpenAIToolCallFunction `json:"function"`
+}
+
+type OpenAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type OpenAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role       string           `json:"role"`
+	Content    *string          `json:"content"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIChatCompletionResponse struct {
