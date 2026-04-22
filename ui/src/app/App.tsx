@@ -51,7 +51,12 @@ export default function App() {
             <p className="console-brand__detail">Routing, cache, traces, budgets, tenants.</p>
           </div>
 
-          <div className="console-sidebar__status">
+          <button
+            className="console-sidebar__status console-sidebar__session-btn"
+            onClick={() => setActiveWorkspace("access")}
+            title="Go to Access settings"
+            type="button"
+          >
             <StatusPill label={titleFromKind(state.health?.status)} tone={state.health?.status === "ok" ? "healthy" : "warning"} />
             <StatusPill
               label={state.session.label}
@@ -65,7 +70,10 @@ export default function App() {
                       : "warning"
               }
             />
-          </div>
+            {(state.session.kind === "anonymous" || state.session.kind === "invalid") ? (
+              <span className="sidebar-cta">Set up access →</span>
+            ) : null}
+          </button>
 
           <nav className="workspace-nav" aria-label="Workspace navigation">
             {workspaces.map((workspace) => (

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { PropsWithChildren, ReactNode } from "react";
 
 function joinClasses(...values: Array<string | false | null | undefined>): string {
@@ -176,6 +177,44 @@ export function TextAreaField({
     <label className="field">
       <span className="field__label">{label}</span>
       <textarea className="field__input field__input--textarea" onChange={(event) => onChange(event.target.value)} placeholder={placeholder} rows={rows} value={value} />
+    </label>
+  );
+}
+
+export function TokenField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="field">
+      <span className="field__label">{label}</span>
+      <div className="field__token-row">
+        <input
+          autoComplete="off"
+          className="field__input field__input--token"
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder ?? "Paste bearer token"}
+          spellCheck={false}
+          type={visible ? "text" : "password"}
+          value={value}
+        />
+        <button
+          aria-label={visible ? "Hide token" : "Show token"}
+          className="field__token-toggle"
+          onClick={() => setVisible((v) => !v)}
+          type="button"
+        >
+          {visible ? "Hide" : "Show"}
+        </button>
+      </div>
     </label>
   );
 }

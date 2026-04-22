@@ -1,5 +1,5 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import { EmptyState, ShellSection, StatusPill, Surface, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import { DefinitionList, InlineNotice, ShellSection, StatusPill, Surface, ToolbarButton, TokenField } from "../shared/ConsolePrimitives";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -7,116 +7,158 @@ type Props = {
 };
 
 export function AccessView({ state, actions }: Props) {
+  const { kind, role, name, tenant, source, keyID, capabilities, allowedProviders, allowedModels } = state.session;
+  const isAuthenticated = kind === "admin" || kind === "tenant";
+
+  if (!isAuthenticated) {
+    return (
+      <div className="auth-gate">
+        <div className="auth-gate__card">
+          <div className="auth-gate__header">
+            <span className={`role-badge role-badge--${kind}`}>
+              {kind === "invalid" ? "Token invalid" : "Not authenticated"}
+            </span>
+            <h2 className="auth-gate__title">Connect to Hecate</h2>
+            <p className="auth-gate__subtitle">
+              Paste a bearer token to authenticate. Your role and access scope are set by the token.
+            </p>
+          </div>
+
+          {kind === "invalid" ? (
+            <InlineNotice message="The token was rejected by the server. Check that it is correct and not expired." tone="error" />
+          ) : null}
+
+          <TokenField
+            label="Bearer token"
+            onChange={actions.setAuthToken}
+            placeholder="Paste tenant or admin token"
+            value={state.authToken}
+          />
+
+          <div className="stack-sm">
+            <ToolbarButton
+              className="auth-gate__submit"
+              disabled={!state.authToken.trim()}
+              onClick={() => void actions.loadDashboard()}
+              tone="primary"
+            >
+              Connect
+            </ToolbarButton>
+            {state.authToken ? (
+              <button className="auth-gate__clear" onClick={actions.clearAuthToken} type="button">
+                Clear token
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="workspace-grid">
       <div className="workspace-main">
-        <ShellSection
-          eyebrow="Authentication"
-          title="Session"
-        >
+        <ShellSection eyebrow="Active session" title="Identity">
+          <Surface>
+            <div className="session-identity">
+              <div className="session-identity__hero">
+                <span className={`role-badge role-badge--${kind}`}>{role || kind}</span>
+                <div className="session-identity__text">
+                  <p className="session-identity__name">{name || tenant || "Authenticated"}</p>
+                  <p className="session-identity__sub">
+                    {[tenant && `Tenant: ${tenant}`, source && `via ${source}`].filter(Boolean).join(" · ") || "No tenant scope"}
+                  </p>
+                </div>
+              </div>
+              <DefinitionList
+                compact
+                items={[
+                  { label: "Role", value: role || "—" },
+                  { label: "Name", value: name || "Not set" },
+                  { label: "Tenant", value: tenant || "Not scoped" },
+                  { label: "Source", value: source || "—" },
+                  { label: "Key ID", value: keyID || "—" },
+                ]}
+              />
+            </div>
+          </Surface>
+        </ShellSection>
+
+        <ShellSection eyebrow="Token management" title="Credentials">
           <Surface tone="strong">
-            <div className="stack-lg">
-              <TextField label="Bearer token" onChange={actions.setAuthToken} placeholder="Paste tenant or admin token" value={state.authToken} />
+            <div className="stack-md">
+              <TokenField
+                label="Bearer token"
+                onChange={actions.setAuthToken}
+                placeholder="Replace with a different token"
+                value={state.authToken}
+              />
               <div className="action-row">
                 <ToolbarButton onClick={() => void actions.loadDashboard()} tone="primary">
                   Refresh session
                 </ToolbarButton>
-                <ToolbarButton onClick={actions.clearAuthToken}>Clear token</ToolbarButton>
-                <StatusPill
-                  label={state.session.label}
-                  tone={
-                    state.session.kind === "admin"
-                      ? "healthy"
-                      : state.session.kind === "tenant"
-                        ? "neutral"
-                        : state.session.kind === "invalid"
-                          ? "danger"
-                          : "warning"
-                  }
-                />
+                <ToolbarButton onClick={actions.clearAuthToken} tone="danger">
+                  Sign out
+                </ToolbarButton>
               </div>
             </div>
           </Surface>
         </ShellSection>
 
-        <ShellSection
-          eyebrow="Scope"
-          title="Scope"
-        >
-          <div className="two-column-grid">
-            <Surface>
-              <dl className="definition-list">
-                <div className="definition-list__row">
-                  <dt>Name</dt>
-                  <dd>{state.session.name || "Not set"}</dd>
-                </div>
-                <div className="definition-list__row">
-                  <dt>Role</dt>
-                  <dd>{state.session.role}</dd>
-                </div>
-                <div className="definition-list__row">
-                  <dt>Tenant</dt>
-                  <dd>{state.session.tenant || "Not scoped"}</dd>
-                </div>
-                <div className="definition-list__row">
-                  <dt>Source</dt>
-                  <dd>{state.session.source || "Not returned"}</dd>
-                </div>
-                <div className="definition-list__row">
-                  <dt>Key ID</dt>
-                  <dd>{state.session.keyID || "Not returned"}</dd>
-                </div>
-              </dl>
-            </Surface>
-            <Surface>
-              <div className="stack-sm">
-                <p className="label-muted">Capabilities</p>
-                {state.session.capabilities.length > 0 ? (
-                  <ul className="bullet-list">
-                    {state.session.capabilities.map((capability) => (
-                      <li key={capability}>{capability}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState title="No capabilities" detail="None returned." />
-                )}
-              </div>
-            </Surface>
-          </div>
+        <ShellSection eyebrow="Permissions" title="Capabilities">
+          <Surface>
+            <div className="stack-sm">
+              <p className="label-muted">What this session can do</p>
+              {capabilities.length > 0 ? (
+                <ul className="capability-list">
+                  {capabilities.map((cap) => (
+                    <li className="capability-list__item" key={cap}>
+                      <span className="capability-list__dot" />
+                      {cap}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="body-muted">No capabilities returned.</p>
+              )}
+            </div>
+          </Surface>
         </ShellSection>
       </div>
 
       <aside className="workspace-rail">
-        <ShellSection eyebrow="Restrictions" title="Access">
+        <ShellSection eyebrow="Access restrictions" title="Scope limits">
           <Surface>
             <div className="stack-md">
-              <div>
+              <div className="stack-sm">
                 <p className="label-muted">Allowed providers</p>
-                {state.session.allowedProviders.length > 0 ? (
+                {allowedProviders.length > 0 ? (
                   <div className="chip-row">
-                    {state.session.allowedProviders.map((provider) => (
-                      <span className="mono-chip" key={provider}>
-                        {provider}
-                      </span>
+                    {allowedProviders.map((p) => (
+                      <span className="mono-chip" key={p}>{p}</span>
                     ))}
                   </div>
                 ) : (
-                  <p className="body-muted">No provider restriction.</p>
+                  <div className="access-unrestricted">
+                    <StatusPill label="Any provider" tone="healthy" />
+                  </div>
                 )}
               </div>
-              <div>
+              <div className="stack-sm">
                 <p className="label-muted">Allowed models</p>
-                {state.session.allowedModels.length > 0 ? (
+                {allowedModels.length > 0 ? (
                   <div className="chip-row">
-                    {state.session.allowedModels.slice(0, 16).map((model) => (
-                      <span className="mono-chip" key={model}>
-                        {model}
-                      </span>
+                    {allowedModels.slice(0, 16).map((m) => (
+                      <span className="mono-chip" key={m}>{m}</span>
                     ))}
-                    {state.session.allowedModels.length > 16 ? <span className="body-muted">+{state.session.allowedModels.length - 16} more</span> : null}
+                    {allowedModels.length > 16 ? (
+                      <span className="body-muted">+{allowedModels.length - 16} more</span>
+                    ) : null}
                   </div>
                 ) : (
-                  <p className="body-muted">No model restriction.</p>
+                  <div className="access-unrestricted">
+                    <StatusPill label="Any model" tone="healthy" />
+                  </div>
                 )}
               </div>
             </div>
