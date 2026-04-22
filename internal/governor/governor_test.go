@@ -188,3 +188,65 @@ func TestStaticGovernorBudgetWarningsAndHistory(t *testing.T) {
 		t.Fatalf("history timestamp = %v, looks stale", status.History[0].Timestamp)
 	}
 }
+
+func TestStaticGovernorRequestPolicyRewrite(t *testing.T) {
+	t.Parallel()
+
+	gov := NewStaticGovernor(config.GovernorConfig{
+		PolicyRules: []config.PolicyRuleConfig{
+			{
+				ID:             "tenant-default-downgrade",
+				Action:         "rewrite_model",
+				Tenants:        []string{"team-a"},
+				Models:         []string{"gpt-4o"},
+				RewriteModelTo: "gpt-4o-mini",
+			},
+		},
+	}, NewMemoryBudgetStore(), NewMemoryBudgetStore())
+
+	rewritten := gov.Rewrite(types.ChatRequest{
+		Model: "gpt-4o",
+		Scope: types.RequestScope{
+			Tenant: "team-a",
+		},
+	})
+	if rewritten.Model != "gpt-4o-mini" {
+		t.Fatalf("rewritten model = %q, want gpt-4o-mini", rewritten.Model)
+	}
+}
+
+func TestStaticGovernorRoutePolicyDenyByTenantAndProviderKind(t *testing.T) {
+	t.Parallel()
+
+	gov := NewStaticGovernor(config.GovernorConfig{
+		PolicyRules: []config.PolicyRuleConfig{
+			{
+				ID:                     "team-a-cloud-spillover-cap",
+				Action:                 "deny",
+				Reason:                 "team-a cannot use expensive cloud spillover",
+				Tenants:                []string{"team-a"},
+				ProviderKinds:          []string{"cloud"},
+				MinEstimatedCostMicros: 100,
+			},
+		},
+	}, NewMemoryBudgetStore(), NewMemoryBudgetStore())
+
+	err := gov.CheckRoute(context.Background(), types.ChatRequest{
+		Scope: types.RequestScope{
+			Tenant: "team-a",
+			Principal: types.PrincipalContext{
+				Role: "tenant",
+			},
+		},
+	}, types.RouteDecision{
+		Provider: "openai",
+		Model:    "gpt-4o-mini",
+		Reason:   "fallback",
+	}, "cloud", 250)
+	if err == nil {
+		t.Fatal("CheckRoute() error = nil, want policy denial")
+	}
+	if err.Error() != "team-a cannot use expensive cloud spillover" {
+		t.Fatalf("error = %q, want policy reason", err.Error())
+	}
+}

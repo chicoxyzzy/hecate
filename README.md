@@ -17,6 +17,7 @@ Current runtime capabilities:
 - semantic cache
 - static cost estimation via a local pricebook
 - budget enforcement
+- config-driven policy rules with deny/rewrite decisions by tenant, provider, model, and cost
 - budget limit top-ups, resets, warning thresholds, and history
 - tenant-aware auth and restrictions
 - request tracing and structured logs
@@ -195,7 +196,7 @@ Implemented:
 Next:
 
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
-- [ ] More advanced routing and policy decisions
+- [ ] Deeper policy lifecycle beyond config-driven rules
 - [ ] A real pricebook ingestion/update path instead of only seeded static defaults
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI

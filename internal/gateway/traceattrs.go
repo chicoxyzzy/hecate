@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"errors"
 	"reflect"
 
+	"github.com/hecate/agent-runtime/internal/policy"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
@@ -38,6 +40,18 @@ func traceErrorAttrs(phase, kind string, err error, attrs map[string]any) map[st
 		out[telemetry.AttrErrorMessage] = err.Error()
 		if _, ok := out[telemetry.AttrErrorType]; !ok {
 			out[telemetry.AttrErrorType] = traceErrorType(err)
+		}
+		var policyErr *policy.Error
+		if errors.As(err, &policyErr) && policyErr != nil {
+			if policyErr.Evaluation.RuleID != "" {
+				out[telemetry.AttrHecatePolicyRuleID] = policyErr.Evaluation.RuleID
+			}
+			if policyErr.Evaluation.Action != "" {
+				out[telemetry.AttrHecatePolicyAction] = policyErr.Evaluation.Action
+			}
+			if policyErr.Evaluation.Reason != "" {
+				out[telemetry.AttrHecatePolicyReason] = policyErr.Evaluation.Reason
+			}
 		}
 	}
 	return out

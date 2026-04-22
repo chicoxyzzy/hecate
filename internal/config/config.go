@@ -76,6 +76,7 @@ type GovernorConfig struct {
 	MaxPromptTokens         int
 	MaxTotalBudgetMicros    int64
 	ModelRewriteTo          string
+	PolicyRules             []PolicyRuleConfig `json:"policy_rules"`
 	BudgetBackend           string
 	BudgetKey               string
 	BudgetScope             string
@@ -88,6 +89,21 @@ type GovernorConfig struct {
 	AllowedProviderKinds    []string
 	BudgetWarningThresholds []int
 	BudgetHistoryLimit      int
+}
+
+type PolicyRuleConfig struct {
+	ID                     string   `json:"id"`
+	Action                 string   `json:"action"`
+	Reason                 string   `json:"reason"`
+	Roles                  []string `json:"roles"`
+	Tenants                []string `json:"tenants"`
+	Providers              []string `json:"providers"`
+	ProviderKinds          []string `json:"provider_kinds"`
+	Models                 []string `json:"models"`
+	RouteReasons           []string `json:"route_reasons"`
+	MinPromptTokens        int      `json:"min_prompt_tokens"`
+	MinEstimatedCostMicros int64    `json:"min_estimated_cost_micros_usd"`
+	RewriteModelTo         string   `json:"rewrite_model_to"`
 }
 
 type CacheConfig struct {
@@ -212,6 +228,7 @@ func LoadFromEnv() Config {
 			MaxPromptTokens:         getEnvInt("GATEWAY_MAX_PROMPT_TOKENS", 64_000),
 			MaxTotalBudgetMicros:    getEnvInt64("GATEWAY_MAX_BUDGET_MICROS_USD", 5_000_000),
 			ModelRewriteTo:          os.Getenv("GATEWAY_MODEL_REWRITE_TO"),
+			PolicyRules:             loadPolicyRulesFromEnv(),
 			BudgetBackend:           getEnv("GATEWAY_BUDGET_BACKEND", "memory"),
 			BudgetKey:               getEnv("GATEWAY_BUDGET_KEY", "global"),
 			BudgetScope:             getEnv("GATEWAY_BUDGET_SCOPE", "global"),
@@ -292,6 +309,37 @@ func loadPricebookFromEnv() PricebookConfig {
 		cfg.UnknownModelPolicy = policy
 	}
 	return cfg
+}
+
+func loadPolicyRulesFromEnv() []PolicyRuleConfig {
+	raw := strings.TrimSpace(os.Getenv("GATEWAY_POLICY_RULES_JSON"))
+	if raw == "" {
+		return nil
+	}
+
+	var rules []PolicyRuleConfig
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil
+	}
+
+	out := make([]PolicyRuleConfig, 0, len(rules))
+	for _, rule := range rules {
+		rule.ID = strings.TrimSpace(rule.ID)
+		rule.Action = strings.TrimSpace(rule.Action)
+		rule.Reason = strings.TrimSpace(rule.Reason)
+		rule.Roles = normalizeValues(rule.Roles)
+		rule.Tenants = normalizeValues(rule.Tenants)
+		rule.Providers = normalizeValues(rule.Providers)
+		rule.ProviderKinds = normalizeValues(rule.ProviderKinds)
+		rule.Models = normalizeValues(rule.Models)
+		rule.RouteReasons = normalizeValues(rule.RouteReasons)
+		rule.RewriteModelTo = strings.TrimSpace(rule.RewriteModelTo)
+		if rule.Action == "" {
+			continue
+		}
+		out = append(out, rule)
+	}
+	return out
 }
 
 func defaultPricebookConfig() PricebookConfig {
@@ -503,12 +551,15 @@ func splitCSV(value string) []string {
 	if value == "" {
 		return nil
 	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
+	return normalizeValues(strings.Split(value, ","))
+}
+
+func normalizeValues(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
 		}
 	}
 	return out

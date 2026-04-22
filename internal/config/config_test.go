@@ -78,6 +78,36 @@ func TestLoadFromEnvPricebookSettings(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvPolicyRules(t *testing.T) {
+	t.Setenv("GATEWAY_POLICY_RULES_JSON", `[
+		{
+			"id":"tenant-local-rewrite",
+			"action":"rewrite_model",
+			"reason":"prefer cheaper model for tenant",
+			"tenants":["team-a"],
+			"models":["gpt-4o"],
+			"rewrite_model_to":"gpt-4o-mini"
+		},
+		{
+			"id":"block-expensive-cloud",
+			"action":"deny",
+			"provider_kinds":["cloud"],
+			"min_estimated_cost_micros_usd":1000000
+		}
+	]`)
+
+	cfg := LoadFromEnv()
+	if len(cfg.Governor.PolicyRules) != 2 {
+		t.Fatalf("policy rules = %d, want 2", len(cfg.Governor.PolicyRules))
+	}
+	if cfg.Governor.PolicyRules[0].ID != "tenant-local-rewrite" {
+		t.Fatalf("first rule id = %q, want tenant-local-rewrite", cfg.Governor.PolicyRules[0].ID)
+	}
+	if cfg.Governor.PolicyRules[1].MinEstimatedCostMicros != 1_000_000 {
+		t.Fatalf("second rule min estimated cost = %d, want 1000000", cfg.Governor.PolicyRules[1].MinEstimatedCostMicros)
+	}
+}
+
 func TestSplitCSVTrimsAndDropsEmptyValues(t *testing.T) {
 	t.Parallel()
 

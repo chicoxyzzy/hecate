@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/policy"
 	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -34,6 +35,7 @@ type StaticGovernor struct {
 	ledger  UsageLedger
 	store   BudgetStateStore
 	history BudgetHistoryStore
+	rules   []policy.Rule
 }
 
 func NewStaticGovernor(cfg config.GovernorConfig, ledger UsageLedger, store BudgetStateStore) *StaticGovernor {
@@ -43,7 +45,13 @@ func NewStaticGovernor(cfg config.GovernorConfig, ledger UsageLedger, store Budg
 	} else if candidate, ok := store.(BudgetHistoryStore); ok {
 		history = candidate
 	}
-	return &StaticGovernor{config: cfg, ledger: ledger, store: store, history: history}
+	return &StaticGovernor{
+		config:  cfg,
+		ledger:  ledger,
+		store:   store,
+		history: history,
+		rules:   policy.FromConfig(cfg.PolicyRules),
+	}
 }
 
 func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
@@ -57,6 +65,10 @@ func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
 	}
 	if promptEstimate > g.config.MaxPromptTokens {
 		return fmt.Errorf("estimated prompt tokens %d exceed limit %d", promptEstimate, g.config.MaxPromptTokens)
+	}
+
+	if err := policy.EvaluateDeny(g.rules, policy.BuildRequestSubject(req)); err != nil {
+		return err
 	}
 
 	return nil
@@ -98,6 +110,10 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 		if providerKind != "cloud" {
 			return fmt.Errorf("route mode %q denies provider kind %q", g.config.RouteMode, providerKind)
 		}
+	}
+
+	if err := policy.EvaluateDeny(g.rules, policy.BuildRouteSubject(req, decision, providerKind, estimatedCostMicros)); err != nil {
+		return err
 	}
 
 	budgetKey := g.budgetKeyForRequest(req, decision)
@@ -288,6 +304,11 @@ func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) e
 }
 
 func (g *StaticGovernor) Rewrite(req types.ChatRequest) types.ChatRequest {
+	if _, rewritten, ok := policy.EvaluateRewrite(g.rules, policy.BuildRequestSubject(req)); ok {
+		req.Model = rewritten
+		return req
+	}
+
 	if g.config.ModelRewriteTo == "" {
 		return req
 	}
