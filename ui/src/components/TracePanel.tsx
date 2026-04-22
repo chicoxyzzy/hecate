@@ -42,52 +42,50 @@ export function TracePanel(props: TracePanelProps) {
 
   return (
     <Panel eyebrow="Trace" title="Request timeline">
-      <div className="mt-4 rounded-2xl bg-slate-50/90 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <TraceBadge label="Request" value={props.requestId || "none"} />
-          <TraceBadge label="Spans" value={props.spans.length.toString()} />
-          <TraceBadge label="Events" value={timeline.length.toString()} />
-          {props.traceStartedAt ? <TraceBadge label="Started" value={new Date(props.traceStartedAt).toLocaleTimeString()} /> : null}
-        </div>
+      <div className="info-block action-row">
+        <TraceBadge label="Request" value={props.requestId || "none"} />
+        <TraceBadge label="Spans" value={props.spans.length.toString()} />
+        <TraceBadge label="Events" value={timeline.length.toString()} />
+        {props.traceStartedAt ? <TraceBadge label="Started" value={new Date(props.traceStartedAt).toLocaleTimeString()} /> : null}
       </div>
 
       {props.loading ? (
-        <div className="mt-4 rounded-2xl border border-slate-200/80 bg-white px-4 py-4 text-sm text-slate-600">Loading trace…</div>
+        <div className="inline-notice inline-notice--success" style={{ marginTop: "1rem" }}>Loading trace…</div>
       ) : null}
 
       {!props.loading && props.error ? (
-        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">{props.error}</div>
+        <div className="inline-notice inline-notice--error" style={{ marginTop: "1rem" }}>{props.error}</div>
       ) : null}
 
       {!props.loading && !props.error && props.spans.length === 0 ? (
-        <div className="mt-4 rounded-2xl border border-slate-200/80 bg-white px-4 py-4 text-sm text-slate-600">
-          Run a chat request to inspect its gateway timeline here.
+        <div className="trace-section" style={{ marginTop: "1rem" }}>
+          <p className="body-muted">Run a chat request to inspect its gateway timeline here.</p>
         </div>
       ) : null}
 
       {!props.loading && !props.error && props.spans.length > 0 ? (
-        <div className="mt-4 grid gap-4">
-          <section className="rounded-2xl border border-slate-200/80 bg-white/95 px-4 py-4">
-            <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">OpenTelemetry-style spans</h4>
-            <ol className="mt-3 grid gap-3">
+        <div className="stack-md" style={{ marginTop: "1rem" }}>
+          <section className="trace-section">
+            <h4 className="trace-section__title">OpenTelemetry-style spans</h4>
+            <ol className="trace-entry-list">
               {props.spans.map((span) => (
-                <li key={span.span_id} className="rounded-2xl bg-slate-50 px-4 py-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
+                <li key={span.span_id} className="trace-entry">
+                  <div className="trace-entry__head">
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">{span.name}</p>
-                      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+                      <p className="trace-entry__name">{span.name}</p>
+                      <p className="trace-entry__meta">
                         {span.kind || "internal"} {span.status_code ? `· ${span.status_code}` : ""}
                       </p>
                     </div>
-                    <p className="text-xs text-slate-500">{formatSpanDuration(span.start_time, span.end_time)}</p>
+                    <p className="trace-entry__duration">{formatSpanDuration(span.start_time, span.end_time)}</p>
                   </div>
-                  {span.status_message ? <p className="mt-2 text-sm text-red-700">{span.status_message}</p> : null}
+                  {span.status_message ? <p className="trace-entry__error">{span.status_message}</p> : null}
                   {span.attributes && Object.keys(span.attributes).length > 0 ? (
-                    <dl className="mt-3 grid gap-2 md:grid-cols-2">
+                    <dl className="trace-attr-grid">
                       {Object.entries(span.attributes).map(([key, value]) => (
-                        <div key={key} className="rounded-xl bg-white px-3 py-2">
-                          <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{formatLabel(key)}</dt>
-                          <dd className="mt-1 break-all text-sm text-slate-800">{formatValue(value)}</dd>
+                        <div key={key} className="trace-attr">
+                          <dt>{formatLabel(key)}</dt>
+                          <dd>{formatValue(value)}</dd>
                         </div>
                       ))}
                     </dl>
@@ -97,27 +95,27 @@ export function TracePanel(props: TracePanelProps) {
             </ol>
           </section>
 
-          <section className="rounded-2xl border border-slate-200/80 bg-white/95 px-4 py-4">
-            <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Span Events Timeline</h4>
+          <section className="trace-section">
+            <h4 className="trace-section__title">Span Events Timeline</h4>
             {timeline.length > 0 ? (
-              <ol className="mt-3 grid gap-3">
+              <ol className="trace-entry-list">
                 {timeline.map((event, index) => (
-                  <li key={`${event.timestamp}-${event.name}-${index}`} className="rounded-2xl bg-slate-50 px-4 py-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
+                  <li key={`${event.timestamp}-${event.name}-${index}`} className="trace-entry">
+                    <div className="trace-entry__head">
                       <div>
-                        <p className="text-sm font-semibold text-slate-900">{event.name}</p>
-                        <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+                        <p className="trace-entry__name">{event.name}</p>
+                        <p className="trace-entry__meta">
                           {event.offsetLabel} · {event.spanName} · {event.spanKind}
                         </p>
                       </div>
-                      <p className="text-xs text-slate-500">{new Date(event.timestamp).toLocaleTimeString()}</p>
+                      <p className="trace-entry__duration">{new Date(event.timestamp).toLocaleTimeString()}</p>
                     </div>
                     {event.attributes && Object.keys(event.attributes).length > 0 ? (
-                      <dl className="mt-3 grid gap-2 md:grid-cols-2">
+                      <dl className="trace-attr-grid">
                         {Object.entries(event.attributes).map(([key, value]) => (
-                          <div key={key} className="rounded-xl bg-white px-3 py-2">
-                            <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{formatLabel(key)}</dt>
-                            <dd className="mt-1 break-all text-sm text-slate-800">{formatValue(value)}</dd>
+                          <div key={key} className="trace-attr">
+                            <dt>{formatLabel(key)}</dt>
+                            <dd>{formatValue(value)}</dd>
                           </div>
                         ))}
                       </dl>
@@ -126,9 +124,9 @@ export function TracePanel(props: TracePanelProps) {
                 ))}
               </ol>
             ) : (
-              <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+              <p className="body-muted" style={{ marginTop: "0.75rem" }}>
                 This trace does not contain span events yet.
-              </div>
+              </p>
             )}
           </section>
         </div>
@@ -139,8 +137,8 @@ export function TracePanel(props: TracePanelProps) {
 
 function TraceBadge(props: { label: string; value: string }) {
   return (
-    <span className="rounded-full border border-slate-200/80 bg-white/95 px-3 py-2 text-xs font-medium text-slate-700">
-      <span className="mr-1 text-slate-500">{props.label}:</span>
+    <span className="trace-badge">
+      <span className="trace-badge__label">{props.label}:</span>
       {props.value}
     </span>
   );

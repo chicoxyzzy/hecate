@@ -55,7 +55,7 @@ export function ModelsPanel(props: ModelsPanelProps) {
 
   return (
     <Panel eyebrow="Models" title="Discovered catalog">
-      <div className="mt-4 grid gap-3">
+      <div className="stack-md">
         <SegmentedTabs
           tabs={[
             { id: "all", label: "All" },
@@ -66,36 +66,36 @@ export function ModelsPanel(props: ModelsPanelProps) {
           onChange={props.onModelFilterChange}
         />
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-          <label className="block">
-            <span className="mb-2 block text-sm text-slate-600">Search models, providers, or discovery source</span>
+        <div className="model-search-bar">
+          <label className="field">
+            <span className="field__label">Search models, providers, or discovery source</span>
             <input
-              className="w-full rounded-2xl border border-slate-200/80 bg-white/90 px-4 py-3 text-slate-900 outline-none transition focus:border-cyan-700 focus:ring-4 focus:ring-cyan-100"
+              className="field__input"
               placeholder="gpt-4o-mini, ollama, upstream_v1_models..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
-          <div className="rounded-2xl bg-slate-50/90 px-4 py-3 text-sm text-slate-600">
+          <div className="model-search-stats">
             {filteredModels.length} shown · {defaultModels.length} defaults · {providerNames.length} providers
           </div>
         </div>
       </div>
 
       {props.localModels.length === 0 ? (
-        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="model-no-local" style={{ marginTop: "1rem" }}>
           No local models are currently registered. In your current runtime config, this usually means the local provider is not enabled.
           Check `LOCAL_PROVIDER_ENABLED=true` and confirm a local provider base URL and model list are configured.
         </div>
       ) : null}
 
       {defaultModels.length > 0 ? (
-        <section className="mt-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Default models</h3>
-            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">{defaultModels.length}</span>
+        <section style={{ marginTop: "1rem" }}>
+          <div className="console-section__header" style={{ marginBottom: "0.75rem" }}>
+            <h3 className="label-muted">Default models</h3>
+            <span className="model-count model-count--default">{defaultModels.length}</span>
           </div>
-          <div className="grid gap-3">
+          <div className="stack-sm">
             {defaultModels.map((entry) => (
               <ModelCard entry={entry} key={`default-${entry.metadata?.provider}-${entry.id}`} />
             ))}
@@ -103,7 +103,7 @@ export function ModelsPanel(props: ModelsPanelProps) {
         </section>
       ) : null}
 
-      <div className="mt-4 grid gap-3">
+      <div className="stack-sm" style={{ marginTop: "1rem" }}>
         {providerNames.map((providerName) => {
           const providerModels = groupedModels[providerName] ?? [];
           const nonDefaultProviderModels = providerModels.filter((entry) => !entry.metadata?.default);
@@ -115,21 +115,17 @@ export function ModelsPanel(props: ModelsPanelProps) {
           const startsOpen = normalizedSearch !== "" || providerNames.length === 1;
 
           return (
-            <details
-              className="rounded-2xl border border-slate-200/80 bg-slate-50/90 p-4 open:bg-white/90"
-              key={providerName}
-              open={startsOpen}
-            >
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+            <details className="model-provider-group" key={providerName} open={startsOpen}>
+              <summary className="model-provider-group__summary">
                 <div>
-                  <strong className="text-slate-900">{providerName}</strong>
-                  <p className="mt-1 text-sm text-slate-500">
+                  <strong className="model-provider-group__name">{providerName}</strong>
+                  <p className="model-provider-group__meta">
                     {providerKind} · {nonDefaultProviderModels.length} additional model{nonDefaultProviderModels.length === 1 ? "" : "s"}
                   </p>
                 </div>
-                <span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700">{nonDefaultProviderModels.length}</span>
+                <span className="model-count model-count--neutral">{nonDefaultProviderModels.length}</span>
               </summary>
-              <div className="mt-4 grid gap-3">
+              <div className="stack-sm" style={{ marginTop: "1rem" }}>
                 {nonDefaultProviderModels.map((entry) => (
                   <ModelCard entry={entry} key={`${entry.metadata?.provider}-${entry.id}`} />
                 ))}
@@ -139,7 +135,7 @@ export function ModelsPanel(props: ModelsPanelProps) {
         })}
       </div>
 
-      {filteredModels.length === 0 ? <p className="mt-3 text-sm text-slate-500">No models matched the current filter or search.</p> : null}
+      {filteredModels.length === 0 ? <p className="body-muted" style={{ marginTop: "0.75rem" }}>No models matched the current filter or search.</p> : null}
     </Panel>
   );
 }
@@ -148,17 +144,17 @@ function ModelCard(props: { entry: ModelRecord }) {
   const { entry } = props;
 
   return (
-    <article className="rounded-2xl bg-slate-50/90 p-4">
-      <div className="flex items-center justify-between gap-3">
+    <article className="model-card">
+      <div className="model-card__head">
         <strong className="break-all">{entry.id}</strong>
-        <div className="flex flex-wrap gap-2">
+        <div className="model-card__badges">
           {entry.metadata?.default ? (
-            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">default</span>
+            <span className="model-count model-count--default">default</span>
           ) : null}
-          <span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700">{entry.metadata?.provider_kind ?? "unknown"}</span>
+          <span className="model-count model-count--neutral">{entry.metadata?.provider_kind ?? "unknown"}</span>
         </div>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="model-card__meta">
         {entry.metadata?.provider ?? "unknown"} · {entry.metadata?.discovery_source ?? "n/a"}
       </p>
     </article>

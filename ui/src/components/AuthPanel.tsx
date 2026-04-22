@@ -3,7 +3,6 @@ import { SessionRestrictions } from "./SessionRestrictions";
 
 type AuthPanelProps = {
   authToken: string;
-  inputClassName: string;
   sessionAllowedModels: string[];
   sessionAllowedProviders: string[];
   sessionCapabilities: string[];
@@ -19,21 +18,14 @@ type AuthPanelProps = {
   onRefresh: () => void | Promise<void>;
 };
 
-const toneBySessionKind: Record<AuthPanelProps["sessionKind"], string> = {
-  anonymous: "border-slate-200 bg-white/70 text-slate-700",
-  tenant: "border-cyan-200 bg-cyan-50 text-cyan-900",
-  admin: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  invalid: "border-red-200 bg-red-50 text-red-800",
-};
-
 export function AuthPanel(props: AuthPanelProps) {
   return (
     <Panel eyebrow="Auth" title="Session and access">
-      <div className="mt-4 grid gap-4">
-        <div className={`rounded-2xl border px-4 py-4 ${toneBySessionKind[props.sessionKind]}`}>
-          <p className="text-sm font-medium uppercase tracking-[0.16em]">Current session</p>
-          <p className="mt-2 text-2xl font-semibold">{props.sessionLabel}</p>
-          <p className="mt-2 text-sm opacity-80">
+      <div className="stack-lg">
+        <div className={`session-badge session-badge--${props.sessionKind}`}>
+          <p className="session-badge__eyebrow">Current session</p>
+          <p className="session-badge__label">{props.sessionLabel}</p>
+          <p className="session-badge__description">
             {props.sessionKind === "admin"
               ? "Admin endpoints and operator actions are available."
               : props.sessionKind === "tenant"
@@ -44,36 +36,28 @@ export function AuthPanel(props: AuthPanelProps) {
           </p>
         </div>
 
-        <label>
-          <span className="mb-2 block text-sm text-slate-600">Bearer token</span>
+        <label className="field">
+          <span className="field__label">Bearer token</span>
           <input
-            className={props.inputClassName}
+            className="field__input"
             placeholder="Admin token or tenant API key"
             value={props.authToken}
             onChange={(event) => props.onAuthTokenChange(event.target.value)}
           />
         </label>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            className="inline-flex rounded-full bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5"
-            onClick={() => void props.onRefresh()}
-            type="button"
-          >
+        <div className="action-row">
+          <button className="toolbar-button toolbar-button--primary" onClick={() => void props.onRefresh()} type="button">
             Refresh session
           </button>
-          <button
-            className="inline-flex rounded-full border border-slate-200/80 bg-white px-4 py-3 text-sm font-medium text-slate-900 transition hover:-translate-y-0.5"
-            onClick={props.onClearAuthToken}
-            type="button"
-          >
+          <button className="toolbar-button" onClick={props.onClearAuthToken} type="button">
             Clear token
           </button>
         </div>
 
-        <div className="rounded-2xl bg-slate-50/90 p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Identity</h3>
-          <dl className="mt-3 grid gap-2 text-sm text-slate-700">
+        <div className="info-block">
+          <h3 className="info-block__title">Identity</h3>
+          <dl className="info-list">
             <IdentityRow label="Role" value={props.sessionRole || "anonymous"} />
             <IdentityRow label="Name" value={props.sessionName || "n/a"} />
             <IdentityRow label="Tenant" value={props.sessionTenant || "n/a"} />
@@ -82,11 +66,11 @@ export function AuthPanel(props: AuthPanelProps) {
           </dl>
         </div>
 
-        <div className="rounded-2xl bg-slate-50/90 p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">What this session can do</h3>
-          <ul className="mt-3 grid gap-2 text-sm text-slate-700">
+        <div className="info-block">
+          <h3 className="info-block__title">What this session can do</h3>
+          <ul className="info-list">
             {props.sessionCapabilities.map((item) => (
-              <li className="rounded-xl bg-white px-3 py-2" key={item}>
+              <li className="info-row" key={item}>
                 {item}
               </li>
             ))}
@@ -96,7 +80,7 @@ export function AuthPanel(props: AuthPanelProps) {
         <SessionRestrictions
           allowedModels={props.sessionAllowedModels}
           allowedProviders={props.sessionAllowedProviders}
-          className="grid gap-3 rounded-2xl bg-slate-50/90 p-4 text-sm text-slate-700"
+          className="info-block info-block--warning"
           title="Session restrictions"
         />
       </div>
@@ -106,9 +90,9 @@ export function AuthPanel(props: AuthPanelProps) {
 
 function IdentityRow(props: { label: string; value: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 rounded-xl bg-white px-3 py-2">
-      <dt className="text-slate-500">{props.label}</dt>
-      <dd className="text-right font-medium text-slate-900">{props.value}</dd>
+    <div className="info-row">
+      <dt>{props.label}</dt>
+      <dd>{props.value}</dd>
     </div>
   );
 }

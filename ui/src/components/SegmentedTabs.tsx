@@ -11,14 +11,10 @@ type SegmentedTabsProps<T extends string> = {
 
 export function SegmentedTabs<T extends string>(props: SegmentedTabsProps<T>) {
   return (
-    <div className="inline-flex flex-wrap gap-1 rounded-full bg-slate-200/80 p-1">
+    <div className="segmented-tabs">
       {props.tabs.map((tab) => (
         <button
-          className={
-            props.value === tab.id
-              ? "rounded-full bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow"
-              : "rounded-full px-3 py-2 text-sm text-slate-600"
-          }
+          className={props.value === tab.id ? "segmented-tabs__item segmented-tabs__item--active" : "segmented-tabs__item"}
           key={tab.id}
           onClick={() => props.onChange(tab.id)}
           type="button"

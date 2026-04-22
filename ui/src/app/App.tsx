@@ -44,7 +44,7 @@ export default function App() {
     <div className="console-root">
       <div className="console-backdrop" />
       <div className="console-layout">
-        <aside className="console-sidebar">
+        <aside className="console-sidebar" role="complementary" aria-label="Sidebar">
           <div className="console-brand">
             <p className="console-brand__eyebrow">Developer Console</p>
             <h1 className="console-brand__title">Hecate</h1>
@@ -70,6 +70,7 @@ export default function App() {
           <nav className="workspace-nav" aria-label="Workspace navigation">
             {workspaces.map((workspace) => (
               <button
+                aria-current={activeWorkspace === workspace.id ? "page" : undefined}
                 className={activeWorkspace === workspace.id ? "workspace-nav__item workspace-nav__item--active" : "workspace-nav__item"}
                 key={workspace.id}
                 onClick={() => setActiveWorkspace(workspace.id)}
