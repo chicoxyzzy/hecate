@@ -31,6 +31,9 @@ describe("useRuntimeConsole", () => {
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
         });
       }
+      if (url.startsWith("/admin/retention/runs")) {
+        return unauthorizedResponse();
+      }
       return unauthorizedResponse();
     });
   });
@@ -103,6 +106,9 @@ describe("useRuntimeConsole", () => {
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
         });
       }
+      if (url.startsWith("/admin/retention/runs")) {
+        return unauthorizedResponse();
+      }
       return unauthorizedResponse();
     });
 
@@ -144,6 +150,9 @@ describe("useRuntimeConsole", () => {
           object: "list",
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
         });
+      }
+      if (url.startsWith("/admin/retention/runs")) {
+        return unauthorizedResponse();
       }
       if (url === "/v1/chat/completions") {
         return new Response(
@@ -223,6 +232,85 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.traceSpans).toHaveLength(1);
       expect(result.current.state.traceRoute?.final_provider).toBe("openai");
       expect(result.current.state.traceSpans[0]?.events?.[0]?.name).toBe("request.received");
+    });
+  });
+
+  it("loads persisted retention history for admin sessions", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const authHeader = headers.get("Authorization");
+      if (url === "/healthz") {
+        return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      }
+      if (url === "/v1/whoami") {
+        if (authHeader === "Bearer admin-secret") {
+          return jsonResponse({
+            object: "session",
+            data: {
+              authenticated: true,
+              invalid_token: false,
+              role: "admin",
+              name: "admin",
+              source: "admin_token",
+            },
+          });
+        }
+        return jsonResponse({
+          object: "session",
+          data: {
+            authenticated: false,
+            invalid_token: false,
+            role: "anonymous",
+            source: "no_token",
+          },
+        });
+      }
+      if (url === "/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
+        });
+      }
+      if (url === "/admin/providers") {
+        return jsonResponse({ object: "provider_status", data: [] });
+      }
+      if (url === "/admin/budget") {
+        return unauthorizedResponse();
+      }
+      if (url === "/admin/control-plane") {
+        return jsonResponse({ object: "control_plane", data: { backend: "file", tenants: [], api_keys: [], events: [] } });
+      }
+      if (url === "/admin/retention/runs?limit=10") {
+        return jsonResponse({
+          object: "retention_runs",
+          data: [
+            {
+              started_at: "2026-04-22T10:00:00Z",
+              finished_at: "2026-04-22T10:00:05Z",
+              trigger: "manual",
+              actor: "admin:req-1",
+              request_id: "req-1",
+              results: [{ name: "trace_snapshots", deleted: 12, max_age: "24h", max_count: 2000 }],
+            },
+          ],
+        });
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    act(() => {
+      result.current.actions.setAuthToken("admin-secret");
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.loading).toBe(false);
+      expect(result.current.state.session.kind).toBe("admin");
+      expect(result.current.state.retentionRuns).toHaveLength(1);
+      expect(result.current.state.retentionLastRun?.request_id).toBe("req-1");
+      expect(result.current.state.retentionLastRun?.actor).toBe("admin:req-1");
     });
   });
 });

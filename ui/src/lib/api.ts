@@ -9,6 +9,7 @@ import type {
   SessionResponse,
   TraceResponse,
   RetentionRunResponse,
+  RetentionRunsResponse,
 } from "../types/runtime";
 
 type RequestOptions = {
@@ -140,6 +141,10 @@ export async function deleteAPIKey(payload: ControlPlaneDeletePayload, authToken
 
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {
   return fetchJSON<RetentionRunResponse>("/admin/retention/run", { authToken, method: "POST", body: payload });
+}
+
+export async function getRetentionRuns(authToken?: string, limit = 10): Promise<RetentionRunsResponse> {
+  return fetchJSON<RetentionRunsResponse>(`/admin/retention/runs?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
 export async function chatCompletions(

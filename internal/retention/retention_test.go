@@ -66,6 +66,7 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 		fakeAuditPruner{deleted: 3},
 		fakeCachePruner{deleted: 4},
 		fakeCachePruner{deleted: 5},
+		NewMemoryHistoryStore(),
 	)
 
 	trace := tracer.Start("old-trace")
@@ -90,5 +91,55 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 	}
 	if !result.Results[0].Skipped || !result.Results[2].Skipped || !result.Results[4].Skipped {
 		t.Fatalf("unexpected skip flags: %#v", result.Results)
+	}
+}
+
+func TestManagerRunPersistsHistory(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracer := profiler.NewInMemoryTracer(nil)
+	history := NewMemoryHistoryStore()
+	manager := NewManager(
+		logger,
+		config.RetentionConfig{
+			Enabled:        true,
+			Interval:       time.Minute,
+			TraceSnapshots: config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 10},
+			BudgetEvents:   config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 5},
+			AuditEvents:    config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 5},
+			ExactCache:     config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 10},
+			SemanticCache:  config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 10},
+		},
+		tracer,
+		tracer,
+		fakeBudgetPruner{deleted: 2},
+		fakeAuditPruner{deleted: 3},
+		fakeCachePruner{deleted: 4},
+		fakeCachePruner{deleted: 5},
+		history,
+	)
+
+	manager.Run(context.Background(), RunRequest{
+		Trigger:   "manual",
+		Actor:     "admin:req-1",
+		RequestID: "req-1",
+	})
+
+	runs, err := manager.ListRuns(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	if runs[0].Actor != "admin:req-1" {
+		t.Fatalf("actor = %q, want admin:req-1", runs[0].Actor)
+	}
+	if runs[0].RequestID != "req-1" {
+		t.Fatalf("request_id = %q, want req-1", runs[0].RequestID)
+	}
+	if len(runs[0].Results) != 5 {
+		t.Fatalf("results = %d, want 5", len(runs[0].Results))
 	}
 }

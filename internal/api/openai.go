@@ -206,6 +206,34 @@ type BudgetHistoryRecord struct {
 	Timestamp        string `json:"timestamp,omitempty"`
 }
 
+type RetentionRunData struct {
+	StartedAt  string                     `json:"started_at"`
+	FinishedAt string                     `json:"finished_at"`
+	Trigger    string                     `json:"trigger"`
+	Actor      string                     `json:"actor,omitempty"`
+	RequestID  string                     `json:"request_id,omitempty"`
+	Results    []RetentionRunResultRecord `json:"results"`
+}
+
+type RetentionRunResultRecord struct {
+	Name     string `json:"name"`
+	Deleted  int    `json:"deleted"`
+	MaxAge   string `json:"max_age,omitempty"`
+	MaxCount int    `json:"max_count"`
+	Error    string `json:"error,omitempty"`
+	Skipped  bool   `json:"skipped,omitempty"`
+}
+
+type RetentionRunResponse struct {
+	Object string           `json:"object"`
+	Data   RetentionRunData `json:"data"`
+}
+
+type RetentionRunsResponse struct {
+	Object string             `json:"object"`
+	Data   []RetentionRunData `json:"data"`
+}
+
 type BudgetResetRequest struct {
 	Key      string `json:"key"`
 	Scope    string `json:"scope"`

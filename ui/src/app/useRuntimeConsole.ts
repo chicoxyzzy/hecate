@@ -12,6 +12,7 @@ import {
   getHealth,
   getModels,
   getProviders,
+  getRetentionRuns,
   getSession,
   getTrace,
   rotateAPIKey as rotateAPIKeyRequest,
@@ -37,7 +38,7 @@ import type {
   SessionResponse,
   TraceResponse,
   TraceSpanRecord,
-  RetentionRunResponse,
+  RetentionRunData,
 } from "../types/runtime";
 
 const defaultPrompt = "Say hello in one short sentence.";
@@ -112,8 +113,8 @@ export function useRuntimeConsole() {
   const [retentionSubsystems, setRetentionSubsystems] = useState("");
   const [retentionLoading, setRetentionLoading] = useState(false);
   const [retentionError, setRetentionError] = useState("");
-  const [retentionLastRun, setRetentionLastRun] = useState<RetentionRunResponse["data"] | null>(null);
-  const [retentionRuns, setRetentionRuns] = useState<Array<RetentionRunResponse["data"]>>([]);
+  const [retentionLastRun, setRetentionLastRun] = useState<RetentionRunData | null>(null);
+  const [retentionRuns, setRetentionRuns] = useState<RetentionRunData[]>([]);
 
   const healthyProviders = providers.filter((provider) => provider.healthy).length;
   const localProviders = providers.filter((provider) => provider.kind === "local");
@@ -204,13 +205,14 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
 
     try {
-      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, controlPlaneResult] = await Promise.allSettled([
+      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
         getHealth(),
         getSession(authToken),
         getModels(authToken),
         getProviders(authToken),
         getBudget("", authToken),
         getControlPlane(authToken),
+        getRetentionRuns(authToken, 10),
       ]);
 
       if (healthResult.status !== "fulfilled") {
@@ -247,6 +249,14 @@ export function useRuntimeConsole() {
         setControlPlane(controlPlaneResult.value.data);
       } else if (controlPlaneResult.reason instanceof Error && controlPlaneResult.reason.message === "missing or invalid bearer token") {
         setControlPlane(null);
+      }
+
+      if (retentionRunsResult.status === "fulfilled") {
+        setRetentionRuns(retentionRunsResult.value.data);
+        setRetentionLastRun(retentionRunsResult.value.data[0] ?? null);
+      } else if (retentionRunsResult.reason instanceof Error && retentionRunsResult.reason.message === "missing or invalid bearer token") {
+        setRetentionRuns([]);
+        setRetentionLastRun(null);
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "unknown load error");
@@ -555,7 +565,7 @@ export function useRuntimeConsole() {
         authToken,
       );
       setRetentionLastRun(payload.data);
-      setRetentionRuns((current) => [payload.data, ...current].slice(0, 6));
+      setRetentionRuns((current) => [payload.data, ...current.filter((run) => run.finished_at !== payload.data.finished_at)].slice(0, 10));
       setNotice({ kind: "success", message: "Retention run completed." });
     } catch (error) {
       setRetentionError(error instanceof Error ? error.message : "failed to run retention");

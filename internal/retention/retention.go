@@ -38,6 +38,8 @@ type CachePruner interface {
 type RunRequest struct {
 	Trigger    string
 	Subsystems []string
+	Actor      string
+	RequestID  string
 }
 
 type SubsystemResult struct {
@@ -65,6 +67,7 @@ type Manager struct {
 	audit    AuditEventPruner
 	exact    CachePruner
 	semantic CachePruner
+	history  HistoryStore
 }
 
 func NewManager(
@@ -76,6 +79,7 @@ func NewManager(
 	audit AuditEventPruner,
 	exact CachePruner,
 	semantic CachePruner,
+	history HistoryStore,
 ) *Manager {
 	return &Manager{
 		logger:   logger,
@@ -86,6 +90,7 @@ func NewManager(
 		audit:    audit,
 		exact:    exact,
 		semantic: semantic,
+		history:  history,
 	}
 }
 
@@ -265,12 +270,40 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 		"retention.results": len(results),
 	})
 
-	return RunResult{
+	run := RunResult{
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
 		Trigger:    trigger,
 		Results:    results,
 	}
+	if m.history != nil {
+		record := HistoryRecord{
+			StartedAt:  run.StartedAt.UTC().Format(time.RFC3339Nano),
+			FinishedAt: run.FinishedAt.UTC().Format(time.RFC3339Nano),
+			Trigger:    run.Trigger,
+			Actor:      req.Actor,
+			RequestID:  req.RequestID,
+			Results:    cloneSubsystemResults(run.Results),
+		}
+		if err := m.history.AppendRun(ctx, record); err != nil {
+			trace.Record("retention.history.failed", map[string]any{
+				"error.message": err.Error(),
+			})
+			m.logger.Warn("retention history append failed", slog.Any("error", err))
+		} else {
+			trace.Record("retention.history.persisted", map[string]any{
+				"retention.trigger": run.Trigger,
+			})
+		}
+	}
+	return run
+}
+
+func (m *Manager) ListRuns(ctx context.Context, limit int) ([]HistoryRecord, error) {
+	if m == nil || m.history == nil {
+		return nil, nil
+	}
+	return m.history.ListRuns(ctx, limit)
 }
 
 func (m *Manager) RunLoop(ctx context.Context) {

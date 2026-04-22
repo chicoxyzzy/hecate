@@ -169,6 +169,7 @@ export function AdminView({ state, actions }: Props) {
                     items={[
                       { label: "Started", value: formatDateTime(state.retentionLastRun.started_at) },
                       { label: "Finished", value: formatDateTime(state.retentionLastRun.finished_at) },
+                      { label: "Actor", value: state.retentionLastRun.actor || "system" },
                       { label: "Subsystems", value: state.retentionLastRun.results.length.toString() },
                     ]}
                   />
@@ -212,6 +213,8 @@ export function AdminView({ state, actions }: Props) {
                           <span className="body-muted">{formatDateTime(run.finished_at)}</span>
                         </div>
                         <div className="budget-history-item__body">
+                          {run.actor ? <span>actor: {run.actor}</span> : null}
+                          {run.request_id ? <span>request: {run.request_id}</span> : null}
                           {run.results.map((result) => (
                             <span key={`${run.finished_at}-${result.name}`}>
                               {result.name}: {result.error ? "failed" : result.skipped ? "skipped" : `${result.deleted} deleted`}
@@ -222,7 +225,7 @@ export function AdminView({ state, actions }: Props) {
                     ))}
                   </ul>
                 ) : (
-                  <EmptyState title="No retention history" detail="Recent retention runs in this browser session will appear here." />
+                  <EmptyState title="No retention history" detail="Persisted retention runs will appear here after the first cleanup cycle." />
                 )}
               </div>
             </Surface>

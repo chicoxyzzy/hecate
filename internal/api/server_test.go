@@ -24,6 +24,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -242,6 +243,59 @@ func TestChatCompletionsExactCacheIsolatedByUserScope(t *testing.T) {
 	}
 	if provider.CallCount() != 2 {
 		t.Fatalf("provider call count = %d, want 2 due to isolated cache scope", provider.CallCount())
+	}
+}
+
+func TestRetentionRunAndListEndpointsPersistHistory(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-123",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Now().UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "Hello!"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	})
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodPost, "/admin/retention/run", strings.NewReader(`{"subsystems":["trace_snapshots"]}`))
+	runRequest.Header.Set("Content-Type", "application/json")
+	runRequest.Header.Set("Authorization", "Bearer admin-secret")
+	handler.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/admin/retention/runs?limit=5", nil)
+	listRequest.Header.Set("Authorization", "Bearer admin-secret")
+	handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
+	}
+
+	var response RetentionRunsResponse
+	if err := json.NewDecoder(bytes.NewReader(listRecorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("retention runs = %d, want 1", len(response.Data))
+	}
+	if response.Data[0].Trigger != "manual" {
+		t.Fatalf("trigger = %q, want manual", response.Data[0].Trigger)
+	}
+	if response.Data[0].Actor == "" {
+		t.Fatal("actor = empty, want populated admin actor")
 	}
 }
 
@@ -1421,6 +1475,33 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 		routerCfg.Strategy = "explicit_or_default"
 	}
 	routerEngine := router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, providerCatalog)
+	retentionCfg := cfg.Retention
+	if retentionCfg.TraceSnapshots.MaxCount == 0 {
+		retentionCfg.TraceSnapshots = config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 2000}
+	}
+	if retentionCfg.BudgetEvents.MaxCount == 0 {
+		retentionCfg.BudgetEvents = config.RetentionPolicy{MaxAge: 30 * 24 * time.Hour, MaxCount: 200}
+	}
+	if retentionCfg.AuditEvents.MaxCount == 0 {
+		retentionCfg.AuditEvents = config.RetentionPolicy{MaxAge: 30 * 24 * time.Hour, MaxCount: 500}
+	}
+	if retentionCfg.ExactCache.MaxCount == 0 {
+		retentionCfg.ExactCache = config.RetentionPolicy{MaxAge: 24 * time.Hour, MaxCount: 10000}
+	}
+	if retentionCfg.SemanticCache.MaxCount == 0 {
+		retentionCfg.SemanticCache = config.RetentionPolicy{MaxAge: 7 * 24 * time.Hour, MaxCount: 10000}
+	}
+	retentionManager := retention.NewManager(
+		logger,
+		retentionCfg,
+		profiler.NewInMemoryTracer(nil),
+		profiler.NewInMemoryTracer(nil),
+		budgetStore,
+		nil,
+		nil,
+		nil,
+		retention.NewMemoryHistoryStore(),
+	)
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -1443,8 +1524,9 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
 		}, pricebookConfigForTests(items)),
-		Tracer:  profiler.NewInMemoryTracer(nil),
-		Metrics: telemetry.NewMetrics(),
+		Tracer:    profiler.NewInMemoryTracer(nil),
+		Metrics:   telemetry.NewMetrics(),
+		Retention: retentionManager,
 	})
 
 	cfg.Governor = governorCfg

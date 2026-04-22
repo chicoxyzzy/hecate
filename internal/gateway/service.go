@@ -99,6 +99,10 @@ type RetentionResult struct {
 	Run retention.RunResult
 }
 
+type RetentionHistoryResult struct {
+	Runs []retention.HistoryRecord
+}
+
 type ResponseMetadata struct {
 	RequestID               string
 	Provider                string
@@ -518,6 +522,17 @@ func (s *Service) RunRetention(ctx context.Context, req retention.RunRequest) (*
 		return nil, fmt.Errorf("retention manager is not configured")
 	}
 	return &RetentionResult{Run: s.retention.Run(ctx, req)}, nil
+}
+
+func (s *Service) ListRetentionRuns(ctx context.Context, limit int) (*RetentionHistoryResult, error) {
+	if s.retention == nil {
+		return nil, fmt.Errorf("retention manager is not configured")
+	}
+	runs, err := s.retention.ListRuns(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list retention runs: %w", err)
+	}
+	return &RetentionHistoryResult{Runs: runs}, nil
 }
 
 func validate(req types.ChatRequest) error {

@@ -214,14 +214,23 @@ export type RetentionRunResultRecord = {
   skipped?: boolean;
 };
 
+export type RetentionRunData = {
+  started_at: string;
+  finished_at: string;
+  trigger: string;
+  actor?: string;
+  request_id?: string;
+  results: RetentionRunResultRecord[];
+};
+
 export type RetentionRunResponse = {
   object: string;
-  data: {
-    started_at: string;
-    finished_at: string;
-    trigger: string;
-    results: RetentionRunResultRecord[];
-  };
+  data: RetentionRunData;
+};
+
+export type RetentionRunsResponse = {
+  object: string;
+  data: RetentionRunData[];
 };
 
 export type ChatResponse = {

@@ -237,6 +237,48 @@ type RetentionRunRequest struct {
 	Subsystems []string `json:"subsystems"`
 }
 
+func (h *Handler) HandleRetentionRuns(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authorizeAdmin(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			WriteError(w, http.StatusBadRequest, "invalid_request", "limit query parameter must be a non-negative integer")
+			return
+		}
+		if value > 200 {
+			value = 200
+		}
+		limit = value
+	}
+
+	result, err := h.service.ListRetentionRuns(ctx, limit)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.retention.list.failed",
+			slog.String("event.name", "gateway.retention.list.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, "gateway_error", err.Error())
+		return
+	}
+
+	items := make([]RetentionRunData, 0, len(result.Runs))
+	for _, run := range result.Runs {
+		items = append(items, renderRetentionRunData(run.StartedAt, run.FinishedAt, run.Trigger, run.Actor, run.RequestID, run.Results))
+	}
+
+	WriteJSON(w, http.StatusOK, RetentionRunsResponse{
+		Object: "retention_runs",
+		Data:   items,
+	})
+}
+
 func (h *Handler) HandleRetentionRun(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.authorizeAdmin(r)
 	if !ok {
@@ -256,6 +298,8 @@ func (h *Handler) HandleRetentionRun(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.RunRetention(ctx, retention.RunRequest{
 		Trigger:    "manual",
 		Subsystems: req.Subsystems,
+		Actor:      controlPlaneActor(principal, r),
+		RequestID:  strings.TrimSpace(RequestIDFromContext(r.Context())),
 	})
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gateway.retention.run.failed",
@@ -266,26 +310,16 @@ func (h *Handler) HandleRetentionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]map[string]any, 0, len(result.Run.Results))
-	for _, item := range result.Run.Results {
-		items = append(items, map[string]any{
-			"name":      item.Name,
-			"deleted":   item.Deleted,
-			"max_age":   item.MaxAge.String(),
-			"max_count": item.MaxCount,
-			"error":     item.Error,
-			"skipped":   item.Skipped,
-		})
-	}
-
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"object": "retention_run",
-		"data": map[string]any{
-			"started_at":  result.Run.StartedAt.UTC().Format(time.RFC3339Nano),
-			"finished_at": result.Run.FinishedAt.UTC().Format(time.RFC3339Nano),
-			"trigger":     result.Run.Trigger,
-			"results":     items,
-		},
+	WriteJSON(w, http.StatusOK, RetentionRunResponse{
+		Object: "retention_run",
+		Data: renderRetentionRunData(
+			result.Run.StartedAt.UTC().Format(time.RFC3339Nano),
+			result.Run.FinishedAt.UTC().Format(time.RFC3339Nano),
+			result.Run.Trigger,
+			controlPlaneActor(principal, r),
+			strings.TrimSpace(RequestIDFromContext(r.Context())),
+			result.Run.Results,
+		),
 	})
 }
 
@@ -933,6 +967,31 @@ func previewSecret(secret string) string {
 		return secret[:2] + "..." + secret[len(secret)-2:]
 	}
 	return secret[:4] + "..." + secret[len(secret)-4:]
+}
+
+func renderRetentionRunData(startedAt, finishedAt, trigger, actor, requestID string, results []retention.SubsystemResult) RetentionRunData {
+	items := make([]RetentionRunResultRecord, 0, len(results))
+	for _, item := range results {
+		record := RetentionRunResultRecord{
+			Name:     item.Name,
+			Deleted:  item.Deleted,
+			MaxCount: item.MaxCount,
+			Error:    item.Error,
+			Skipped:  item.Skipped,
+		}
+		if item.MaxAge > 0 {
+			record.MaxAge = item.MaxAge.String()
+		}
+		items = append(items, record)
+	}
+	return RetentionRunData{
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		Trigger:    trigger,
+		Actor:      actor,
+		RequestID:  requestID,
+		Results:    items,
+	}
 }
 
 func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletionResponse {

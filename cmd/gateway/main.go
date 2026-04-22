@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -113,6 +115,7 @@ func main() {
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
 	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
+	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient)
 	retentionManager := retention.NewManager(
 		logger,
 		cfg.Retention,
@@ -122,6 +125,7 @@ func main() {
 		controlPlaneStore,
 		pruneableExactCache(cacheStore),
 		pruneableSemanticCache(semanticStore),
+		retentionHistoryStore,
 	)
 	providerCatalog := catalog.NewRegistryCatalog(providerRegistry, healthTracker)
 	routerEngine := router.NewRuleRouter(
@@ -343,6 +347,41 @@ func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *sto
 	return cache.NewMemoryStore(cfg.Cache.DefaultTTL)
 }
 
+func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) retention.HistoryStore {
+	switch cfg.Server.ControlPlaneBackend {
+	case "file":
+		path := retentionHistoryFilePath(cfg.Server.ControlPlaneFile)
+		store, err := retention.NewFileHistoryStore(path)
+		if err != nil {
+			logger.Error("retention history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	case "redis":
+		client := storage.NewRedisClient(storage.RedisConfig{
+			Address:  cfg.Cache.Redis.Address,
+			Password: cfg.Cache.Redis.Password,
+			DB:       cfg.Cache.Redis.DB,
+			Timeout:  cfg.Cache.Redis.Timeout,
+		})
+		store, err := retention.NewRedisHistoryStore(client, cfg.Cache.Redis.Prefix, retentionHistoryKey(cfg.Server.ControlPlaneKey))
+		if err != nil {
+			logger.Error("retention history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	case "postgres":
+		store, err := retention.NewPostgresHistoryStore(context.Background(), postgresClient, "retention_runs")
+		if err != nil {
+			logger.Error("retention history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	default:
+		return retention.NewMemoryHistoryStore()
+	}
+}
+
 func buildSemanticStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) cache.SemanticStore {
 	if !cfg.Cache.Semantic.Enabled {
 		return cache.NoopSemanticStore{}
@@ -478,4 +517,25 @@ func postgresRequired(cfg config.Config) bool {
 		cfg.Cache.Semantic.Backend == "postgres" ||
 		cfg.Governor.BudgetBackend == "postgres" ||
 		cfg.Server.ControlPlaneBackend == "postgres"
+}
+
+func retentionHistoryFilePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "retention-history.json"
+	}
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + ".retention"
+	}
+	base := strings.TrimSuffix(path, ext)
+	return base + ".retention" + ext
+}
+
+func retentionHistoryKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "control-plane"
+	}
+	return key + ":retention-history"
 }
