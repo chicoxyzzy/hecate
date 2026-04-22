@@ -36,6 +36,8 @@ type anthropicMessagesRequest struct {
 	MaxTokens   int                        `json:"max_tokens"`
 	Temperature float64                    `json:"temperature,omitempty"`
 	Metadata    *anthropicMessagesMetadata `json:"metadata,omitempty"`
+	Tools       []anthropicTool            `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage            `json:"tool_choice,omitempty"`
 }
 
 type anthropicMessagesMetadata struct {
@@ -47,9 +49,25 @@ type anthropicMessage struct {
 	Content []anthropicContentBlock `json:"content"`
 }
 
+// anthropicContentBlock covers all block variants (text, tool_use, tool_result).
 type anthropicContentBlock struct {
 	Type string `json:"type"`
+	// text
 	Text string `json:"text,omitempty"`
+	// tool_use
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// tool_result
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Content reused as tool_result content string (omitted for other types)
+	ResultContent string `json:"content,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicMessagesResponse struct {
@@ -292,6 +310,21 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	if userID := requestscope.Normalize(req.Scope).User; userID != "" {
 		wireReq.Metadata = &anthropicMessagesMetadata{UserID: userID}
 	}
+	if len(req.Tools) > 0 {
+		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			schema := t.Function.Parameters
+			if len(schema) == 0 {
+				schema = json.RawMessage(`{}`)
+			}
+			wireReq.Tools = append(wireReq.Tools, anthropicTool{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				InputSchema: schema,
+			})
+		}
+		wireReq.ToolChoice = anthropicToolChoice(req.ToolChoice)
+	}
 
 	payload, err := json.Marshal(wireReq)
 	if err != nil {
@@ -322,18 +355,19 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	if model == "" {
 		model = req.Model
 	}
-	content := anthropicTextContent(wireResp.Content)
+	msg := anthropicResponseToMessage(wireResp.Content)
+	finishReason := wireResp.StopReason
+	if finishReason == "tool_use" {
+		finishReason = "tool_calls"
+	}
 	return &types.ChatResponse{
 		ID:        wireResp.ID,
 		Model:     model,
 		CreatedAt: time.Now().UTC(),
 		Choices: []types.ChatChoice{{
-			Index: 0,
-			Message: types.Message{
-				Role:    "assistant",
-				Content: content,
-			},
-			FinishReason: wireResp.StopReason,
+			Index:        0,
+			Message:      msg,
+			FinishReason: finishReason,
 		}},
 		Usage: types.Usage{
 			PromptTokens:     wireResp.Usage.InputTokens,
@@ -360,34 +394,126 @@ func (p *AnthropicProvider) apiVersion() string {
 func anthropicMessagesFromTypes(messages []types.Message) (string, []anthropicMessage) {
 	systemParts := make([]string, 0, 1)
 	wire := make([]anthropicMessage, 0, len(messages))
-	for _, msg := range messages {
+
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
 		role := strings.TrimSpace(msg.Role)
+
 		switch role {
 		case "system":
 			if text := strings.TrimSpace(msg.Content); text != "" {
 				systemParts = append(systemParts, text)
 			}
-		case "assistant", "user":
+
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
+				if msg.Content != "" {
+					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
+				}
+				for _, tc := range msg.ToolCalls {
+					input := json.RawMessage(tc.Function.Arguments)
+					if !json.Valid(input) {
+						input = json.RawMessage(`{}`)
+					}
+					blocks = append(blocks, anthropicContentBlock{
+						Type:  "tool_use",
+						ID:    tc.ID,
+						Name:  tc.Function.Name,
+						Input: input,
+					})
+				}
+				wire = append(wire, anthropicMessage{Role: "assistant", Content: blocks})
+			} else {
+				wire = append(wire, anthropicMessage{
+					Role:    "assistant",
+					Content: []anthropicContentBlock{{Type: "text", Text: msg.Content}},
+				})
+			}
+
+		case "tool":
+			// Batch consecutive tool-result messages into a single user message.
+			blocks := []anthropicContentBlock{{
+				Type:          "tool_result",
+				ToolUseID:     msg.ToolCallID,
+				ResultContent: msg.Content,
+			}}
+			for i+1 < len(messages) && strings.TrimSpace(messages[i+1].Role) == "tool" {
+				i++
+				next := messages[i]
+				blocks = append(blocks, anthropicContentBlock{
+					Type:          "tool_result",
+					ToolUseID:     next.ToolCallID,
+					ResultContent: next.Content,
+				})
+			}
+			wire = append(wire, anthropicMessage{Role: "user", Content: blocks})
+
+		case "user":
 			wire = append(wire, anthropicMessage{
-				Role: role,
-				Content: []anthropicContentBlock{{
-					Type: "text",
-					Text: msg.Content,
-				}},
+				Role:    "user",
+				Content: []anthropicContentBlock{{Type: "text", Text: msg.Content}},
 			})
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), wire
 }
 
-func anthropicTextContent(items []anthropicContentBlock) string {
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.Type == "text" && strings.TrimSpace(item.Text) != "" {
-			parts = append(parts, item.Text)
+func anthropicResponseToMessage(blocks []anthropicContentBlock) types.Message {
+	msg := types.Message{Role: "assistant"}
+	textParts := make([]string, 0)
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if t := strings.TrimSpace(b.Text); t != "" {
+				textParts = append(textParts, t)
+			}
+		case "tool_use":
+			args := string(b.Input)
+			if args == "" {
+				args = "{}"
+			}
+			msg.ToolCalls = append(msg.ToolCalls, types.ToolCall{
+				ID:   b.ID,
+				Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      b.Name,
+					Arguments: args,
+				},
+			})
 		}
 	}
-	return strings.Join(parts, "\n")
+	msg.Content = strings.Join(textParts, "\n")
+	return msg
+}
+
+func anthropicToolChoice(choice json.RawMessage) json.RawMessage {
+	if len(choice) == 0 {
+		return nil
+	}
+	var s string
+	if json.Unmarshal(choice, &s) == nil {
+		switch s {
+		case "auto":
+			return json.RawMessage(`{"type":"auto"}`)
+		case "none":
+			return nil
+		case "required":
+			return json.RawMessage(`{"type":"any"}`)
+		}
+		return nil
+	}
+	var obj struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if json.Unmarshal(choice, &obj) == nil && obj.Type == "function" && obj.Function.Name != "" {
+		b, _ := json.Marshal(map[string]string{"type": "tool", "name": obj.Function.Name})
+		return b
+	}
+	return nil
 }
 
 func decodeAnthropicError(resp *http.Response) error {
