@@ -39,8 +39,9 @@ Storage backends currently used in different subsystems:
 client
   -> auth
   -> governor
-  -> exact cache
   -> router
+  -> route preflight
+  -> exact cache
   -> semantic cache
   -> provider
   -> usage normalization
@@ -146,7 +147,7 @@ The control plane currently supports:
 Implemented observability features:
 
 - request IDs
-- trace IDs and span IDs in responses
+- trace IDs and span IDs in response headers
 - structured logs
 - in-memory trace snapshots over HTTP
 - OTLP HTTP export for traces
@@ -183,19 +184,28 @@ make ui-build
 
 ```text
 cmd/gateway           Main HTTP server
+cmd/sandboxd          Sandbox daemon placeholder
 internal/api          HTTP handlers and middleware
 internal/auth         Auth and principal resolution
 internal/billing      Static pricebook and cost estimation
 internal/cache        Exact and semantic cache backends
+internal/catalog      Provider/model catalog views
+internal/chatstate    Persisted chat session state
 internal/config       Environment-based configuration
 internal/controlplane Tenant, API-key, and audit-history persistence
 internal/gateway      Core runtime pipeline
 internal/governor     Policy and budget enforcement
 internal/models       Canonical model identity helpers
+internal/policy       Policy matching helpers
 internal/profiler     Tracing and trace snapshots
-internal/providers    OpenAI-compatible provider implementations
+internal/providers    Provider transports, discovery, and health tracking
+internal/requestscope Tenant/provider request scoping
+internal/retention    Background pruning and retention runs
 internal/router       Routing logic
+internal/sandbox      Sandbox runtime placeholder
+internal/secrets      Secret encryption helpers
 internal/storage      Redis and Postgres helpers
+internal/telemetry    Metrics and OTLP export wiring
 pkg/types             Vendor-neutral runtime types
 ui                    Operator console
 ```
