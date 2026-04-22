@@ -34,6 +34,16 @@ func (f fakeStore) SetAPIKeyEnabled(context.Context, string, bool) (controlplane
 func (f fakeStore) RotateAPIKey(context.Context, string, string) (controlplane.APIKey, error) {
 	return controlplane.APIKey{}, nil
 }
+func (f fakeStore) UpsertProvider(context.Context, controlplane.Provider, *controlplane.ProviderSecret) (controlplane.Provider, error) {
+	return controlplane.Provider{}, nil
+}
+func (f fakeStore) SetProviderEnabled(context.Context, string, bool) (controlplane.Provider, error) {
+	return controlplane.Provider{}, nil
+}
+func (f fakeStore) RotateProviderSecret(context.Context, string, controlplane.ProviderSecret) (controlplane.Provider, error) {
+	return controlplane.Provider{}, nil
+}
+func (f fakeStore) DeleteProvider(context.Context, string) error { return nil }
 func (f fakeStore) PruneAuditEvents(context.Context, time.Duration, int) (int, error) {
 	return 0, nil
 }

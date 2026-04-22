@@ -9,6 +9,7 @@ import {
   deleteChatSession as deleteChatSessionRequest,
   updateChatSession as updateChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
+  deleteProvider as deleteProviderRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
   getBudget,
@@ -17,19 +18,23 @@ import {
   getControlPlane,
   getHealth,
   getModels,
+  getProviderPresets,
   getProviders,
   getRequestLedger,
   getRetentionRuns,
   getSession,
   getTrace,
   rotateAPIKey as rotateAPIKeyRequest,
+  rotateProviderSecret as rotateProviderSecretRequest,
   runRetention as runRetentionRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
   setBudgetLimit as setBudgetLimitRequest,
+  setProviderEnabled as setProviderEnabledRequest,
   setTenantEnabled as setTenantEnabledRequest,
   topUpBudget as topUpBudgetRequest,
   upsertAPIKey as upsertAPIKeyRequest,
+  upsertProvider as upsertProviderRequest,
   upsertTenant as upsertTenantRequest,
 } from "../lib/api";
 import type {
@@ -42,6 +47,7 @@ import type {
   HealthResponse,
   ModelFilter,
   ModelResponse,
+  ProviderPresetRecord,
   ProviderFilter,
   ProviderStatusResponse,
   RequestLedgerResponse,
@@ -77,6 +83,7 @@ export function useRuntimeConsole() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [models, setModels] = useState<ModelResponse["data"]>([]);
   const [providers, setProviders] = useState<ProviderStatusResponse["data"]>([]);
+  const [providerPresets, setProviderPresets] = useState<ProviderPresetRecord[]>([]);
   const [budget, setBudget] = useState<BudgetStatusResponse["data"] | null>(null);
   const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse["data"] | null>(null);
   const [requestLedger, setRequestLedger] = useState<RequestLedgerResponse["data"]>([]);
@@ -124,6 +131,20 @@ export function useRuntimeConsole() {
   const [apiKeyFormRole, setAPIKeyFormRole] = useState("tenant");
   const [apiKeyFormProviders, setAPIKeyFormProviders] = useState("");
   const [apiKeyFormModels, setAPIKeyFormModels] = useState("");
+  const [providerFormID, setProviderFormID] = useState("");
+  const [providerFormName, setProviderFormName] = useState("");
+  const [providerFormKind, setProviderFormKind] = useState("cloud");
+  const [providerFormProtocol, setProviderFormProtocol] = useState("openai");
+  const [providerFormBaseURL, setProviderFormBaseURL] = useState("");
+  const [providerFormAPIVersion, setProviderFormAPIVersion] = useState("");
+  const [providerFormDefaultModel, setProviderFormDefaultModel] = useState("");
+  const [providerFormModels, setProviderFormModels] = useState("");
+  const [providerFormAllowAnyModel, setProviderFormAllowAnyModel] = useState("true");
+  const [providerFormEnabled, setProviderFormEnabled] = useState("true");
+  const [providerFormSecret, setProviderFormSecret] = useState("");
+  const [providerFormPresetID, setProviderFormPresetID] = useState("");
+  const [rotateProviderID, setRotateProviderID] = useState("");
+  const [rotateProviderSecret, setRotateProviderSecret] = useState("");
   const [rotateAPIKeyID, setRotateAPIKeyID] = useState("");
   const [rotateAPIKeySecret, setRotateAPIKeySecret] = useState("");
   const [retentionSubsystems, setRetentionSubsystems] = useState("");
@@ -233,11 +254,12 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
 
     try {
-      const [healthResult, sessionResult, modelsResult, providersResult, budgetResult, accountSummaryResult, chatSessionsResult, requestLedgerResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
+      const [healthResult, sessionResult, modelsResult, providersResult, providerPresetsResult, budgetResult, accountSummaryResult, chatSessionsResult, requestLedgerResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
         getHealth(),
         getSession(authToken),
         getModels(authToken),
         getProviders(authToken),
+        getProviderPresets(authToken),
         getBudget("", authToken),
         getAccountSummary("", authToken),
         getChatSessions(authToken, 20),
@@ -268,6 +290,12 @@ export function useRuntimeConsole() {
         setProviders(providersResult.value.data);
       } else if (providersResult.reason instanceof Error && providersResult.reason.message === "missing or invalid bearer token") {
         setProviders([]);
+      }
+
+      if (providerPresetsResult.status === "fulfilled") {
+        setProviderPresets(providerPresetsResult.value.data);
+      } else {
+        setProviderPresets([]);
       }
 
       if (budgetResult.status === "fulfilled") {
@@ -573,6 +601,98 @@ export function useRuntimeConsole() {
     }
   }
 
+  function populateProviderFormFromPreset(presetID: string) {
+    setProviderFormPresetID(presetID);
+    const preset = providerPresets.find((entry) => entry.id === presetID);
+    if (!preset) {
+      return;
+    }
+    setProviderFormID(preset.id);
+    setProviderFormName(preset.id);
+    setProviderFormKind(preset.kind);
+    setProviderFormProtocol(preset.protocol);
+    setProviderFormBaseURL(preset.base_url);
+    setProviderFormAPIVersion(preset.api_version ?? "");
+    setProviderFormDefaultModel("");
+    setProviderFormModels("");
+    setProviderFormAllowAnyModel(preset.kind === "local" ? "false" : "true");
+    setProviderFormEnabled("true");
+    setProviderFormSecret("");
+  }
+
+  async function upsertProvider() {
+    setControlPlaneError("");
+    setNotice(null);
+    try {
+      await upsertProviderRequest(
+        {
+          id: providerFormID,
+          name: providerFormName,
+          kind: providerFormKind,
+          protocol: providerFormProtocol,
+          base_url: providerFormBaseURL,
+          api_version: providerFormAPIVersion,
+          default_model: providerFormDefaultModel,
+          models: parseCSV(providerFormModels),
+          allow_any_model: providerFormAllowAnyModel === "true",
+          enabled: providerFormEnabled === "true",
+          key: providerFormSecret,
+        },
+        authToken,
+      );
+      setProviderFormSecret("");
+      await loadDashboard();
+      setNotice({ kind: "success", message: "Provider saved." });
+    } catch (error) {
+      setControlPlaneError(error instanceof Error ? error.message : "failed to save provider");
+      setNotice({ kind: "error", message: "Failed to save provider." });
+    }
+  }
+
+  async function setProviderEnabled(id: string, enabled: boolean) {
+    setControlPlaneError("");
+    setNotice(null);
+    try {
+      await setProviderEnabledRequest({ id, enabled }, authToken);
+      await loadDashboard();
+      setNotice({ kind: "success", message: `Provider ${enabled ? "enabled" : "disabled"}.` });
+    } catch (error) {
+      setControlPlaneError(error instanceof Error ? error.message : "failed to update provider state");
+      setNotice({ kind: "error", message: "Failed to update provider state." });
+    }
+  }
+
+  async function rotateProviderCredential() {
+    setControlPlaneError("");
+    setNotice(null);
+    try {
+      await rotateProviderSecretRequest({ id: rotateProviderID, key: rotateProviderSecret }, authToken);
+      setRotateProviderID("");
+      setRotateProviderSecret("");
+      await loadDashboard();
+      setNotice({ kind: "success", message: "Provider secret rotated." });
+    } catch (error) {
+      setControlPlaneError(error instanceof Error ? error.message : "failed to rotate provider secret");
+      setNotice({ kind: "error", message: "Failed to rotate provider secret." });
+    }
+  }
+
+  async function deleteProvider(id: string) {
+    setControlPlaneError("");
+    setNotice(null);
+    if (!window.confirm(`Delete provider "${id}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteProviderRequest({ id }, authToken);
+      await loadDashboard();
+      setNotice({ kind: "success", message: "Provider deleted." });
+    } catch (error) {
+      setControlPlaneError(error instanceof Error ? error.message : "failed to delete provider");
+      setNotice({ kind: "error", message: "Failed to delete provider." });
+    }
+  }
+
   async function setTenantEnabled(id: string, enabled: boolean) {
     setControlPlaneError("");
     setNotice(null);
@@ -794,7 +914,22 @@ export function useRuntimeConsole() {
       session,
       providerFilter,
       providerScopedModels,
+      providerFormAPIVersion,
+      providerFormAllowAnyModel,
+      providerFormBaseURL,
+      providerFormDefaultModel,
+      providerFormEnabled,
+      providerFormID,
+      providerFormKind,
+      providerFormModels,
+      providerFormName,
+      providerFormPresetID,
+      providerFormProtocol,
+      providerFormSecret,
       providers,
+      providerPresets,
+      rotateProviderID,
+      rotateProviderSecret,
       activeChatSession,
       activeChatSessionID,
       retentionError,
@@ -820,6 +955,7 @@ export function useRuntimeConsole() {
     actions: {
       copyCommand,
       deleteAPIKey,
+      deleteProvider,
       deleteTenant,
       createChatSession,
       deleteChatSession,
@@ -827,6 +963,7 @@ export function useRuntimeConsole() {
       loadDashboard,
       resetBudget,
       rotateAPIKey,
+      rotateProviderCredential,
       setAPIKeyEnabled,
       setAPIKeyFormID,
       setAPIKeyFormModels,
@@ -842,9 +979,24 @@ export function useRuntimeConsole() {
       setModel,
       setModelFilter,
       setProviderFilter,
+      setProviderEnabled,
+      setProviderFormAPIVersion,
+      setProviderFormAllowAnyModel,
+      setProviderFormBaseURL,
+      setProviderFormDefaultModel,
+      setProviderFormEnabled,
+      setProviderFormID,
+      setProviderFormKind,
+      setProviderFormModels,
+      setProviderFormName,
+      setProviderFormPresetID,
+      setProviderFormProtocol,
+      setProviderFormSecret,
       setRetentionSubsystems,
       setRotateAPIKeyID,
       setRotateAPIKeySecret,
+      setRotateProviderID,
+      setRotateProviderSecret,
       setTenantEnabled,
       setTenant,
       setTenantFormID,
@@ -852,12 +1004,14 @@ export function useRuntimeConsole() {
       setTenantFormName,
       setTenantFormProviders,
       setBudgetLimit,
+      populateProviderFormFromPreset,
       runRetention,
       selectChatSession,
       startNewChat,
       submitChat,
       topUpBudget,
       upsertAPIKey,
+      upsertProvider,
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
       dismissNotice: () => setNotice(null),

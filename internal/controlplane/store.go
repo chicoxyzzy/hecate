@@ -35,6 +35,31 @@ type APIKey struct {
 	UpdatedAt        time.Time `json:"updated_at,omitempty"`
 }
 
+type Provider struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	Protocol      string    `json:"protocol"`
+	BaseURL       string    `json:"base_url"`
+	APIVersion    string    `json:"api_version,omitempty"`
+	DefaultModel  string    `json:"default_model,omitempty"`
+	Models        []string  `json:"models,omitempty"`
+	AllowAnyModel bool      `json:"allow_any_model"`
+	Enabled       bool      `json:"enabled"`
+	CredentialID  string    `json:"credential_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+}
+
+type ProviderSecret struct {
+	ID              string    `json:"id"`
+	ProviderID      string    `json:"provider_id"`
+	APIKeyEncrypted string    `json:"api_key_encrypted"`
+	APIKeyPreview   string    `json:"api_key_preview,omitempty"`
+	CreatedAt       time.Time `json:"created_at,omitempty"`
+	RotatedAt       time.Time `json:"rotated_at,omitempty"`
+}
+
 type AuditEvent struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Actor      string    `json:"actor"`
@@ -45,9 +70,11 @@ type AuditEvent struct {
 }
 
 type State struct {
-	Tenants []Tenant     `json:"tenants"`
-	APIKeys []APIKey     `json:"api_keys"`
-	Events  []AuditEvent `json:"events,omitempty"`
+	Tenants         []Tenant         `json:"tenants"`
+	APIKeys         []APIKey         `json:"api_keys"`
+	Providers       []Provider       `json:"providers,omitempty"`
+	ProviderSecrets []ProviderSecret `json:"provider_secrets,omitempty"`
+	Events          []AuditEvent     `json:"events,omitempty"`
 }
 
 type Store interface {
@@ -60,6 +87,10 @@ type Store interface {
 	SetAPIKeyEnabled(ctx context.Context, id string, enabled bool) (APIKey, error)
 	RotateAPIKey(ctx context.Context, id, secret string) (APIKey, error)
 	DeleteAPIKey(ctx context.Context, id string) error
+	UpsertProvider(ctx context.Context, provider Provider, secret *ProviderSecret) (Provider, error)
+	SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error)
+	RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error)
+	DeleteProvider(ctx context.Context, id string) error
 	PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
@@ -667,9 +698,11 @@ func (s *RedisStore) writeState(ctx context.Context, state State) error {
 
 func cloneState(state State) State {
 	out := State{
-		Tenants: make([]Tenant, 0, len(state.Tenants)),
-		APIKeys: make([]APIKey, 0, len(state.APIKeys)),
-		Events:  make([]AuditEvent, 0, len(state.Events)),
+		Tenants:         make([]Tenant, 0, len(state.Tenants)),
+		APIKeys:         make([]APIKey, 0, len(state.APIKeys)),
+		Providers:       make([]Provider, 0, len(state.Providers)),
+		ProviderSecrets: make([]ProviderSecret, 0, len(state.ProviderSecrets)),
+		Events:          make([]AuditEvent, 0, len(state.Events)),
 	}
 	for _, tenant := range state.Tenants {
 		out.Tenants = append(out.Tenants, Tenant{
@@ -693,6 +726,33 @@ func cloneState(state State) State {
 			Enabled:          key.Enabled,
 			CreatedAt:        key.CreatedAt,
 			UpdatedAt:        key.UpdatedAt,
+		})
+	}
+	for _, provider := range state.Providers {
+		out.Providers = append(out.Providers, Provider{
+			ID:            provider.ID,
+			Name:          provider.Name,
+			Kind:          provider.Kind,
+			Protocol:      provider.Protocol,
+			BaseURL:       provider.BaseURL,
+			APIVersion:    provider.APIVersion,
+			DefaultModel:  provider.DefaultModel,
+			Models:        append([]string(nil), provider.Models...),
+			AllowAnyModel: provider.AllowAnyModel,
+			Enabled:       provider.Enabled,
+			CredentialID:  provider.CredentialID,
+			CreatedAt:     provider.CreatedAt,
+			UpdatedAt:     provider.UpdatedAt,
+		})
+	}
+	for _, secret := range state.ProviderSecrets {
+		out.ProviderSecrets = append(out.ProviderSecrets, ProviderSecret{
+			ID:              secret.ID,
+			ProviderID:      secret.ProviderID,
+			APIKeyEncrypted: secret.APIKeyEncrypted,
+			APIKeyPreview:   secret.APIKeyPreview,
+			CreatedAt:       secret.CreatedAt,
+			RotatedAt:       secret.RotatedAt,
 		})
 	}
 	for _, event := range state.Events {

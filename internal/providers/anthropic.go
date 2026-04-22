@@ -123,6 +123,27 @@ func (p *AnthropicProvider) Supports(model string) bool {
 	return p.config.DefaultModel != "" && p.config.DefaultModel == model
 }
 
+func (p *AnthropicProvider) supportsResolvedModel(ctx context.Context, model string) bool {
+	if model == "" {
+		return p.config.DefaultModel != ""
+	}
+	if p.config.AllowAnyModel {
+		return true
+	}
+	caps, err := p.Capabilities(ctx)
+	if err == nil {
+		for _, candidate := range caps.Models {
+			if candidate == model {
+				return true
+			}
+		}
+		if caps.DefaultModel == model {
+			return true
+		}
+	}
+	return p.Supports(model)
+}
+
 func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, error) {
 	if p.config.StubMode {
 		return p.staticCapabilities("config"), nil
@@ -154,7 +175,7 @@ func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, err
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error) {
-	if !p.Supports(req.Model) {
+	if !p.supportsResolvedModel(ctx, req.Model) {
 		return nil, fmt.Errorf("model %q is not supported by provider %s", req.Model, p.Name())
 	}
 	if p.config.StubMode {

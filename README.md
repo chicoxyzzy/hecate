@@ -10,6 +10,8 @@ Current runtime capabilities:
 
 - OpenAI-compatible provider layer with configurable base URLs
 - cloud and local provider support
+- persisted provider configs with encrypted control-plane secret storage
+- live provider catalog discovery from upstream model endpoints
 - rule-based routing
 - provider health tracking with cooldown-based recovery states
 - retry and failover for transient upstream errors
@@ -98,6 +100,8 @@ Default addresses:
 
 The provider layer is vendor-neutral at the gateway boundary. Any upstream exposing an OpenAI-compatible API can be integrated through configuration.
 
+Configured provider records tell Hecate how to connect. The model catalog itself is discovered from the provider when possible, rather than treated as hardcoded application state.
+
 This includes local runtimes such as:
 
 - Ollama
@@ -117,6 +121,8 @@ The control plane currently supports:
 
 - tenant management
 - API key management
+- persisted provider management
+- encrypted provider credential storage
 - enable/disable and rotation flows
 - audit history
 - file, Redis, and Postgres backends
@@ -138,6 +144,8 @@ Implemented observability features:
 The operator UI currently includes:
 
 - provider and model visibility
+- preset-driven provider setup
+- managed provider enable/disable/delete and secret rotation
 - playground
 - runtime metadata inspection
 - trace inspection
@@ -192,8 +200,10 @@ Implemented:
 - [x] Budget enforcement with top-ups, resets, warning thresholds, and history
 - [x] Background retention and pruning for traces, cache, budget history, and audit events
 - [x] Tenant-aware auth and persisted control-plane state
+- [x] Persisted provider config with encrypted secret storage and runtime reload
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
+- [x] Provider preset catalog for common cloud and local runtimes
 
 Next:
 
@@ -202,6 +212,6 @@ Next:
 - [ ] A real pricebook ingestion/update path instead of only seeded static defaults
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI
-- [ ] More provider presets and discovery paths
+- [ ] More provider discovery paths and richer preset coverage
 - [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
 - [ ] Deployment examples for local and production-style environments

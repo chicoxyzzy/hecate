@@ -132,6 +132,11 @@ type ProviderStatusResponse struct {
 	Data   []ProviderStatusResponseItem `json:"data"`
 }
 
+type ProviderPresetResponse struct {
+	Object string                       `json:"object"`
+	Data   []ProviderPresetResponseItem `json:"data"`
+}
+
 type TraceResponse struct {
 	Object string            `json:"object"`
 	Data   TraceResponseItem `json:"data"`
@@ -215,6 +220,22 @@ type ProviderStatusResponseItem struct {
 	DiscoverySource string   `json:"discovery_source,omitempty"`
 	RefreshedAt     string   `json:"refreshed_at,omitempty"`
 	Error           string   `json:"error,omitempty"`
+}
+
+type ProviderPresetResponseItem struct {
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Kind                string   `json:"kind"`
+	Protocol            string   `json:"protocol"`
+	BaseURL             string   `json:"base_url"`
+	APIKeyEnv           string   `json:"api_key_env,omitempty"`
+	APIVersion          string   `json:"api_version,omitempty"`
+	DefaultModel        string   `json:"default_model,omitempty"`
+	ExampleModels       []string `json:"example_models,omitempty"`
+	DocsURL             string   `json:"docs_url,omitempty"`
+	Description         string   `json:"description,omitempty"`
+	EnvSnippet          string   `json:"env_snippet,omitempty"`
+	ProviderJSONSnippet string   `json:"provider_json_snippet,omitempty"`
 }
 
 type BudgetStatusResponse struct {
@@ -358,11 +379,12 @@ type ControlPlaneResponse struct {
 }
 
 type ControlPlaneResponseItem struct {
-	Backend string                         `json:"backend"`
-	Path    string                         `json:"path,omitempty"`
-	Tenants []ControlPlaneTenantItem       `json:"tenants"`
-	APIKeys []ControlPlaneAPIKeyRecord     `json:"api_keys"`
-	Events  []ControlPlaneAuditEventRecord `json:"events"`
+	Backend   string                         `json:"backend"`
+	Path      string                         `json:"path,omitempty"`
+	Tenants   []ControlPlaneTenantItem       `json:"tenants"`
+	APIKeys   []ControlPlaneAPIKeyRecord     `json:"api_keys"`
+	Providers []ControlPlaneProviderRecord   `json:"providers"`
+	Events    []ControlPlaneAuditEventRecord `json:"events"`
 }
 
 type ControlPlaneTenantItem struct {
@@ -385,6 +407,23 @@ type ControlPlaneAPIKeyRecord struct {
 	KeyPreview       string   `json:"key_preview,omitempty"`
 	CreatedAt        string   `json:"created_at,omitempty"`
 	UpdatedAt        string   `json:"updated_at,omitempty"`
+}
+
+type ControlPlaneProviderRecord struct {
+	ID                   string   `json:"id"`
+	Name                 string   `json:"name"`
+	Kind                 string   `json:"kind"`
+	Protocol             string   `json:"protocol"`
+	BaseURL              string   `json:"base_url"`
+	APIVersion           string   `json:"api_version,omitempty"`
+	DefaultModel         string   `json:"default_model,omitempty"`
+	Models               []string `json:"models,omitempty"`
+	AllowAnyModel        bool     `json:"allow_any_model"`
+	Enabled              bool     `json:"enabled"`
+	CredentialConfigured bool     `json:"credential_configured"`
+	CredentialPreview    string   `json:"credential_preview,omitempty"`
+	CreatedAt            string   `json:"created_at,omitempty"`
+	UpdatedAt            string   `json:"updated_at,omitempty"`
 }
 
 type ControlPlaneAuditEventRecord struct {
@@ -416,12 +455,32 @@ type ControlPlaneAPIKeyUpsertRequest struct {
 	Enabled          bool     `json:"enabled"`
 }
 
+type ControlPlaneProviderUpsertRequest struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Kind          string   `json:"kind"`
+	Protocol      string   `json:"protocol"`
+	BaseURL       string   `json:"base_url"`
+	APIVersion    string   `json:"api_version"`
+	DefaultModel  string   `json:"default_model"`
+	Models        []string `json:"models"`
+	AllowAnyModel bool     `json:"allow_any_model"`
+	Enabled       bool     `json:"enabled"`
+	Key           string   `json:"key"`
+}
+
 type ControlPlaneTenantLifecycleRequest struct {
 	ID      string `json:"id"`
 	Enabled bool   `json:"enabled"`
 }
 
 type ControlPlaneAPIKeyLifecycleRequest struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+	Key     string `json:"key"`
+}
+
+type ControlPlaneProviderLifecycleRequest struct {
 	ID      string `json:"id"`
 	Enabled bool   `json:"enabled"`
 	Key     string `json:"key"`

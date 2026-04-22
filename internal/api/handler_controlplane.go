@@ -16,10 +16,11 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	payload := ControlPlaneResponse{
 		Object: "control_plane",
 		Data: ControlPlaneResponseItem{
-			Backend: "env",
-			Tenants: []ControlPlaneTenantItem{},
-			APIKeys: []ControlPlaneAPIKeyRecord{},
-			Events:  []ControlPlaneAuditEventRecord{},
+			Backend:   "env",
+			Tenants:   []ControlPlaneTenantItem{},
+			APIKeys:   []ControlPlaneAPIKeyRecord{},
+			Providers: []ControlPlaneProviderRecord{},
+			Events:    []ControlPlaneAuditEventRecord{},
 		},
 	}
 
@@ -63,6 +64,9 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	}
 	for _, key := range state.APIKeys {
 		payload.Data.APIKeys = append(payload.Data.APIKeys, renderControlPlaneAPIKey(key))
+	}
+	for _, provider := range state.Providers {
+		payload.Data.Providers = append(payload.Data.Providers, renderControlPlaneProvider(provider, state.ProviderSecrets))
 	}
 	for _, event := range state.Events {
 		payload.Data.Events = append(payload.Data.Events, renderControlPlaneAuditEvent(event))
@@ -264,6 +268,129 @@ func (h *Handler) HandleControlPlaneDeleteAPIKey(w http.ResponseWriter, r *http.
 	})
 }
 
+func (h *Handler) HandleControlPlaneUpsertProvider(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	var req ControlPlaneProviderUpsertRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	provider, err := h.providerRuntime.Upsert(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), controlplane.Provider{
+		ID:            req.ID,
+		Name:          req.Name,
+		Kind:          req.Kind,
+		Protocol:      req.Protocol,
+		BaseURL:       req.BaseURL,
+		APIVersion:    req.APIVersion,
+		DefaultModel:  req.DefaultModel,
+		Models:        req.Models,
+		AllowAnyModel: req.AllowAnyModel,
+		Enabled:       req.Enabled,
+	}, req.Key)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	state, _ := h.controlPlane.Snapshot(r.Context())
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_provider",
+		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
+	})
+}
+
+func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	var req ControlPlaneProviderLifecycleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	provider, err := h.providerRuntime.SetEnabled(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID, req.Enabled)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	state, _ := h.controlPlane.Snapshot(r.Context())
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_provider",
+		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
+	})
+}
+
+func (h *Handler) HandleControlPlaneRotateProviderSecret(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	var req ControlPlaneProviderLifecycleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	provider, err := h.providerRuntime.RotateSecret(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID, req.Key)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	state, _ := h.controlPlane.Snapshot(r.Context())
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_provider",
+		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
+	})
+}
+
+func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	var req ControlPlaneProviderLifecycleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if err := h.providerRuntime.Delete(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID); err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_provider_deleted",
+		"data": map[string]string{
+			"id": req.ID,
+		},
+	})
+}
+
 func renderControlPlaneAPIKey(key controlplane.APIKey) ControlPlaneAPIKeyRecord {
 	record := ControlPlaneAPIKeyRecord{
 		ID:               key.ID,
@@ -294,6 +421,35 @@ func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAud
 	}
 	if !event.Timestamp.IsZero() {
 		record.Timestamp = event.Timestamp.UTC().Format(time.RFC3339)
+	}
+	return record
+}
+
+func renderControlPlaneProvider(provider controlplane.Provider, secrets []controlplane.ProviderSecret) ControlPlaneProviderRecord {
+	record := ControlPlaneProviderRecord{
+		ID:            provider.ID,
+		Name:          provider.Name,
+		Kind:          provider.Kind,
+		Protocol:      provider.Protocol,
+		BaseURL:       provider.BaseURL,
+		APIVersion:    provider.APIVersion,
+		DefaultModel:  provider.DefaultModel,
+		Models:        provider.Models,
+		AllowAnyModel: provider.AllowAnyModel,
+		Enabled:       provider.Enabled,
+	}
+	for _, secret := range secrets {
+		if secret.ProviderID == provider.ID {
+			record.CredentialConfigured = secret.APIKeyEncrypted != ""
+			record.CredentialPreview = secret.APIKeyPreview
+			break
+		}
+	}
+	if !provider.CreatedAt.IsZero() {
+		record.CreatedAt = provider.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if !provider.UpdatedAt.IsZero() {
+		record.UpdatedAt = provider.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 	return record
 }

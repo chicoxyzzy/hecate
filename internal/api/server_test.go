@@ -905,6 +905,49 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	}
 }
 
+func TestProviderPresetsReturnsCatalog(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/provider-presets", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response ProviderPresetResponse
+	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if response.Object != "provider_presets" {
+		t.Fatalf("object = %q, want provider_presets", response.Object)
+	}
+	if len(response.Data) < 4 {
+		t.Fatalf("preset count = %d, want at least 4", len(response.Data))
+	}
+
+	foundAnthropic := false
+	foundOllama := false
+	for _, item := range response.Data {
+		if item.ID == "anthropic" && item.Protocol == "anthropic" && item.EnvSnippet != "" {
+			foundAnthropic = true
+		}
+		if item.ID == "ollama" && item.Kind == "local" && item.ProviderJSONSnippet != "" {
+			foundOllama = true
+		}
+	}
+	if !foundAnthropic {
+		t.Fatalf("missing anthropic preset: %#v", response.Data)
+	}
+	if !foundOllama {
+		t.Fatalf("missing ollama preset: %#v", response.Data)
+	}
+}
+
 func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	t.Parallel()
 

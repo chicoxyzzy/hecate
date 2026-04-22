@@ -7,6 +7,7 @@ import type {
   ControlPlaneResponse,
   HealthResponse,
   ModelResponse,
+  ProviderPresetResponse,
   ProviderStatusResponse,
   RequestLedgerResponse,
   RuntimeHeaders,
@@ -73,6 +74,20 @@ export type RotateAPIKeyPayload = {
   key: string;
 };
 
+export type ProviderUpsertPayload = {
+  id: string;
+  name: string;
+  kind: string;
+  protocol: string;
+  base_url: string;
+  api_version: string;
+  default_model: string;
+  models: string[];
+  allow_any_model: boolean;
+  enabled: boolean;
+  key: string;
+};
+
 export type RetentionRunPayload = {
   subsystems: string[];
 };
@@ -95,6 +110,10 @@ export async function getModels(authToken?: string): Promise<ModelResponse> {
 
 export async function getProviders(authToken?: string): Promise<ProviderStatusResponse> {
   return fetchJSON<ProviderStatusResponse>("/admin/providers", { authToken });
+}
+
+export async function getProviderPresets(authToken?: string): Promise<ProviderPresetResponse> {
+  return fetchJSON<ProviderPresetResponse>("/v1/provider-presets", { authToken });
 }
 
 export async function getTrace(requestID: string, authToken?: string): Promise<TraceResponse> {
@@ -175,6 +194,22 @@ export async function rotateAPIKey(payload: RotateAPIKeyPayload, authToken?: str
 
 export async function deleteAPIKey(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/api-keys/delete", { authToken, method: "POST", body: payload });
+}
+
+export async function upsertProvider(payload: ProviderUpsertPayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/providers", { authToken, method: "POST", body: payload });
+}
+
+export async function setProviderEnabled(payload: ControlPlaneEnabledPayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/providers/enabled", { authToken, method: "POST", body: payload });
+}
+
+export async function rotateProviderSecret(payload: RotateAPIKeyPayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/providers/rotate-secret", { authToken, method: "POST", body: payload });
+}
+
+export async function deleteProvider(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/providers/delete", { authToken, method: "POST", body: payload });
 }
 
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {

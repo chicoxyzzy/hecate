@@ -17,20 +17,35 @@ import (
 )
 
 type Handler struct {
-	config        config.Config
-	logger        *slog.Logger
-	service       *gateway.Service
-	authenticator *auth.Authenticator
-	controlPlane  controlplane.Store
+	config          config.Config
+	logger          *slog.Logger
+	service         *gateway.Service
+	authenticator   *auth.Authenticator
+	controlPlane    controlplane.Store
+	providerRuntime ProviderRuntime
 }
 
-func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store) *Handler {
+type ProviderRuntime interface {
+	Reload(ctx context.Context) error
+	SecretStorageEnabled() bool
+	Upsert(ctx context.Context, provider controlplane.Provider, apiKey string) (controlplane.Provider, error)
+	SetEnabled(ctx context.Context, id string, enabled bool) (controlplane.Provider, error)
+	RotateSecret(ctx context.Context, id, apiKey string) (controlplane.Provider, error)
+	Delete(ctx context.Context, id string) error
+}
+
+func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store, providerRuntimes ...ProviderRuntime) *Handler {
+	var providerRuntime ProviderRuntime
+	if len(providerRuntimes) > 0 {
+		providerRuntime = providerRuntimes[0]
+	}
 	return &Handler{
-		config:        cfg,
-		logger:        logger,
-		service:       service,
-		authenticator: auth.NewAuthenticator(cfg.Server, cpStore),
-		controlPlane:  cpStore,
+		config:          cfg,
+		logger:          logger,
+		service:         service,
+		authenticator:   auth.NewAuthenticator(cfg.Server, cpStore),
+		controlPlane:    cpStore,
+		providerRuntime: providerRuntime,
 	}
 }
 

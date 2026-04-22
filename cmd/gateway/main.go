@@ -26,6 +26,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
+	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/storage"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
@@ -84,19 +85,26 @@ func main() {
 		}()
 	}
 
-	providerList := make([]providers.Provider, 0, len(cfg.Providers.OpenAICompatible))
-	for _, providerCfg := range cfg.Providers.OpenAICompatible {
-		switch strings.ToLower(strings.TrimSpace(providerCfg.Protocol)) {
-		case "anthropic":
-			providerList = append(providerList, providers.NewAnthropicProvider(providerCfg, logger))
-		default:
-			providerList = append(providerList, providers.NewOpenAICompatibleProvider(providerCfg, logger))
+	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
+	var secretCipher secrets.Cipher
+	if strings.TrimSpace(cfg.Server.ControlPlaneSecretKey) != "" {
+		cipherImpl, err := secrets.NewAESGCMCipher(cfg.Server.ControlPlaneSecretKey)
+		if err != nil {
+			logger.Error("control plane secret cipher init failed", slog.Any("error", err))
+			os.Exit(1)
 		}
+		secretCipher = cipherImpl
 	}
-	providerRegistry := providers.NewRegistry(providerList...)
+
+	providerRuntime := providers.NewControlPlaneRuntimeManager(logger, cfg.Providers.OpenAICompatible, controlPlaneStore, secretCipher)
+	if err := providerRuntime.Reload(context.Background()); err != nil {
+		logger.Error("provider runtime reload failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	providerRegistry := providerRuntime.Registry()
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 
-	pricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
+	pricebook := billing.NewRegistryAwarePricebook(billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook), providerRegistry)
 	otelProvider, err := profiler.NewTracerProvider(
 		context.Background(),
 		cfg.OTel.Traces.Enabled,
@@ -121,7 +129,6 @@ func main() {
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
 	chatSessionStore := buildChatSessionStore(cfg, logger, postgresClient)
-	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
 	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient)
 	retentionManager := retention.NewManager(
 		logger,
@@ -165,7 +172,7 @@ func main() {
 	defer retentionCancel()
 	go retentionManager.RunLoop(retentionCtx)
 
-	handler := api.NewHandler(cfg, logger, service, controlPlaneStore)
+	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, providerRuntime)
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
 		Handler:           api.NewServer(logger, handler),

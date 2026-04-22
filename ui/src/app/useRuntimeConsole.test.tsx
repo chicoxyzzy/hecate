@@ -31,6 +31,12 @@ describe("useRuntimeConsole", () => {
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
         });
       }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }],
+        });
+      }
       if (url.startsWith("/admin/retention/runs")) {
         return unauthorizedResponse();
       }
@@ -55,6 +61,7 @@ describe("useRuntimeConsole", () => {
 
     expect(result.current.state.health?.status).toBe("ok");
     expect(result.current.state.models).toHaveLength(1);
+    expect(result.current.state.providerPresets).toHaveLength(1);
     expect(result.current.state.providers).toEqual([]);
     expect(result.current.state.budget).toBeNull();
     expect(result.current.state.controlPlane).toBeNull();
@@ -112,6 +119,12 @@ describe("useRuntimeConsole", () => {
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
         });
       }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }],
+        });
+      }
       if (url.startsWith("/admin/retention/runs")) {
         return unauthorizedResponse();
       }
@@ -161,6 +174,12 @@ describe("useRuntimeConsole", () => {
         return jsonResponse({
           object: "list",
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
+        });
+      }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }],
         });
       }
       if (url.startsWith("/admin/retention/runs")) {
@@ -342,6 +361,12 @@ describe("useRuntimeConsole", () => {
         return jsonResponse({
           object: "list",
           data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
+        });
+      }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }],
         });
       }
       if (url === "/admin/providers") {

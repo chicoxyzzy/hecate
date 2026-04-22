@@ -111,6 +111,27 @@ export type ProviderStatusResponse = {
   data: ProviderRecord[];
 };
 
+export type ProviderPresetRecord = {
+  id: string;
+  name: string;
+  kind: string;
+  protocol: string;
+  base_url: string;
+  api_key_env?: string;
+  api_version?: string;
+  default_model?: string;
+  example_models?: string[];
+  docs_url?: string;
+  description?: string;
+  env_snippet?: string;
+  provider_json_snippet?: string;
+};
+
+export type ProviderPresetResponse = {
+  object: string;
+  data: ProviderPresetRecord[];
+};
+
 export type TraceEventRecord = {
   name: string;
   timestamp: string;
@@ -274,6 +295,23 @@ export type ControlPlaneAPIKeyRecord = {
   updated_at?: string;
 };
 
+export type ControlPlaneProviderRecord = {
+  id: string;
+  name: string;
+  kind: string;
+  protocol: string;
+  base_url: string;
+  api_version?: string;
+  default_model?: string;
+  models?: string[];
+  allow_any_model: boolean;
+  enabled: boolean;
+  credential_configured: boolean;
+  credential_preview?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type ControlPlaneAuditEventRecord = {
   timestamp?: string;
   actor: string;
@@ -290,6 +328,7 @@ export type ControlPlaneResponse = {
     path?: string;
     tenants: ControlPlaneTenantRecord[];
     api_keys: ControlPlaneAPIKeyRecord[];
+    providers: ControlPlaneProviderRecord[];
     events: ControlPlaneAuditEventRecord[];
   };
 };
