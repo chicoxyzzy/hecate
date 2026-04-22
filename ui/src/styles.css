@@ -142,6 +142,11 @@ textarea {
   align-items: center;
 }
 
+.action-row--wide {
+  flex: 1;
+  justify-content: space-between;
+}
+
 .console-sidebar__module {
   display: grid;
   gap: 0.35rem;
@@ -308,6 +313,13 @@ textarea {
   align-items: end;
 }
 
+.console-section__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .console-section__copy {
   display: grid;
   gap: 0.3rem;
@@ -455,6 +467,11 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.trace-inline-card--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, white);
 }
 
 .trace-inline-grid {

@@ -60,9 +60,9 @@ export function PlaygroundView({ state, actions }: Props) {
             </Surface>
 
             <Surface>
-              {state.activeChatSession?.turns.length ? (
+              {(state.activeChatSession?.turns?.length ?? 0) > 0 ? (
                 <div className="stack-sm">
-                  {state.activeChatSession.turns.map((turn) => (
+                  {(state.activeChatSession?.turns ?? []).map((turn) => (
                     <div className="budget-history-item" key={turn.id}>
                       <div className="budget-history-item__head">
                         <div className="action-row">

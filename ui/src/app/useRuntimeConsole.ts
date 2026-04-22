@@ -847,7 +847,7 @@ function deriveChatSessionTitle(message: string): string {
 
 function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): Array<{ role: string; content: string }> {
   const history =
-    activeSession?.turns.flatMap((turn) => [
+    activeSession?.turns?.flatMap((turn) => [
       { role: turn.user_message.role, content: turn.user_message.content },
       { role: turn.assistant_message.role, content: turn.assistant_message.content },
     ]) ?? [];
@@ -855,13 +855,14 @@ function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, mes
 }
 
 function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsResponse["data"][number] {
-  const lastTurn = session.turns[session.turns.length - 1];
+  const turns = session.turns ?? [];
+  const lastTurn = turns[turns.length - 1];
   return {
     id: session.id,
     title: session.title,
     tenant: session.tenant,
     user: session.user,
-    turn_count: session.turns.length,
+    turn_count: turns.length,
     created_at: session.created_at,
     updated_at: session.updated_at,
     last_model: lastTurn?.model,

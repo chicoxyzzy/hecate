@@ -95,7 +95,7 @@ type ChatSessionItem struct {
 	User      string                `json:"user,omitempty"`
 	CreatedAt string                `json:"created_at,omitempty"`
 	UpdatedAt string                `json:"updated_at,omitempty"`
-	Turns     []ChatSessionTurnItem `json:"turns,omitempty"`
+	Turns     []ChatSessionTurnItem `json:"turns"`
 }
 
 type ChatSessionTurnItem struct {

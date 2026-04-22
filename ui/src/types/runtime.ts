@@ -81,7 +81,7 @@ export type ChatSessionRecord = {
   user?: string;
   created_at?: string;
   updated_at?: string;
-  turns: ChatSessionTurnRecord[];
+  turns?: ChatSessionTurnRecord[];
 };
 
 export type ChatSessionsResponse = {
