@@ -5,6 +5,15 @@ import (
 	"net/http"
 )
 
+const (
+	errCodeUnauthorized   = "unauthorized"
+	errCodeInvalidRequest = "invalid_request"
+	errCodeForbidden      = "forbidden"
+	errCodeGatewayError   = "gateway_error"
+	errCodeUpstreamError  = "upstream_error"
+	errCodeNotFound       = "not_found"
+)
+
 func WriteJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

@@ -32,11 +32,11 @@ import (
 func main() {
 	cfg := config.LoadFromEnv()
 	logger, shutdownLogs, err := telemetry.NewLoggerWithOTLP(context.Background(), cfg.LogLevel, telemetry.OTelLogOptions{
-		Enabled:     cfg.OTel.LogsEnabled,
-		Endpoint:    firstNonEmpty(cfg.OTel.LogsEndpoint, cfg.OTel.TracesEndpoint),
-		Headers:     firstNonEmptyMap(cfg.OTel.LogsHeaders, cfg.OTel.TracesHeaders),
+		Enabled:     cfg.OTel.Logs.Enabled,
+		Endpoint:    firstNonEmpty(cfg.OTel.Logs.Endpoint, cfg.OTel.Traces.Endpoint),
+		Headers:     firstNonEmptyMap(cfg.OTel.Logs.Headers, cfg.OTel.Traces.Headers),
 		ServiceName: cfg.OTel.ServiceName,
-		Timeout:     firstNonZeroDuration(cfg.OTel.LogsTimeout, cfg.OTel.TracesTimeout),
+		Timeout:     firstNonZeroDuration(cfg.OTel.Logs.Timeout, cfg.OTel.Traces.Timeout),
 	})
 	if err != nil {
 		slog.Error("otel logger init failed", slog.Any("error", err))
@@ -50,11 +50,11 @@ func main() {
 		}
 	}()
 	meterProvider, shutdownMetrics, err := telemetry.NewMeterProvider(context.Background(), telemetry.OTelMetricOptions{
-		Enabled:     cfg.OTel.MetricsEnabled,
-		Endpoint:    cfg.OTel.MetricsEndpoint,
-		Headers:     cfg.OTel.MetricsHeaders,
+		Enabled:     cfg.OTel.Metrics.Enabled,
+		Endpoint:    cfg.OTel.Metrics.Endpoint,
+		Headers:     cfg.OTel.Metrics.Headers,
 		ServiceName: cfg.OTel.ServiceName,
-		Timeout:     cfg.OTel.MetricsTimeout,
+		Timeout:     cfg.OTel.Metrics.Timeout,
 		Interval:    cfg.OTel.MetricsInterval,
 	})
 	if err != nil {
@@ -93,11 +93,11 @@ func main() {
 	pricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
 	otelProvider, err := profiler.NewTracerProvider(
 		context.Background(),
-		cfg.OTel.TracesEnabled,
-		cfg.OTel.TracesEndpoint,
-		cfg.OTel.TracesHeaders,
+		cfg.OTel.Traces.Enabled,
+		cfg.OTel.Traces.Endpoint,
+		cfg.OTel.Traces.Headers,
 		cfg.OTel.ServiceName,
-		cfg.OTel.TracesTimeout,
+		cfg.OTel.Traces.Timeout,
 	)
 	if err != nil {
 		logger.Error("otel tracer provider init failed", slog.Any("error", err))
@@ -179,12 +179,12 @@ func main() {
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
 			slog.Bool("retention_enabled", cfg.Retention.Enabled),
 			slog.Duration("retention_interval", cfg.Retention.Interval),
-			slog.Bool("otel_traces_enabled", cfg.OTel.TracesEnabled),
-			slog.String("otel_traces_endpoint", cfg.OTel.TracesEndpoint),
-			slog.Bool("otel_metrics_enabled", cfg.OTel.MetricsEnabled),
-			slog.String("otel_metrics_endpoint", cfg.OTel.MetricsEndpoint),
-			slog.Bool("otel_logs_enabled", cfg.OTel.LogsEnabled),
-			slog.String("otel_logs_endpoint", firstNonEmpty(cfg.OTel.LogsEndpoint, cfg.OTel.TracesEndpoint)),
+			slog.Bool("otel_traces_enabled", cfg.OTel.Traces.Enabled),
+			slog.String("otel_traces_endpoint", cfg.OTel.Traces.Endpoint),
+			slog.Bool("otel_metrics_enabled", cfg.OTel.Metrics.Enabled),
+			slog.String("otel_metrics_endpoint", cfg.OTel.Metrics.Endpoint),
+			slog.Bool("otel_logs_enabled", cfg.OTel.Logs.Enabled),
+			slog.String("otel_logs_endpoint", firstNonEmpty(cfg.OTel.Logs.Endpoint, cfg.OTel.Traces.Endpoint)),
 			slog.Int("provider_count", len(cfg.Providers.OpenAICompatible)),
 		)
 

@@ -19,20 +19,40 @@ const (
 	SubsystemSemanticCache = "semantic_cache"
 )
 
-type TracePruner interface {
+// Pruner prunes old or excess records from a subsystem store.
+type Pruner interface {
 	Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
+// BudgetEventPruner is implemented by budget stores that support event pruning.
 type BudgetEventPruner interface {
 	PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
+// AuditEventPruner is implemented by control-plane stores that support audit pruning.
 type AuditEventPruner interface {
 	PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
-type CachePruner interface {
-	Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
+// CachePruner is an alias kept for compatibility with callers that type-assert cache stores.
+type CachePruner = Pruner
+
+type budgetPrunerAdapter struct{ p BudgetEventPruner }
+
+func (a budgetPrunerAdapter) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	return a.p.PruneEvents(ctx, maxAge, maxCount)
+}
+
+type auditPrunerAdapter struct{ p AuditEventPruner }
+
+func (a auditPrunerAdapter) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	return a.p.PruneAuditEvents(ctx, maxAge, maxCount)
+}
+
+type subsystemEntry struct {
+	name   string
+	policy config.RetentionPolicy
+	pruner Pruner
 }
 
 type RunRequest struct {
@@ -59,38 +79,44 @@ type RunResult struct {
 }
 
 type Manager struct {
-	logger   *slog.Logger
-	cfg      config.RetentionConfig
-	tracer   profiler.Tracer
-	traces   TracePruner
-	budgets  BudgetEventPruner
-	audit    AuditEventPruner
-	exact    CachePruner
-	semantic CachePruner
-	history  HistoryStore
+	logger     *slog.Logger
+	cfg        config.RetentionConfig
+	tracer     profiler.Tracer
+	subsystems []subsystemEntry
+	history    HistoryStore
 }
 
 func NewManager(
 	logger *slog.Logger,
 	cfg config.RetentionConfig,
 	tracer profiler.Tracer,
-	traces TracePruner,
+	traces Pruner,
 	budgets BudgetEventPruner,
 	audit AuditEventPruner,
-	exact CachePruner,
-	semantic CachePruner,
+	exact Pruner,
+	semantic Pruner,
 	history HistoryStore,
 ) *Manager {
+	var budgetsPruner Pruner
+	if budgets != nil {
+		budgetsPruner = budgetPrunerAdapter{budgets}
+	}
+	var auditPruner Pruner
+	if audit != nil {
+		auditPruner = auditPrunerAdapter{audit}
+	}
 	return &Manager{
-		logger:   logger,
-		cfg:      cfg,
-		tracer:   tracer,
-		traces:   traces,
-		budgets:  budgets,
-		audit:    audit,
-		exact:    exact,
-		semantic: semantic,
-		history:  history,
+		logger: logger,
+		cfg:    cfg,
+		tracer: tracer,
+		subsystems: []subsystemEntry{
+			{SubsystemTraces, cfg.TraceSnapshots, traces},
+			{SubsystemBudgetEvents, cfg.BudgetEvents, budgetsPruner},
+			{SubsystemAuditEvents, cfg.AuditEvents, auditPruner},
+			{SubsystemExactCache, cfg.ExactCache, exact},
+			{SubsystemSemanticCache, cfg.SemanticCache, semantic},
+		},
+		history: history,
 	}
 }
 
@@ -112,157 +138,41 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 		"retention.trigger": trigger,
 	})
 
-	results := make([]SubsystemResult, 0, 5)
-	runSubsystem := func(name string, policy config.RetentionPolicy, pruner CachePruner) {
+	results := make([]SubsystemResult, 0, len(m.subsystems))
+	for _, sub := range m.subsystems {
 		result := SubsystemResult{
-			Name:     name,
-			MaxAge:   policy.MaxAge,
-			MaxCount: policy.MaxCount,
+			Name:     sub.name,
+			MaxAge:   sub.policy.MaxAge,
+			MaxCount: sub.policy.MaxCount,
 		}
-		if !shouldRun(req.Subsystems, name) {
+		if !shouldRun(req.Subsystems, sub.name) || sub.pruner == nil {
 			result.Skipped = true
 			results = append(results, result)
-			return
+			continue
 		}
-		if pruner == nil {
-			result.Skipped = true
-			results = append(results, result)
-			return
-		}
-		deleted, err := pruner.Prune(ctx, policy.MaxAge, policy.MaxCount)
+		deleted, err := sub.pruner.Prune(ctx, sub.policy.MaxAge, sub.policy.MaxCount)
 		result.Deleted = deleted
 		if err != nil {
 			result.Error = err.Error()
 			trace.Record("retention.subsystem.failed", map[string]any{
-				"retention.subsystem": name,
+				"retention.subsystem": sub.name,
 				"error.message":       err.Error(),
 			})
 		} else {
 			trace.Record("retention.subsystem.finished", map[string]any{
-				"retention.subsystem": name,
+				"retention.subsystem": sub.name,
 				"retention.deleted":   deleted,
 			})
 			m.logger.Info("retention subsystem finished",
-				slog.String("subsystem", name),
+				slog.String("subsystem", sub.name),
 				slog.Int("deleted", deleted),
-				slog.Duration("max_age", policy.MaxAge),
-				slog.Int("max_count", policy.MaxCount),
+				slog.Duration("max_age", sub.policy.MaxAge),
+				slog.Int("max_count", sub.policy.MaxCount),
 				slog.String("trigger", trigger),
 			)
 		}
 		results = append(results, result)
 	}
-
-	runTraceSubsystem := func() {
-		result := SubsystemResult{
-			Name:     SubsystemTraces,
-			MaxAge:   m.cfg.TraceSnapshots.MaxAge,
-			MaxCount: m.cfg.TraceSnapshots.MaxCount,
-		}
-		if !shouldRun(req.Subsystems, result.Name) || m.traces == nil {
-			result.Skipped = true
-			results = append(results, result)
-			return
-		}
-		deleted, err := m.traces.Prune(ctx, m.cfg.TraceSnapshots.MaxAge, m.cfg.TraceSnapshots.MaxCount)
-		result.Deleted = deleted
-		if err != nil {
-			result.Error = err.Error()
-			trace.Record("retention.subsystem.failed", map[string]any{
-				"retention.subsystem": result.Name,
-				"error.message":       err.Error(),
-			})
-		} else {
-			trace.Record("retention.subsystem.finished", map[string]any{
-				"retention.subsystem": result.Name,
-				"retention.deleted":   deleted,
-			})
-			m.logger.Info("retention subsystem finished",
-				slog.String("subsystem", result.Name),
-				slog.Int("deleted", deleted),
-				slog.Duration("max_age", m.cfg.TraceSnapshots.MaxAge),
-				slog.Int("max_count", m.cfg.TraceSnapshots.MaxCount),
-				slog.String("trigger", trigger),
-			)
-		}
-		results = append(results, result)
-	}
-
-	runBudgetSubsystem := func() {
-		result := SubsystemResult{
-			Name:     SubsystemBudgetEvents,
-			MaxAge:   m.cfg.BudgetEvents.MaxAge,
-			MaxCount: m.cfg.BudgetEvents.MaxCount,
-		}
-		if !shouldRun(req.Subsystems, result.Name) || m.budgets == nil {
-			result.Skipped = true
-			results = append(results, result)
-			return
-		}
-		deleted, err := m.budgets.PruneEvents(ctx, m.cfg.BudgetEvents.MaxAge, m.cfg.BudgetEvents.MaxCount)
-		result.Deleted = deleted
-		if err != nil {
-			result.Error = err.Error()
-			trace.Record("retention.subsystem.failed", map[string]any{
-				"retention.subsystem": result.Name,
-				"error.message":       err.Error(),
-			})
-		} else {
-			trace.Record("retention.subsystem.finished", map[string]any{
-				"retention.subsystem": result.Name,
-				"retention.deleted":   deleted,
-			})
-			m.logger.Info("retention subsystem finished",
-				slog.String("subsystem", result.Name),
-				slog.Int("deleted", deleted),
-				slog.Duration("max_age", m.cfg.BudgetEvents.MaxAge),
-				slog.Int("max_count", m.cfg.BudgetEvents.MaxCount),
-				slog.String("trigger", trigger),
-			)
-		}
-		results = append(results, result)
-	}
-
-	runAuditSubsystem := func() {
-		result := SubsystemResult{
-			Name:     SubsystemAuditEvents,
-			MaxAge:   m.cfg.AuditEvents.MaxAge,
-			MaxCount: m.cfg.AuditEvents.MaxCount,
-		}
-		if !shouldRun(req.Subsystems, result.Name) || m.audit == nil {
-			result.Skipped = true
-			results = append(results, result)
-			return
-		}
-		deleted, err := m.audit.PruneAuditEvents(ctx, m.cfg.AuditEvents.MaxAge, m.cfg.AuditEvents.MaxCount)
-		result.Deleted = deleted
-		if err != nil {
-			result.Error = err.Error()
-			trace.Record("retention.subsystem.failed", map[string]any{
-				"retention.subsystem": result.Name,
-				"error.message":       err.Error(),
-			})
-		} else {
-			trace.Record("retention.subsystem.finished", map[string]any{
-				"retention.subsystem": result.Name,
-				"retention.deleted":   deleted,
-			})
-			m.logger.Info("retention subsystem finished",
-				slog.String("subsystem", result.Name),
-				slog.Int("deleted", deleted),
-				slog.Duration("max_age", m.cfg.AuditEvents.MaxAge),
-				slog.Int("max_count", m.cfg.AuditEvents.MaxCount),
-				slog.String("trigger", trigger),
-			)
-		}
-		results = append(results, result)
-	}
-
-	runTraceSubsystem()
-	runBudgetSubsystem()
-	runAuditSubsystem()
-	runSubsystem(SubsystemExactCache, m.cfg.ExactCache, m.exact)
-	runSubsystem(SubsystemSemanticCache, m.cfg.SemanticCache, m.semantic)
 
 	finishedAt := time.Now().UTC()
 	trace.Record("retention.run.finished", map[string]any{

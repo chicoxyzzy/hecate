@@ -55,21 +55,19 @@ type ProviderConfig struct {
 	HealthCooldown  time.Duration
 }
 
+type OTelSignalConfig struct {
+	Enabled  bool
+	Endpoint string
+	Headers  map[string]string
+	Timeout  time.Duration
+}
+
 type OTelConfig struct {
-	TracesEnabled   bool
-	TracesEndpoint  string
-	TracesHeaders   map[string]string
 	ServiceName     string
-	TracesTimeout   time.Duration
-	MetricsEnabled  bool
-	MetricsEndpoint string
-	MetricsHeaders  map[string]string
-	MetricsTimeout  time.Duration
+	Traces          OTelSignalConfig
+	Metrics         OTelSignalConfig
 	MetricsInterval time.Duration
-	LogsEnabled     bool
-	LogsEndpoint    string
-	LogsHeaders     map[string]string
-	LogsTimeout     time.Duration
+	Logs            OTelSignalConfig
 }
 
 type GovernorConfig struct {
@@ -204,17 +202,17 @@ func LoadFromEnv() Config {
 	return Config{
 		Server: ServerConfig{
 			Address:             getEnv("GATEWAY_ADDRESS", ":8080"),
-			AuthToken:           os.Getenv("GATEWAY_AUTH_TOKEN"),
+			AuthToken:           getEnv("GATEWAY_AUTH_TOKEN", ""),
 			APIKeys:             loadAPIKeysFromEnv(),
 			ControlPlaneBackend: getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "none"),
-			ControlPlaneFile:    os.Getenv("GATEWAY_CONTROL_PLANE_FILE"),
+			ControlPlaneFile:    getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:     getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
 		},
 		Router: RouterConfig{
 			DefaultModel:     getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"),
 			DefaultProvider:  getEnv("GATEWAY_DEFAULT_PROVIDER", firstProviderName(providersCfg, "openai")),
 			Strategy:         getEnv("GATEWAY_ROUTER_STRATEGY", "explicit_or_default"),
-			FallbackProvider: os.Getenv("GATEWAY_ROUTER_FALLBACK_PROVIDER"),
+			FallbackProvider: getEnv("GATEWAY_ROUTER_FALLBACK_PROVIDER", ""),
 		},
 		Provider: ProviderConfig{
 			MaxAttempts:     getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
@@ -224,37 +222,43 @@ func LoadFromEnv() Config {
 			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
 		},
 		OTel: OTelConfig{
-			TracesEnabled:   getEnvBool("GATEWAY_OTEL_TRACES_ENABLED", false),
-			TracesEndpoint:  getEnv("GATEWAY_OTEL_TRACES_ENDPOINT", ""),
-			TracesHeaders:   parseEnvMap(getEnv("GATEWAY_OTEL_TRACES_HEADERS", "")),
 			ServiceName:     getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
-			TracesTimeout:   getEnvDuration("GATEWAY_OTEL_TRACES_TIMEOUT", 5*time.Second),
-			MetricsEnabled:  getEnvBool("GATEWAY_OTEL_METRICS_ENABLED", false),
-			MetricsEndpoint: getEnv("GATEWAY_OTEL_METRICS_ENDPOINT", ""),
-			MetricsHeaders:  parseEnvMap(getEnv("GATEWAY_OTEL_METRICS_HEADERS", "")),
-			MetricsTimeout:  getEnvDuration("GATEWAY_OTEL_METRICS_TIMEOUT", 5*time.Second),
 			MetricsInterval: getEnvDuration("GATEWAY_OTEL_METRICS_INTERVAL", 30*time.Second),
-			LogsEnabled:     getEnvBool("GATEWAY_OTEL_LOGS_ENABLED", false),
-			LogsEndpoint:    os.Getenv("GATEWAY_OTEL_LOGS_ENDPOINT"),
-			LogsHeaders:     parseEnvMap(os.Getenv("GATEWAY_OTEL_LOGS_HEADERS")),
-			LogsTimeout:     getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
+			Traces: OTelSignalConfig{
+				Enabled:  getEnvBool("GATEWAY_OTEL_TRACES_ENABLED", false),
+				Endpoint: getEnv("GATEWAY_OTEL_TRACES_ENDPOINT", ""),
+				Headers:  parseEnvMap(getEnv("GATEWAY_OTEL_TRACES_HEADERS", "")),
+				Timeout:  getEnvDuration("GATEWAY_OTEL_TRACES_TIMEOUT", 5*time.Second),
+			},
+			Metrics: OTelSignalConfig{
+				Enabled:  getEnvBool("GATEWAY_OTEL_METRICS_ENABLED", false),
+				Endpoint: getEnv("GATEWAY_OTEL_METRICS_ENDPOINT", ""),
+				Headers:  parseEnvMap(getEnv("GATEWAY_OTEL_METRICS_HEADERS", "")),
+				Timeout:  getEnvDuration("GATEWAY_OTEL_METRICS_TIMEOUT", 5*time.Second),
+			},
+			Logs: OTelSignalConfig{
+				Enabled:  getEnvBool("GATEWAY_OTEL_LOGS_ENABLED", false),
+				Endpoint: getEnv("GATEWAY_OTEL_LOGS_ENDPOINT", ""),
+				Headers:  parseEnvMap(getEnv("GATEWAY_OTEL_LOGS_HEADERS", "")),
+				Timeout:  getEnvDuration("GATEWAY_OTEL_LOGS_TIMEOUT", 5*time.Second),
+			},
 		},
 		Governor: GovernorConfig{
 			DenyAll:                 getEnvBool("GATEWAY_DENY_ALL", false),
 			MaxPromptTokens:         getEnvInt("GATEWAY_MAX_PROMPT_TOKENS", 64_000),
 			MaxTotalBudgetMicros:    getEnvInt64("GATEWAY_MAX_BUDGET_MICROS_USD", 5_000_000),
-			ModelRewriteTo:          os.Getenv("GATEWAY_MODEL_REWRITE_TO"),
+			ModelRewriteTo:          getEnv("GATEWAY_MODEL_REWRITE_TO", ""),
 			PolicyRules:             loadPolicyRulesFromEnv(),
 			BudgetBackend:           getEnv("GATEWAY_BUDGET_BACKEND", "memory"),
 			BudgetKey:               getEnv("GATEWAY_BUDGET_KEY", "global"),
 			BudgetScope:             getEnv("GATEWAY_BUDGET_SCOPE", "global"),
 			BudgetTenantFallback:    getEnv("GATEWAY_BUDGET_TENANT_FALLBACK", "anonymous"),
 			RouteMode:               getEnv("GATEWAY_ROUTE_MODE", "any"),
-			AllowedProviders:        splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDERS")),
-			DeniedProviders:         splitCSV(os.Getenv("GATEWAY_DENIED_PROVIDERS")),
-			AllowedModels:           splitCSV(os.Getenv("GATEWAY_ALLOWED_MODELS")),
-			DeniedModels:            splitCSV(os.Getenv("GATEWAY_DENIED_MODELS")),
-			AllowedProviderKinds:    splitCSV(os.Getenv("GATEWAY_ALLOWED_PROVIDER_KINDS")),
+			AllowedProviders:        splitCSV(getEnv("GATEWAY_ALLOWED_PROVIDERS", "")),
+			DeniedProviders:         splitCSV(getEnv("GATEWAY_DENIED_PROVIDERS", "")),
+			AllowedModels:           splitCSV(getEnv("GATEWAY_ALLOWED_MODELS", "")),
+			DeniedModels:            splitCSV(getEnv("GATEWAY_DENIED_MODELS", "")),
+			AllowedProviderKinds:    splitCSV(getEnv("GATEWAY_ALLOWED_PROVIDER_KINDS", "")),
 			BudgetWarningThresholds: parseEnvCSVInts(getEnv("GATEWAY_BUDGET_WARNING_THRESHOLDS", "50,80,95")),
 			BudgetHistoryLimit:      getEnvInt("GATEWAY_BUDGET_HISTORY_LIMIT", 20),
 		},
@@ -263,7 +267,7 @@ func LoadFromEnv() Config {
 			Backend:    getEnv("GATEWAY_CACHE_BACKEND", "memory"),
 			Redis: RedisConfig{
 				Address:  getEnv("REDIS_ADDRESS", "127.0.0.1:6379"),
-				Password: os.Getenv("REDIS_PASSWORD"),
+				Password: getEnv("REDIS_PASSWORD", ""),
 				DB:       getEnvInt("REDIS_DB", 0),
 				Prefix:   getEnv("REDIS_PREFIX", "agent-runtime"),
 				Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
@@ -276,10 +280,10 @@ func LoadFromEnv() Config {
 				MaxEntries:                       getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES", 10_000),
 				MaxTextChars:                     getEnvInt("GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS", 8_000),
 				Embedder:                         getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER", "local_simple"),
-				EmbedderProvider:                 os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_PROVIDER"),
-				EmbedderModel:                    os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_MODEL"),
-				EmbedderBaseURL:                  os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_BASE_URL"),
-				EmbedderAPIKey:                   os.Getenv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_API_KEY"),
+				EmbedderProvider:                 getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_PROVIDER", ""),
+				EmbedderModel:                    getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_MODEL", ""),
+				EmbedderBaseURL:                  getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_BASE_URL", ""),
+				EmbedderAPIKey:                   getEnv("GATEWAY_SEMANTIC_CACHE_EMBEDDER_API_KEY", ""),
 				EmbedderTimeout:                  getEnvDuration("GATEWAY_SEMANTIC_CACHE_EMBEDDER_TIMEOUT", 30*time.Second),
 				PostgresVectorMode:               getEnv("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_MODE", "auto"),
 				PostgresVectorCandidates:         getEnvInt("GATEWAY_SEMANTIC_CACHE_POSTGRES_VECTOR_CANDIDATES", 200),
@@ -302,7 +306,7 @@ func LoadFromEnv() Config {
 			SemanticCache:  loadRetentionPolicyFromEnv("GATEWAY_RETENTION_SEMANTIC_CACHE_", 7*24*time.Hour, 10_000),
 		},
 		Postgres: PostgresConfig{
-			DSN:          os.Getenv("POSTGRES_DSN"),
+			DSN:          getEnv("POSTGRES_DSN", ""),
 			Schema:       getEnv("POSTGRES_SCHEMA", "public"),
 			TablePrefix:  getEnv("POSTGRES_TABLE_PREFIX", "hecate"),
 			MaxOpenConns: getEnvInt("POSTGRES_MAX_OPEN_CONNS", 10),
@@ -324,7 +328,7 @@ func loadRetentionPolicyFromEnv(prefix string, defaultAge time.Duration, default
 func loadPricebookFromEnv() PricebookConfig {
 	cfg := defaultPricebookConfig()
 
-	if raw := strings.TrimSpace(os.Getenv("GATEWAY_PRICEBOOK_JSON")); raw != "" {
+	if raw := strings.TrimSpace(getEnv("GATEWAY_PRICEBOOK_JSON", "")); raw != "" {
 		var loaded PricebookConfig
 		if err := json.Unmarshal([]byte(raw), &loaded); err == nil {
 			if strings.TrimSpace(loaded.UnknownModelPolicy) == "" {
@@ -337,14 +341,14 @@ func loadPricebookFromEnv() PricebookConfig {
 		}
 	}
 
-	if policy := strings.TrimSpace(os.Getenv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY")); policy != "" {
+	if policy := strings.TrimSpace(getEnv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "")); policy != "" {
 		cfg.UnknownModelPolicy = policy
 	}
 	return cfg
 }
 
 func loadPolicyRulesFromEnv() []PolicyRuleConfig {
-	raw := strings.TrimSpace(os.Getenv("GATEWAY_POLICY_RULES_JSON"))
+	raw := strings.TrimSpace(getEnv("GATEWAY_POLICY_RULES_JSON", ""))
 	if raw == "" {
 		return nil
 	}
@@ -433,7 +437,7 @@ func defaultPricebookConfig() PricebookConfig {
 }
 
 func loadAPIKeysFromEnv() []APIKeyConfig {
-	raw := strings.TrimSpace(os.Getenv("GATEWAY_API_KEYS_JSON"))
+	raw := strings.TrimSpace(getEnv("GATEWAY_API_KEYS_JSON", ""))
 	if raw == "" {
 		return nil
 	}
@@ -457,7 +461,7 @@ func loadAPIKeysFromEnv() []APIKeyConfig {
 }
 
 func loadProvidersFromEnv() ProvidersConfig {
-	if raw := os.Getenv("GATEWAY_PROVIDERS_JSON"); raw != "" {
+	if raw := getEnv("GATEWAY_PROVIDERS_JSON", ""); raw != "" {
 		var providersCfg []OpenAICompatibleProviderConfig
 		if err := json.Unmarshal([]byte(raw), &providersCfg); err == nil && len(providersCfg) > 0 {
 			normalizeProviders(providersCfg)
@@ -470,12 +474,12 @@ func loadProvidersFromEnv() ProvidersConfig {
 		Name:          getEnv("OPENAI_PROVIDER_NAME", "openai"),
 		Kind:          getEnv("OPENAI_PROVIDER_KIND", "cloud"),
 		BaseURL:       getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
-		APIKey:        os.Getenv("OPENAI_API_KEY"),
+		APIKey:        getEnv("OPENAI_API_KEY", ""),
 		Timeout:       getEnvDuration("OPENAI_TIMEOUT", 30*time.Second),
 		StubMode:      getEnvBool("OPENAI_STUB_MODE", true),
 		StubResponse:  getEnv("OPENAI_STUB_RESPONSE", "Stubbed response from the AI Agent Runtime MVP."),
 		DefaultModel:  getEnv("OPENAI_DEFAULT_MODEL", getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini")),
-		Models:        splitCSV(os.Getenv("OPENAI_MODELS")),
+		Models:        splitCSV(getEnv("OPENAI_MODELS", "")),
 		AllowAnyModel: getEnvBool("OPENAI_ALLOW_ANY_MODEL", true),
 	})
 
@@ -484,12 +488,12 @@ func loadProvidersFromEnv() ProvidersConfig {
 			Name:          getEnv("LOCAL_PROVIDER_NAME", "local"),
 			Kind:          getEnv("LOCAL_PROVIDER_KIND", "local"),
 			BaseURL:       getEnv("LOCAL_PROVIDER_BASE_URL", "http://127.0.0.1:11434"),
-			APIKey:        os.Getenv("LOCAL_PROVIDER_API_KEY"),
+			APIKey:        getEnv("LOCAL_PROVIDER_API_KEY", ""),
 			Timeout:       getEnvDuration("LOCAL_PROVIDER_TIMEOUT", 30*time.Second),
 			StubMode:      getEnvBool("LOCAL_PROVIDER_STUB_MODE", false),
 			StubResponse:  getEnv("LOCAL_PROVIDER_STUB_RESPONSE", "Stubbed local provider response."),
-			DefaultModel:  os.Getenv("LOCAL_PROVIDER_DEFAULT_MODEL"),
-			Models:        splitCSV(os.Getenv("LOCAL_PROVIDER_MODELS")),
+			DefaultModel:  getEnv("LOCAL_PROVIDER_DEFAULT_MODEL", ""),
+			Models:        splitCSV(getEnv("LOCAL_PROVIDER_MODELS", "")),
 			AllowAnyModel: getEnvBool("LOCAL_PROVIDER_ALLOW_ANY_MODEL", false),
 		})
 	}
