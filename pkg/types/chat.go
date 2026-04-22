@@ -16,6 +16,7 @@ type ChatRequest struct {
 	Scope        RequestScope
 	Tools        []Tool
 	ToolChoice   json.RawMessage
+	Stream       bool
 }
 
 type RequestScope struct {

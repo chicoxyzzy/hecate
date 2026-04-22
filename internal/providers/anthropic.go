@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -38,6 +39,7 @@ type anthropicMessagesRequest struct {
 	Metadata    *anthropicMessagesMetadata `json:"metadata,omitempty"`
 	Tools       []anthropicTool            `json:"tools,omitempty"`
 	ToolChoice  json.RawMessage            `json:"tool_choice,omitempty"`
+	Stream      bool                       `json:"stream,omitempty"`
 }
 
 type anthropicMessagesMetadata struct {
@@ -512,6 +514,293 @@ func anthropicToolChoice(choice json.RawMessage) json.RawMessage {
 	if json.Unmarshal(choice, &obj) == nil && obj.Type == "function" && obj.Function.Name != "" {
 		b, _ := json.Marshal(map[string]string{"type": "tool", "name": obj.Function.Name})
 		return b
+	}
+	return nil
+}
+
+func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error {
+	if p.config.APIKey == "" && p.Kind() != KindLocal {
+		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	}
+
+	system, messages := anthropicMessagesFromTypes(req.Messages)
+	if len(messages) == 0 {
+		return fmt.Errorf("anthropic messages request requires at least one non-system message")
+	}
+	wireReq := anthropicMessagesRequest{
+		Model:     req.Model,
+		System:    system,
+		Messages:  messages,
+		MaxTokens: req.MaxTokens,
+		Stream:    true,
+	}
+	if wireReq.MaxTokens <= 0 {
+		wireReq.MaxTokens = 1024
+	}
+	if req.Temperature > 0 {
+		wireReq.Temperature = req.Temperature
+	}
+	if userID := requestscope.Normalize(req.Scope).User; userID != "" {
+		wireReq.Metadata = &anthropicMessagesMetadata{UserID: userID}
+	}
+	if len(req.Tools) > 0 {
+		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			schema := t.Function.Parameters
+			if len(schema) == 0 {
+				schema = json.RawMessage(`{}`)
+			}
+			wireReq.Tools = append(wireReq.Tools, anthropicTool{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				InputSchema: schema,
+			})
+		}
+		wireReq.ToolChoice = anthropicToolChoice(req.ToolChoice)
+	}
+
+	payload, err := json.Marshal(wireReq)
+	if err != nil {
+		return fmt.Errorf("marshal upstream request: %w", err)
+	}
+	endpoint := strings.TrimRight(p.config.BaseURL, "/") + "/v1/messages"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build upstream request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	p.applyHeaders(httpReq)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send upstream request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return decodeAnthropicError(resp)
+	}
+
+	return translateAnthropicSSE(ctx, req.Model, resp.Body, w)
+}
+
+// translateAnthropicSSE reads Anthropic SSE events and writes OpenAI-format SSE chunks.
+func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst io.Writer) error {
+	type anthropicStreamEvent struct {
+		Type  string          `json:"type"`
+		Index int             `json:"index"`
+		Delta json.RawMessage `json:"delta"`
+		// message_start
+		Message *struct {
+			ID    string `json:"id"`
+			Model string `json:"model"`
+			Usage *struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		// content_block_start
+		ContentBlock *struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+		// message_delta usage
+		Usage *struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+
+	type deltaPayload struct {
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
+	}
+
+	var (
+		completionID string
+		// track open tool_use blocks by index
+		toolBlocks = make(map[int]struct{ id, name string })
+	)
+
+	writeChunk := func(data any) error {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(dst, "data: %s\n\n", b); err != nil {
+			return err
+		}
+		if f, ok := dst.(interface{ Flush() }); ok {
+			f.Flush()
+		}
+		return nil
+	}
+
+	scanner := bufio.NewScanner(src)
+	var eventType string
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		rawData := strings.TrimPrefix(line, "data: ")
+
+		var ev anthropicStreamEvent
+		if err := json.Unmarshal([]byte(rawData), &ev); err != nil {
+			continue
+		}
+
+		switch eventType {
+		case "message_start":
+			if ev.Message != nil {
+				completionID = ev.Message.ID
+				if ev.Message.Model != "" {
+					model = ev.Message.Model
+				}
+			}
+			// Send role delta
+			if err := writeChunk(map[string]any{
+				"id":      completionID,
+				"object":  "chat.completion.chunk",
+				"created": 0,
+				"model":   model,
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         map[string]any{"role": "assistant", "content": ""},
+					"finish_reason": nil,
+				}},
+			}); err != nil {
+				return err
+			}
+
+		case "content_block_start":
+			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+				toolBlocks[ev.Index] = struct{ id, name string }{ev.ContentBlock.ID, ev.ContentBlock.Name}
+				if err := writeChunk(map[string]any{
+					"id":      completionID,
+					"object":  "chat.completion.chunk",
+					"created": 0,
+					"model":   model,
+					"choices": []map[string]any{{
+						"index": 0,
+						"delta": map[string]any{
+							"tool_calls": []map[string]any{{
+								"index": ev.Index,
+								"id":    ev.ContentBlock.ID,
+								"type":  "function",
+								"function": map[string]any{
+									"name":      ev.ContentBlock.Name,
+									"arguments": "",
+								},
+							}},
+						},
+						"finish_reason": nil,
+					}},
+				}); err != nil {
+					return err
+				}
+			}
+
+		case "content_block_delta":
+			var delta deltaPayload
+			if err := json.Unmarshal(ev.Delta, &delta); err != nil {
+				continue
+			}
+			switch delta.Type {
+			case "text_delta":
+				if err := writeChunk(map[string]any{
+					"id":      completionID,
+					"object":  "chat.completion.chunk",
+					"created": 0,
+					"model":   model,
+					"choices": []map[string]any{{
+						"index":         0,
+						"delta":         map[string]any{"content": delta.Text},
+						"finish_reason": nil,
+					}},
+				}); err != nil {
+					return err
+				}
+			case "input_json_delta":
+				if _, ok := toolBlocks[ev.Index]; ok {
+					if err := writeChunk(map[string]any{
+						"id":      completionID,
+						"object":  "chat.completion.chunk",
+						"created": 0,
+						"model":   model,
+						"choices": []map[string]any{{
+							"index": 0,
+							"delta": map[string]any{
+								"tool_calls": []map[string]any{{
+									"index":    ev.Index,
+									"function": map[string]any{"arguments": delta.PartialJSON},
+								}},
+							},
+							"finish_reason": nil,
+						}},
+					}); err != nil {
+						return err
+					}
+				}
+			}
+
+		case "message_delta":
+			var delta deltaPayload
+			if err := json.Unmarshal(ev.Delta, &delta); err != nil {
+				continue
+			}
+			finishReason := delta.StopReason
+			if finishReason == "tool_use" {
+				finishReason = "tool_calls"
+			}
+			if finishReason == "" {
+				finishReason = "stop"
+			}
+			// Usage chunk
+			usage := map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+			if ev.Usage != nil {
+				usage["completion_tokens"] = ev.Usage.OutputTokens
+				usage["total_tokens"] = ev.Usage.OutputTokens
+			}
+			if err := writeChunk(map[string]any{
+				"id":      completionID,
+				"object":  "chat.completion.chunk",
+				"created": 0,
+				"model":   model,
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         map[string]any{},
+					"finish_reason": finishReason,
+				}},
+				"usage": usage,
+			}); err != nil {
+				return err
+			}
+
+		case "message_stop":
+			fmt.Fprintf(dst, "data: [DONE]\n\n") //nolint:errcheck
+			if f, ok := dst.(interface{ Flush() }); ok {
+				f.Flush()
+			}
+			return nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	// Send DONE if message_stop was never seen
+	fmt.Fprintf(dst, "data: [DONE]\n\n") //nolint:errcheck
+	if f, ok := dst.(interface{ Flush() }); ok {
+		f.Flush()
 	}
 	return nil
 }

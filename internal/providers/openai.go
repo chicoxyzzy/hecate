@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -28,13 +29,19 @@ type OpenAICompatibleProvider struct {
 }
 
 type openAIChatCompletionRequest struct {
-	Model       string              `json:"model"`
-	Messages    []openAIChatMessage `json:"messages"`
-	MaxTokens   int                 `json:"max_tokens,omitempty"`
-	Temperature float64             `json:"temperature,omitempty"`
-	User        string              `json:"user,omitempty"`
-	Tools       []openAITool        `json:"tools,omitempty"`
-	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
+	Model         string                `json:"model"`
+	Messages      []openAIChatMessage   `json:"messages"`
+	MaxTokens     int                   `json:"max_tokens,omitempty"`
+	Temperature   float64               `json:"temperature,omitempty"`
+	User          string                `json:"user,omitempty"`
+	Tools         []openAITool          `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage       `json:"tool_choice,omitempty"`
+	Stream        bool                  `json:"stream,omitempty"`
+	StreamOptions *openAIStreamOptions  `json:"stream_options,omitempty"`
+}
+
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openAITool struct {
@@ -460,6 +467,88 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 	}, nil
 }
 
+func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error {
+	if p.config.APIKey == "" && p.Kind() != KindLocal {
+		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	}
+
+	wireReq := openAIChatCompletionRequest{
+		Model:       req.Model,
+		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		User:        requestscope.Normalize(req.Scope).User,
+		ToolChoice:  req.ToolChoice,
+		Stream:      true,
+		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
+	}
+	for _, msg := range req.Messages {
+		wireMsg := openAIChatMessage{
+			Role:       msg.Role,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
+		}
+		if len(msg.ToolCalls) > 0 {
+			wireMsg.ToolCalls = make([]openAIToolCall, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				wireMsg.ToolCalls = append(wireMsg.ToolCalls, openAIToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: openAIToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		} else {
+			c := msg.Content
+			wireMsg.Content = &c
+		}
+		wireReq.Messages = append(wireReq.Messages, wireMsg)
+	}
+	if len(req.Tools) > 0 {
+		wireReq.Tools = make([]openAITool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			wireReq.Tools = append(wireReq.Tools, openAITool{
+				Type: t.Type,
+				Function: openAIToolFunction{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					Parameters:  t.Function.Parameters,
+					Strict:      t.Function.Strict,
+				},
+			})
+		}
+	}
+
+	payload, err := json.Marshal(wireReq)
+	if err != nil {
+		return fmt.Errorf("marshal upstream request: %w", err)
+	}
+
+	endpoint := buildChatCompletionsURL(p.config.BaseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build upstream request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.config.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
+	}
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send upstream request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		return decodeUpstreamError(resp)
+	}
+
+	return proxySSE(ctx, resp.Body, w)
+}
+
 func buildChatCompletionsURL(baseURL string) string {
 	trimmed := strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(trimmed, "/v1") {
@@ -526,4 +615,35 @@ func contains(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// proxySSE reads OpenAI-format SSE from src and writes it verbatim to dst,
+// flushing after each blank-line boundary. It returns when [DONE] is seen,
+// src is exhausted, or the context is cancelled.
+func proxySSE(ctx context.Context, src io.Reader, dst io.Writer) error {
+	scanner := bufio.NewScanner(src)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		line := scanner.Text()
+		if _, err := fmt.Fprintf(dst, "%s\n", line); err != nil {
+			return err
+		}
+		// SSE events are separated by blank lines; flush after each blank line.
+		if line == "" {
+			if f, ok := dst.(interface{ Flush() }); ok {
+				f.Flush()
+			}
+		}
+		if line == "data: [DONE]" {
+			// Write the trailing blank line and flush.
+			fmt.Fprintf(dst, "\n") //nolint:errcheck
+			if f, ok := dst.(interface{ Flush() }); ok {
+				f.Flush()
+			}
+			return nil
+		}
+	}
+	return scanner.Err()
 }

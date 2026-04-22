@@ -221,6 +221,72 @@ export async function getRetentionRuns(authToken?: string, limit = 10): Promise<
   return fetchJSON<RetentionRunsResponse>(`/admin/retention/runs?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
+export async function chatCompletionsStream(
+  payload: ChatCompletionPayload,
+  authToken: string | undefined,
+  onChunk: (delta: string) => void,
+): Promise<{ headers: RuntimeHeaders }> {
+  const response = await fetch(
+    "/v1/chat/completions",
+    buildRequestOptions({ authToken, method: "POST", body: { ...payload, stream: true } }),
+  );
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "request failed"));
+  }
+
+  const headers: RuntimeHeaders = {
+    requestId: response.headers.get("X-Request-Id") ?? "",
+    traceId: response.headers.get("X-Trace-Id") ?? "",
+    spanId: response.headers.get("X-Span-Id") ?? "",
+    provider: response.headers.get("X-Runtime-Provider") ?? "",
+    providerKind: response.headers.get("X-Runtime-Provider-Kind") ?? "",
+    routeReason: response.headers.get("X-Runtime-Route-Reason") ?? "",
+    requestedModel: response.headers.get("X-Runtime-Requested-Model") ?? "",
+    resolvedModel: response.headers.get("X-Runtime-Model") ?? "",
+    cache: response.headers.get("X-Runtime-Cache") ?? "",
+    cacheType: response.headers.get("X-Runtime-Cache-Type") ?? "",
+    semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
+    semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
+    semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
+    attempts: response.headers.get("X-Runtime-Attempts") ?? "",
+    retries: response.headers.get("X-Runtime-Retries") ?? "",
+    fallbackFrom: response.headers.get("X-Runtime-Fallback-From") ?? "",
+    costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
+  };
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (raw === "[DONE]") return { headers };
+      try {
+        const chunk = JSON.parse(raw) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+          error?: { message?: string };
+        };
+        if (chunk.error?.message) throw new Error(chunk.error.message);
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) onChunk(delta);
+      } catch (parseError) {
+        if (parseError instanceof Error && parseError.message !== "JSON") throw parseError;
+      }
+    }
+  }
+
+  return { headers };
+}
+
 export async function chatCompletions(
   payload: ChatCompletionPayload,
   authToken?: string,

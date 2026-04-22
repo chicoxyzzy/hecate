@@ -13,6 +13,7 @@ type OpenAIChatCompletionRequest struct {
 	User         string              `json:"user,omitempty"`
 	Tools        []OpenAITool        `json:"tools,omitempty"`
 	ToolChoice   json.RawMessage     `json:"tool_choice,omitempty"`
+	Stream       bool                `json:"stream,omitempty"`
 }
 
 type OpenAITool struct {

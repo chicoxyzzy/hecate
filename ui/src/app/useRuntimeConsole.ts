@@ -4,7 +4,7 @@ import { buildLocalProviderIssue } from "../lib/provider-issues";
 import type { LocalProviderIssue } from "../lib/provider-issues";
 import { filterModelsByKind, filterModelsByProvider, parseCSV, usdToMicros } from "../lib/runtime-utils";
 import {
-  chatCompletions,
+  chatCompletionsStream,
   createChatSession as createChatSessionRequest,
   deleteChatSession as deleteChatSessionRequest,
   updateChatSession as updateChatSessionRequest,
@@ -95,6 +95,7 @@ export function useRuntimeConsole() {
   const [tenant, setTenant] = useState("team-a");
   const [message, setMessage] = useState(defaultPrompt);
   const [chatLoading, setChatLoading] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSessionsResponse["data"]>([]);
   const [activeChatSessionID, setActiveChatSessionID] = useState("");
@@ -379,18 +380,32 @@ export function useRuntimeConsole() {
       }
 
       const messages = buildMessagesForSubmission(activeChatSession, message);
-      const response = await chatCompletions(
-        {
-          model,
-          provider: providerFilter === "auto" ? "" : providerFilter,
-          session_id: sessionID,
-          user: tenant,
-          messages,
-        },
-        authToken,
-      );
+      const chatPayload = {
+        model,
+        provider: providerFilter === "auto" ? "" : providerFilter,
+        session_id: sessionID,
+        user: tenant,
+        messages,
+      };
 
-      setChatResult(response.data);
+      let fullContent = "";
+      setStreamingContent("");
+      const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
+        fullContent += delta;
+        setStreamingContent(fullContent);
+      });
+      setStreamingContent(null);
+
+      // Build a synthetic ChatResponse from the streamed content so the rest
+      // of the UI (trace, budget, session refresh) works without changes.
+      const syntheticResult: ChatResponse = {
+        id: response.headers.requestId || "stream",
+        model: response.headers.resolvedModel || model,
+        choices: [{ index: 0, message: { role: "assistant", content: fullContent }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
+
+      setChatResult(syntheticResult);
       setRuntimeHeaders(response.headers);
       setMessage("");
       setTraceLoading(true);
@@ -893,6 +908,7 @@ export function useRuntimeConsole() {
       budgetLimitUsd,
       chatError,
       chatLoading,
+      streamingContent,
       chatResult,
       chatSessions,
       cloudModels,

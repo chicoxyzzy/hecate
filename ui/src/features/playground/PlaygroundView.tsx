@@ -239,7 +239,17 @@ export function PlaygroundView({ state, actions }: Props) {
         >
           <div className="two-column-grid">
             <Surface>
-              {state.chatResult ? (
+              {state.streamingContent !== null ? (
+                <div className="stack-md">
+                  <div className="action-row">
+                    <StatusPill label="Streaming…" tone="neutral" />
+                  </div>
+                  <div className="response-preview response-preview--large response-preview--streaming">
+                    {state.streamingContent}
+                    <span className="streaming-cursor" />
+                  </div>
+                </div>
+              ) : state.chatResult ? (
                 <div className="stack-md">
                   <div className="action-row">
                     <StatusPill label={state.runtimeHeaders?.provider || "Unknown provider"} tone="neutral" />

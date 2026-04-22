@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -24,6 +25,13 @@ type Provider interface {
 	Capabilities(ctx context.Context) (Capabilities, error)
 	Chat(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error)
 	Supports(model string) bool
+}
+
+// Streamer is an optional interface providers may implement to support SSE streaming.
+// ChatStream writes an OpenAI-compatible SSE body (including the final "data: [DONE]\n\n")
+// to w and returns when the stream is complete or the context is cancelled.
+type Streamer interface {
+	ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error
 }
 
 type Capabilities struct {

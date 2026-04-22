@@ -824,6 +824,26 @@ textarea {
   color: var(--ink);
 }
 
+.response-preview--streaming {
+  white-space: pre-wrap;
+  min-height: 3rem;
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent);
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .data-row {
   display: flex;
   justify-content: space-between;

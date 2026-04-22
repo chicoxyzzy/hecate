@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusForbidden, errCodeForbidden, err.Error())
 		return
 	}
+
+	if internalReq.Stream {
+		h.handleChatCompletionsStream(w, r, ctx, internalReq)
+		return
+	}
+
 	result, err := h.service.HandleChat(ctx, internalReq)
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gen_ai.gateway.request.failed",
@@ -99,6 +106,59 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, http.StatusOK, wireResp)
 }
 
+func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Request, ctx context.Context, req types.ChatRequest) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, "streaming not supported by server")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
+
+	meta, err := h.service.HandleChatStream(ctx, req, flushWriter{w, flusher})
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gen_ai.gateway.stream.failed",
+			slog.String("event.name", "gen_ai.gateway.stream.failed"),
+			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
+			slog.Any("error", err),
+		)
+		// Headers already sent; write an SSE error event.
+		statusCode := http.StatusInternalServerError
+		if gateway.IsClientError(err) {
+			statusCode = http.StatusBadRequest
+		}
+		if gateway.IsDeniedError(err) {
+			statusCode = http.StatusForbidden
+		}
+		errMsg := err.Error()
+		var upstreamErr *providers.UpstreamError
+		if errors.As(err, &upstreamErr) {
+			statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
+			errMsg = upstreamErr.Message
+		}
+		// If nothing was written yet we can still set the status code.
+		w.WriteHeader(statusCode)
+		fmt.Fprintf(w, "data: {\"error\":{\"message\":%q}}\n\ndata: [DONE]\n\n",
+			errMsg)
+		flusher.Flush()
+		return
+	}
+
+	// Set metadata headers after stream completes (they go into trailers or are just informational here).
+	_ = meta
+}
+
+type flushWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (fw flushWriter) Write(p []byte) (int, error) { return fw.w.Write(p) }
+func (fw flushWriter) Flush()                      { fw.flusher.Flush() }
+
 func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
 	messages := make([]types.Message, 0, len(req.Messages))
 	for _, msg := range req.Messages {
@@ -162,6 +222,7 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 		Scope:        scope,
 		Tools:        tools,
 		ToolChoice:   req.ToolChoice,
+		Stream:       req.Stream,
 	}, nil
 }
 

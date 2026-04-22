@@ -21,6 +21,7 @@ export function createRuntimeConsoleFixture(
     activeChatSessionID: "",
     chatError: "",
     chatLoading: false,
+    streamingContent: null,
     chatResult: null,
     chatSessions: [],
     cloudModels: [],

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -71,6 +72,7 @@ type Service struct {
 	retention       *retention.Manager
 	pricebook       billing.Pricebook
 	chatSessions    chatstate.Store
+	providers       providers.Registry
 }
 
 type ChatResult struct {
@@ -220,6 +222,7 @@ func NewService(deps Dependencies) *Service {
 		retention:       deps.Retention,
 		pricebook:       deps.Pricebook,
 		chatSessions:    deps.ChatSessions,
+		providers:       deps.Providers,
 	}
 }
 
@@ -406,6 +409,50 @@ func estimateUsage(req types.ChatRequest) types.Usage {
 func withResolvedModel(req types.ChatRequest, model string) types.ChatRequest {
 	req.Model = model
 	return req
+}
+
+// HandleChatStream runs governor/routing checks then streams the response to w
+// in OpenAI SSE format. Caching and session recording are skipped.
+// The returned ResponseMetadata contains route info; cost is unavailable until stream end.
+func (s *Service) HandleChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) (ResponseMetadata, error) {
+	trace := s.tracer.Start(req.RequestID)
+	defer trace.Finalize()
+	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
+
+	plan, err := s.buildExecutionPlan(ctx, trace, req)
+	if err != nil {
+		return ResponseMetadata{}, err
+	}
+
+	var p providers.Provider
+	if s.providers != nil {
+		p, _ = s.providers.Get(plan.Route.Provider)
+	}
+	if p == nil {
+		return ResponseMetadata{}, fmt.Errorf("provider %q not found", plan.Route.Provider)
+	}
+
+	streamer, ok := p.(providers.Streamer)
+	if !ok {
+		return ResponseMetadata{}, fmt.Errorf("provider %q does not support streaming", plan.Route.Provider)
+	}
+
+	streamReq := plan.Request
+	streamReq.Model = plan.Route.Model
+
+	meta := ResponseMetadata{
+		RequestID:    req.RequestID,
+		Provider:     plan.Route.Provider,
+		ProviderKind: plan.ProviderKind,
+		RouteReason:  plan.Route.Reason,
+		TraceID:      trace.TraceID,
+		SpanID:       trace.RootSpanID(),
+	}
+
+	if err := streamer.ChatStream(ctx, streamReq, w); err != nil {
+		return meta, err
+	}
+	return meta, nil
 }
 
 func fallbackFrom(initialProvider, finalProvider string) string {
