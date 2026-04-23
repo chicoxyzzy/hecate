@@ -31,13 +31,13 @@ func TestRuleRouterRoute(t *testing.T) {
 				Model: "gpt-4.1-mini",
 			},
 			wantModel:  "gpt-4.1-mini",
-			wantReason: "explicit_model",
+			wantReason: "requested_model",
 		},
 		{
 			name:       "default model is selected",
 			req:        types.ChatRequest{},
 			wantModel:  "llama3.1:8b",
-			wantReason: "default_model",
+			wantReason: "provider_default_model",
 		},
 	}
 
@@ -236,8 +236,8 @@ func TestRuleRouterHonorsExplicitProvider(t *testing.T) {
 	if got.Model != "llama3.1:8b" {
 		t.Fatalf("Route() model = %q, want llama3.1:8b", got.Model)
 	}
-	if got.Reason != "explicit_provider" {
-		t.Fatalf("Route() reason = %q, want explicit_provider", got.Reason)
+	if got.Reason != "pinned_provider" {
+		t.Fatalf("Route() reason = %q, want pinned_provider", got.Reason)
 	}
 }
 
@@ -263,8 +263,8 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 	if got.Provider != "openai" {
 		t.Fatalf("Route() provider = %q, want openai", got.Provider)
 	}
-	if got.Reason != "default_model" {
-		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
+	if got.Reason != "provider_default_model" {
+		t.Fatalf("Route() reason = %q, want provider_default_model", got.Reason)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestRuleRouterFallbacksUseAlphabeticalProviderOrder(t *testing.T) {
 	)
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
-	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
+	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "provider_default_model"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
 	if len(fallbacks) < 2 {
 		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
@@ -289,7 +289,7 @@ func TestRuleRouterFallbacksUseAlphabeticalProviderOrder(t *testing.T) {
 	if fallbacks[0].Model != "claude-sonnet" {
 		t.Fatalf("Fallbacks()[0] model = %q, want claude-sonnet", fallbacks[0].Model)
 	}
-	if fallbacks[0].Reason != "default_model_local_first_failover" {
+	if fallbacks[0].Reason != "provider_default_model_failover" {
 		t.Fatalf("Fallbacks()[0] reason = %q, want failover reason", fallbacks[0].Reason)
 	}
 }
@@ -305,7 +305,7 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{
 		Scope: types.RequestScope{ProviderHint: "ollama"},
-	}, types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "explicit_provider"})
+	}, types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "pinned_provider"})
 	if len(fallbacks) != 0 {
 		t.Fatalf("Fallbacks() count = %d, want 0 for explicit provider", len(fallbacks))
 	}
@@ -330,8 +330,8 @@ func TestRuleRouterSkipsDegradedAlphabeticalProvider(t *testing.T) {
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model" {
-		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
+	if got.Reason != "provider_default_model" {
+		t.Fatalf("Route() reason = %q, want provider_default_model", got.Reason)
 	}
 }
 
@@ -361,8 +361,8 @@ func TestRuleRouterLocalFirstExplicitModelSkipsUnhealthyFallbackProvider(t *test
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "explicit_model" {
-		t.Fatalf("Route() reason = %q, want explicit_model", got.Reason)
+	if got.Reason != "requested_model" {
+		t.Fatalf("Route() reason = %q, want requested_model", got.Reason)
 	}
 }
 
@@ -392,8 +392,8 @@ func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testi
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model" {
-		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
+	if got.Reason != "provider_default_model" {
+		t.Fatalf("Route() reason = %q, want provider_default_model", got.Reason)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestRuleRouterFallbacksSkipDegradedProviders(t *testing.T) {
 
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
-	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
+	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "provider_default_model"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
 	if len(fallbacks) != 1 {
 		t.Fatalf("Fallbacks() count = %d, want 1", len(fallbacks))
@@ -461,8 +461,8 @@ func TestRuleRouterUsesHalfOpenRecoveryWhenNoHealthyAlternativeExists(t *testing
 	if got.Provider != "openai" {
 		t.Fatalf("Route() provider = %q, want openai half_open recovery route", got.Provider)
 	}
-	if got.Reason != "default_model_half_open_recovery" {
-		t.Fatalf("Route() reason = %q, want default_model_half_open_recovery", got.Reason)
+	if got.Reason != "provider_default_model_half_open_recovery" {
+		t.Fatalf("Route() reason = %q, want provider_default_model_half_open_recovery", got.Reason)
 	}
 }
 
@@ -480,7 +480,7 @@ func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
 
 	router := NewRuleRouter("claude-sonnet", catalog.NewRegistryCatalog(registry, tracker))
 
-	current := types.RouteDecision{Provider: "gemini", Model: "gemini-flash", Reason: "default_model"}
+	current := types.RouteDecision{Provider: "gemini", Model: "gemini-flash", Reason: "provider_default_model"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
 	if len(fallbacks) < 2 {
 		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
@@ -491,7 +491,7 @@ func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
 	if fallbacks[1].Provider != "openai" {
 		t.Fatalf("Fallbacks()[1] provider = %q, want half_open openai second", fallbacks[1].Provider)
 	}
-	if fallbacks[1].Reason != "default_model_failover_half_open_recovery" {
+	if fallbacks[1].Reason != "provider_default_model_failover_half_open_recovery" {
 		t.Fatalf("Fallbacks()[1] reason = %q, want half_open recovery failover reason", fallbacks[1].Reason)
 	}
 }

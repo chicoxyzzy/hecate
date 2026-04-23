@@ -584,7 +584,7 @@ func TestChatCompletionsFailsOverToConfiguredProvider(t *testing.T) {
 	if got := response.Header().Get("X-Runtime-Retries"); got != "0" {
 		t.Fatalf("X-Runtime-Retries = %q, want 0", got)
 	}
-	if got := response.Header().Get("X-Runtime-Route-Reason"); got != "default_model_failover" {
+	if got := response.Header().Get("X-Runtime-Route-Reason"); got != "provider_default_model_failover" {
 		t.Fatalf("X-Runtime-Route-Reason = %q, want failover reason", got)
 	}
 	if localProvider.CallCount() != 1 {
@@ -665,8 +665,8 @@ func TestChatCompletionsSkipsDegradedProviderAfterTransientFailures(t *testing.T
 	if got := second.Header().Get("X-Runtime-Provider"); got != "openai" {
 		t.Fatalf("second X-Runtime-Provider = %q, want openai", got)
 	}
-	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model" {
-		t.Fatalf("second X-Runtime-Route-Reason = %q, want default_model", got)
+	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "provider_default_model" {
+		t.Fatalf("second X-Runtime-Route-Reason = %q, want provider_default_model", got)
 	}
 	if localProvider.CallCount() != 1 {
 		t.Fatalf("local provider call count = %d, want 1 because degraded provider should be skipped", localProvider.CallCount())

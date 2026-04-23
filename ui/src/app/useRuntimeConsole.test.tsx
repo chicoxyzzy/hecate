@@ -260,7 +260,7 @@ describe("useRuntimeConsole", () => {
               "X-Span-Id": "span-123",
               "X-Runtime-Provider": "openai",
               "X-Runtime-Provider-Kind": "cloud",
-              "X-Runtime-Route-Reason": "explicit_model",
+              "X-Runtime-Route-Reason": "requested_model",
               "X-Runtime-Requested-Model": "gpt-4o-mini",
               "X-Runtime-Model": "gpt-4o-mini",
               "X-Runtime-Cache": "false",
@@ -284,7 +284,7 @@ describe("useRuntimeConsole", () => {
               final_provider: "openai",
               final_provider_kind: "cloud",
               final_model: "gpt-4o-mini",
-              final_reason: "default_model",
+              final_reason: "provider_default_model",
               candidates: [
                 {
                   provider: "openai",

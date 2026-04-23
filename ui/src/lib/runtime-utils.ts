@@ -75,20 +75,41 @@ export function describeRouteReason(reason?: string): string {
     return "No route reason";
   }
 
-  return reason
+  const suffixes: string[] = [];
+  let base = reason;
+  if (base.endsWith("_half_open_recovery")) {
+    base = base.slice(0, -"_half_open_recovery".length);
+    suffixes.push("recovery probe");
+  }
+  if (base.endsWith("_degraded")) {
+    base = base.slice(0, -"_degraded".length);
+    suffixes.push("degraded provider");
+  }
+  if (base.endsWith("_failover")) {
+    base = base.slice(0, -"_failover".length);
+    suffixes.push("after failover");
+  }
+
+  const labels: Record<string, string> = {
+    global_default_model: "Global default model",
+    pinned_provider: "Pinned provider",
+    pinned_provider_model: "Pinned provider and model",
+    provider_default_model: "Provider default model",
+    requested_model: "Requested model",
+  };
+
+  const label = labels[base] ?? titleizeIdentifier(base);
+  if (suffixes.length === 0) {
+    return label;
+  }
+  return `${label} ${suffixes.join(", ")}`;
+}
+
+function titleizeIdentifier(value: string): string {
+  return value
     .split("_")
-    .map((part) => {
-      switch (part) {
-        case "local":
-          return "local";
-        case "first":
-          return "first";
-        case "failover":
-          return "failover";
-        default:
-          return part.charAt(0).toUpperCase() + part.slice(1);
-      }
-    })
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 

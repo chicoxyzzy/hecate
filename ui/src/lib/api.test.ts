@@ -84,7 +84,7 @@ describe("api client", () => {
             "X-Span-Id": "span-123",
             "X-Runtime-Provider": "openai",
             "X-Runtime-Provider-Kind": "cloud",
-            "X-Runtime-Route-Reason": "explicit_model",
+            "X-Runtime-Route-Reason": "requested_model",
             "X-Runtime-Requested-Model": "gpt-4o-mini",
             "X-Runtime-Model": "gpt-4o-mini",
             "X-Runtime-Cache": "false",
@@ -115,7 +115,7 @@ describe("api client", () => {
     expect(result.headers.traceId).toBe("trace-123");
     expect(result.headers.spanId).toBe("span-123");
     expect(result.headers.provider).toBe("openai");
-    expect(result.headers.routeReason).toBe("explicit_model");
+    expect(result.headers.routeReason).toBe("requested_model");
     expect(result.headers.cacheType).toBe("false");
     expect(result.headers.semanticStrategy).toBe("postgres_pgvector");
     expect(result.headers.semanticIndex).toBe("hnsw");

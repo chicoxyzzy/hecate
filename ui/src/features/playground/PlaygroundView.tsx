@@ -225,7 +225,7 @@ export function PlaygroundView({ state, actions }: Props) {
 
               <div className="action-row">
                 <ToolbarButton disabled={state.loading || state.chatLoading || !state.message.trim()} tone="primary" type="submit">
-                  {state.loading ? "Loading…" : state.chatLoading ? "Running request..." : "Run through Hecate"}
+                  {state.loading ? "Loading…" : state.chatLoading ? "Sending..." : "Send"}
                 </ToolbarButton>
                 <StatusPill label={state.activeChatSession ? `Session: ${state.activeChatSession.title}` : "No active session"} tone="neutral" />
                 <StatusPill label={state.providerFilter === "auto" ? "Route mode: auto" : `Pinned: ${state.providerFilter}`} tone="neutral" />

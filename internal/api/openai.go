@@ -17,8 +17,8 @@ type OpenAIChatCompletionRequest struct {
 }
 
 type OpenAITool struct {
-	Type     string              `json:"type"`
-	Function OpenAIToolFunction  `json:"function"`
+	Type     string             `json:"type"`
+	Function OpenAIToolFunction `json:"function"`
 }
 
 type OpenAIToolFunction struct {

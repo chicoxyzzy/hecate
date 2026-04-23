@@ -46,7 +46,7 @@ describe("PlaygroundView", () => {
     expect(screen.getByRole("option", { name: "anthropic (not configured)" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "lmstudio (not configured, default http://127.0.0.1:1234/v1)" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Auto (route default)" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Run through Hecate/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
   it("shows provider-scoped models when a provider is pinned", () => {
@@ -97,7 +97,7 @@ describe("PlaygroundView", () => {
             spanId: "span-1",
             provider: "openai",
             providerKind: "cloud",
-            routeReason: "default_model_local_first_failover",
+            routeReason: "provider_default_model_failover",
             requestedModel: "gpt-4o-mini",
             resolvedModel: "gpt-4o-mini",
             cache: "false",
@@ -114,14 +114,14 @@ describe("PlaygroundView", () => {
             final_provider: "openai",
             final_provider_kind: "cloud",
             final_model: "gpt-4o-mini",
-            final_reason: "default_model_local_first_failover",
+            final_reason: "provider_default_model_failover",
             fallback_from: "ollama",
             candidates: [
               {
                 provider: "ollama",
                 provider_kind: "local",
                 model: "llama3.1:8b",
-                reason: "default_model_local_first",
+                reason: "provider_default_model",
                 outcome: "denied",
                 skip_reason: "route_denied",
                 health_status: "open",
@@ -131,7 +131,7 @@ describe("PlaygroundView", () => {
                 provider: "openai",
                 provider_kind: "cloud",
                 model: "gpt-4o-mini",
-                reason: "default_model_local_first_failover",
+                reason: "provider_default_model_failover",
                 outcome: "selected",
                 health_status: "half_open",
                 estimated_usd: "0.000012",
@@ -172,7 +172,7 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByText("gateway.request")).toBeInTheDocument();
     expect(screen.getAllByText("router.selected").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Default Model local first failover").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Provider default model after failover").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Recovered via half-open provider probe").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Recovery probe").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Circuit open").length).toBeGreaterThan(0);

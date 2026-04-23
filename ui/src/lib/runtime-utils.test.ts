@@ -34,7 +34,7 @@ const semanticHeaders: RuntimeHeaders = {
   spanId: "span-1",
   provider: "ollama",
   providerKind: "local",
-  routeReason: "default_model_local_first",
+  routeReason: "provider_default_model",
   requestedModel: "llama3.1:8b",
   resolvedModel: "llama3.1:8b",
   cache: "true",
@@ -90,7 +90,7 @@ describe("runtime-utils", () => {
   });
 
   it("formats route and provider diagnostics", () => {
-    expect(describeRouteReason("default_model_local_first_failover")).toBe("Default Model local first failover");
+    expect(describeRouteReason("provider_default_model_failover")).toBe("Provider default model after failover");
     expect(findProvider(providers, "ollama")).toEqual(providers[1]);
     expect(providerStatusTone(providers[1])).toBe("danger");
     expect(providerStatusTone(providers[0])).toBe("healthy");

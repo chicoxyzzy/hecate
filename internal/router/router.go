@@ -138,9 +138,9 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 	}
 
 	routedModel := model
-	reason := "explicit_provider"
+	reason := "pinned_provider"
 	if req.Model != "" {
-		reason = "explicit_provider_model"
+		reason = "pinned_provider_model"
 		if !supportsModel(entry, model) {
 			return types.RouteDecision{}, fmt.Errorf("provider %q does not support explicit model %q", explicitProvider, model)
 		}
@@ -167,7 +167,7 @@ func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) 
 		if !isRoutableCandidate(entry, model) {
 			continue
 		}
-		candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model"))
+		candidates = append(candidates, newRouteCandidate(entry, model, "requested_model"))
 	}
 	return orderCandidates(dedupeCandidates(candidates))
 }
@@ -181,11 +181,11 @@ func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []rout
 		}
 
 		if providerModel := entry.DefaultModel; providerModel != "" {
-			candidates = append(candidates, newRouteCandidate(entry, providerModel, "default_model"))
+			candidates = append(candidates, newRouteCandidate(entry, providerModel, "provider_default_model"))
 			continue
 		}
 		if supportsModel(entry, model) {
-			candidates = append(candidates, newRouteCandidate(entry, model, "default_model"))
+			candidates = append(candidates, newRouteCandidate(entry, model, "global_default_model"))
 		}
 	}
 
