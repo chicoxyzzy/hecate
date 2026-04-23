@@ -178,8 +178,7 @@ func (p *OpenAICompatibleProvider) Capabilities(ctx context.Context) (Capabiliti
 			slog.String("gen_ai.provider.name", p.Name()),
 			slog.Any("error", err),
 		)
-		fallback := p.staticCapabilities("config_fallback")
-		return fallback, err
+		return p.staticCapabilities("config_fallback"), nil
 	}
 
 	p.mu.Lock()
@@ -330,9 +329,16 @@ func (p *OpenAICompatibleProvider) discoverCapabilities(ctx context.Context) (Ca
 	}, nil
 }
 
+func (p *OpenAICompatibleProvider) Validate() error {
+	if p.config.APIKey == "" && p.Kind() != KindLocal && !p.config.StubMode {
+		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	}
+	return nil
+}
+
 func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error) {
-	if p.config.APIKey == "" && p.Kind() != KindLocal {
-		return nil, fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	if err := p.Validate(); err != nil {
+		return nil, err
 	}
 
 	wireReq := openAIChatCompletionRequest{
@@ -468,8 +474,8 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 }
 
 func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error {
-	if p.config.APIKey == "" && p.Kind() != KindLocal {
-		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	if err := p.Validate(); err != nil {
+		return err
 	}
 
 	wireReq := openAIChatCompletionRequest{

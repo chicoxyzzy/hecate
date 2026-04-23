@@ -154,7 +154,7 @@ export function PlaygroundView({ state, actions }: Props) {
           <Surface tone="strong">
             <form className="stack-lg" onSubmit={(event) => void actions.submitChat(event)}>
               <div className="form-grid form-grid--triple">
-                <SelectField label="Provider route" onChange={actions.setProviderFilter} value={state.providerFilter}>
+                <SelectField disabled={state.loading} label="Provider route" onChange={actions.setProviderFilter} value={state.providerFilter}>
                   <option value="auto">Auto-select</option>
                   {state.localProviders.length > 0 ? (
                     <optgroup label="Local">
@@ -176,8 +176,8 @@ export function PlaygroundView({ state, actions }: Props) {
                   ) : null}
                 </SelectField>
 
-                <SelectField label="Model" onChange={actions.setModel} value={state.model}>
-                  <option value="">Select a model</option>
+                <SelectField disabled={state.loading} label="Model" onChange={actions.setModel} value={state.model}>
+                  <option value="">{state.loading ? "Loading models…" : "Select a model"}</option>
                   {state.providerFilter === "auto" ? (
                     <>
                       {state.localModels.length > 0 ? (
@@ -227,8 +227,8 @@ export function PlaygroundView({ state, actions }: Props) {
               {state.chatError ? <InlineNotice message={state.chatError} tone="error" /> : null}
 
               <div className="action-row">
-                <ToolbarButton disabled={state.chatLoading || !state.model || !state.message.trim()} tone="primary" type="submit">
-                  {state.chatLoading ? "Running request..." : "Run through Hecate"}
+                <ToolbarButton disabled={state.loading || state.chatLoading || !state.model || !state.message.trim()} tone="primary" type="submit">
+                  {state.loading ? "Loading…" : state.chatLoading ? "Running request..." : "Run through Hecate"}
                 </ToolbarButton>
                 <StatusPill label={state.activeChatSession ? `Session: ${state.activeChatSession.title}` : "No active session"} tone="neutral" />
                 <StatusPill label={state.providerFilter === "auto" ? "Route mode: auto" : `Pinned: ${state.providerFilter}`} tone="neutral" />

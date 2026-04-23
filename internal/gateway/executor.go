@@ -201,9 +201,16 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrHecateProviderLatencyMS: latency.Milliseconds(),
 			})
 			if e.healthTracker != nil {
+				// Only count retryable errors (timeouts, 5xx) against provider health.
+				// Non-retryable errors (auth failures, bad requests) mean the provider
+				// is reachable — they must not trip the circuit breaker.
+				var healthErr error
+				if providers.IsRetryableError(err) {
+					healthErr = err
+				}
 				e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{
 					Duration: latency,
-					Error:    err,
+					Error:    healthErr,
 				})
 			}
 

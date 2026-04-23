@@ -34,6 +34,12 @@ type Streamer interface {
 	ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error
 }
 
+// Validator is an optional interface for providers to surface configuration problems
+// (e.g. missing API key) before any response bytes are written.
+type Validator interface {
+	Validate() error
+}
+
 type Capabilities struct {
 	Name            string
 	Kind            Kind

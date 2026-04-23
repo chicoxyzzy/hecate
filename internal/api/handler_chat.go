@@ -113,19 +113,14 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Connection", "keep-alive")
-
-	meta, err := h.service.HandleChatStream(ctx, req, flushWriter{w, flusher})
+	// Route first — no bytes written yet, so errors can still be JSON.
+	handle, streamCtx, err := h.service.RouteForStream(ctx, req)
 	if err != nil {
-		telemetry.Error(h.logger, ctx, "gen_ai.gateway.stream.failed",
-			slog.String("event.name", "gen_ai.gateway.stream.failed"),
+		telemetry.Error(h.logger, ctx, "gen_ai.gateway.stream.route_failed",
+			slog.String("event.name", "gen_ai.gateway.stream.route_failed"),
 			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
 			slog.Any("error", err),
 		)
-		// Headers already sent; write an SSE error event.
 		statusCode := http.StatusInternalServerError
 		if gateway.IsClientError(err) {
 			statusCode = http.StatusBadRequest
@@ -139,16 +134,37 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 			statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
 			errMsg = upstreamErr.Message
 		}
-		// If nothing was written yet we can still set the status code.
-		w.WriteHeader(statusCode)
-		fmt.Fprintf(w, "data: {\"error\":{\"message\":%q}}\n\ndata: [DONE]\n\n",
-			errMsg)
-		flusher.Flush()
+		WriteError(w, statusCode, errCodeGatewayError, errMsg)
 		return
 	}
 
-	// Set metadata headers after stream completes (they go into trailers or are just informational here).
-	_ = meta
+	// Routing succeeded — now commit to SSE.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Runtime-Provider", handle.Metadata.Provider)
+	w.Header().Set("X-Runtime-Provider-Kind", handle.Metadata.ProviderKind)
+	w.Header().Set("X-Runtime-Route-Reason", handle.Metadata.RouteReason)
+	w.Header().Set("X-Trace-Id", handle.Metadata.TraceID)
+	w.Header().Set("X-Span-Id", handle.Metadata.SpanID)
+	w.WriteHeader(http.StatusOK)
+
+	if err := handle.Execute(flushWriter{w, flusher}); err != nil {
+		telemetry.Error(h.logger, streamCtx, "gen_ai.gateway.stream.failed",
+			slog.String("event.name", "gen_ai.gateway.stream.failed"),
+			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
+			slog.Any("error", err),
+		)
+		// Headers already sent; write a terminal SSE error event.
+		errMsg := err.Error()
+		var upstreamErr *providers.UpstreamError
+		if errors.As(err, &upstreamErr) {
+			errMsg = upstreamErr.Message
+		}
+		fmt.Fprintf(w, "data: {\"error\":{\"message\":%q}}\n\ndata: [DONE]\n\n", errMsg)
+		flusher.Flush()
+	}
 }
 
 type flushWriter struct {

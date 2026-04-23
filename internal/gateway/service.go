@@ -411,17 +411,28 @@ func withResolvedModel(req types.ChatRequest, model string) types.ChatRequest {
 	return req
 }
 
-// HandleChatStream runs governor/routing checks then streams the response to w
-// in OpenAI SSE format. Caching and session recording are skipped.
-// The returned ResponseMetadata contains route info; cost is unavailable until stream end.
-func (s *Service) HandleChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) (ResponseMetadata, error) {
+// StreamHandle holds everything needed to execute a stream after routing succeeds.
+type StreamHandle struct {
+	Metadata ResponseMetadata
+	stream   func(w io.Writer) error
+}
+
+// Execute writes the SSE stream to w.
+func (h *StreamHandle) Execute(w io.Writer) error {
+	return h.stream(w)
+}
+
+// RouteForStream runs governor/routing checks and returns a StreamHandle ready to
+// write to any io.Writer. This lets the HTTP handler set response headers and status
+// between routing and streaming, so errors during routing still produce JSON responses.
+func (s *Service) RouteForStream(ctx context.Context, req types.ChatRequest) (*StreamHandle, context.Context, error) {
 	trace := s.tracer.Start(req.RequestID)
-	defer trace.Finalize()
 	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
 
 	plan, err := s.buildExecutionPlan(ctx, trace, req)
 	if err != nil {
-		return ResponseMetadata{}, err
+		trace.Finalize()
+		return nil, ctx, err
 	}
 
 	var p providers.Provider
@@ -429,12 +440,21 @@ func (s *Service) HandleChatStream(ctx context.Context, req types.ChatRequest, w
 		p, _ = s.providers.Get(plan.Route.Provider)
 	}
 	if p == nil {
-		return ResponseMetadata{}, fmt.Errorf("provider %q not found", plan.Route.Provider)
+		trace.Finalize()
+		return nil, ctx, fmt.Errorf("provider %q not found", plan.Route.Provider)
 	}
 
 	streamer, ok := p.(providers.Streamer)
 	if !ok {
-		return ResponseMetadata{}, fmt.Errorf("provider %q does not support streaming", plan.Route.Provider)
+		trace.Finalize()
+		return nil, ctx, fmt.Errorf("provider %q does not support streaming", plan.Route.Provider)
+	}
+
+	if v, ok := p.(providers.Validator); ok {
+		if err := v.Validate(); err != nil {
+			trace.Finalize()
+			return nil, ctx, fmt.Errorf("%w: %v", errClient, err)
+		}
 	}
 
 	streamReq := plan.Request
@@ -449,10 +469,14 @@ func (s *Service) HandleChatStream(ctx context.Context, req types.ChatRequest, w
 		SpanID:       trace.RootSpanID(),
 	}
 
-	if err := streamer.ChatStream(ctx, streamReq, w); err != nil {
-		return meta, err
+	handle := &StreamHandle{
+		Metadata: meta,
+		stream: func(w io.Writer) error {
+			defer trace.Finalize()
+			return streamer.ChatStream(ctx, streamReq, w)
+		},
 	}
-	return meta, nil
+	return handle, ctx, nil
 }
 
 func fallbackFrom(initialProvider, finalProvider string) string {

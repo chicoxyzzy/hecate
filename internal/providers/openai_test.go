@@ -240,8 +240,8 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	provider.httpClient.Transport = transport
 
 	caps, err := provider.Capabilities(context.Background())
-	if err == nil {
-		t.Fatal("Capabilities() error = nil, want discovery failure")
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v, want nil (fallback to config)", err)
 	}
 	if caps.DefaultModel != "llama3" {
 		t.Fatalf("default model = %q, want llama3", caps.DefaultModel)

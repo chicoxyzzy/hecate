@@ -184,7 +184,7 @@ func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, err
 			slog.String("gen_ai.provider.name", p.Name()),
 			slog.Any("error", err),
 		)
-		return p.staticCapabilities("config_fallback"), err
+		return p.staticCapabilities("config_fallback"), nil
 	}
 
 	p.mu.Lock()
@@ -288,9 +288,16 @@ func (p *AnthropicProvider) discoverCapabilities(ctx context.Context) (Capabilit
 	}, nil
 }
 
+func (p *AnthropicProvider) Validate() error {
+	if p.config.APIKey == "" && p.Kind() != KindLocal && !p.config.StubMode {
+		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	}
+	return nil
+}
+
 func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error) {
-	if p.config.APIKey == "" && p.Kind() != KindLocal {
-		return nil, fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	if err := p.Validate(); err != nil {
+		return nil, err
 	}
 
 	system, messages := anthropicMessagesFromTypes(req.Messages)
@@ -519,8 +526,8 @@ func anthropicToolChoice(choice json.RawMessage) json.RawMessage {
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatRequest, w io.Writer) error {
-	if p.config.APIKey == "" && p.Kind() != KindLocal {
-		return fmt.Errorf("api key is required for cloud provider %s when stub mode is disabled", p.Name())
+	if err := p.Validate(); err != nil {
+		return err
 	}
 
 	system, messages := anthropicMessagesFromTypes(req.Messages)

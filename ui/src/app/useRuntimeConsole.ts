@@ -91,7 +91,7 @@ export function useRuntimeConsole() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [model, setModel] = useState("");
   const [tenant, setTenant] = useState("team-a");
   const [message, setMessage] = useState(defaultPrompt);
   const [chatLoading, setChatLoading] = useState(false);
@@ -237,6 +237,21 @@ export function useRuntimeConsole() {
     }
     setTenant((current) => (current === session.tenant ? current : session.tenant));
   }, [session.kind, session.tenant]);
+
+  useEffect(() => {
+    if (model !== "" || models.length === 0) {
+      return;
+    }
+    const scopedModels = providerFilter === "auto" ? models : models.filter((m) => m.metadata?.provider === providerFilter);
+    if (scopedModels.length === 0) return;
+    // Prefer local providers (no API key needed), then healthy cloud, then any.
+    const healthyProviderNames = new Set(providers.filter((p) => p.healthy).map((p) => p.name));
+    const pick =
+      scopedModels.find((m) => m.metadata?.provider_kind === "local") ??
+      scopedModels.find((m) => healthyProviderNames.has(m.metadata?.provider ?? "")) ??
+      scopedModels[0];
+    if (pick) setModel(pick.id);
+  }, [model, models, providers, providerFilter]);
 
   useEffect(() => {
     if (providerFilter !== "auto" && session.allowedProviders.length > 0 && !session.allowedProviders.includes(providerFilter)) {

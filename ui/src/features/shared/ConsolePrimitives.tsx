@@ -224,15 +224,17 @@ export function SelectField({
   value,
   onChange,
   children,
+  disabled,
 }: PropsWithChildren<{
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }>) {
   return (
     <label className="field">
       <span className="field__label">{label}</span>
-      <select className="field__input" onChange={(event) => onChange(event.target.value)} value={value}>
+      <select className="field__input" disabled={disabled} onChange={(event) => onChange(event.target.value)} value={value}>
         {children}
       </select>
     </label>
