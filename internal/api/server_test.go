@@ -2123,11 +2123,81 @@ func TestTaskStartShellExecutor(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if started.Data.Status != "completed" {
-		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
 	}
-	if started.Data.ArtifactCount != 2 {
-		t.Fatalf("artifact_count = %d, want 2", started.Data.ArtifactCount)
+	if started.Data.ApprovalCount != 1 {
+		t.Fatalf("approval_count = %d, want 1", started.Data.ApprovalCount)
+	}
+
+	approvalsRecorder := httptest.NewRecorder()
+	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
+	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
+	if approvalsRecorder.Code != http.StatusOK {
+		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
+	}
+
+	var approvals TaskApprovalsResponse
+	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(approvals.Data) != 1 {
+		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
+	}
+	if approvals.Data[0].Status != "pending" {
+		t.Fatalf("approval status = %q, want pending", approvals.Data[0].Status)
+	}
+	if approvals.Data[0].Kind != "shell_command" {
+		t.Fatalf("approval kind = %q, want shell_command", approvals.Data[0].Kind)
+	}
+
+	approvalRecorder := httptest.NewRecorder()
+	approvalRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID, nil)
+	handler.ServeHTTP(approvalRecorder, approvalRequest)
+	if approvalRecorder.Code != http.StatusOK {
+		t.Fatalf("approval detail status = %d, want %d, body=%s", approvalRecorder.Code, http.StatusOK, approvalRecorder.Body.String())
+	}
+
+	var approval TaskApprovalResponse
+	if err := json.NewDecoder(bytes.NewReader(approvalRecorder.Body.Bytes())).Decode(&approval); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if approval.Data.ID != approvals.Data[0].ID {
+		t.Fatalf("approval id = %q, want %q", approval.Data.ID, approvals.Data[0].ID)
+	}
+
+	resolveRecorder := httptest.NewRecorder()
+	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"approve","note":"looks safe"}`))
+	resolveRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(resolveRecorder, resolveRequest)
+	if resolveRecorder.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
+	}
+
+	var resolved TaskApprovalResponse
+	if err := json.NewDecoder(bytes.NewReader(resolveRecorder.Body.Bytes())).Decode(&resolved); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if resolved.Data.Status != "approved" {
+		t.Fatalf("approval status = %q, want approved", resolved.Data.Status)
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID, nil)
+	handler.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
+	}
+
+	var completedRun TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(runRecorder.Body.Bytes())).Decode(&completedRun); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if completedRun.Data.Status != "completed" {
+		t.Fatalf("run status after approval = %q, want completed", completedRun.Data.Status)
+	}
+	if completedRun.Data.ArtifactCount != 2 {
+		t.Fatalf("artifact_count = %d, want 2", completedRun.Data.ArtifactCount)
 	}
 
 	stepsRecorder := httptest.NewRecorder()
@@ -2313,7 +2383,7 @@ func TestTaskStartGitExecutor(t *testing.T) {
 	}
 }
 
-func TestTaskStartShellExecutorRespectsReadOnlyPolicy(t *testing.T) {
+func TestTaskApprovedShellExecutorRespectsReadOnlyPolicy(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -2346,8 +2416,46 @@ func TestTaskStartShellExecutorRespectsReadOnlyPolicy(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if started.Data.Status != "failed" {
-		t.Fatalf("run status = %q, want failed", started.Data.Status)
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
+	}
+
+	approvalsRecorder := httptest.NewRecorder()
+	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
+	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
+	if approvalsRecorder.Code != http.StatusOK {
+		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
+	}
+
+	var approvals TaskApprovalsResponse
+	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(approvals.Data) != 1 {
+		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
+	}
+
+	resolveRecorder := httptest.NewRecorder()
+	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"approve"}`))
+	resolveRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(resolveRecorder, resolveRequest)
+	if resolveRecorder.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID, nil)
+	handler.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
+	}
+
+	var failedRun TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(runRecorder.Body.Bytes())).Decode(&failedRun); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if failedRun.Data.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", failedRun.Data.Status)
 	}
 
 	stepsRecorder := httptest.NewRecorder()

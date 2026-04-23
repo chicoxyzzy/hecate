@@ -241,6 +241,204 @@ func (h *Handler) HandleStartTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleTaskApprovals(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+
+	approvals, err := h.taskStore.ListApprovals(ctx, task.ID)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.tasks.approvals.list.failed",
+			slog.String("event.name", "gateway.tasks.approvals.list.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	items := make([]TaskApprovalItem, 0, len(approvals))
+	for _, approval := range approvals {
+		items = append(items, renderTaskApproval(approval))
+	}
+	WriteJSON(w, http.StatusOK, TaskApprovalsResponse{
+		Object: "task_approvals",
+		Data:   items,
+	})
+}
+
+func (h *Handler) HandleTaskApproval(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	approvalID := strings.TrimSpace(r.PathValue("approval_id"))
+	if approvalID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "approval id is required")
+		return
+	}
+
+	approval, found, err := h.taskStore.GetApproval(ctx, task.ID, approvalID)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.tasks.approvals.get.failed",
+			slog.String("event.name", "gateway.tasks.approvals.get.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task approval not found")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, TaskApprovalResponse{
+		Object: "task_approval",
+		Data:   renderTaskApproval(approval),
+	})
+}
+
+func (h *Handler) HandleResolveTaskApproval(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+	if h.taskRunner == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task runner is not configured")
+		return
+	}
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	approvalID := strings.TrimSpace(r.PathValue("approval_id"))
+	if approvalID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "approval id is required")
+		return
+	}
+
+	approval, found, err := h.taskStore.GetApproval(ctx, task.ID, approvalID)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.tasks.approvals.resolve.failed",
+			slog.String("event.name", "gateway.tasks.approvals.resolve.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task approval not found")
+		return
+	}
+	if approval.Status != "pending" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task approval is not pending")
+		return
+	}
+
+	var req ResolveTaskApprovalRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	decision, ok := normalizeApprovalDecision(req.Decision)
+	if !ok {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "decision must be approve or reject")
+		return
+	}
+
+	now := time.Now().UTC()
+	approval.Status = decision
+	approval.ResolutionNote = strings.TrimSpace(req.Note)
+	approval.ResolvedBy = principal.Name
+	approval.ResolvedAt = now
+	approval, err = h.taskStore.UpdateApproval(ctx, approval)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	switch decision {
+	case "approved":
+		result, err := h.taskRunner.ResumeTaskAfterApproval(ctx, task, approval, newOpaqueTaskResourceID)
+		if err != nil {
+			telemetry.Error(h.logger, ctx, "gateway.tasks.approvals.resume.failed",
+				slog.String("event.name", "gateway.tasks.approvals.resume.failed"),
+				slog.Any("error", err),
+			)
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+		if result.TraceID != "" {
+			w.Header().Set("X-Trace-Id", result.TraceID)
+		}
+		if result.SpanID != "" {
+			w.Header().Set("X-Span-Id", result.SpanID)
+		}
+	case "rejected":
+		run, found, err := h.taskStore.GetRun(ctx, task.ID, approval.RunID)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+		if !found {
+			WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
+			return
+		}
+		run.Status = "cancelled"
+		run.LastError = "approval rejected"
+		run.FinishedAt = now
+		run.OtelStatusCode = "error"
+		run.OtelStatusMessage = "approval rejected"
+		if _, err := h.taskStore.UpdateRun(ctx, run); err != nil {
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+
+		task.Status = "cancelled"
+		task.LatestRunID = run.ID
+		if task.StartedAt.IsZero() {
+			task.StartedAt = run.StartedAt
+		}
+		task.FinishedAt = now
+		task.UpdatedAt = now
+		task.LastError = "approval rejected"
+		if requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx)); requestID != "" {
+			task.LatestRequestID = requestID
+		}
+		if _, err := h.taskStore.UpdateTask(ctx, task); err != nil {
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, TaskApprovalResponse{
+		Object: "task_approval",
+		Data:   renderTaskApproval(approval),
+	})
+}
+
 func (h *Handler) HandleTaskRuns(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAny(w, r)
 	if !ok {
@@ -618,6 +816,31 @@ func renderTaskStep(step types.TaskStep) TaskStepItem {
 	return item
 }
 
+func renderTaskApproval(approval types.TaskApproval) TaskApprovalItem {
+	item := TaskApprovalItem{
+		ID:             approval.ID,
+		TaskID:         approval.TaskID,
+		RunID:          approval.RunID,
+		StepID:         approval.StepID,
+		Kind:           approval.Kind,
+		Status:         approval.Status,
+		Reason:         approval.Reason,
+		RequestedBy:    approval.RequestedBy,
+		ResolvedBy:     approval.ResolvedBy,
+		ResolutionNote: approval.ResolutionNote,
+		RequestID:      approval.RequestID,
+		TraceID:        approval.TraceID,
+		SpanID:         approval.SpanID,
+	}
+	if !approval.CreatedAt.IsZero() {
+		item.CreatedAt = approval.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !approval.ResolvedAt.IsZero() {
+		item.ResolvedAt = approval.ResolvedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return item
+}
+
 func renderTaskArtifact(artifact types.TaskArtifact) TaskArtifactItem {
 	item := TaskArtifactItem{
 		ID:          artifact.ID,
@@ -686,6 +909,17 @@ func newTaskStepID() string {
 
 func newTaskArtifactID() string {
 	return newOpaqueTaskResourceID("artifact")
+}
+
+func normalizeApprovalDecision(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "approve", "approved":
+		return "approved", true
+	case "reject", "rejected", "deny", "denied":
+		return "rejected", true
+	default:
+		return "", false
+	}
 }
 
 func newOpaqueTaskResourceID(prefix string) string {

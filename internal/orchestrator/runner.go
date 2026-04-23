@@ -145,6 +145,9 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		TraceID:    trace.TraceID,
 		RootSpanID: trace.RootSpanID(),
 	}
+	if r.approvalRequiredForTask(task) {
+		run.Status = "awaiting_approval"
+	}
 	run, err = r.store.CreateRun(ctx, run)
 	if err != nil {
 		trace.Record("orchestrator.run.failed", map[string]any{
@@ -169,6 +172,107 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		telemetry.AttrGenAIRequestModel: run.Model,
 	})
 
+	if r.approvalRequiredForTask(task) {
+		if _, err := r.createApprovalForTask(ctx, trace, task, run, requestID, now, idgen); err != nil {
+			return nil, err
+		}
+		run.ApprovalCount = 1
+		run, err = r.store.UpdateRun(ctx, run)
+		if err != nil {
+			return nil, err
+		}
+
+		task.LatestRunID = run.ID
+		task.Status = "awaiting_approval"
+		if task.StartedAt.IsZero() {
+			task.StartedAt = now
+		}
+		task.FinishedAt = time.Time{}
+		task.UpdatedAt = now
+		task.RootTraceID = trace.TraceID
+		task.LatestTraceID = trace.TraceID
+		task.LatestRequestID = requestID
+		if _, err := r.store.UpdateTask(ctx, task); err != nil {
+			return nil, err
+		}
+
+		return &StartTaskResult{
+			Task:    task,
+			Run:     run,
+			TraceID: trace.TraceID,
+			SpanID:  trace.RootSpanID(),
+		}, nil
+	}
+
+	return r.executeRun(ctx, trace, task, run, requestID, idgen)
+}
+
+func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, approval types.TaskApproval, idgen func(prefix string) string) (*StartTaskResult, error) {
+	if r.store == nil {
+		return nil, fmt.Errorf("task store is not configured")
+	}
+	if idgen == nil {
+		return nil, fmt.Errorf("resource id generator is required")
+	}
+	run, found, err := r.store.GetRun(ctx, task.ID, approval.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("task run %q not found", approval.RunID)
+	}
+	if run.Status != "awaiting_approval" {
+		return nil, fmt.Errorf("task run %q is not awaiting approval", run.ID)
+	}
+
+	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
+	if requestID == "" {
+		requestID = idgen("request")
+	}
+
+	trace := r.tracer.Start(requestID)
+	defer trace.Finalize()
+
+	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
+	now := time.Now().UTC()
+
+	trace.Record("orchestrator.approval.resolved", map[string]any{
+		telemetry.AttrHecatePhase:  "approval",
+		telemetry.AttrHecateResult: telemetry.ResultSuccess,
+		"hecate.task.id":           task.ID,
+		"hecate.run.id":            run.ID,
+		"hecate.approval.id":       approval.ID,
+		"hecate.approval.kind":     approval.Kind,
+		"hecate.approval.status":   approval.Status,
+	})
+
+	run.Status = "running"
+	run.RequestID = requestID
+	run.TraceID = trace.TraceID
+	run.RootSpanID = trace.RootSpanID()
+	if run.StartedAt.IsZero() {
+		run.StartedAt = now
+	}
+	run.LastError = ""
+	run.FinishedAt = time.Time{}
+	if _, err := r.store.UpdateRun(ctx, run); err != nil {
+		return nil, err
+	}
+
+	trace.Record("orchestrator.run.started", map[string]any{
+		telemetry.AttrHecatePhase:       "orchestration",
+		telemetry.AttrHecateResult:      telemetry.ResultSuccess,
+		"hecate.task.id":                task.ID,
+		"hecate.run.id":                 run.ID,
+		"hecate.run.number":             run.Number,
+		"hecate.run.status":             run.Status,
+		telemetry.AttrGenAIRequestModel: run.Model,
+	})
+
+	return r.executeRun(ctx, trace, task, run, requestID, idgen)
+}
+
+func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, idgen func(prefix string) string) (*StartTaskResult, error) {
 	executor := r.executorForTask(task)
 	execution, err := executor.Execute(ctx, ExecutionSpec{
 		Task:       task,
@@ -176,7 +280,7 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		RequestID:  requestID,
 		TraceID:    trace.TraceID,
 		RootSpanID: trace.RootSpanID(),
-		StartedAt:  now,
+		StartedAt:  time.Now().UTC(),
 		NewID:      idgen,
 	})
 	if err != nil {
@@ -257,22 +361,27 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		persistedArtifacts = append(persistedArtifacts, artifact)
 	}
 
+	resultKind := telemetry.ResultSuccess
+	if execution.Status == "failed" {
+		resultKind = telemetry.ResultError
+	}
 	trace.Record("orchestrator.run.finished", map[string]any{
 		telemetry.AttrHecatePhase:  "orchestration",
-		telemetry.AttrHecateResult: telemetry.ResultSuccess,
+		telemetry.AttrHecateResult: resultKind,
 		"hecate.task.id":           task.ID,
 		"hecate.run.id":            run.ID,
 	})
 	trace.Record("orchestrator.task.finished", map[string]any{
 		telemetry.AttrHecatePhase:  "orchestration",
-		telemetry.AttrHecateResult: telemetry.ResultSuccess,
+		telemetry.AttrHecateResult: resultKind,
 		"hecate.task.id":           task.ID,
 	})
 
+	finishedAt := time.Now().UTC()
 	run.Status = firstNonEmpty(execution.Status, "completed")
 	run.StepCount = len(persistedSteps)
 	run.ArtifactCount = len(persistedArtifacts)
-	run.FinishedAt = now
+	run.FinishedAt = finishedAt
 	run.LastError = execution.LastError
 	run.OtelStatusCode = firstNonEmpty(execution.OtelStatusCode, "ok")
 	run.OtelStatusMessage = execution.OtelStatusMessage
@@ -283,10 +392,10 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	task.LatestRunID = run.ID
 	task.Status = run.Status
 	if task.StartedAt.IsZero() {
-		task.StartedAt = now
+		task.StartedAt = run.StartedAt
 	}
-	task.FinishedAt = now
-	task.UpdatedAt = now
+	task.FinishedAt = finishedAt
+	task.UpdatedAt = finishedAt
 	task.RootTraceID = trace.TraceID
 	task.LatestTraceID = trace.TraceID
 	task.LatestRequestID = requestID
@@ -302,6 +411,50 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		TraceID:   trace.TraceID,
 		SpanID:    trace.RootSpanID(),
 	}, nil
+}
+
+func (r *Runner) approvalRequiredForTask(task types.Task) bool {
+	return task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != ""
+}
+
+func (r *Runner) createApprovalForTask(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, createdAt time.Time, idgen func(prefix string) string) (types.TaskApproval, error) {
+	approval := types.TaskApproval{
+		ID:          idgen("approval"),
+		TaskID:      task.ID,
+		RunID:       run.ID,
+		Kind:        "shell_command",
+		Status:      "pending",
+		Reason:      "Shell commands require approval before execution.",
+		RequestedBy: task.User,
+		CreatedAt:   createdAt,
+		RequestID:   requestID,
+		TraceID:     trace.TraceID,
+	}
+	trace.Record("orchestrator.approval.requested", map[string]any{
+		telemetry.AttrHecatePhase:  "approval",
+		telemetry.AttrHecateResult: telemetry.ResultSuccess,
+		"hecate.task.id":           task.ID,
+		"hecate.run.id":            run.ID,
+		"hecate.approval.id":       approval.ID,
+		"hecate.approval.kind":     approval.Kind,
+		"hecate.shell.command":     task.ShellCommand,
+	})
+	approval.SpanID = spanIDByName(trace, "orchestrator.approval")
+	approval, err := r.store.CreateApproval(ctx, approval)
+	if err != nil {
+		trace.Record("orchestrator.approval.failed", map[string]any{
+			telemetry.AttrHecatePhase:     "approval",
+			telemetry.AttrHecateResult:    telemetry.ResultError,
+			telemetry.AttrHecateErrorKind: "approval_create_failed",
+			telemetry.AttrErrorType:       "approval_create_failed",
+			telemetry.AttrErrorMessage:    err.Error(),
+			"hecate.task.id":              task.ID,
+			"hecate.run.id":               run.ID,
+			"hecate.approval.id":          approval.ID,
+		})
+		return types.TaskApproval{}, err
+	}
+	return approval, nil
 }
 
 func firstNonEmpty(values ...string) string {
