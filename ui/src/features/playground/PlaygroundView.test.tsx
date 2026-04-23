@@ -176,7 +176,8 @@ describe("PlaygroundView", () => {
     expect(screen.getAllByText("Recovered via half-open provider probe").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Recovery probe").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Circuit open").length).toBeGreaterThan(0);
-    expect(screen.getByText("Route decision tree")).toBeInTheDocument();
+    expect(screen.getByText("Request receipt")).toBeInTheDocument();
+    expect(screen.getByText("Provider candidates")).toBeInTheDocument();
     expect(screen.getByText("Failover chain")).toBeInTheDocument();
     expect(screen.getByText("Semantic cache")).toBeInTheDocument();
     expect(screen.getAllByText("Semantic lookup miss").length).toBeGreaterThan(0);

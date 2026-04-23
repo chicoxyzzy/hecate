@@ -24,6 +24,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
   const candidateCount = route?.candidates?.length ?? 0;
   const failoverCount = route?.failovers?.length ?? 0;
   const selectedCandidate = route?.candidates?.find((candidate) => candidate.outcome === "selected") ?? null;
+  const skippedCount = route?.candidates?.filter((candidate) => candidate.outcome === "skipped" || candidate.outcome === "denied" || candidate.skip_reason).length ?? 0;
   const healthCounts = countRouteHealthStatuses(route);
   const finalHealth = selectedCandidate?.health_status;
   const finalHealthLabel = finalHealth ? describeHealthStatus(finalHealth) : "No health signal";
@@ -33,7 +34,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
 
   return (
     <div className="stack-md">
-      <ShellSection eyebrow="Runtime decision" title="Routing">
+      <ShellSection eyebrow="Decision" title="Route decision">
         {runtimeHeaders || route ? (
           <div className="stack-md">
             <Surface tone={finalHealthTone === "danger" ? "danger" : "strong"} className="route-summary">
@@ -57,8 +58,8 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
 
                 <div className="route-summary__cluster">
                   <div className="route-summary__metric">
-                    <span>Recovery</span>
-                    <strong>{routeRecovery}</strong>
+                    <span>Fallback</span>
+                    <strong>{failoverCount > 0 ? routeRecovery : "Not used"}</strong>
                   </div>
                   <div className="route-summary__metric">
                     <span>Cache path</span>
@@ -91,21 +92,21 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
                 tone={finalHealthTone === "healthy" ? "healthy" : finalHealthTone === "warning" ? "warning" : "neutral"}
               />
               <MetricTile
-                label="Decision reason"
+                label="Why selected"
                 value={describeRouteReason(route?.final_reason || runtimeHeaders?.routeReason)}
                 detail={runtimeHeaders?.providerKind ? `Provider kind ${runtimeHeaders.providerKind}` : "Provider kind not returned"}
                 tone="neutral"
               />
               <MetricTile
-                label="Attempts"
-                value={runtimeHeaders?.attempts || "1"}
-                detail={`Retries ${runtimeHeaders?.retries || "0"}`}
-                tone={runtimeHeaders?.retries && runtimeHeaders.retries !== "0" ? "warning" : "neutral"}
+                label="Skipped"
+                value={String(skippedCount)}
+                detail={candidateCount > 0 ? `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} inspected` : "No candidate report returned"}
+                tone={skippedCount > 0 ? "warning" : "neutral"}
               />
               <MetricTile
-                label="Estimated cost"
+                label="Final cost"
                 value={formatUsd(runtimeHeaders?.costUsd || "0")}
-                detail={candidateCount > 0 ? `${candidateCount} route candidates inspected` : "No candidate report returned"}
+                detail={selectedCandidate?.estimated_usd ? `Preflight estimate ${formatUsd(selectedCandidate.estimated_usd)}` : "No preflight estimate returned"}
                 tone="neutral"
               />
             </div>
@@ -208,7 +209,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
         )}
       </ShellSection>
 
-      <ShellSection eyebrow="Candidate evaluation" title="Route decision tree">
+      <ShellSection eyebrow="Evaluation" title="Provider candidates">
         {route?.candidates?.length ? (
           <div className="trace-timeline">
             {route.candidates.map((candidate, index) => (
@@ -219,13 +220,19 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
                   <span>candidate {candidate.index ?? index}</span>
                 </div>
                 <strong>{candidate.provider || "unknown provider"} · {candidate.model || "unknown model"}</strong>
-                <p className="body-muted">{describeRouteReason(candidate.reason)}</p>
+                <p className="body-muted">
+                  {candidate.outcome === "selected"
+                    ? `Selected because ${describeRouteReason(candidate.reason).toLowerCase()}.`
+                    : candidate.skip_reason
+                      ? `Skipped: ${candidate.skip_reason}. ${describeRouteReason(candidate.reason)}.`
+                      : describeRouteReason(candidate.reason)}
+                </p>
                 <DefinitionList
                   compact
                   items={[
                     { label: "Provider kind", value: candidate.provider_kind || "unknown" },
                     { label: "Health", value: candidate.health_status ? describeHealthStatus(candidate.health_status) : "No health signal" },
-                    { label: "Estimated", value: candidate.estimated_usd || "$0.00" },
+                    { label: "Preflight cost", value: candidate.estimated_usd ? formatUsd(candidate.estimated_usd) : "$0.00" },
                     { label: "Attempt", value: String(candidate.attempt || 0) },
                     { label: "Retries", value: String(candidate.retry_count || 0) },
                     { label: "Latency", value: candidate.latency_ms ? `${candidate.latency_ms} ms` : "n/a" },

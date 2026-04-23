@@ -1,5 +1,6 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatRelativeCount, formatUsd } from "../../lib/format";
+import { describeRouteReason } from "../../lib/runtime-utils";
 import { EmptyState, MetricTile, ShellSection, StatusPill, Surface, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type Props = {
@@ -42,7 +43,7 @@ export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
             <MetricTile
               detail={state.runtimeHeaders?.provider ? `${state.runtimeHeaders.provider} -> ${state.runtimeHeaders.resolvedModel}` : undefined}
               label="Latest routing"
-              value={state.runtimeHeaders?.routeReason || "Awaiting request"}
+              value={state.runtimeHeaders?.routeReason ? describeRouteReason(state.runtimeHeaders.routeReason) : "Awaiting request"}
             />
           </div>
         </ShellSection>
@@ -98,7 +99,7 @@ export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
                       <dd>{state.runtimeHeaders.resolvedModel || state.runtimeHeaders.requestedModel || state.model || "Not set"}</dd>
                     </div>
                     <div className="definition-list__row">
-                      <dt>Estimated cost</dt>
+                      <dt>Cost</dt>
                       <dd>{formatUsd(state.runtimeHeaders.costUsd)}</dd>
                     </div>
                     <div className="definition-list__row">

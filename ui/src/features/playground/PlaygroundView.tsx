@@ -23,6 +23,11 @@ function formatToolArgs(args: string): string {
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const routeReport = state.traceRoute;
+  const cacheLabel = state.runtimeHeaders?.cache === "true"
+    ? `${state.runtimeHeaders.cacheType || "cache"} hit`
+    : state.runtimeHeaders
+      ? "cache miss"
+      : "no cache data";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const routeProviders = buildProviderRouteOptions(state.providers, state.providerPresets, state.session.allowedProviders);
@@ -323,10 +328,20 @@ export function PlaygroundView({ state, actions }: Props) {
 
             <Surface>
               {state.runtimeHeaders ? (
-                <div className="stack-lg">
+                <div className="request-receipt">
+                  <div className="request-receipt__head">
+                    <div>
+                      <p className="console-eyebrow">Request receipt</p>
+                      <h3 className="request-receipt__title">
+                        {state.runtimeHeaders.provider || "unknown"} · {state.runtimeHeaders.resolvedModel || state.chatResult?.model || "unknown model"}
+                      </h3>
+                    </div>
+                    <StatusPill label={formatUsd(state.runtimeHeaders.costUsd)} tone="warning" />
+                  </div>
+
                   <div className="action-row action-row--wide">
                     <StatusPill label={describeRouteReason(state.runtimeHeaders.routeReason)} tone="neutral" />
-                    <StatusPill label={`cache ${state.runtimeHeaders.cacheType || state.runtimeHeaders.cache || "miss"}`} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
+                    <StatusPill label={cacheLabel} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
                     <StatusPill
                       label={activeProvider ? `${activeProvider.name} ${activeProvider.status}` : routeReport?.final_provider || state.runtimeHeaders.provider || "unknown provider"}
                       tone={providerStatusTone(activeProvider ?? undefined)}
@@ -335,19 +350,20 @@ export function PlaygroundView({ state, actions }: Props) {
                   </div>
 
                   <DefinitionList
+                    compact
                     items={[
                       { label: "Provider", value: state.runtimeHeaders.provider || "unknown" },
-                      { label: "Provider kind", value: state.runtimeHeaders.providerKind || "unknown" },
-                      { label: "Requested model", value: state.runtimeHeaders.requestedModel || state.model || "n/a" },
-                      { label: "Resolved model", value: state.runtimeHeaders.resolvedModel || "n/a" },
-                      { label: "Attempts", value: state.runtimeHeaders.attempts || "1" },
-                      { label: "Retries", value: state.runtimeHeaders.retries || "0" },
-                      { label: "Estimated cost", value: formatUsd(state.runtimeHeaders.costUsd) },
+                      { label: "Model", value: state.runtimeHeaders.resolvedModel || state.runtimeHeaders.requestedModel || state.model || "n/a" },
+                      { label: "Route", value: describeRouteReason(state.runtimeHeaders.routeReason) },
+                      { label: "Attempts", value: `${state.runtimeHeaders.attempts || "1"} attempt(s), ${state.runtimeHeaders.retries || "0"} retries` },
+                      { label: "Cache", value: cacheLabel },
+                      { label: "Request ID", value: <span className="mono-value">{state.runtimeHeaders.requestId || "n/a"}</span> },
+                      { label: "Trace ID", value: <span className="mono-value">{state.runtimeHeaders.traceId || "n/a"}</span> },
                     ]}
                   />
                 </div>
               ) : (
-                <EmptyState title="No metadata" detail="Headers will appear after a response." />
+                <EmptyState title="No receipt" detail="Send a request to see route, cache, cost, and trace IDs." />
               )}
             </Surface>
           </div>

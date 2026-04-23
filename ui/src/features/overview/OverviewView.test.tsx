@@ -19,7 +19,7 @@ describe("OverviewView", () => {
             spanId: "span-123",
             provider: "openai",
             providerKind: "cloud",
-            routeReason: "explicit_or_default",
+            routeReason: "requested_model",
             requestedModel: "gpt-4o-mini",
             resolvedModel: "gpt-4o-mini-2024-07-18",
             cache: "false",
@@ -44,6 +44,7 @@ describe("OverviewView", () => {
 
     expect(screen.getByText("req-123")).toBeInTheDocument();
     expect(screen.getByText("Hello from Hecate.")).toBeInTheDocument();
-    expect(screen.getByText(/Estimated cost/i)).toBeInTheDocument();
+    expect(screen.getByText("Requested model")).toBeInTheDocument();
+    expect(screen.getByText(/Cost/i)).toBeInTheDocument();
   });
 });

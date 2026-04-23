@@ -574,6 +574,33 @@ textarea {
   line-height: 1.35;
 }
 
+.request-receipt {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.request-receipt__head {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.request-receipt__title {
+  margin: 0.18rem 0 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.mono-value {
+  font-family:
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    monospace;
+  font-size: 0.86rem;
+}
+
 .route-summary__health {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.7rem;
