@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/profiler"
@@ -18,6 +19,13 @@ type Config struct {
 	DefaultModel string
 }
 
+type queuedRun struct {
+	ctx    context.Context
+	taskID string
+	runID  string
+	idgen  func(prefix string) string
+}
+
 type Runner struct {
 	logger     *slog.Logger
 	store      taskstate.Store
@@ -28,6 +36,9 @@ type Runner struct {
 	git        Executor
 	workspaces *WorkspaceManager
 	config     Config
+	queue      chan queuedRun
+	jobMu      sync.Mutex
+	jobs       map[string]context.CancelFunc
 }
 
 type StartTaskResult struct {
@@ -44,7 +55,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		tracer = profiler.NewInMemoryTracer(nil)
 	}
 	worker := sandbox.NewWorkerExecutor()
-	return &Runner{
+	runner := &Runner{
 		logger:     logger,
 		store:      store,
 		tracer:     tracer,
@@ -54,7 +65,11 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		git:        NewGitExecutor(worker),
 		workspaces: NewWorkspaceManager(""),
 		config:     cfg,
+		queue:      make(chan queuedRun, 128),
+		jobs:       make(map[string]context.CancelFunc),
 	}
+	go runner.processQueue()
+	return runner
 }
 
 func (r *Runner) SetExecutor(exec Executor) {
@@ -136,21 +151,15 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		ID:           idgen("run"),
 		TaskID:       task.ID,
 		Number:       len(runs) + 1,
-		Status:       "running",
+		Status:       "queued",
 		Orchestrator: "builtin",
 		Model:        firstNonEmpty(task.RequestedModel, r.config.DefaultModel),
 		Provider:     task.RequestedProvider,
 		WorkspaceID:  "workspace_" + task.ID,
-		WorkspacePath: func() string {
-			if task.Repo == "" {
-				return ""
-			}
-			return task.Repo
-		}(),
-		StartedAt:  now,
-		RequestID:  requestID,
-		TraceID:    trace.TraceID,
-		RootSpanID: trace.RootSpanID(),
+		StartedAt:    now,
+		RequestID:    requestID,
+		TraceID:      trace.TraceID,
+		RootSpanID:   trace.RootSpanID(),
 	}
 	if r.approvalRequiredForTask(task) {
 		run.Status = "awaiting_approval"
@@ -192,6 +201,17 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		telemetry.AttrGenAIRequestModel: run.Model,
 	})
 
+	task.LatestRunID = run.ID
+	task.Status = run.Status
+	if task.StartedAt.IsZero() {
+		task.StartedAt = now
+	}
+	task.FinishedAt = time.Time{}
+	task.UpdatedAt = now
+	task.RootTraceID = trace.TraceID
+	task.LatestTraceID = trace.TraceID
+	task.LatestRequestID = requestID
+
 	if r.approvalRequiredForTask(task) {
 		if _, err := r.createApprovalForTask(ctx, trace, task, run, requestID, now, idgen); err != nil {
 			return nil, err
@@ -201,30 +221,21 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		if err != nil {
 			return nil, err
 		}
-
-		task.LatestRunID = run.ID
 		task.Status = "awaiting_approval"
-		if task.StartedAt.IsZero() {
-			task.StartedAt = now
-		}
-		task.FinishedAt = time.Time{}
-		task.UpdatedAt = now
-		task.RootTraceID = trace.TraceID
-		task.LatestTraceID = trace.TraceID
-		task.LatestRequestID = requestID
-		if _, err := r.store.UpdateTask(ctx, task); err != nil {
-			return nil, err
-		}
-
-		return &StartTaskResult{
-			Task:    task,
-			Run:     run,
-			TraceID: trace.TraceID,
-			SpanID:  trace.RootSpanID(),
-		}, nil
+	} else if err := r.enqueueRun(task.ID, run.ID, idgen); err != nil {
+		return nil, err
 	}
 
-	return r.executeRun(ctx, trace, task, run, requestID, idgen)
+	if _, err := r.store.UpdateTask(ctx, task); err != nil {
+		return nil, err
+	}
+
+	return &StartTaskResult{
+		Task:    task,
+		Run:     run,
+		TraceID: trace.TraceID,
+		SpanID:  trace.RootSpanID(),
+	}, nil
 }
 
 func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, approval types.TaskApproval, idgen func(prefix string) string) (*StartTaskResult, error) {
@@ -255,7 +266,6 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 
 	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
 	now := time.Now().UTC()
-
 	trace.Record("orchestrator.approval.resolved", map[string]any{
 		telemetry.AttrHecatePhase:  "approval",
 		telemetry.AttrHecateResult: telemetry.ResultSuccess,
@@ -266,6 +276,133 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 		"hecate.approval.status":   approval.Status,
 	})
 
+	run.Status = "queued"
+	run.RequestID = requestID
+	run.TraceID = trace.TraceID
+	run.RootSpanID = trace.RootSpanID()
+	run.LastError = ""
+	run.FinishedAt = time.Time{}
+	if _, err := r.store.UpdateRun(ctx, run); err != nil {
+		return nil, err
+	}
+
+	task.Status = "queued"
+	task.LatestRunID = run.ID
+	task.UpdatedAt = now
+	task.FinishedAt = time.Time{}
+	task.LastError = ""
+	task.LatestTraceID = trace.TraceID
+	task.LatestRequestID = requestID
+	if _, err := r.store.UpdateTask(ctx, task); err != nil {
+		return nil, err
+	}
+
+	if err := r.enqueueRun(task.ID, run.ID, idgen); err != nil {
+		return nil, err
+	}
+
+	return &StartTaskResult{
+		Task:    task,
+		Run:     run,
+		TraceID: trace.TraceID,
+		SpanID:  trace.RootSpanID(),
+	}, nil
+}
+
+func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (types.TaskRun, error) {
+	run, found, err := r.store.GetRun(ctx, task.ID, runID)
+	if err != nil {
+		return types.TaskRun{}, err
+	}
+	if !found {
+		return types.TaskRun{}, fmt.Errorf("task run %q not found", runID)
+	}
+	if run.Status == "completed" || run.Status == "failed" || run.Status == "cancelled" {
+		return run, nil
+	}
+
+	r.jobMu.Lock()
+	cancel, ok := r.jobs[run.ID]
+	r.jobMu.Unlock()
+	if ok {
+		cancel()
+	}
+
+	now := time.Now().UTC()
+	run.Status = "cancelled"
+	run.LastError = "run cancelled"
+	run.FinishedAt = now
+	run.OtelStatusCode = "error"
+	run.OtelStatusMessage = "run cancelled"
+	run, err = r.store.UpdateRun(ctx, run)
+	if err != nil {
+		return types.TaskRun{}, err
+	}
+
+	steps, _ := r.store.ListSteps(ctx, run.ID)
+	for _, step := range steps {
+		if step.Status == "running" {
+			step.Status = "cancelled"
+			step.Result = telemetry.ResultError
+			step.Error = "run cancelled"
+			step.ErrorKind = "run_cancelled"
+			step.FinishedAt = now
+			_, _ = r.store.UpdateStep(ctx, step)
+		}
+	}
+
+	artifacts, _ := r.store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: task.ID, RunID: run.ID})
+	for _, artifact := range artifacts {
+		if artifact.Status == "streaming" {
+			artifact.Status = "cancelled"
+			_, _ = r.store.UpdateArtifact(ctx, artifact)
+		}
+	}
+
+	task.Status = "cancelled"
+	task.LatestRunID = run.ID
+	task.LastError = "run cancelled"
+	task.FinishedAt = now
+	task.UpdatedAt = now
+	if _, err := r.store.UpdateTask(ctx, task); err != nil {
+		return types.TaskRun{}, err
+	}
+	return run, nil
+}
+
+func (r *Runner) processQueue() {
+	for job := range r.queue {
+		r.processQueuedRun(job)
+	}
+}
+
+func (r *Runner) processQueuedRun(job queuedRun) {
+	defer r.unregisterJob(job.runID)
+	if job.ctx.Err() != nil {
+		return
+	}
+
+	task, found, err := r.store.GetTask(context.Background(), job.taskID)
+	if err != nil || !found {
+		return
+	}
+	run, found, err := r.store.GetRun(context.Background(), job.taskID, job.runID)
+	if err != nil || !found {
+		return
+	}
+	if run.Status != "queued" {
+		return
+	}
+
+	requestID := strings.TrimSpace(run.RequestID)
+	if requestID == "" {
+		requestID = job.idgen("request")
+	}
+	trace := r.tracer.Start(requestID)
+	defer trace.Finalize()
+
+	ctx := telemetry.WithTraceIDs(job.ctx, trace.TraceID, trace.RootSpanID())
+	now := time.Now().UTC()
 	run.Status = "running"
 	run.RequestID = requestID
 	run.TraceID = trace.TraceID
@@ -276,7 +413,22 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 	run.LastError = ""
 	run.FinishedAt = time.Time{}
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
-		return nil, err
+		return
+	}
+
+	task.Status = "running"
+	task.LatestRunID = run.ID
+	if task.StartedAt.IsZero() {
+		task.StartedAt = now
+	}
+	task.UpdatedAt = now
+	task.FinishedAt = time.Time{}
+	task.LastError = ""
+	task.RootTraceID = trace.TraceID
+	task.LatestTraceID = trace.TraceID
+	task.LatestRequestID = requestID
+	if _, err := r.store.UpdateTask(ctx, task); err != nil {
+		return
 	}
 
 	trace.Record("orchestrator.run.started", map[string]any{
@@ -289,19 +441,50 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 		telemetry.AttrGenAIRequestModel: run.Model,
 	})
 
-	return r.executeRun(ctx, trace, task, run, requestID, idgen)
+	if _, err := r.executeRun(ctx, trace, task, run, requestID, job.idgen); err != nil {
+		finalStatus := "failed"
+		lastError := err.Error()
+		if job.ctx.Err() != nil {
+			finalStatus = "cancelled"
+			lastError = "run cancelled"
+		}
+		_ = r.finalizeFailedRun(ctx, trace, task, run, requestID, finalStatus, lastError)
+	}
+}
+
+func (r *Runner) enqueueRun(taskID, runID string, idgen func(prefix string) string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.jobMu.Lock()
+	r.jobs[runID] = cancel
+	r.jobMu.Unlock()
+	select {
+	case r.queue <- queuedRun{ctx: ctx, taskID: taskID, runID: runID, idgen: idgen}:
+		return nil
+	default:
+		cancel()
+		r.unregisterJob(runID)
+		return fmt.Errorf("run queue is full")
+	}
+}
+
+func (r *Runner) unregisterJob(runID string) {
+	r.jobMu.Lock()
+	defer r.jobMu.Unlock()
+	delete(r.jobs, runID)
 }
 
 func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, idgen func(prefix string) string) (*StartTaskResult, error) {
 	executor := r.executorForTask(task)
 	execution, err := executor.Execute(ctx, ExecutionSpec{
-		Task:       taskForRun(task, run),
-		Run:        run,
-		RequestID:  requestID,
-		TraceID:    trace.TraceID,
-		RootSpanID: trace.RootSpanID(),
-		StartedAt:  time.Now().UTC(),
-		NewID:      idgen,
+		Task:           taskForRun(task, run),
+		Run:            run,
+		RequestID:      requestID,
+		TraceID:        trace.TraceID,
+		RootSpanID:     trace.RootSpanID(),
+		StartedAt:      time.Now().UTC(),
+		NewID:          idgen,
+		UpsertStep:     func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
+		UpsertArtifact: func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
 	})
 	if err != nil {
 		trace.Record("orchestrator.run.failed", map[string]any{
@@ -319,7 +502,7 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	persistedSteps := make([]types.TaskStep, 0, len(execution.Steps))
 	for _, step := range execution.Steps {
 		eventName := "orchestrator.step.completed"
-		if step.Status == "failed" || step.Result == telemetry.ResultError {
+		if step.Status == "failed" || step.Status == "cancelled" || step.Result == telemetry.ResultError {
 			eventName = "orchestrator.step.failed"
 		}
 		trace.Record(eventName, map[string]any{
@@ -334,18 +517,7 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		})
 		step.SpanID = spanIDByName(trace, "orchestrator.step")
 		step.ParentSpanID = trace.RootSpanID()
-		step, err = r.store.AppendStep(ctx, step)
-		if err != nil {
-			trace.Record("orchestrator.step.failed", map[string]any{
-				telemetry.AttrHecatePhase:     firstNonEmpty(step.Phase, "execution"),
-				telemetry.AttrHecateResult:    telemetry.ResultError,
-				telemetry.AttrHecateErrorKind: "step_create_failed",
-				telemetry.AttrErrorType:       "step_create_failed",
-				telemetry.AttrErrorMessage:    err.Error(),
-				"hecate.task.id":              task.ID,
-				"hecate.run.id":               run.ID,
-				"hecate.step.id":              step.ID,
-			})
+		if err := r.upsertStep(ctx, step); err != nil {
 			return nil, err
 		}
 		persistedSteps = append(persistedSteps, step)
@@ -364,25 +536,14 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 			"hecate.artifact.size_bytes": artifact.SizeBytes,
 		})
 		artifact.SpanID = spanIDByName(trace, "orchestrator.artifact")
-		artifact, err = r.store.CreateArtifact(ctx, artifact)
-		if err != nil {
-			trace.Record("orchestrator.artifact.failed", map[string]any{
-				telemetry.AttrHecatePhase:     "artifact",
-				telemetry.AttrHecateResult:    telemetry.ResultError,
-				telemetry.AttrHecateErrorKind: "artifact_create_failed",
-				telemetry.AttrErrorType:       "artifact_create_failed",
-				telemetry.AttrErrorMessage:    err.Error(),
-				"hecate.task.id":              task.ID,
-				"hecate.run.id":               run.ID,
-				"hecate.artifact.id":          artifact.ID,
-			})
+		if err := r.upsertArtifact(ctx, artifact); err != nil {
 			return nil, err
 		}
 		persistedArtifacts = append(persistedArtifacts, artifact)
 	}
 
 	resultKind := telemetry.ResultSuccess
-	if execution.Status == "failed" {
+	if execution.Status == "failed" || execution.Status == "cancelled" {
 		resultKind = telemetry.ResultError
 	}
 	trace.Record("orchestrator.run.finished", map[string]any{
@@ -419,6 +580,7 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	task.RootTraceID = trace.TraceID
 	task.LatestTraceID = trace.TraceID
 	task.LatestRequestID = requestID
+	task.LastError = execution.LastError
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
 		return nil, err
 	}
@@ -431,6 +593,52 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		TraceID:   trace.TraceID,
 		SpanID:    trace.RootSpanID(),
 	}, nil
+}
+
+func (r *Runner) finalizeFailedRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID, status, message string) error {
+	now := time.Now().UTC()
+	run.Status = status
+	run.LastError = message
+	run.FinishedAt = now
+	run.OtelStatusCode = "error"
+	run.OtelStatusMessage = message
+	if _, err := r.store.UpdateRun(ctx, run); err != nil {
+		return err
+	}
+	task.Status = status
+	task.LatestRunID = run.ID
+	task.LastError = message
+	task.FinishedAt = now
+	task.UpdatedAt = now
+	task.LatestTraceID = trace.TraceID
+	task.LatestRequestID = requestID
+	_, err := r.store.UpdateTask(ctx, task)
+	return err
+}
+
+func (r *Runner) upsertStep(ctx context.Context, step types.TaskStep) error {
+	if existing, found, err := r.store.GetStep(ctx, step.RunID, step.ID); err != nil {
+		return err
+	} else if found {
+		step.SpanID = firstNonEmpty(step.SpanID, existing.SpanID)
+		step.ParentSpanID = firstNonEmpty(step.ParentSpanID, existing.ParentSpanID)
+		_, err = r.store.UpdateStep(ctx, step)
+		return err
+	}
+	_, err := r.store.AppendStep(ctx, step)
+	return err
+}
+
+func (r *Runner) upsertArtifact(ctx context.Context, artifact types.TaskArtifact) error {
+	if existing, found, err := r.store.GetArtifact(ctx, artifact.TaskID, artifact.ID); err != nil {
+		return err
+	} else if found {
+		artifact.SpanID = firstNonEmpty(artifact.SpanID, existing.SpanID)
+		_, err = r.store.UpdateArtifact(ctx, artifact)
+		return err
+	}
+	_, err := r.store.CreateArtifact(ctx, artifact)
+	return err
 }
 
 func taskForRun(task types.Task, run types.TaskRun) types.Task {

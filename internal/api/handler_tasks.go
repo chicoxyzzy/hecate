@@ -513,6 +513,44 @@ func (h *Handler) HandleTaskRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleCancelTaskRun(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+	if h.taskRunner == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task runner is not configured")
+		return
+	}
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	runID := strings.TrimSpace(r.PathValue("run_id"))
+	if runID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+		return
+	}
+	run, err := h.taskRunner.CancelRun(ctx, task, runID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			WriteError(w, http.StatusNotFound, errCodeNotFound, err.Error())
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, TaskRunResponse{
+		Object: "task_run",
+		Data:   renderTaskRun(run),
+	})
+}
+
 func (h *Handler) HandleTaskRunSteps(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAny(w, r)
 	if !ok {

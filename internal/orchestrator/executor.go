@@ -17,13 +17,15 @@ type Executor interface {
 }
 
 type ExecutionSpec struct {
-	Task       types.Task
-	Run        types.TaskRun
-	RequestID  string
-	TraceID    string
-	RootSpanID string
-	StartedAt  time.Time
-	NewID      func(prefix string) string
+	Task           types.Task
+	Run            types.TaskRun
+	RequestID      string
+	TraceID        string
+	RootSpanID     string
+	StartedAt      time.Time
+	NewID          func(prefix string) string
+	UpsertStep     func(step types.TaskStep) error
+	UpsertArtifact func(artifact types.TaskArtifact) error
 }
 
 type ExecutionResult struct {
@@ -126,11 +128,103 @@ func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execu
 	if workingDirectory == "" {
 		workingDirectory = "."
 	}
-	resultData, err := e.sandbox.Run(ctx, sandbox.Command{
+	step := types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    1,
+		Kind:     "shell",
+		Title:    "Shell command",
+		Status:   "running",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: "shell",
+		Input: map[string]any{
+			"command":           command,
+			"working_directory": workingDirectory,
+			"timeout_ms":        timeout,
+		},
+		OutputSummary: map[string]any{
+			"stdout_bytes": 0,
+			"stderr_bytes": 0,
+			"exit_code":    0,
+		},
+		StartedAt: spec.StartedAt,
+		RequestID: spec.RequestID,
+		TraceID:   spec.TraceID,
+	}
+	if spec.UpsertStep != nil {
+		if err := spec.UpsertStep(step); err != nil {
+			return nil, err
+		}
+	}
+
+	stdoutArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stdout",
+		Name:        "stdout.txt",
+		Description: "Shell stdout capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: "",
+		SizeBytes:   0,
+		Status:      "streaming",
+		CreatedAt:   spec.StartedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
+			return nil, err
+		}
+	}
+
+	stderrArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stderr",
+		Name:        "stderr.txt",
+		Description: "Shell stderr capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: "",
+		SizeBytes:   0,
+		Status:      "streaming",
+		CreatedAt:   spec.StartedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
+			return nil, err
+		}
+	}
+
+	resultData, err := e.sandbox.RunStreaming(ctx, sandbox.Command{
 		Command:          command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
 		Policy:           taskPolicy(spec.Task),
+	}, func(chunk sandbox.OutputChunk) {
+		switch chunk.Stream {
+		case "stdout":
+			stdoutArtifact.ContentText += chunk.Text
+			stdoutArtifact.SizeBytes = int64(len(stdoutArtifact.ContentText))
+			if spec.UpsertArtifact != nil {
+				_ = spec.UpsertArtifact(stdoutArtifact)
+			}
+		case "stderr":
+			stderrArtifact.ContentText += chunk.Text
+			stderrArtifact.SizeBytes = int64(len(stderrArtifact.ContentText))
+			if spec.UpsertArtifact != nil {
+				_ = spec.UpsertArtifact(stderrArtifact)
+			}
+		}
 	})
 
 	status := "completed"
@@ -144,73 +238,41 @@ func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execu
 		lastError = err.Error()
 		otelStatusCode = "error"
 		otelStatusMessage = err.Error()
+		if errors.Is(err, context.Canceled) {
+			status = "cancelled"
+		}
 	}
 
 	finishedAt := time.Now().UTC()
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     "shell",
-		Title:    "Shell command",
-		Status:   status,
-		Phase:    "execution",
-		Result:   result,
-		ToolName: "shell",
-		Input: map[string]any{
-			"command":           command,
-			"working_directory": workingDirectory,
-			"timeout_ms":        timeout,
-		},
-		OutputSummary: map[string]any{
-			"stdout_bytes": len(resultData.Stdout),
-			"stderr_bytes": len(resultData.Stderr),
-			"exit_code":    resultData.ExitCode,
-		},
-		ExitCode:   resultData.ExitCode,
-		Error:      lastError,
-		ErrorKind:  shellErrorKind(err),
-		StartedAt:  spec.StartedAt,
-		FinishedAt: finishedAt,
-		RequestID:  spec.RequestID,
-		TraceID:    spec.TraceID,
+	step.Status = status
+	step.Result = result
+	step.OutputSummary = map[string]any{
+		"stdout_bytes": len(resultData.Stdout),
+		"stderr_bytes": len(resultData.Stderr),
+		"exit_code":    resultData.ExitCode,
 	}
-
-	stdoutArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stdout",
-		Name:        "stdout.txt",
-		Description: "Shell stdout capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: resultData.Stdout,
-		SizeBytes:   int64(len(resultData.Stdout)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
+	step.ExitCode = resultData.ExitCode
+	step.Error = lastError
+	step.ErrorKind = shellErrorKind(err)
+	step.FinishedAt = finishedAt
+	if spec.UpsertStep != nil {
+		if err := spec.UpsertStep(step); err != nil {
+			return nil, err
+		}
 	}
-
-	stderrArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stderr",
-		Name:        "stderr.txt",
-		Description: "Shell stderr capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: resultData.Stderr,
-		SizeBytes:   int64(len(resultData.Stderr)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
+	stdoutArtifact.Status = "ready"
+	stderrArtifact.Status = "ready"
+	if status == "cancelled" {
+		stdoutArtifact.Status = "cancelled"
+		stderrArtifact.Status = "cancelled"
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
+			return nil, err
+		}
+		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
+			return nil, err
+		}
 	}
 
 	return &ExecutionResult{
@@ -226,6 +288,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execu
 func shellErrorKind(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "run_cancelled"
 	}
 	if sandbox.IsPolicyDenied(err) {
 		return "sandbox_policy_denied"
@@ -365,11 +430,102 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 	if workingDirectory == "" {
 		workingDirectory = "."
 	}
-	resultData, err := e.sandbox.Run(ctx, sandbox.Command{
+	step := types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    1,
+		Kind:     "git",
+		Title:    "Git command",
+		Status:   "running",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: "git",
+		Input: map[string]any{
+			"command":           command,
+			"working_directory": workingDirectory,
+			"timeout_ms":        timeout,
+		},
+		OutputSummary: map[string]any{
+			"stdout_bytes": 0,
+			"stderr_bytes": 0,
+			"exit_code":    0,
+		},
+		StartedAt: spec.StartedAt,
+		RequestID: spec.RequestID,
+		TraceID:   spec.TraceID,
+	}
+	if spec.UpsertStep != nil {
+		if err := spec.UpsertStep(step); err != nil {
+			return nil, err
+		}
+	}
+
+	stdoutArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stdout",
+		Name:        "git-stdout.txt",
+		Description: "Git stdout capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: "",
+		SizeBytes:   0,
+		Status:      "streaming",
+		CreatedAt:   spec.StartedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
+			return nil, err
+		}
+	}
+	stderrArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stderr",
+		Name:        "git-stderr.txt",
+		Description: "Git stderr capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: "",
+		SizeBytes:   0,
+		Status:      "streaming",
+		CreatedAt:   spec.StartedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
+			return nil, err
+		}
+	}
+
+	resultData, err := e.sandbox.RunStreaming(ctx, sandbox.Command{
 		Command:          "git " + command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
 		Policy:           taskPolicy(spec.Task),
+	}, func(chunk sandbox.OutputChunk) {
+		switch chunk.Stream {
+		case "stdout":
+			stdoutArtifact.ContentText += chunk.Text
+			stdoutArtifact.SizeBytes = int64(len(stdoutArtifact.ContentText))
+			if spec.UpsertArtifact != nil {
+				_ = spec.UpsertArtifact(stdoutArtifact)
+			}
+		case "stderr":
+			stderrArtifact.ContentText += chunk.Text
+			stderrArtifact.SizeBytes = int64(len(stderrArtifact.ContentText))
+			if spec.UpsertArtifact != nil {
+				_ = spec.UpsertArtifact(stderrArtifact)
+			}
+		}
 	})
 
 	status := "completed"
@@ -383,72 +539,41 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 		lastError = err.Error()
 		otelStatusCode = "error"
 		otelStatusMessage = err.Error()
+		if errors.Is(err, context.Canceled) {
+			status = "cancelled"
+		}
 	}
 
 	finishedAt := time.Now().UTC()
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     "git",
-		Title:    "Git command",
-		Status:   status,
-		Phase:    "execution",
-		Result:   result,
-		ToolName: "git",
-		Input: map[string]any{
-			"command":           command,
-			"working_directory": workingDirectory,
-			"timeout_ms":        timeout,
-		},
-		OutputSummary: map[string]any{
-			"stdout_bytes": len(resultData.Stdout),
-			"stderr_bytes": len(resultData.Stderr),
-			"exit_code":    resultData.ExitCode,
-		},
-		ExitCode:   resultData.ExitCode,
-		Error:      lastError,
-		ErrorKind:  gitErrorKind(err),
-		StartedAt:  spec.StartedAt,
-		FinishedAt: finishedAt,
-		RequestID:  spec.RequestID,
-		TraceID:    spec.TraceID,
+	step.Status = status
+	step.Result = result
+	step.OutputSummary = map[string]any{
+		"stdout_bytes": len(resultData.Stdout),
+		"stderr_bytes": len(resultData.Stderr),
+		"exit_code":    resultData.ExitCode,
 	}
-
-	stdoutArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stdout",
-		Name:        "git-stdout.txt",
-		Description: "Git stdout capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: resultData.Stdout,
-		SizeBytes:   int64(len(resultData.Stdout)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
+	step.ExitCode = resultData.ExitCode
+	step.Error = lastError
+	step.ErrorKind = gitErrorKind(err)
+	step.FinishedAt = finishedAt
+	if spec.UpsertStep != nil {
+		if err := spec.UpsertStep(step); err != nil {
+			return nil, err
+		}
 	}
-	stderrArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stderr",
-		Name:        "git-stderr.txt",
-		Description: "Git stderr capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: resultData.Stderr,
-		SizeBytes:   int64(len(resultData.Stderr)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
+	stdoutArtifact.Status = "ready"
+	stderrArtifact.Status = "ready"
+	if status == "cancelled" {
+		stdoutArtifact.Status = "cancelled"
+		stderrArtifact.Status = "cancelled"
+	}
+	if spec.UpsertArtifact != nil {
+		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
+			return nil, err
+		}
+		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
+			return nil, err
+		}
 	}
 
 	return &ExecutionResult{
@@ -464,6 +589,9 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 func gitErrorKind(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "run_cancelled"
 	}
 	if sandbox.IsPolicyDenied(err) {
 		return "sandbox_policy_denied"

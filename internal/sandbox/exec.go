@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -44,8 +45,14 @@ type FileResult struct {
 	BytesWritten int
 }
 
+type OutputChunk struct {
+	Stream string
+	Text   string
+}
+
 type Executor interface {
 	Run(ctx context.Context, command Command) (Result, error)
+	RunStreaming(ctx context.Context, command Command, onChunk func(OutputChunk)) (Result, error)
 	WriteFile(ctx context.Context, request FileRequest) (FileResult, error)
 	AppendFile(ctx context.Context, request FileRequest) (FileResult, error)
 }
@@ -73,6 +80,19 @@ func NewLocalExecutor() *LocalExecutor {
 }
 
 func (e *LocalExecutor) Run(ctx context.Context, command Command) (Result, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	return e.RunStreaming(ctx, command, func(chunk OutputChunk) {
+		switch chunk.Stream {
+		case "stdout":
+			stdout.WriteString(chunk.Text)
+		case "stderr":
+			stderr.WriteString(chunk.Text)
+		}
+	})
+}
+
+func (e *LocalExecutor) RunStreaming(ctx context.Context, command Command, onChunk func(OutputChunk)) (Result, error) {
 	workingDirectory, err := resolveWorkingDirectory(command.WorkingDirectory, command.Policy)
 	if err != nil {
 		return Result{ExitCode: -1}, err
@@ -95,10 +115,31 @@ func (e *LocalExecutor) Run(ctx context.Context, command Command) (Result, error
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return Result{ExitCode: -1}, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return Result{ExitCode: -1}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return Result{ExitCode: -1}, err
+	}
 
-	err = cmd.Run()
+	readDone := make(chan error, 2)
+	go streamPipe(stdoutPipe, "stdout", &stdout, onChunk, readDone)
+	go streamPipe(stderrPipe, "stderr", &stderr, onChunk, readDone)
+
+	err = cmd.Wait()
+	firstReadErr := <-readDone
+	secondReadErr := <-readDone
+	if firstReadErr != nil {
+		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1}, firstReadErr
+	}
+	if secondReadErr != nil {
+		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1}, secondReadErr
+	}
 	result := Result{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
@@ -108,6 +149,10 @@ func (e *LocalExecutor) Run(ctx context.Context, command Command) (Result, error
 		return result, nil
 	}
 
+	if errors.Is(runCtx.Err(), context.Canceled) {
+		result.ExitCode = -1
+		return result, context.Canceled
+	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		result.ExitCode = -1
 		return result, runCtx.Err()
@@ -154,6 +199,34 @@ func writeFile(request FileRequest, appendMode bool) (FileResult, error) {
 		return FileResult{}, err
 	}
 	return FileResult{Path: targetPath, BytesWritten: len(request.Content)}, nil
+}
+
+func streamPipe(pipe io.ReadCloser, streamName string, sink *bytes.Buffer, onChunk func(OutputChunk), done chan<- error) {
+	reader := bufio.NewReader(pipe)
+	buffer := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			text := string(buffer[:n])
+			sink.WriteString(text)
+			if onChunk != nil {
+				onChunk(OutputChunk{Stream: streamName, Text: text})
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			done <- nil
+			return
+		}
+		if errors.Is(err, os.ErrClosed) {
+			done <- nil
+			return
+		}
+		done <- err
+		return
+	}
 }
 
 func ResolvePath(workingDirectory, targetPath string, policy Policy) (string, error) {
