@@ -105,10 +105,7 @@ type ShellExecutor struct {
 }
 
 func NewShellExecutor(exec sandbox.Executor) *ShellExecutor {
-	if exec == nil {
-		exec = sandbox.NewLocalExecutor()
-	}
-	return &ShellExecutor{sandbox: exec}
+	return &ShellExecutor{sandbox: ensureSandboxExecutor(exec)}
 }
 
 func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
@@ -119,186 +116,22 @@ func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execu
 	if command == "" {
 		return nil, fmt.Errorf("shell command is required")
 	}
-
-	timeout := spec.Task.TimeoutMS
-	if timeout <= 0 {
-		timeout = 5000
-	}
-	workingDirectory := spec.Task.WorkingDirectory
-	if workingDirectory == "" {
-		workingDirectory = "."
-	}
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     "shell",
-		Title:    "Shell command",
-		Status:   "running",
-		Phase:    "execution",
-		Result:   telemetry.ResultSuccess,
-		ToolName: "shell",
-		Input: map[string]any{
-			"command":           command,
-			"working_directory": workingDirectory,
-			"timeout_ms":        timeout,
-		},
-		OutputSummary: map[string]any{
-			"stdout_bytes": 0,
-			"stderr_bytes": 0,
-			"exit_code":    0,
-		},
-		StartedAt: spec.StartedAt,
-		RequestID: spec.RequestID,
-		TraceID:   spec.TraceID,
-	}
-	if spec.UpsertStep != nil {
-		if err := spec.UpsertStep(step); err != nil {
-			return nil, err
-		}
-	}
-
-	stdoutArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stdout",
-		Name:        "stdout.txt",
-		Description: "Shell stdout capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: "",
-		SizeBytes:   0,
-		Status:      "streaming",
-		CreatedAt:   spec.StartedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
-	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
-			return nil, err
-		}
-	}
-
-	stderrArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stderr",
-		Name:        "stderr.txt",
-		Description: "Shell stderr capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: "",
-		SizeBytes:   0,
-		Status:      "streaming",
-		CreatedAt:   spec.StartedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
-	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
-			return nil, err
-		}
-	}
-
-	resultData, err := e.sandbox.RunStreaming(ctx, sandbox.Command{
-		Command:          command,
-		WorkingDirectory: workingDirectory,
-		Timeout:          time.Duration(timeout) * time.Millisecond,
-		Policy:           taskPolicy(spec.Task),
-	}, func(chunk sandbox.OutputChunk) {
-		switch chunk.Stream {
-		case "stdout":
-			stdoutArtifact.ContentText += chunk.Text
-			stdoutArtifact.SizeBytes = int64(len(stdoutArtifact.ContentText))
-			if spec.UpsertArtifact != nil {
-				_ = spec.UpsertArtifact(stdoutArtifact)
-			}
-		case "stderr":
-			stderrArtifact.ContentText += chunk.Text
-			stderrArtifact.SizeBytes = int64(len(stderrArtifact.ContentText))
-			if spec.UpsertArtifact != nil {
-				_ = spec.UpsertArtifact(stderrArtifact)
-			}
-		}
+	return executeStreamingCommand(ctx, e.sandbox, spec, streamingCommandSpec{
+		command:           command,
+		kind:              "shell",
+		title:             "Shell command",
+		toolName:          "shell",
+		stdoutName:        "stdout.txt",
+		stdoutDescription: "Shell stdout capture",
+		stderrName:        "stderr.txt",
+		stderrDescription: "Shell stderr capture",
+		timeoutErrorKind:  "shell_timeout",
+		defaultErrorKind:  "shell_command_failed",
 	})
-
-	status := "completed"
-	result := telemetry.ResultSuccess
-	lastError := ""
-	otelStatusCode := "ok"
-	otelStatusMessage := ""
-	if err != nil {
-		status = "failed"
-		result = telemetry.ResultError
-		lastError = err.Error()
-		otelStatusCode = "error"
-		otelStatusMessage = err.Error()
-		if errors.Is(err, context.Canceled) {
-			status = "cancelled"
-		}
-	}
-
-	finishedAt := time.Now().UTC()
-	step.Status = status
-	step.Result = result
-	step.OutputSummary = map[string]any{
-		"stdout_bytes": len(resultData.Stdout),
-		"stderr_bytes": len(resultData.Stderr),
-		"exit_code":    resultData.ExitCode,
-	}
-	step.ExitCode = resultData.ExitCode
-	step.Error = lastError
-	step.ErrorKind = shellErrorKind(err)
-	step.FinishedAt = finishedAt
-	if spec.UpsertStep != nil {
-		if err := spec.UpsertStep(step); err != nil {
-			return nil, err
-		}
-	}
-	stdoutArtifact.Status = "ready"
-	stderrArtifact.Status = "ready"
-	if status == "cancelled" {
-		stdoutArtifact.Status = "cancelled"
-		stderrArtifact.Status = "cancelled"
-	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
-			return nil, err
-		}
-		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
-			return nil, err
-		}
-	}
-
-	return &ExecutionResult{
-		Status:            status,
-		Steps:             []types.TaskStep{step},
-		Artifacts:         []types.TaskArtifact{stdoutArtifact, stderrArtifact},
-		LastError:         lastError,
-		OtelStatusCode:    otelStatusCode,
-		OtelStatusMessage: otelStatusMessage,
-	}, nil
 }
 
 func shellErrorKind(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, context.Canceled) {
-		return "run_cancelled"
-	}
-	if sandbox.IsPolicyDenied(err) {
-		return "sandbox_policy_denied"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "shell_timeout"
-	}
-	return "shell_command_failed"
+	return commandErrorKind(err, "shell_timeout", "shell_command_failed")
 }
 
 type FileExecutor struct {
@@ -407,10 +240,7 @@ type GitExecutor struct {
 }
 
 func NewGitExecutor(exec sandbox.Executor) *GitExecutor {
-	if exec == nil {
-		exec = sandbox.NewLocalExecutor()
-	}
-	return &GitExecutor{sandbox: exec}
+	return &GitExecutor{sandbox: ensureSandboxExecutor(exec)}
 }
 
 func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
@@ -421,28 +251,60 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 	if command == "" {
 		return nil, fmt.Errorf("git command is required")
 	}
+	return executeStreamingCommand(ctx, e.sandbox, spec, streamingCommandSpec{
+		command:           "git " + command,
+		displayCommand:    command,
+		kind:              "git",
+		title:             "Git command",
+		toolName:          "git",
+		stdoutName:        "git-stdout.txt",
+		stdoutDescription: "Git stdout capture",
+		stderrName:        "git-stderr.txt",
+		stderrDescription: "Git stderr capture",
+		timeoutErrorKind:  "git_timeout",
+		defaultErrorKind:  "git_command_failed",
+	})
+}
 
-	timeout := spec.Task.TimeoutMS
-	if timeout <= 0 {
-		timeout = 5000
+func gitErrorKind(err error) string {
+	return commandErrorKind(err, "git_timeout", "git_command_failed")
+}
+
+type streamingCommandSpec struct {
+	command           string
+	displayCommand    string
+	kind              string
+	title             string
+	toolName          string
+	stdoutName        string
+	stdoutDescription string
+	stderrName        string
+	stderrDescription string
+	timeoutErrorKind  string
+	defaultErrorKind  string
+}
+
+func executeStreamingCommand(ctx context.Context, exec sandbox.Executor, spec ExecutionSpec, commandSpec streamingCommandSpec) (*ExecutionResult, error) {
+	timeout := commandTimeout(spec.Task)
+	workingDirectory := commandWorkingDirectory(spec.Task)
+	displayCommand := commandSpec.displayCommand
+	if displayCommand == "" {
+		displayCommand = commandSpec.command
 	}
-	workingDirectory := spec.Task.WorkingDirectory
-	if workingDirectory == "" {
-		workingDirectory = "."
-	}
+
 	step := types.TaskStep{
 		ID:       spec.NewID("step"),
 		TaskID:   spec.Task.ID,
 		RunID:    spec.Run.ID,
 		Index:    1,
-		Kind:     "git",
-		Title:    "Git command",
+		Kind:     commandSpec.kind,
+		Title:    commandSpec.title,
 		Status:   "running",
 		Phase:    "execution",
 		Result:   telemetry.ResultSuccess,
-		ToolName: "git",
+		ToolName: commandSpec.toolName,
 		Input: map[string]any{
-			"command":           command,
+			"command":           displayCommand,
 			"working_directory": workingDirectory,
 			"timeout_ms":        timeout,
 		},
@@ -455,59 +317,21 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 		RequestID: spec.RequestID,
 		TraceID:   spec.TraceID,
 	}
-	if spec.UpsertStep != nil {
-		if err := spec.UpsertStep(step); err != nil {
-			return nil, err
-		}
+	if err := upsertTaskStep(spec, step); err != nil {
+		return nil, err
 	}
 
-	stdoutArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stdout",
-		Name:        "git-stdout.txt",
-		Description: "Git stdout capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: "",
-		SizeBytes:   0,
-		Status:      "streaming",
-		CreatedAt:   spec.StartedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
+	stdoutArtifact := newStreamingCommandArtifact(spec, step.ID, "stdout", commandSpec.stdoutName, commandSpec.stdoutDescription)
+	if err := upsertTaskArtifact(spec, stdoutArtifact); err != nil {
+		return nil, err
 	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
-			return nil, err
-		}
-	}
-	stderrArtifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stderr",
-		Name:        "git-stderr.txt",
-		Description: "Git stderr capture",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: "",
-		SizeBytes:   0,
-		Status:      "streaming",
-		CreatedAt:   spec.StartedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
-	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
-			return nil, err
-		}
+	stderrArtifact := newStreamingCommandArtifact(spec, step.ID, "stderr", commandSpec.stderrName, commandSpec.stderrDescription)
+	if err := upsertTaskArtifact(spec, stderrArtifact); err != nil {
+		return nil, err
 	}
 
-	resultData, err := e.sandbox.RunStreaming(ctx, sandbox.Command{
-		Command:          "git " + command,
+	resultData, err := exec.RunStreaming(ctx, sandbox.Command{
+		Command:          commandSpec.command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
 		Policy:           taskPolicy(spec.Task),
@@ -516,35 +340,17 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 		case "stdout":
 			stdoutArtifact.ContentText += chunk.Text
 			stdoutArtifact.SizeBytes = int64(len(stdoutArtifact.ContentText))
-			if spec.UpsertArtifact != nil {
-				_ = spec.UpsertArtifact(stdoutArtifact)
-			}
+			_ = upsertTaskArtifact(spec, stdoutArtifact)
 		case "stderr":
 			stderrArtifact.ContentText += chunk.Text
 			stderrArtifact.SizeBytes = int64(len(stderrArtifact.ContentText))
-			if spec.UpsertArtifact != nil {
-				_ = spec.UpsertArtifact(stderrArtifact)
-			}
+			_ = upsertTaskArtifact(spec, stderrArtifact)
 		}
 	})
 
-	status := "completed"
-	result := telemetry.ResultSuccess
-	lastError := ""
-	otelStatusCode := "ok"
-	otelStatusMessage := ""
-	if err != nil {
-		status = "failed"
-		result = telemetry.ResultError
-		lastError = err.Error()
-		otelStatusCode = "error"
-		otelStatusMessage = err.Error()
-		if errors.Is(err, context.Canceled) {
-			status = "cancelled"
-		}
-	}
-
+	status, result, lastError, otelStatusCode, otelStatusMessage := executionStatus(err)
 	finishedAt := time.Now().UTC()
+
 	step.Status = status
 	step.Result = result
 	step.OutputSummary = map[string]any{
@@ -554,26 +360,23 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 	}
 	step.ExitCode = resultData.ExitCode
 	step.Error = lastError
-	step.ErrorKind = gitErrorKind(err)
+	step.ErrorKind = commandErrorKind(err, commandSpec.timeoutErrorKind, commandSpec.defaultErrorKind)
 	step.FinishedAt = finishedAt
-	if spec.UpsertStep != nil {
-		if err := spec.UpsertStep(step); err != nil {
-			return nil, err
-		}
+	if err := upsertTaskStep(spec, step); err != nil {
+		return nil, err
 	}
-	stdoutArtifact.Status = "ready"
-	stderrArtifact.Status = "ready"
+
+	finalArtifactStatus := "ready"
 	if status == "cancelled" {
-		stdoutArtifact.Status = "cancelled"
-		stderrArtifact.Status = "cancelled"
+		finalArtifactStatus = "cancelled"
 	}
-	if spec.UpsertArtifact != nil {
-		if err := spec.UpsertArtifact(stdoutArtifact); err != nil {
-			return nil, err
-		}
-		if err := spec.UpsertArtifact(stderrArtifact); err != nil {
-			return nil, err
-		}
+	stdoutArtifact.Status = finalArtifactStatus
+	stderrArtifact.Status = finalArtifactStatus
+	if err := upsertTaskArtifact(spec, stdoutArtifact); err != nil {
+		return nil, err
+	}
+	if err := upsertTaskArtifact(spec, stderrArtifact); err != nil {
+		return nil, err
 	}
 
 	return &ExecutionResult{
@@ -586,7 +389,45 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 	}, nil
 }
 
-func gitErrorKind(err error) string {
+func ensureSandboxExecutor(exec sandbox.Executor) sandbox.Executor {
+	if exec == nil {
+		return sandbox.NewLocalExecutor()
+	}
+	return exec
+}
+
+func commandTimeout(task types.Task) int {
+	timeout := task.TimeoutMS
+	if timeout <= 0 {
+		return 5000
+	}
+	return timeout
+}
+
+func commandWorkingDirectory(task types.Task) string {
+	if task.WorkingDirectory == "" {
+		return "."
+	}
+	return task.WorkingDirectory
+}
+
+func executionStatus(err error) (status string, result string, lastError string, otelStatusCode string, otelStatusMessage string) {
+	if err == nil {
+		return "completed", telemetry.ResultSuccess, "", "ok", ""
+	}
+
+	status = "failed"
+	result = telemetry.ResultError
+	lastError = err.Error()
+	otelStatusCode = "error"
+	otelStatusMessage = err.Error()
+	if errors.Is(err, context.Canceled) {
+		status = "cancelled"
+	}
+	return status, result, lastError, otelStatusCode, otelStatusMessage
+}
+
+func commandErrorKind(err error, timeoutErrorKind, defaultErrorKind string) string {
 	if err == nil {
 		return ""
 	}
@@ -597,9 +438,43 @@ func gitErrorKind(err error) string {
 		return "sandbox_policy_denied"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "git_timeout"
+		return timeoutErrorKind
 	}
-	return "git_command_failed"
+	return defaultErrorKind
+}
+
+func newStreamingCommandArtifact(spec ExecutionSpec, stepID, kind, name, description string) types.TaskArtifact {
+	return types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      stepID,
+		Kind:        kind,
+		Name:        name,
+		Description: description,
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: "",
+		SizeBytes:   0,
+		Status:      "streaming",
+		CreatedAt:   spec.StartedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+}
+
+func upsertTaskStep(spec ExecutionSpec, step types.TaskStep) error {
+	if spec.UpsertStep == nil {
+		return nil
+	}
+	return spec.UpsertStep(step)
+}
+
+func upsertTaskArtifact(spec ExecutionSpec, artifact types.TaskArtifact) error {
+	if spec.UpsertArtifact == nil {
+		return nil
+	}
+	return spec.UpsertArtifact(artifact)
 }
 
 func fileErrorKind(err error) string {
