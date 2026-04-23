@@ -8,6 +8,20 @@ The goal is not to build another thin proxy. Hecate is meant to become a runtime
 
 Today, Hecate is production-shaped at the model gateway layer. It supports OpenAI-compatible upstreams, Anthropic's native Messages API, local runtimes, provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and an operator UI. That already makes it useful as the gateway and control plane behind coding assistants that know how to execute tools themselves. It is not yet a full coding-agent runtime with sandboxed tool execution and workspace orchestration; that remains the next major track.
 
+## Table Of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Providers](#providers)
+- [Auth And Control Plane](#auth-and-control-plane)
+- [Observability](#observability)
+- [UI](#ui)
+- [Using Hecate For Coding](#using-hecate-for-coding)
+- [Docs](#docs)
+- [Commands](#commands)
+- [Repository Layout](#repository-layout)
+- [Checklist](#checklist)
+
 Current runtime capabilities:
 
 - OpenAI-compatible and Anthropic provider paths
@@ -249,6 +263,10 @@ Expand the runtime into something teams can trust for daily coding work:
 - richer UI for task timelines, tool runs, traces, and cost by session or repo
 - smarter model selection policies for different coding task classes
 - stronger reliability features around health, failover, pricing sync, and debug tooling
+
+## Docs
+
+- [Telemetry And OTLP Notes](docs/telemetry.md)
 
 ## Commands
 
