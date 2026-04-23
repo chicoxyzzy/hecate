@@ -13,7 +13,11 @@ type Task struct {
 	WorkspaceMode     string
 	ExecutionKind     string
 	ShellCommand      string
+	GitCommand        string
 	WorkingDirectory  string
+	FileOperation     string
+	FilePath          string
+	FileContent       string
 	TimeoutMS         int
 	Status            string
 	Priority          string

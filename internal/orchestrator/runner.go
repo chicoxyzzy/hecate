@@ -23,6 +23,8 @@ type Runner struct {
 	tracer profiler.Tracer
 	exec   Executor
 	shell  Executor
+	file   Executor
+	git    Executor
 	config Config
 }
 
@@ -45,6 +47,8 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		tracer: tracer,
 		exec:   NewStubExecutor(),
 		shell:  NewShellExecutor(nil),
+		file:   NewFileExecutor(),
+		git:    NewGitExecutor(nil),
 		config: cfg,
 	}
 }
@@ -61,6 +65,20 @@ func (r *Runner) SetShellExecutor(exec Executor) {
 		return
 	}
 	r.shell = exec
+}
+
+func (r *Runner) SetFileExecutor(exec Executor) {
+	if exec == nil {
+		return
+	}
+	r.file = exec
+}
+
+func (r *Runner) SetGitExecutor(exec Executor) {
+	if exec == nil {
+		return
+	}
+	r.git = exec
 }
 
 func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(prefix string) string) (*StartTaskResult, error) {
@@ -310,6 +328,12 @@ func spanIDByName(trace *profiler.Trace, name string) string {
 func (r *Runner) executorForTask(task types.Task) Executor {
 	if task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != "" && r.shell != nil {
 		return r.shell
+	}
+	if task.ExecutionKind == "file" && strings.TrimSpace(task.FilePath) != "" && r.file != nil {
+		return r.file
+	}
+	if task.ExecutionKind == "git" && strings.TrimSpace(task.GitCommand) != "" && r.git != nil {
+		return r.git
 	}
 	return r.exec
 }

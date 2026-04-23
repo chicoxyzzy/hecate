@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/sandbox"
@@ -229,4 +231,237 @@ func shellErrorKind(err error) string {
 		return "shell_timeout"
 	}
 	return "shell_command_failed"
+}
+
+type FileExecutor struct{}
+
+func NewFileExecutor() *FileExecutor {
+	return &FileExecutor{}
+}
+
+func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
+	if spec.NewID == nil {
+		return nil, fmt.Errorf("resource id generator is required")
+	}
+	if spec.Task.FilePath == "" {
+		return nil, fmt.Errorf("file path is required")
+	}
+
+	operation := spec.Task.FileOperation
+	if operation == "" {
+		operation = "write"
+	}
+	targetPath := spec.Task.FilePath
+	if spec.Task.WorkingDirectory != "" && !filepath.IsAbs(targetPath) {
+		targetPath = filepath.Join(spec.Task.WorkingDirectory, targetPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return nil, err
+	}
+
+	var err error
+	switch operation {
+	case "write":
+		err = os.WriteFile(targetPath, []byte(spec.Task.FileContent), 0o644)
+	case "append":
+		var handle *os.File
+		handle, err = os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err == nil {
+			_, err = handle.WriteString(spec.Task.FileContent)
+			closeErr := handle.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+	default:
+		return nil, fmt.Errorf("unsupported file operation %q", operation)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	finishedAt := time.Now().UTC()
+	step := types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    1,
+		Kind:     "file",
+		Title:    "File operation",
+		Status:   "completed",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: "file",
+		Input: map[string]any{
+			"operation":         operation,
+			"path":              spec.Task.FilePath,
+			"working_directory": spec.Task.WorkingDirectory,
+		},
+		OutputSummary: map[string]any{
+			"path":  targetPath,
+			"bytes": len(spec.Task.FileContent),
+		},
+		StartedAt:  spec.StartedAt,
+		FinishedAt: finishedAt,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+	artifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "file",
+		Name:        filepath.Base(targetPath),
+		Description: "File executor output",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		Path:        targetPath,
+		ContentText: spec.Task.FileContent,
+		SizeBytes:   int64(len(spec.Task.FileContent)),
+		Status:      "ready",
+		CreatedAt:   finishedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+
+	return &ExecutionResult{
+		Status:         "completed",
+		Steps:          []types.TaskStep{step},
+		Artifacts:      []types.TaskArtifact{artifact},
+		OtelStatusCode: "ok",
+	}, nil
+}
+
+type GitExecutor struct {
+	sandbox sandbox.Executor
+}
+
+func NewGitExecutor(exec sandbox.Executor) *GitExecutor {
+	if exec == nil {
+		exec = sandbox.NewLocalExecutor()
+	}
+	return &GitExecutor{sandbox: exec}
+}
+
+func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
+	if spec.NewID == nil {
+		return nil, fmt.Errorf("resource id generator is required")
+	}
+	command := spec.Task.GitCommand
+	if command == "" {
+		return nil, fmt.Errorf("git command is required")
+	}
+
+	timeout := spec.Task.TimeoutMS
+	if timeout <= 0 {
+		timeout = 5000
+	}
+	workingDirectory := spec.Task.WorkingDirectory
+	if workingDirectory == "" {
+		workingDirectory = "."
+	}
+	resultData, err := e.sandbox.Run(ctx, sandbox.Command{
+		Command:          "git " + command,
+		WorkingDirectory: workingDirectory,
+		Timeout:          time.Duration(timeout) * time.Millisecond,
+	})
+
+	status := "completed"
+	result := telemetry.ResultSuccess
+	lastError := ""
+	otelStatusCode := "ok"
+	otelStatusMessage := ""
+	if err != nil {
+		status = "failed"
+		result = telemetry.ResultError
+		lastError = err.Error()
+		otelStatusCode = "error"
+		otelStatusMessage = err.Error()
+	}
+
+	finishedAt := time.Now().UTC()
+	step := types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    1,
+		Kind:     "git",
+		Title:    "Git command",
+		Status:   status,
+		Phase:    "execution",
+		Result:   result,
+		ToolName: "git",
+		Input: map[string]any{
+			"command":           command,
+			"working_directory": workingDirectory,
+			"timeout_ms":        timeout,
+		},
+		OutputSummary: map[string]any{
+			"stdout_bytes": len(resultData.Stdout),
+			"stderr_bytes": len(resultData.Stderr),
+			"exit_code":    resultData.ExitCode,
+		},
+		ExitCode:   resultData.ExitCode,
+		Error:      lastError,
+		ErrorKind:  gitErrorKind(err),
+		StartedAt:  spec.StartedAt,
+		FinishedAt: finishedAt,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+
+	stdoutArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stdout",
+		Name:        "git-stdout.txt",
+		Description: "Git stdout capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: resultData.Stdout,
+		SizeBytes:   int64(len(resultData.Stdout)),
+		Status:      "ready",
+		CreatedAt:   finishedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	stderrArtifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stderr",
+		Name:        "git-stderr.txt",
+		Description: "Git stderr capture",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: resultData.Stderr,
+		SizeBytes:   int64(len(resultData.Stderr)),
+		Status:      "ready",
+		CreatedAt:   finishedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+
+	return &ExecutionResult{
+		Status:            status,
+		Steps:             []types.TaskStep{step},
+		Artifacts:         []types.TaskArtifact{stdoutArtifact, stderrArtifact},
+		LastError:         lastError,
+		OtelStatusCode:    otelStatusCode,
+		OtelStatusMessage: otelStatusMessage,
+	}, nil
+}
+
+func gitErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "git_timeout"
+	}
+	return "git_command_failed"
 }

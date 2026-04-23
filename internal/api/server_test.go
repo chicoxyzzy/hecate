@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2171,6 +2173,143 @@ func TestTaskStartShellExecutor(t *testing.T) {
 	}
 	if !foundStdout {
 		t.Fatal("stdout artifact missing shell output")
+	}
+}
+
+func TestTaskStartFileExecutor(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tempDir := t.TempDir()
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Write file","prompt":"Write a file.","execution_kind":"file","file_operation":"write","file_path":"note.txt","file_content":"hello file","working_directory":%q}`, tempDir)))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Data.ExecutionKind != "file" {
+		t.Fatalf("execution_kind = %q, want file", created.Data.ExecutionKind)
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Data.Status != "completed" {
+		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 || steps.Data[0].Kind != "file" {
+		t.Fatalf("steps = %#v, want one file step", steps.Data)
+	}
+
+	content, err := os.ReadFile(filepath.Join(tempDir, "note.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(content) != "hello file" {
+		t.Fatalf("file contents = %q, want hello file", string(content))
+	}
+}
+
+func TestTaskStartGitExecutor(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tempDir := t.TempDir()
+
+	initCmd := exec.Command("git", "init")
+	initCmd.Dir = tempDir
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v, output=%s", err, string(output))
+	}
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Run git","prompt":"Run a git command.","execution_kind":"git","git_command":"status --short","working_directory":%q,"timeout_ms":2000}`, tempDir)))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Data.ExecutionKind != "git" {
+		t.Fatalf("execution_kind = %q, want git", created.Data.ExecutionKind)
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Data.Status != "completed" {
+		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 || steps.Data[0].Kind != "git" {
+		t.Fatalf("steps = %#v, want one git step", steps.Data)
+	}
+
+	artifactsRecorder := httptest.NewRecorder()
+	artifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
+	handler.ServeHTTP(artifactsRecorder, artifactsRequest)
+	if artifactsRecorder.Code != http.StatusOK {
+		t.Fatalf("artifacts status = %d, want %d, body=%s", artifactsRecorder.Code, http.StatusOK, artifactsRecorder.Body.String())
+	}
+
+	var artifacts TaskArtifactsResponse
+	if err := json.NewDecoder(bytes.NewReader(artifactsRecorder.Body.Bytes())).Decode(&artifacts); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(artifacts.Data) != 2 {
+		t.Fatalf("artifacts = %d, want 2", len(artifacts.Data))
 	}
 }
 

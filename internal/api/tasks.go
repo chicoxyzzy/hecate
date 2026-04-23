@@ -8,7 +8,11 @@ type CreateTaskRequest struct {
 	WorkspaceMode     string `json:"workspace_mode"`
 	ExecutionKind     string `json:"execution_kind"`
 	ShellCommand      string `json:"shell_command"`
+	GitCommand        string `json:"git_command"`
 	WorkingDirectory  string `json:"working_directory"`
+	FileOperation     string `json:"file_operation"`
+	FilePath          string `json:"file_path"`
+	FileContent       string `json:"file_content"`
 	TimeoutMS         int    `json:"timeout_ms"`
 	Priority          string `json:"priority"`
 	RequestedModel    string `json:"requested_model"`
@@ -86,7 +90,11 @@ type TaskItem struct {
 	WorkspaceMode        string `json:"workspace_mode,omitempty"`
 	ExecutionKind        string `json:"execution_kind,omitempty"`
 	ShellCommand         string `json:"shell_command,omitempty"`
+	GitCommand           string `json:"git_command,omitempty"`
 	WorkingDirectory     string `json:"working_directory,omitempty"`
+	FileOperation        string `json:"file_operation,omitempty"`
+	FilePath             string `json:"file_path,omitempty"`
+	FileContent          string `json:"file_content,omitempty"`
 	TimeoutMS            int    `json:"timeout_ms,omitempty"`
 	Status               string `json:"status"`
 	Priority             string `json:"priority,omitempty"`
