@@ -1,5 +1,6 @@
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { DefinitionList, InlineNotice, ShellSection, StatusPill, Surface, ToolbarButton, TokenField } from "../shared/ConsolePrimitives";
+import "./AccessView.css";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
