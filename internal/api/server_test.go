@@ -947,12 +947,26 @@ func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
+		t.Fatalf("UpsertTenant() error = %v", err)
+	}
+	if _, err := cpStore.UpsertAPIKey(context.Background(), controlplane.APIKey{
+		ID:      "team-a",
+		Name:    "team-a",
+		Key:     "tenant-secret",
+		Tenant:  "team-a",
+		Role:    "tenant",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("UpsertAPIKey() error = %v", err)
+	}
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
 		Server: config.ServerConfig{
 			AuthToken: "admin-secret",
-			APIKeys: []config.APIKeyConfig{
-				{Name: "team-a", Key: "tenant-secret", Tenant: "team-a", Role: "tenant"},
-			},
 		},
 		Governor: config.GovernorConfig{
 			MaxPromptTokens:      64_000,
@@ -961,7 +975,7 @@ func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 			BudgetKey:            "global",
 			BudgetScope:          "global",
 		},
-	}, governor.NewMemoryBudgetStore(), nil)
+	}, governor.NewMemoryBudgetStore(), cpStore)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/budget", nil)
 	req.Header.Set("Authorization", "Bearer tenant-secret")
@@ -978,13 +992,24 @@ func TestChatCompletionAPIKeyRejectsTenantImpersonation(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	provider := &fakeProvider{name: "openai"}
-	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
-		Server: config.ServerConfig{
-			APIKeys: []config.APIKeyConfig{
-				{Name: "team-a", Key: "tenant-secret", Tenant: "team-a", Role: "tenant"},
-			},
-		},
-	})
+	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
+		t.Fatalf("UpsertTenant() error = %v", err)
+	}
+	if _, err := cpStore.UpsertAPIKey(context.Background(), controlplane.APIKey{
+		ID:      "team-a",
+		Name:    "team-a",
+		Key:     "tenant-secret",
+		Tenant:  "team-a",
+		Role:    "tenant",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("UpsertAPIKey() error = %v", err)
+	}
+	handler := newTestHTTPHandlerWithControlPlane(logger, []providers.Provider{provider}, config.Config{}, cpStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","user":"team-b","messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Authorization", "Bearer tenant-secret")
@@ -1015,6 +1040,25 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 	registry := providers.NewRegistry(cloudProvider, localProvider)
 	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	budgetStore := governor.NewMemoryBudgetStore()
+	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
+		t.Fatalf("UpsertTenant() error = %v", err)
+	}
+	if _, err := cpStore.UpsertAPIKey(context.Background(), controlplane.APIKey{
+		ID:               "team-a",
+		Name:             "team-a",
+		Key:              "tenant-secret",
+		Tenant:           "team-a",
+		Role:             "tenant",
+		AllowedProviders: []string{"ollama"},
+		AllowedModels:    []string{"llama3.1:8b"},
+		Enabled:          true,
+	}); err != nil {
+		t.Fatalf("UpsertAPIKey() error = %v", err)
+	}
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
@@ -1030,20 +1074,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{
-		Server: config.ServerConfig{
-			APIKeys: []config.APIKeyConfig{
-				{
-					Name:             "team-a",
-					Key:              "tenant-secret",
-					Tenant:           "team-a",
-					Role:             "tenant",
-					AllowedProviders: []string{"ollama"},
-					AllowedModels:    []string{"llama3.1:8b"},
-				},
-			},
-		},
-	}, logger, service, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer tenant-secret")
@@ -1759,6 +1790,10 @@ func newTestHTTPHandlerWithConfig(logger *slog.Logger, provider providers.Provid
 }
 
 func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provider, cfg config.Config) http.Handler {
+	return newTestHTTPHandlerWithControlPlane(logger, items, cfg, nil)
+}
+
+func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.Provider, cfg config.Config, cpStore controlplane.Store) http.Handler {
 	registry := providers.NewRegistry(items...)
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 	providerCatalog := catalog.NewRegistryCatalog(registry, healthTracker)
@@ -1825,7 +1860,7 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 	})
 
 	cfg.Governor = governorCfg
-	handler := NewHandler(cfg, logger, service, nil)
+	handler := NewHandler(cfg, logger, service, cpStore)
 	return NewServer(logger, handler)
 }
 

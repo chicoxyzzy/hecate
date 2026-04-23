@@ -2,21 +2,6 @@ package config
 
 import "testing"
 
-func TestLoadAPIKeysFromEnvDefaultsRoleAndSkipsEmptyKey(t *testing.T) {
-	t.Setenv("GATEWAY_API_KEYS_JSON", `[{"name":"tenant-a","key":"secret-a","tenant":"acme"},{"name":"missing","key":""}]`)
-
-	keys := loadAPIKeysFromEnv()
-	if len(keys) != 1 {
-		t.Fatalf("len(keys) = %d, want 1", len(keys))
-	}
-	if keys[0].Role != "tenant" {
-		t.Fatalf("role = %q, want tenant", keys[0].Role)
-	}
-	if keys[0].Tenant != "acme" {
-		t.Fatalf("tenant = %q, want acme", keys[0].Tenant)
-	}
-}
-
 func TestLoadFromEnvSemanticAndPostgresSettings(t *testing.T) {
 	t.Setenv("GATEWAY_SEMANTIC_CACHE_ENABLED", "true")
 	t.Setenv("GATEWAY_SEMANTIC_CACHE_BACKEND", "postgres")

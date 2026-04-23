@@ -25,30 +25,15 @@ func (p Principal) IsAdmin() bool {
 
 type Authenticator struct {
 	adminToken string
-	apiKeys    map[string]Principal
 	store      controlplane.Store
 	enabled    bool
 }
 
 func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authenticator {
-	keys := make(map[string]Principal, len(cfg.APIKeys))
-	for _, item := range cfg.APIKeys {
-		keys[item.Key] = Principal{
-			Name:             item.Name,
-			Role:             item.Role,
-			Tenant:           item.Tenant,
-			Source:           "env_api_key",
-			KeyID:            item.Name,
-			AllowedProviders: append([]string(nil), item.AllowedProviders...),
-			AllowedModels:    append([]string(nil), item.AllowedModels...),
-		}
-	}
-
 	return &Authenticator{
 		adminToken: cfg.AuthToken,
-		apiKeys:    keys,
 		store:      store,
-		enabled:    cfg.AuthToken != "" || len(keys) > 0 || store != nil,
+		enabled:    cfg.AuthToken != "" || store != nil,
 	}
 }
 
@@ -72,14 +57,6 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 			Role:   "admin",
 			Source: "admin_token",
 		}, true
-	}
-
-	principal, ok := a.apiKeys[token]
-	if ok {
-		if principal.Role == "" {
-			principal.Role = "tenant"
-		}
-		return principal, true
 	}
 
 	if a.store != nil {

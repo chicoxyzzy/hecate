@@ -26,20 +26,10 @@ type Config struct {
 type ServerConfig struct {
 	Address               string
 	AuthToken             string
-	APIKeys               []APIKeyConfig
 	ControlPlaneBackend   string
 	ControlPlaneFile      string
 	ControlPlaneKey       string
 	ControlPlaneSecretKey string
-}
-
-type APIKeyConfig struct {
-	Name             string   `json:"name"`
-	Key              string   `json:"key"`
-	Tenant           string   `json:"tenant"`
-	Role             string   `json:"role"`
-	AllowedProviders []string `json:"allowed_providers"`
-	AllowedModels    []string `json:"allowed_models"`
 }
 
 type RouterConfig struct {
@@ -209,7 +199,6 @@ func LoadFromEnv() Config {
 		Server: ServerConfig{
 			Address:               getEnv("GATEWAY_ADDRESS", ":8080"),
 			AuthToken:             getEnv("GATEWAY_AUTH_TOKEN", ""),
-			APIKeys:               loadAPIKeysFromEnv(),
 			ControlPlaneBackend:   getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "none"),
 			ControlPlaneFile:      getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:       getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
@@ -538,30 +527,6 @@ func defaultPricebookConfig() PricebookConfig {
 			},
 		},
 	}
-}
-
-func loadAPIKeysFromEnv() []APIKeyConfig {
-	raw := strings.TrimSpace(getEnv("GATEWAY_API_KEYS_JSON", ""))
-	if raw == "" {
-		return nil
-	}
-
-	var keys []APIKeyConfig
-	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
-		return nil
-	}
-
-	out := make([]APIKeyConfig, 0, len(keys))
-	for _, item := range keys {
-		if item.Key == "" {
-			continue
-		}
-		if item.Role == "" {
-			item.Role = "tenant"
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 func loadProvidersFromEnv() ProvidersConfig {

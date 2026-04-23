@@ -159,7 +159,6 @@ endpoint.
 Auth supports:
 
 - admin bearer token
-- env-defined API keys
 - persisted API keys managed through the control plane
 
 The control plane currently supports:

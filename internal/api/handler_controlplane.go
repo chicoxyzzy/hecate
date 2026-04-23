@@ -25,19 +25,6 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 		},
 	}
 
-	for _, key := range h.config.Server.APIKeys {
-		payload.Data.APIKeys = append(payload.Data.APIKeys, ControlPlaneAPIKeyRecord{
-			ID:               key.Name,
-			Name:             key.Name,
-			Tenant:           key.Tenant,
-			Role:             key.Role,
-			AllowedProviders: key.AllowedProviders,
-			AllowedModels:    key.AllowedModels,
-			Enabled:          true,
-			KeyPreview:       previewSecret(key.Key),
-		})
-	}
-
 	if h.controlPlane == nil {
 		WriteJSON(w, http.StatusOK, payload)
 		return
