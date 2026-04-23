@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -251,5 +252,34 @@ func TestStaticGovernorRoutePolicyDenyByTenantAndProviderKind(t *testing.T) {
 	}
 	if err.Error() != "team-a cannot use expensive cloud spillover" {
 		t.Fatalf("error = %q, want policy reason", err.Error())
+	}
+}
+
+func TestControlPlaneGovernorUsesPersistedPolicyRule(t *testing.T) {
+	t.Parallel()
+
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := store.UpsertPolicyRule(context.Background(), config.PolicyRuleConfig{
+		ID:            "deny-cloud",
+		Action:        "deny",
+		Reason:        "cloud denied from control plane",
+		ProviderKinds: []string{"cloud"},
+	}); err != nil {
+		t.Fatalf("UpsertPolicyRule() error = %v", err)
+	}
+
+	gov := NewControlPlaneGovernor(config.GovernorConfig{}, NewMemoryBudgetStore(), NewMemoryBudgetStore(), store)
+	err = gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
+		Provider: "openai",
+		Model:    "gpt-4o-mini",
+	}, "cloud", 0)
+	if err == nil {
+		t.Fatal("CheckRoute() error = nil, want persisted policy denial")
+	}
+	if err.Error() != "cloud denied from control plane" {
+		t.Fatalf("error = %q, want persisted policy reason", err.Error())
 	}
 }

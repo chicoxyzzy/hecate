@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
@@ -261,6 +262,93 @@ func (s *PostgresStore) DeleteAPIKey(ctx context.Context, id string) error {
 	}
 	appendAuditEvent(&state, newAuditEvent(ctx, "api_key.deleted", "api_key", state.APIKeys[index].ID, state.APIKeys[index].Name))
 	state.APIKeys = append(state.APIKeys[:index], state.APIKeys[index+1:]...)
+	return s.writeState(ctx, state)
+}
+
+func (s *PostgresStore) UpsertPolicyRule(ctx context.Context, rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error) {
+	rule, err := normalizePolicyRule(rule)
+	if err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+	action := upsertPolicyRule(&state, rule)
+	appendAuditEvent(&state, newAuditEvent(ctx, action, "policy_rule", rule.ID, rule.Action))
+	if err := s.writeState(ctx, state); err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+	return rule, nil
+}
+
+func (s *PostgresStore) DeletePolicyRule(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("policy rule id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return err
+	}
+	index := policyRuleIndex(state.PolicyRules, id)
+	if index < 0 {
+		return fmt.Errorf("policy rule %q not found", id)
+	}
+	appendAuditEvent(&state, newAuditEvent(ctx, "policy_rule.deleted", "policy_rule", state.PolicyRules[index].ID, state.PolicyRules[index].Action))
+	state.PolicyRules = append(state.PolicyRules[:index], state.PolicyRules[index+1:]...)
+	return s.writeState(ctx, state)
+}
+
+func (s *PostgresStore) UpsertPricebookEntry(ctx context.Context, entry config.ModelPriceConfig) (config.ModelPriceConfig, error) {
+	entry, err := normalizePricebookEntry(entry)
+	if err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+	action := upsertPricebookEntry(&state, entry)
+	appendAuditEvent(&state, newAuditEvent(ctx, action, "pricebook_entry", pricebookEntryID(entry.Provider, entry.Model), ""))
+	if err := s.writeState(ctx, state); err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+	return entry, nil
+}
+
+func (s *PostgresStore) DeletePricebookEntry(ctx context.Context, provider, model string) error {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return fmt.Errorf("pricebook provider and model are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return err
+	}
+	index := pricebookEntryIndex(state.Pricebook, provider, model)
+	if index < 0 {
+		return fmt.Errorf("pricebook entry %q not found", pricebookEntryID(provider, model))
+	}
+	appendAuditEvent(&state, newAuditEvent(ctx, "pricebook_entry.deleted", "pricebook_entry", pricebookEntryID(provider, model), ""))
+	state.Pricebook = append(state.Pricebook[:index], state.Pricebook[index+1:]...)
 	return s.writeState(ctx, state)
 }
 

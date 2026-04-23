@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
@@ -82,6 +83,65 @@ func TestFileStoreRejectsAPIKeyForUnknownTenant(t *testing.T) {
 		Role:   "tenant",
 	}); err == nil {
 		t.Fatal("UpsertAPIKey() error = nil, want unknown tenant error")
+	}
+}
+
+func TestFileStorePersistsPolicyRulesAndPricebookEntries(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "control-plane.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	if _, err := store.UpsertPolicyRule(context.Background(), config.PolicyRuleConfig{
+		ID:              "deny-expensive-cloud",
+		Action:          "deny",
+		Reason:          "cloud route blocked",
+		ProviderKinds:   []string{" cloud ", "cloud"},
+		RouteReasons:    []string{"fallback"},
+		MinPromptTokens: 1000,
+	}); err != nil {
+		t.Fatalf("UpsertPolicyRule() error = %v", err)
+	}
+	if _, err := store.UpsertPricebookEntry(context.Background(), config.ModelPriceConfig{
+		Provider:                             "openai",
+		Model:                                "custom-model",
+		InputMicrosUSDPerMillionTokens:       100_000,
+		OutputMicrosUSDPerMillionTokens:      200_000,
+		CachedInputMicrosUSDPerMillionTokens: 50_000,
+	}); err != nil {
+		t.Fatalf("UpsertPricebookEntry() error = %v", err)
+	}
+
+	reloaded, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore(reload) error = %v", err)
+	}
+	state, err := reloaded.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(state.PolicyRules) != 1 || state.PolicyRules[0].ProviderKinds[0] != "cloud" {
+		t.Fatalf("policy rules = %#v, want normalized persisted rule", state.PolicyRules)
+	}
+	if len(state.Pricebook) != 1 || state.Pricebook[0].Model != "custom-model" {
+		t.Fatalf("pricebook = %#v, want persisted entry", state.Pricebook)
+	}
+
+	if err := reloaded.DeletePolicyRule(context.Background(), "deny-expensive-cloud"); err != nil {
+		t.Fatalf("DeletePolicyRule() error = %v", err)
+	}
+	if err := reloaded.DeletePricebookEntry(context.Background(), "openai", "custom-model"); err != nil {
+		t.Fatalf("DeletePricebookEntry() error = %v", err)
+	}
+	state, err = reloaded.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot(after delete) error = %v", err)
+	}
+	if len(state.PolicyRules) != 0 || len(state.Pricebook) != 0 {
+		t.Fatalf("state after delete = %#v, want no policy or pricebook records", state)
 	}
 }
 

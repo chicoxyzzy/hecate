@@ -44,6 +44,14 @@ func (f fakeStore) RotateProviderSecret(context.Context, string, controlplane.Pr
 	return controlplane.Provider{}, nil
 }
 func (f fakeStore) DeleteProvider(context.Context, string) error { return nil }
+func (f fakeStore) UpsertPolicyRule(context.Context, config.PolicyRuleConfig) (config.PolicyRuleConfig, error) {
+	return config.PolicyRuleConfig{}, nil
+}
+func (f fakeStore) DeletePolicyRule(context.Context, string) error { return nil }
+func (f fakeStore) UpsertPricebookEntry(context.Context, config.ModelPriceConfig) (config.ModelPriceConfig, error) {
+	return config.ModelPriceConfig{}, nil
+}
+func (f fakeStore) DeletePricebookEntry(context.Context, string, string) error { return nil }
 func (f fakeStore) PruneAuditEvents(context.Context, time.Duration, int) (int, error) {
 	return 0, nil
 }

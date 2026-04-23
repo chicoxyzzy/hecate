@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
@@ -70,11 +71,13 @@ type AuditEvent struct {
 }
 
 type State struct {
-	Tenants         []Tenant         `json:"tenants"`
-	APIKeys         []APIKey         `json:"api_keys"`
-	Providers       []Provider       `json:"providers,omitempty"`
-	ProviderSecrets []ProviderSecret `json:"provider_secrets,omitempty"`
-	Events          []AuditEvent     `json:"events,omitempty"`
+	Tenants         []Tenant                  `json:"tenants"`
+	APIKeys         []APIKey                  `json:"api_keys"`
+	Providers       []Provider                `json:"providers,omitempty"`
+	ProviderSecrets []ProviderSecret          `json:"provider_secrets,omitempty"`
+	PolicyRules     []config.PolicyRuleConfig `json:"policy_rules,omitempty"`
+	Pricebook       []config.ModelPriceConfig `json:"pricebook,omitempty"`
+	Events          []AuditEvent              `json:"events,omitempty"`
 }
 
 type Store interface {
@@ -91,6 +94,10 @@ type Store interface {
 	SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error)
 	RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error)
 	DeleteProvider(ctx context.Context, id string) error
+	UpsertPolicyRule(ctx context.Context, rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error)
+	DeletePolicyRule(ctx context.Context, id string) error
+	UpsertPricebookEntry(ctx context.Context, entry config.ModelPriceConfig) (config.ModelPriceConfig, error)
+	DeletePricebookEntry(ctx context.Context, provider, model string) error
 	PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
@@ -589,6 +596,164 @@ func (s *RedisStore) DeleteAPIKey(ctx context.Context, id string) error {
 	return s.writeState(ctx, state)
 }
 
+func (s *FileStore) UpsertPolicyRule(ctx context.Context, rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error) {
+	rule, err := normalizePolicyRule(rule)
+	if err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	action := upsertPolicyRule(&s.data, rule)
+	appendAuditEvent(&s.data, newAuditEvent(ctx, action, "policy_rule", rule.ID, rule.Action))
+	if err := s.persistLocked(); err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+	return rule, nil
+}
+
+func (s *RedisStore) UpsertPolicyRule(ctx context.Context, rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error) {
+	rule, err := normalizePolicyRule(rule)
+	if err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+	action := upsertPolicyRule(&state, rule)
+	appendAuditEvent(&state, newAuditEvent(ctx, action, "policy_rule", rule.ID, rule.Action))
+	if err := s.writeState(ctx, state); err != nil {
+		return config.PolicyRuleConfig{}, err
+	}
+	return rule, nil
+}
+
+func (s *FileStore) DeletePolicyRule(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("policy rule id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	index := policyRuleIndex(s.data.PolicyRules, id)
+	if index < 0 {
+		return fmt.Errorf("policy rule %q not found", id)
+	}
+	appendAuditEvent(&s.data, newAuditEvent(ctx, "policy_rule.deleted", "policy_rule", s.data.PolicyRules[index].ID, s.data.PolicyRules[index].Action))
+	s.data.PolicyRules = append(s.data.PolicyRules[:index], s.data.PolicyRules[index+1:]...)
+	return s.persistLocked()
+}
+
+func (s *RedisStore) DeletePolicyRule(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("policy rule id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return err
+	}
+	index := policyRuleIndex(state.PolicyRules, id)
+	if index < 0 {
+		return fmt.Errorf("policy rule %q not found", id)
+	}
+	appendAuditEvent(&state, newAuditEvent(ctx, "policy_rule.deleted", "policy_rule", state.PolicyRules[index].ID, state.PolicyRules[index].Action))
+	state.PolicyRules = append(state.PolicyRules[:index], state.PolicyRules[index+1:]...)
+	return s.writeState(ctx, state)
+}
+
+func (s *FileStore) UpsertPricebookEntry(ctx context.Context, entry config.ModelPriceConfig) (config.ModelPriceConfig, error) {
+	entry, err := normalizePricebookEntry(entry)
+	if err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	action := upsertPricebookEntry(&s.data, entry)
+	appendAuditEvent(&s.data, newAuditEvent(ctx, action, "pricebook_entry", pricebookEntryID(entry.Provider, entry.Model), ""))
+	if err := s.persistLocked(); err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+	return entry, nil
+}
+
+func (s *RedisStore) UpsertPricebookEntry(ctx context.Context, entry config.ModelPriceConfig) (config.ModelPriceConfig, error) {
+	entry, err := normalizePricebookEntry(entry)
+	if err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+	action := upsertPricebookEntry(&state, entry)
+	appendAuditEvent(&state, newAuditEvent(ctx, action, "pricebook_entry", pricebookEntryID(entry.Provider, entry.Model), ""))
+	if err := s.writeState(ctx, state); err != nil {
+		return config.ModelPriceConfig{}, err
+	}
+	return entry, nil
+}
+
+func (s *FileStore) DeletePricebookEntry(ctx context.Context, provider, model string) error {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return fmt.Errorf("pricebook provider and model are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	index := pricebookEntryIndex(s.data.Pricebook, provider, model)
+	if index < 0 {
+		return fmt.Errorf("pricebook entry %q not found", pricebookEntryID(provider, model))
+	}
+	appendAuditEvent(&s.data, newAuditEvent(ctx, "pricebook_entry.deleted", "pricebook_entry", pricebookEntryID(provider, model), ""))
+	s.data.Pricebook = append(s.data.Pricebook[:index], s.data.Pricebook[index+1:]...)
+	return s.persistLocked()
+}
+
+func (s *RedisStore) DeletePricebookEntry(ctx context.Context, provider, model string) error {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return fmt.Errorf("pricebook provider and model are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return err
+	}
+	index := pricebookEntryIndex(state.Pricebook, provider, model)
+	if index < 0 {
+		return fmt.Errorf("pricebook entry %q not found", pricebookEntryID(provider, model))
+	}
+	appendAuditEvent(&state, newAuditEvent(ctx, "pricebook_entry.deleted", "pricebook_entry", pricebookEntryID(provider, model), ""))
+	state.Pricebook = append(state.Pricebook[:index], state.Pricebook[index+1:]...)
+	return s.writeState(ctx, state)
+}
+
 func (s *FileStore) PruneAuditEvents(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -702,6 +867,8 @@ func cloneState(state State) State {
 		APIKeys:         make([]APIKey, 0, len(state.APIKeys)),
 		Providers:       make([]Provider, 0, len(state.Providers)),
 		ProviderSecrets: make([]ProviderSecret, 0, len(state.ProviderSecrets)),
+		PolicyRules:     make([]config.PolicyRuleConfig, 0, len(state.PolicyRules)),
+		Pricebook:       make([]config.ModelPriceConfig, 0, len(state.Pricebook)),
 		Events:          make([]AuditEvent, 0, len(state.Events)),
 	}
 	for _, tenant := range state.Tenants {
@@ -754,6 +921,12 @@ func cloneState(state State) State {
 			CreatedAt:       secret.CreatedAt,
 			RotatedAt:       secret.RotatedAt,
 		})
+	}
+	for _, rule := range state.PolicyRules {
+		out.PolicyRules = append(out.PolicyRules, clonePolicyRule(rule))
+	}
+	for _, entry := range state.Pricebook {
+		out.Pricebook = append(out.Pricebook, entry)
 	}
 	for _, event := range state.Events {
 		out.Events = append(out.Events, AuditEvent{
@@ -871,6 +1044,107 @@ func apiKeyIndex(keys []APIKey, id string) int {
 		}
 	}
 	return -1
+}
+
+func normalizePolicyRule(rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error) {
+	rule.ID = strings.TrimSpace(rule.ID)
+	rule.Action = strings.TrimSpace(rule.Action)
+	rule.Reason = strings.TrimSpace(rule.Reason)
+	rule.Roles = normalizeStringList(rule.Roles)
+	rule.Tenants = normalizeStringList(rule.Tenants)
+	rule.Providers = normalizeStringList(rule.Providers)
+	rule.ProviderKinds = normalizeStringList(rule.ProviderKinds)
+	rule.Models = normalizeStringList(rule.Models)
+	rule.RouteReasons = normalizeStringList(rule.RouteReasons)
+	rule.RewriteModelTo = strings.TrimSpace(rule.RewriteModelTo)
+	if rule.ID == "" {
+		return config.PolicyRuleConfig{}, fmt.Errorf("policy rule id is required")
+	}
+	if rule.Action == "" {
+		return config.PolicyRuleConfig{}, fmt.Errorf("policy rule action is required")
+	}
+	return rule, nil
+}
+
+func normalizePricebookEntry(entry config.ModelPriceConfig) (config.ModelPriceConfig, error) {
+	entry.Provider = strings.TrimSpace(entry.Provider)
+	entry.Model = strings.TrimSpace(entry.Model)
+	if entry.Provider == "" || entry.Model == "" {
+		return config.ModelPriceConfig{}, fmt.Errorf("pricebook provider and model are required")
+	}
+	if entry.InputMicrosUSDPerMillionTokens < 0 || entry.OutputMicrosUSDPerMillionTokens < 0 || entry.CachedInputMicrosUSDPerMillionTokens < 0 {
+		return config.ModelPriceConfig{}, fmt.Errorf("pricebook values must be zero or greater")
+	}
+	return entry, nil
+}
+
+func upsertPolicyRule(state *State, rule config.PolicyRuleConfig) string {
+	index := policyRuleIndex(state.PolicyRules, rule.ID)
+	if index >= 0 {
+		state.PolicyRules[index] = clonePolicyRule(rule)
+		return "policy_rule.updated"
+	}
+	state.PolicyRules = append(state.PolicyRules, clonePolicyRule(rule))
+	return "policy_rule.created"
+}
+
+func upsertPricebookEntry(state *State, entry config.ModelPriceConfig) string {
+	index := pricebookEntryIndex(state.Pricebook, entry.Provider, entry.Model)
+	if index >= 0 {
+		state.Pricebook[index] = entry
+		return "pricebook_entry.updated"
+	}
+	state.Pricebook = append(state.Pricebook, entry)
+	return "pricebook_entry.created"
+}
+
+func policyRuleIndex(items []config.PolicyRuleConfig, id string) int {
+	for i := range items {
+		if items[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func pricebookEntryIndex(items []config.ModelPriceConfig, provider, model string) int {
+	for i := range items {
+		if items[i].Provider == provider && items[i].Model == model {
+			return i
+		}
+	}
+	return -1
+}
+
+func pricebookEntryID(provider, model string) string {
+	return strings.TrimSpace(provider) + "/" + strings.TrimSpace(model)
+}
+
+func normalizeStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func clonePolicyRule(rule config.PolicyRuleConfig) config.PolicyRuleConfig {
+	rule.Roles = append([]string(nil), rule.Roles...)
+	rule.Tenants = append([]string(nil), rule.Tenants...)
+	rule.Providers = append([]string(nil), rule.Providers...)
+	rule.ProviderKinds = append([]string(nil), rule.ProviderKinds...)
+	rule.Models = append([]string(nil), rule.Models...)
+	rule.RouteReasons = append([]string(nil), rule.RouteReasons...)
+	return rule
 }
 
 func tenantReferencedByAPIKeys(keys []APIKey, tenantID string) bool {

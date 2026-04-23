@@ -20,9 +20,9 @@ Current runtime capabilities:
 - retry and failover for transient upstream errors
 - exact cache
 - semantic cache
-- static cost estimation via a local pricebook
+- static and persisted pricebook-backed cost estimation
 - budget enforcement
-- config-driven policy rules with deny/rewrite decisions by tenant, provider, model, and cost
+- persisted policy rules with deny/rewrite decisions by tenant, provider, model, and cost
 - budget limit top-ups, resets, warning thresholds, and history
 - tenant-aware auth and restrictions
 - request tracing and structured logs
@@ -122,8 +122,7 @@ The documented core provider knobs are:
 - `PROVIDER_<NAME>_DEFAULT_MODEL`
 
 Advanced overrides like `PROTOCOL`, `API_VERSION`, and `TIMEOUT` are available
-when needed. Provider model catalogs are discovered from provider APIs instead
-of maintained as static env lists.
+when needed.
 
 
 Built-in cloud provider presets:
@@ -252,11 +251,12 @@ Implemented:
 - [x] Retry, failover, and provider health tracking
 - [x] Exact cache
 - [x] Semantic cache
-- [x] Static pricebook and cost estimation
+- [x] Static and persisted pricebook-backed cost estimation
 - [x] Budget enforcement with top-ups, resets, warning thresholds, and history
 - [x] Background retention and pruning for traces, cache, budget history, and audit events
 - [x] Tenant-aware auth and persisted control-plane state
 - [x] Persisted provider config with encrypted secret storage and runtime reload
+- [x] Persisted policy and pricebook control-plane CRUD
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
 - [x] Provider setup preset catalog for common cloud and local runtimes
@@ -265,8 +265,8 @@ Next:
 
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
 - [ ] Cleaner route reason taxonomy and debug views after routing simplification
-- [ ] Deeper policy lifecycle beyond config-driven rules
-- [ ] A real pricebook ingestion/update path instead of only seeded static defaults
+- [ ] Richer policy lifecycle UI, history, and validation helpers
+- [ ] Automated pricebook ingestion/sync from provider pricing sources
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI
 - [ ] Provider setup UX that keeps presets separate from runtime routing truth

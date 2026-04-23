@@ -17,11 +17,13 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	payload := ControlPlaneResponse{
 		Object: "control_plane",
 		Data: ControlPlaneResponseItem{
-			Backend:   "env",
-			Tenants:   []ControlPlaneTenantItem{},
-			APIKeys:   []ControlPlaneAPIKeyRecord{},
-			Providers: []ControlPlaneProviderRecord{},
-			Events:    []ControlPlaneAuditEventRecord{},
+			Backend:     "env",
+			Tenants:     []ControlPlaneTenantItem{},
+			APIKeys:     []ControlPlaneAPIKeyRecord{},
+			Providers:   []ControlPlaneProviderRecord{},
+			PolicyRules: []ControlPlanePolicyRuleRecord{},
+			Pricebook:   []ControlPlanePricebookRecord{},
+			Events:      []ControlPlaneAuditEventRecord{},
 		},
 	}
 
@@ -55,6 +57,12 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	}
 	for _, provider := range state.Providers {
 		payload.Data.Providers = append(payload.Data.Providers, renderControlPlaneProvider(provider, state.ProviderSecrets))
+	}
+	for _, rule := range state.PolicyRules {
+		payload.Data.PolicyRules = append(payload.Data.PolicyRules, renderControlPlanePolicyRule(rule))
+	}
+	for _, entry := range state.Pricebook {
+		payload.Data.Pricebook = append(payload.Data.Pricebook, renderControlPlanePricebookEntry(entry))
 	}
 	for _, event := range state.Events {
 		payload.Data.Events = append(payload.Data.Events, renderControlPlaneAuditEvent(event))
@@ -395,6 +403,118 @@ func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *htt
 	})
 }
 
+func (h *Handler) HandleControlPlaneUpsertPolicyRule(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+
+	var req ControlPlanePolicyRuleUpsertRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	rule, err := h.controlPlane.UpsertPolicyRule(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), config.PolicyRuleConfig{
+		ID:                     req.ID,
+		Action:                 req.Action,
+		Reason:                 req.Reason,
+		Roles:                  req.Roles,
+		Tenants:                req.Tenants,
+		Providers:              req.Providers,
+		ProviderKinds:          req.ProviderKinds,
+		Models:                 req.Models,
+		RouteReasons:           req.RouteReasons,
+		MinPromptTokens:        req.MinPromptTokens,
+		MinEstimatedCostMicros: req.MinEstimatedCostMicros,
+		RewriteModelTo:         req.RewriteModelTo,
+	})
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_policy_rule",
+		"data":   renderControlPlanePolicyRule(rule),
+	})
+}
+
+func (h *Handler) HandleControlPlaneDeletePolicyRule(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+
+	var req ControlPlanePolicyRuleLifecycleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.controlPlane.DeletePolicyRule(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID); err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_policy_rule_deleted",
+		"data": map[string]string{
+			"id": req.ID,
+		},
+	})
+}
+
+func (h *Handler) HandleControlPlaneUpsertPricebookEntry(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+
+	var req ControlPlanePricebookUpsertRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	entry, err := h.controlPlane.UpsertPricebookEntry(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), config.ModelPriceConfig{
+		Provider:                             req.Provider,
+		Model:                                req.Model,
+		InputMicrosUSDPerMillionTokens:       req.InputMicrosUSDPerMillionTokens,
+		OutputMicrosUSDPerMillionTokens:      req.OutputMicrosUSDPerMillionTokens,
+		CachedInputMicrosUSDPerMillionTokens: req.CachedInputMicrosUSDPerMillionTokens,
+	})
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_pricebook_entry",
+		"data":   renderControlPlanePricebookEntry(entry),
+	})
+}
+
+func (h *Handler) HandleControlPlaneDeletePricebookEntry(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+
+	var req ControlPlanePricebookLifecycleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.controlPlane.DeletePricebookEntry(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.Provider, req.Model); err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_pricebook_entry_deleted",
+		"data": map[string]string{
+			"provider": req.Provider,
+			"model":    req.Model,
+		},
+	})
+}
+
 func renderControlPlaneAPIKey(key controlplane.APIKey) ControlPlaneAPIKeyRecord {
 	record := ControlPlaneAPIKeyRecord{
 		ID:               key.ID,
@@ -413,6 +533,33 @@ func renderControlPlaneAPIKey(key controlplane.APIKey) ControlPlaneAPIKeyRecord 
 		record.UpdatedAt = key.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 	return record
+}
+
+func renderControlPlanePolicyRule(rule config.PolicyRuleConfig) ControlPlanePolicyRuleRecord {
+	return ControlPlanePolicyRuleRecord{
+		ID:                     rule.ID,
+		Action:                 rule.Action,
+		Reason:                 rule.Reason,
+		Roles:                  rule.Roles,
+		Tenants:                rule.Tenants,
+		Providers:              rule.Providers,
+		ProviderKinds:          rule.ProviderKinds,
+		Models:                 rule.Models,
+		RouteReasons:           rule.RouteReasons,
+		MinPromptTokens:        rule.MinPromptTokens,
+		MinEstimatedCostMicros: rule.MinEstimatedCostMicros,
+		RewriteModelTo:         rule.RewriteModelTo,
+	}
+}
+
+func renderControlPlanePricebookEntry(entry config.ModelPriceConfig) ControlPlanePricebookRecord {
+	return ControlPlanePricebookRecord{
+		Provider:                             entry.Provider,
+		Model:                                entry.Model,
+		InputMicrosUSDPerMillionTokens:       entry.InputMicrosUSDPerMillionTokens,
+		OutputMicrosUSDPerMillionTokens:      entry.OutputMicrosUSDPerMillionTokens,
+		CachedInputMicrosUSDPerMillionTokens: entry.CachedInputMicrosUSDPerMillionTokens,
+	}
 }
 
 func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAuditEventRecord {

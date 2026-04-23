@@ -104,7 +104,8 @@ func main() {
 	providerRegistry := providerRuntime.Registry()
 	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
 
-	pricebook := billing.NewRegistryAwarePricebook(billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook), providerRegistry)
+	staticPricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
+	pricebook := billing.NewRegistryAwarePricebook(billing.NewControlPlanePricebook(staticPricebook, controlPlaneStore), providerRegistry)
 	otelProvider, err := profiler.NewTracerProvider(
 		context.Background(),
 		cfg.OTel.Traces.Enabled,
@@ -146,7 +147,7 @@ func main() {
 		cfg.Router.DefaultModel,
 		providerCatalog,
 	)
-	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore, budgetStore)
+	governorEngine := governor.NewControlPlaneGovernor(cfg.Governor, budgetStore, budgetStore, controlPlaneStore)
 
 	service := gateway.NewService(buildGatewayDependencies(
 		cfg,

@@ -1,9 +1,11 @@
 package billing
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -139,5 +141,40 @@ func TestStaticPricebookEstimateUnknownModelPolicyError(t *testing.T) {
 	}
 	if !IsPriceNotFound(err) {
 		t.Fatalf("Estimate() error = %v, want IsPriceNotFound", err)
+	}
+}
+
+func TestControlPlanePricebookUsesPersistedEntry(t *testing.T) {
+	t.Parallel()
+
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := store.UpsertPricebookEntry(context.Background(), config.ModelPriceConfig{
+		Provider:                             "openai",
+		Model:                                "custom-model",
+		InputMicrosUSDPerMillionTokens:       100_000,
+		OutputMicrosUSDPerMillionTokens:      200_000,
+		CachedInputMicrosUSDPerMillionTokens: 50_000,
+	}); err != nil {
+		t.Fatalf("UpsertPricebookEntry() error = %v", err)
+	}
+
+	base := NewStaticPricebook(config.ProvidersConfig{
+		OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+	}, config.PricebookConfig{})
+	pricebook := NewControlPlanePricebook(base, store)
+
+	got, err := pricebook.Estimate("openai", "custom-model", types.Usage{
+		PromptTokens:       1000,
+		CompletionTokens:   1000,
+		CachedPromptTokens: 1000,
+	})
+	if err != nil {
+		t.Fatalf("Estimate() error = %v", err)
+	}
+	if got.TotalMicrosUSD != 350 {
+		t.Fatalf("total = %d, want 350", got.TotalMicrosUSD)
 	}
 }

@@ -407,12 +407,14 @@ type ControlPlaneResponse struct {
 }
 
 type ControlPlaneResponseItem struct {
-	Backend   string                         `json:"backend"`
-	Path      string                         `json:"path,omitempty"`
-	Tenants   []ControlPlaneTenantItem       `json:"tenants"`
-	APIKeys   []ControlPlaneAPIKeyRecord     `json:"api_keys"`
-	Providers []ControlPlaneProviderRecord   `json:"providers"`
-	Events    []ControlPlaneAuditEventRecord `json:"events"`
+	Backend     string                         `json:"backend"`
+	Path        string                         `json:"path,omitempty"`
+	Tenants     []ControlPlaneTenantItem       `json:"tenants"`
+	APIKeys     []ControlPlaneAPIKeyRecord     `json:"api_keys"`
+	Providers   []ControlPlaneProviderRecord   `json:"providers"`
+	PolicyRules []ControlPlanePolicyRuleRecord `json:"policy_rules"`
+	Pricebook   []ControlPlanePricebookRecord  `json:"pricebook"`
+	Events      []ControlPlaneAuditEventRecord `json:"events"`
 }
 
 type ControlPlaneTenantItem struct {
@@ -455,6 +457,29 @@ type ControlPlaneProviderRecord struct {
 	UpdatedAt            string   `json:"updated_at,omitempty"`
 }
 
+type ControlPlanePolicyRuleRecord struct {
+	ID                     string   `json:"id"`
+	Action                 string   `json:"action"`
+	Reason                 string   `json:"reason,omitempty"`
+	Roles                  []string `json:"roles,omitempty"`
+	Tenants                []string `json:"tenants,omitempty"`
+	Providers              []string `json:"providers,omitempty"`
+	ProviderKinds          []string `json:"provider_kinds,omitempty"`
+	Models                 []string `json:"models,omitempty"`
+	RouteReasons           []string `json:"route_reasons,omitempty"`
+	MinPromptTokens        int      `json:"min_prompt_tokens,omitempty"`
+	MinEstimatedCostMicros int64    `json:"min_estimated_cost_micros_usd,omitempty"`
+	RewriteModelTo         string   `json:"rewrite_model_to,omitempty"`
+}
+
+type ControlPlanePricebookRecord struct {
+	Provider                             string `json:"provider"`
+	Model                                string `json:"model"`
+	InputMicrosUSDPerMillionTokens       int64  `json:"input_micros_usd_per_million_tokens"`
+	OutputMicrosUSDPerMillionTokens      int64  `json:"output_micros_usd_per_million_tokens"`
+	CachedInputMicrosUSDPerMillionTokens int64  `json:"cached_input_micros_usd_per_million_tokens"`
+}
+
 type ControlPlaneAuditEventRecord struct {
 	Timestamp  string `json:"timestamp"`
 	Actor      string `json:"actor"`
@@ -495,6 +520,19 @@ type ControlPlaneProviderUpsertRequest struct {
 	DefaultModel *string `json:"default_model,omitempty"`
 	Enabled      bool    `json:"enabled"`
 	Key          string  `json:"key"`
+}
+
+type ControlPlanePolicyRuleUpsertRequest = ControlPlanePolicyRuleRecord
+
+type ControlPlanePolicyRuleLifecycleRequest struct {
+	ID string `json:"id"`
+}
+
+type ControlPlanePricebookUpsertRequest = ControlPlanePricebookRecord
+
+type ControlPlanePricebookLifecycleRequest struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 type ControlPlaneTenantLifecycleRequest struct {

@@ -1249,6 +1249,83 @@ func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	}
 }
 
+func TestControlPlanePolicyAndPricebookCRUD(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	}, governor.NewMemoryBudgetStore(), store)
+
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/policy-rules", strings.NewReader(`{"id":"deny-cloud","action":"deny","reason":"cloud denied","provider_kinds":["cloud"]}`))
+	policyReq.Header.Set("Authorization", "Bearer admin-secret")
+	policyReq.Header.Set("Content-Type", "application/json")
+	policyRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(policyRecorder, policyReq)
+	if policyRecorder.Code != http.StatusOK {
+		t.Fatalf("policy status = %d, want %d, body=%s", policyRecorder.Code, http.StatusOK, policyRecorder.Body.String())
+	}
+
+	pricebookReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/pricebook", strings.NewReader(`{"provider":"openai","model":"custom-model","input_micros_usd_per_million_tokens":100000,"output_micros_usd_per_million_tokens":200000}`))
+	pricebookReq.Header.Set("Authorization", "Bearer admin-secret")
+	pricebookReq.Header.Set("Content-Type", "application/json")
+	pricebookRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(pricebookRecorder, pricebookReq)
+	if pricebookRecorder.Code != http.StatusOK {
+		t.Fatalf("pricebook status = %d, want %d, body=%s", pricebookRecorder.Code, http.StatusOK, pricebookRecorder.Body.String())
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
+	statusReq.Header.Set("Authorization", "Bearer admin-secret")
+	statusRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(statusRecorder, statusReq)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", statusRecorder.Code, http.StatusOK, statusRecorder.Body.String())
+	}
+
+	var response ControlPlaneResponse
+	if err := json.NewDecoder(bytes.NewReader(statusRecorder.Body.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(response.Data.PolicyRules) != 1 {
+		t.Fatalf("policy rule count = %d, want 1", len(response.Data.PolicyRules))
+	}
+	if response.Data.PolicyRules[0].ID != "deny-cloud" {
+		t.Fatalf("policy rule id = %q, want deny-cloud", response.Data.PolicyRules[0].ID)
+	}
+	if len(response.Data.Pricebook) != 1 {
+		t.Fatalf("pricebook count = %d, want 1", len(response.Data.Pricebook))
+	}
+	if response.Data.Pricebook[0].Provider != "openai" || response.Data.Pricebook[0].Model != "custom-model" {
+		t.Fatalf("pricebook entry = %s/%s, want openai/custom-model", response.Data.Pricebook[0].Provider, response.Data.Pricebook[0].Model)
+	}
+
+	deletePolicyReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/policy-rules/delete", strings.NewReader(`{"id":"deny-cloud"}`))
+	deletePolicyReq.Header.Set("Authorization", "Bearer admin-secret")
+	deletePolicyReq.Header.Set("Content-Type", "application/json")
+	deletePolicyRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deletePolicyRecorder, deletePolicyReq)
+	if deletePolicyRecorder.Code != http.StatusOK {
+		t.Fatalf("delete policy status = %d, want %d, body=%s", deletePolicyRecorder.Code, http.StatusOK, deletePolicyRecorder.Body.String())
+	}
+
+	deletePricebookReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/pricebook/delete", strings.NewReader(`{"provider":"openai","model":"custom-model"}`))
+	deletePricebookReq.Header.Set("Authorization", "Bearer admin-secret")
+	deletePricebookReq.Header.Set("Content-Type", "application/json")
+	deletePricebookRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deletePricebookRecorder, deletePricebookReq)
+	if deletePricebookRecorder.Code != http.StatusOK {
+		t.Fatalf("delete pricebook status = %d, want %d, body=%s", deletePricebookRecorder.Code, http.StatusOK, deletePricebookRecorder.Body.String())
+	}
+}
+
 func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.T) {
 	t.Parallel()
 

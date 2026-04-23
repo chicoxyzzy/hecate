@@ -312,6 +312,29 @@ export type ControlPlaneProviderRecord = {
   updated_at?: string;
 };
 
+export type ControlPlanePolicyRuleRecord = {
+  id: string;
+  action: string;
+  reason?: string;
+  roles?: string[];
+  tenants?: string[];
+  providers?: string[];
+  provider_kinds?: string[];
+  models?: string[];
+  route_reasons?: string[];
+  min_prompt_tokens?: number;
+  min_estimated_cost_micros_usd?: number;
+  rewrite_model_to?: string;
+};
+
+export type ControlPlanePricebookRecord = {
+  provider: string;
+  model: string;
+  input_micros_usd_per_million_tokens: number;
+  output_micros_usd_per_million_tokens: number;
+  cached_input_micros_usd_per_million_tokens: number;
+};
+
 export type ControlPlaneAuditEventRecord = {
   timestamp?: string;
   actor: string;
@@ -329,6 +352,8 @@ export type ControlPlaneResponse = {
     tenants: ControlPlaneTenantRecord[];
     api_keys: ControlPlaneAPIKeyRecord[];
     providers: ControlPlaneProviderRecord[];
+    policy_rules: ControlPlanePolicyRuleRecord[];
+    pricebook: ControlPlanePricebookRecord[];
     events: ControlPlaneAuditEventRecord[];
   };
 };
