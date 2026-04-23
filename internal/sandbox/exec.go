@@ -80,16 +80,7 @@ func NewLocalExecutor() *LocalExecutor {
 }
 
 func (e *LocalExecutor) Run(ctx context.Context, command Command) (Result, error) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	return e.RunStreaming(ctx, command, func(chunk OutputChunk) {
-		switch chunk.Stream {
-		case "stdout":
-			stdout.WriteString(chunk.Text)
-		case "stderr":
-			stderr.WriteString(chunk.Text)
-		}
-	})
+	return e.RunStreaming(ctx, command, nil)
 }
 
 func (e *LocalExecutor) RunStreaming(ctx context.Context, command Command, onChunk func(OutputChunk)) (Result, error) {
@@ -127,19 +118,17 @@ func (e *LocalExecutor) RunStreaming(ctx context.Context, command Command, onChu
 		return Result{ExitCode: -1}, err
 	}
 
-	readDone := make(chan error, 2)
-	go streamPipe(stdoutPipe, "stdout", &stdout, onChunk, readDone)
-	go streamPipe(stderrPipe, "stderr", &stderr, onChunk, readDone)
+	streamEvents := make(chan outputEvent, 8)
+	go streamPipe(stdoutPipe, "stdout", streamEvents)
+	go streamPipe(stderrPipe, "stderr", streamEvents)
+
+	readErr := drainProcessOutput(streamEvents, &stdout, &stderr, onChunk)
+	if readErr != nil {
+		_ = cmd.Wait()
+		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1}, readErr
+	}
 
 	err = cmd.Wait()
-	firstReadErr := <-readDone
-	secondReadErr := <-readDone
-	if firstReadErr != nil {
-		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1}, firstReadErr
-	}
-	if secondReadErr != nil {
-		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1}, secondReadErr
-	}
 	result := Result{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
@@ -201,32 +190,64 @@ func writeFile(request FileRequest, appendMode bool) (FileResult, error) {
 	return FileResult{Path: targetPath, BytesWritten: len(request.Content)}, nil
 }
 
-func streamPipe(pipe io.ReadCloser, streamName string, sink *bytes.Buffer, onChunk func(OutputChunk), done chan<- error) {
+type outputEvent struct {
+	chunk OutputChunk
+	err   error
+	done  bool
+}
+
+func streamPipe(pipe io.ReadCloser, streamName string, events chan<- outputEvent) {
+	defer pipe.Close()
+
 	reader := bufio.NewReader(pipe)
 	buffer := make([]byte, 4096)
 	for {
 		n, err := reader.Read(buffer)
 		if n > 0 {
-			text := string(buffer[:n])
-			sink.WriteString(text)
-			if onChunk != nil {
-				onChunk(OutputChunk{Stream: streamName, Text: text})
+			events <- outputEvent{
+				chunk: OutputChunk{Stream: streamName, Text: string(buffer[:n])},
 			}
 		}
 		if err == nil {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
-			done <- nil
+			events <- outputEvent{done: true}
 			return
 		}
 		if errors.Is(err, os.ErrClosed) {
-			done <- nil
+			events <- outputEvent{done: true}
 			return
 		}
-		done <- err
+		events <- outputEvent{done: true, err: err}
 		return
 	}
+}
+
+func drainProcessOutput(events <-chan outputEvent, stdout, stderr *bytes.Buffer, onChunk func(OutputChunk)) error {
+	var readErr error
+	completedStreams := 0
+	for completedStreams < 2 {
+		event := <-events
+		if event.done {
+			completedStreams++
+			if event.err != nil && readErr == nil {
+				readErr = event.err
+			}
+			continue
+		}
+
+		switch event.chunk.Stream {
+		case "stdout":
+			stdout.WriteString(event.chunk.Text)
+		case "stderr":
+			stderr.WriteString(event.chunk.Text)
+		}
+		if onChunk != nil {
+			onChunk(event.chunk)
+		}
+	}
+	return readErr
 }
 
 func ResolvePath(workingDirectory, targetPath string, policy Policy) (string, error) {
