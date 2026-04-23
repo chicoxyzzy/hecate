@@ -399,39 +399,20 @@ func (h *Handler) HandleResolveTaskApproval(w http.ResponseWriter, r *http.Reque
 			w.Header().Set("X-Span-Id", result.SpanID)
 		}
 	case "rejected":
-		run, found, err := h.taskStore.GetRun(ctx, task.ID, approval.RunID)
+		result, err := h.taskRunner.RejectTaskAfterApproval(ctx, task, approval, newOpaqueTaskResourceID)
 		if err != nil {
+			telemetry.Error(h.logger, ctx, "gateway.tasks.approvals.reject.failed",
+				slog.String("event.name", "gateway.tasks.approvals.reject.failed"),
+				slog.Any("error", err),
+			)
 			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
 			return
 		}
-		if !found {
-			WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
-			return
+		if result.TraceID != "" {
+			w.Header().Set("X-Trace-Id", result.TraceID)
 		}
-		run.Status = "cancelled"
-		run.LastError = "approval rejected"
-		run.FinishedAt = now
-		run.OtelStatusCode = "error"
-		run.OtelStatusMessage = "approval rejected"
-		if _, err := h.taskStore.UpdateRun(ctx, run); err != nil {
-			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-			return
-		}
-
-		task.Status = "cancelled"
-		task.LatestRunID = run.ID
-		if task.StartedAt.IsZero() {
-			task.StartedAt = run.StartedAt
-		}
-		task.FinishedAt = now
-		task.UpdatedAt = now
-		task.LastError = "approval rejected"
-		if requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx)); requestID != "" {
-			task.LatestRequestID = requestID
-		}
-		if _, err := h.taskStore.UpdateTask(ctx, task); err != nil {
-			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-			return
+		if result.SpanID != "" {
+			w.Header().Set("X-Span-Id", result.SpanID)
 		}
 	}
 

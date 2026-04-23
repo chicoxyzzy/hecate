@@ -309,6 +309,62 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 	}, nil
 }
 
+func (r *Runner) RejectTaskAfterApproval(ctx context.Context, task types.Task, approval types.TaskApproval, idgen func(prefix string) string) (*StartTaskResult, error) {
+	if r.store == nil {
+		return nil, fmt.Errorf("task store is not configured")
+	}
+	if idgen == nil {
+		return nil, fmt.Errorf("resource id generator is required")
+	}
+	run, found, err := r.store.GetRun(ctx, task.ID, approval.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("task run %q not found", approval.RunID)
+	}
+	if run.Status != "awaiting_approval" {
+		return nil, fmt.Errorf("task run %q is not awaiting approval", run.ID)
+	}
+
+	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
+	if requestID == "" {
+		requestID = firstNonEmpty(approval.RequestID, run.RequestID)
+	}
+	if requestID == "" {
+		requestID = idgen("request")
+	}
+
+	trace := r.tracer.Start(requestID)
+	defer trace.Finalize()
+
+	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
+	trace.Record("orchestrator.approval.resolved", map[string]any{
+		telemetry.AttrHecatePhase:  "approval",
+		telemetry.AttrHecateResult: telemetry.ResultSuccess,
+		"hecate.task.id":           task.ID,
+		"hecate.run.id":            run.ID,
+		"hecate.approval.id":       approval.ID,
+		"hecate.approval.kind":     approval.Kind,
+		"hecate.approval.status":   approval.Status,
+	})
+
+	run, err = r.cancelRunWithMessage(ctx, task, run, "approval rejected", requestID, trace.TraceID)
+	if err != nil {
+		return nil, err
+	}
+	task, _, err = r.store.GetTask(ctx, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &StartTaskResult{
+		Task:    task,
+		Run:     run,
+		TraceID: trace.TraceID,
+		SpanID:  trace.RootSpanID(),
+	}, nil
+}
+
 func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (types.TaskRun, error) {
 	run, found, err := r.store.GetRun(ctx, task.ID, runID)
 	if err != nil {
@@ -321,6 +377,12 @@ func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (
 		return run, nil
 	}
 
+	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
+	traceIDs := telemetry.TraceIDsFromContext(ctx)
+	return r.cancelRunWithMessage(ctx, task, run, "run cancelled", requestID, traceIDs.TraceID)
+}
+
+func (r *Runner) cancelRunWithMessage(ctx context.Context, task types.Task, run types.TaskRun, message, requestID, traceID string) (types.TaskRun, error) {
 	r.jobMu.Lock()
 	cancel, ok := r.jobs[run.ID]
 	r.jobMu.Unlock()
@@ -330,10 +392,17 @@ func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (
 
 	now := time.Now().UTC()
 	run.Status = "cancelled"
-	run.LastError = "run cancelled"
+	run.LastError = message
 	run.FinishedAt = now
 	run.OtelStatusCode = "error"
-	run.OtelStatusMessage = "run cancelled"
+	run.OtelStatusMessage = message
+	if requestID != "" {
+		run.RequestID = requestID
+	}
+	if traceID != "" {
+		run.TraceID = traceID
+	}
+	var err error
 	run, err = r.store.UpdateRun(ctx, run)
 	if err != nil {
 		return types.TaskRun{}, err
@@ -344,7 +413,7 @@ func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (
 		if step.Status == "running" {
 			step.Status = "cancelled"
 			step.Result = telemetry.ResultError
-			step.Error = "run cancelled"
+			step.Error = message
 			step.ErrorKind = "run_cancelled"
 			step.FinishedAt = now
 			_, _ = r.store.UpdateStep(ctx, step)
@@ -361,9 +430,18 @@ func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (
 
 	task.Status = "cancelled"
 	task.LatestRunID = run.ID
-	task.LastError = "run cancelled"
+	task.LastError = message
+	if task.StartedAt.IsZero() {
+		task.StartedAt = run.StartedAt
+	}
 	task.FinishedAt = now
 	task.UpdatedAt = now
+	if requestID != "" {
+		task.LatestRequestID = requestID
+	}
+	if traceID != "" {
+		task.LatestTraceID = traceID
+	}
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
 		return types.TaskRun{}, err
 	}
