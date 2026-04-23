@@ -671,11 +671,43 @@ export function useRuntimeConsole() {
     }
   }
 
-  async function upsertTenant() {
+  function setNoticeMessage(kind: NoticeState["kind"], message: string) {
+    setNotice({ kind, message });
+  }
+
+  function describeError(error: unknown, fallback: string): string {
+    return error instanceof Error ? error.message : fallback;
+  }
+
+  function resetControlPlaneFeedback() {
     setControlPlaneError("");
     setNotice(null);
+  }
+
+  async function runControlPlaneMutation(options: {
+    action: () => Promise<void>;
+    successMessage: string;
+    errorMessage: string;
+    failureDetail: string;
+  }) {
+    resetControlPlaneFeedback();
     try {
-      await upsertTenantRequest(
+      await options.action();
+      await loadDashboard();
+      setNoticeMessage("success", options.successMessage);
+    } catch (error) {
+      setControlPlaneError(describeError(error, options.failureDetail));
+      setNoticeMessage("error", options.errorMessage);
+    }
+  }
+
+  async function upsertTenant() {
+    await runControlPlaneMutation({
+      successMessage: "Tenant saved.",
+      errorMessage: "Failed to save tenant.",
+      failureDetail: "failed to save tenant",
+      action: async () => {
+        await upsertTenantRequest(
         {
           id: tenantFormID,
           name: tenantFormName,
@@ -685,24 +717,21 @@ export function useRuntimeConsole() {
         },
         authToken,
       );
-
-      setTenantFormID("");
-      setTenantFormName("");
-      setTenantFormProviders("");
-      setTenantFormModels("");
-      await loadDashboard();
-      setNotice({ kind: "success", message: "Tenant saved." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to save tenant");
-      setNotice({ kind: "error", message: "Failed to save tenant." });
-    }
+        setTenantFormID("");
+        setTenantFormName("");
+        setTenantFormProviders("");
+        setTenantFormModels("");
+      },
+    });
   }
 
   async function upsertAPIKey() {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await upsertAPIKeyRequest(
+    await runControlPlaneMutation({
+      successMessage: "API key saved.",
+      errorMessage: "Failed to save API key.",
+      failureDetail: "failed to save api key",
+      action: async () => {
+        await upsertAPIKeyRequest(
         {
           id: apiKeyFormID,
           name: apiKeyFormName,
@@ -715,19 +744,14 @@ export function useRuntimeConsole() {
         },
         authToken,
       );
-
-      setAPIKeyFormID("");
-      setAPIKeyFormName("");
-      setAPIKeyFormSecret("");
-      setAPIKeyFormTenant("");
-      setAPIKeyFormProviders("");
-      setAPIKeyFormModels("");
-      await loadDashboard();
-      setNotice({ kind: "success", message: "API key saved." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to save api key");
-      setNotice({ kind: "error", message: "Failed to save API key." });
-    }
+        setAPIKeyFormID("");
+        setAPIKeyFormName("");
+        setAPIKeyFormSecret("");
+        setAPIKeyFormTenant("");
+        setAPIKeyFormProviders("");
+        setAPIKeyFormModels("");
+      },
+    });
   }
 
   function populateProviderFormFromPreset(presetID: string) {
@@ -748,10 +772,12 @@ export function useRuntimeConsole() {
   }
 
   async function upsertProvider() {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      const payload = buildProviderUpsertPayload({
+    await runControlPlaneMutation({
+      successMessage: "Provider saved.",
+      errorMessage: "Failed to save provider.",
+      failureDetail: "failed to save provider",
+      action: async () => {
+        const payload = buildProviderUpsertPayload({
         presetID: providerFormPresetID,
         id: providerFormID,
         name: providerFormName,
@@ -764,134 +790,117 @@ export function useRuntimeConsole() {
         key: providerFormSecret,
         presets: providerPresets,
       });
-      await upsertProviderRequest(
+        await upsertProviderRequest(
         payload,
         authToken,
       );
-      setProviderFormSecret("");
-      await loadDashboard();
-      setNotice({ kind: "success", message: "Provider saved." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to save provider");
-      setNotice({ kind: "error", message: "Failed to save provider." });
-    }
+        setProviderFormSecret("");
+      },
+    });
   }
 
   async function setProviderEnabled(id: string, enabled: boolean) {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await setProviderEnabledRequest({ id, enabled }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: `Provider ${enabled ? "enabled" : "disabled"}.` });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to update provider state");
-      setNotice({ kind: "error", message: "Failed to update provider state." });
-    }
+    await runControlPlaneMutation({
+      successMessage: `Provider ${enabled ? "enabled" : "disabled"}.`,
+      errorMessage: "Failed to update provider state.",
+      failureDetail: "failed to update provider state",
+      action: async () => {
+        await setProviderEnabledRequest({ id, enabled }, authToken);
+      },
+    });
   }
 
   async function rotateProviderCredential() {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await rotateProviderSecretRequest({ id: rotateProviderID, key: rotateProviderSecret }, authToken);
-      setRotateProviderID("");
-      setRotateProviderSecret("");
-      await loadDashboard();
-      setNotice({ kind: "success", message: "Provider secret rotated." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to rotate provider secret");
-      setNotice({ kind: "error", message: "Failed to rotate provider secret." });
-    }
+    await runControlPlaneMutation({
+      successMessage: "Provider secret rotated.",
+      errorMessage: "Failed to rotate provider secret.",
+      failureDetail: "failed to rotate provider secret",
+      action: async () => {
+        await rotateProviderSecretRequest({ id: rotateProviderID, key: rotateProviderSecret }, authToken);
+        setRotateProviderID("");
+        setRotateProviderSecret("");
+      },
+    });
   }
 
   async function deleteProvider(id: string) {
-    setControlPlaneError("");
-    setNotice(null);
+    resetControlPlaneFeedback();
     if (!window.confirm(`Delete provider "${id}"? This cannot be undone.`)) {
       return;
     }
-    try {
-      await deleteProviderRequest({ id }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: "Provider deleted." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to delete provider");
-      setNotice({ kind: "error", message: "Failed to delete provider." });
-    }
+    await runControlPlaneMutation({
+      successMessage: "Provider deleted.",
+      errorMessage: "Failed to delete provider.",
+      failureDetail: "failed to delete provider",
+      action: async () => {
+        await deleteProviderRequest({ id }, authToken);
+      },
+    });
   }
 
   async function setTenantEnabled(id: string, enabled: boolean) {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await setTenantEnabledRequest({ id, enabled }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: `Tenant ${enabled ? "enabled" : "disabled"}.` });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to update tenant state");
-      setNotice({ kind: "error", message: "Failed to update tenant state." });
-    }
+    await runControlPlaneMutation({
+      successMessage: `Tenant ${enabled ? "enabled" : "disabled"}.`,
+      errorMessage: "Failed to update tenant state.",
+      failureDetail: "failed to update tenant state",
+      action: async () => {
+        await setTenantEnabledRequest({ id, enabled }, authToken);
+      },
+    });
   }
 
   async function deleteTenant(id: string) {
-    setControlPlaneError("");
-    setNotice(null);
+    resetControlPlaneFeedback();
     if (!window.confirm(`Delete tenant "${id}"? This cannot be undone.`)) {
       return;
     }
-    try {
-      await deleteTenantRequest({ id }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: "Tenant deleted." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to delete tenant");
-      setNotice({ kind: "error", message: "Failed to delete tenant." });
-    }
+    await runControlPlaneMutation({
+      successMessage: "Tenant deleted.",
+      errorMessage: "Failed to delete tenant.",
+      failureDetail: "failed to delete tenant",
+      action: async () => {
+        await deleteTenantRequest({ id }, authToken);
+      },
+    });
   }
 
   async function setAPIKeyEnabled(id: string, enabled: boolean) {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await setAPIKeyEnabledRequest({ id, enabled }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: `API key ${enabled ? "enabled" : "disabled"}.` });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to update api key state");
-      setNotice({ kind: "error", message: "Failed to update API key state." });
-    }
+    await runControlPlaneMutation({
+      successMessage: `API key ${enabled ? "enabled" : "disabled"}.`,
+      errorMessage: "Failed to update API key state.",
+      failureDetail: "failed to update api key state",
+      action: async () => {
+        await setAPIKeyEnabledRequest({ id, enabled }, authToken);
+      },
+    });
   }
 
   async function rotateAPIKey() {
-    setControlPlaneError("");
-    setNotice(null);
-    try {
-      await rotateAPIKeyRequest({ id: rotateAPIKeyID, key: rotateAPIKeySecret }, authToken);
-      setRotateAPIKeyID("");
-      setRotateAPIKeySecret("");
-      await loadDashboard();
-      setNotice({ kind: "success", message: "API key rotated." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to rotate api key");
-      setNotice({ kind: "error", message: "Failed to rotate API key." });
-    }
+    await runControlPlaneMutation({
+      successMessage: "API key rotated.",
+      errorMessage: "Failed to rotate API key.",
+      failureDetail: "failed to rotate api key",
+      action: async () => {
+        await rotateAPIKeyRequest({ id: rotateAPIKeyID, key: rotateAPIKeySecret }, authToken);
+        setRotateAPIKeyID("");
+        setRotateAPIKeySecret("");
+      },
+    });
   }
 
   async function deleteAPIKey(id: string) {
-    setControlPlaneError("");
-    setNotice(null);
+    resetControlPlaneFeedback();
     if (!window.confirm(`Delete API key "${id}"? This cannot be undone.`)) {
       return;
     }
-    try {
-      await deleteAPIKeyRequest({ id }, authToken);
-      await loadDashboard();
-      setNotice({ kind: "success", message: "API key deleted." });
-    } catch (error) {
-      setControlPlaneError(error instanceof Error ? error.message : "failed to delete api key");
-      setNotice({ kind: "error", message: "Failed to delete API key." });
-    }
+    await runControlPlaneMutation({
+      successMessage: "API key deleted.",
+      errorMessage: "Failed to delete API key.",
+      failureDetail: "failed to delete api key",
+      action: async () => {
+        await deleteAPIKeyRequest({ id }, authToken);
+      },
+    });
   }
 
   async function copyCommand(command: string) {
