@@ -139,10 +139,7 @@ type FileExecutor struct {
 }
 
 func NewFileExecutor(exec sandbox.Executor) *FileExecutor {
-	if exec == nil {
-		exec = sandbox.NewLocalExecutor()
-	}
-	return &FileExecutor{sandbox: exec}
+	return &FileExecutor{sandbox: ensureSandboxExecutor(exec)}
 }
 
 func (e *FileExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
@@ -153,10 +150,7 @@ func (e *FileExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execut
 		return nil, fmt.Errorf("file path is required")
 	}
 
-	operation := spec.Task.FileOperation
-	if operation == "" {
-		operation = "write"
-	}
+	operation := fileOperation(spec.Task)
 	if spec.Task.SandboxReadOnly {
 		return fileFailure(spec, operation, spec.Task.FilePath, "sandbox policy denied: write access is disabled", "sandbox_policy_denied"), nil
 	}
@@ -182,57 +176,16 @@ func (e *FileExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execut
 		return fileFailure(spec, operation, spec.Task.FilePath, err.Error(), fileErrorKind(err)), nil
 	}
 
+	status, result, lastError, otelStatusCode, otelStatusMessage := executionStatus(nil)
 	finishedAt := time.Now().UTC()
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     "file",
-		Title:    "File operation",
-		Status:   "completed",
-		Phase:    "execution",
-		Result:   telemetry.ResultSuccess,
-		ToolName: "file",
-		Input: map[string]any{
-			"operation":         operation,
-			"path":              spec.Task.FilePath,
-			"working_directory": spec.Task.WorkingDirectory,
-		},
-		OutputSummary: map[string]any{
-			"path":  fileResult.Path,
-			"bytes": fileResult.BytesWritten,
-		},
-		StartedAt:  spec.StartedAt,
-		FinishedAt: finishedAt,
-		RequestID:  spec.RequestID,
-		TraceID:    spec.TraceID,
-	}
-	artifact := types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "file",
-		Name:        filepath.Base(fileResult.Path),
-		Description: "File executor output",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		Path:        fileResult.Path,
-		ContentText: spec.Task.FileContent,
-		SizeBytes:   int64(len(spec.Task.FileContent)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
-	}
+	step := newExecutionStep(spec, "file", "File operation", "file", fileOperationInput(spec.Task, operation))
+	finalizeExecutionStep(&step, finishedAt, status, result, lastError, "", map[string]any{
+		"path":  fileResult.Path,
+		"bytes": fileResult.BytesWritten,
+	})
+	artifact := newInlineArtifact(spec, step.ID, "file", filepath.Base(fileResult.Path), "File executor output", fileResult.Path, spec.Task.FileContent, "ready", finishedAt)
 
-	return &ExecutionResult{
-		Status:         "completed",
-		Steps:          []types.TaskStep{step},
-		Artifacts:      []types.TaskArtifact{artifact},
-		OtelStatusCode: "ok",
-	}, nil
+	return newExecutionResult(status, []types.TaskStep{step}, []types.TaskArtifact{artifact}, lastError, otelStatusCode, otelStatusMessage), nil
 }
 
 type GitExecutor struct {
@@ -292,30 +245,15 @@ func executeStreamingCommand(ctx context.Context, exec sandbox.Executor, spec Ex
 		displayCommand = commandSpec.command
 	}
 
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     commandSpec.kind,
-		Title:    commandSpec.title,
-		Status:   "running",
-		Phase:    "execution",
-		Result:   telemetry.ResultSuccess,
-		ToolName: commandSpec.toolName,
-		Input: map[string]any{
-			"command":           displayCommand,
-			"working_directory": workingDirectory,
-			"timeout_ms":        timeout,
-		},
-		OutputSummary: map[string]any{
-			"stdout_bytes": 0,
-			"stderr_bytes": 0,
-			"exit_code":    0,
-		},
-		StartedAt: spec.StartedAt,
-		RequestID: spec.RequestID,
-		TraceID:   spec.TraceID,
+	step := newExecutionStep(spec, commandSpec.kind, commandSpec.title, commandSpec.toolName, map[string]any{
+		"command":           displayCommand,
+		"working_directory": workingDirectory,
+		"timeout_ms":        timeout,
+	})
+	step.OutputSummary = map[string]any{
+		"stdout_bytes": 0,
+		"stderr_bytes": 0,
+		"exit_code":    0,
 	}
 	if err := upsertTaskStep(spec, step); err != nil {
 		return nil, err
@@ -351,17 +289,12 @@ func executeStreamingCommand(ctx context.Context, exec sandbox.Executor, spec Ex
 	status, result, lastError, otelStatusCode, otelStatusMessage := executionStatus(err)
 	finishedAt := time.Now().UTC()
 
-	step.Status = status
-	step.Result = result
-	step.OutputSummary = map[string]any{
+	finalizeExecutionStep(&step, finishedAt, status, result, lastError, commandErrorKind(err, commandSpec.timeoutErrorKind, commandSpec.defaultErrorKind), map[string]any{
 		"stdout_bytes": len(resultData.Stdout),
 		"stderr_bytes": len(resultData.Stderr),
 		"exit_code":    resultData.ExitCode,
-	}
+	})
 	step.ExitCode = resultData.ExitCode
-	step.Error = lastError
-	step.ErrorKind = commandErrorKind(err, commandSpec.timeoutErrorKind, commandSpec.defaultErrorKind)
-	step.FinishedAt = finishedAt
 	if err := upsertTaskStep(spec, step); err != nil {
 		return nil, err
 	}
@@ -379,14 +312,7 @@ func executeStreamingCommand(ctx context.Context, exec sandbox.Executor, spec Ex
 		return nil, err
 	}
 
-	return &ExecutionResult{
-		Status:            status,
-		Steps:             []types.TaskStep{step},
-		Artifacts:         []types.TaskArtifact{stdoutArtifact, stderrArtifact},
-		LastError:         lastError,
-		OtelStatusCode:    otelStatusCode,
-		OtelStatusMessage: otelStatusMessage,
-	}, nil
+	return newExecutionResult(status, []types.TaskStep{step}, []types.TaskArtifact{stdoutArtifact, stderrArtifact}, lastError, otelStatusCode, otelStatusMessage), nil
 }
 
 func ensureSandboxExecutor(exec sandbox.Executor) sandbox.Executor {
@@ -444,23 +370,7 @@ func commandErrorKind(err error, timeoutErrorKind, defaultErrorKind string) stri
 }
 
 func newStreamingCommandArtifact(spec ExecutionSpec, stepID, kind, name, description string) types.TaskArtifact {
-	return types.TaskArtifact{
-		ID:          spec.NewID("artifact"),
-		TaskID:      spec.Task.ID,
-		RunID:       spec.Run.ID,
-		StepID:      stepID,
-		Kind:        kind,
-		Name:        name,
-		Description: description,
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: "",
-		SizeBytes:   0,
-		Status:      "streaming",
-		CreatedAt:   spec.StartedAt,
-		RequestID:   spec.RequestID,
-		TraceID:     spec.TraceID,
-	}
+	return newInlineArtifact(spec, stepID, kind, name, description, "", "", "streaming", spec.StartedAt)
 }
 
 func upsertTaskStep(spec ExecutionSpec, step types.TaskStep) error {
@@ -475,6 +385,13 @@ func upsertTaskArtifact(spec ExecutionSpec, artifact types.TaskArtifact) error {
 		return nil
 	}
 	return spec.UpsertArtifact(artifact)
+}
+
+func fileOperation(task types.Task) string {
+	if task.FileOperation == "" {
+		return "write"
+	}
+	return task.FileOperation
 }
 
 func fileErrorKind(err error) string {
@@ -497,52 +414,76 @@ func taskPolicy(task types.Task) sandbox.Policy {
 
 func fileFailure(spec ExecutionSpec, operation, path, message, errorKind string) *ExecutionResult {
 	finishedAt := time.Now().UTC()
-	step := types.TaskStep{
-		ID:       spec.NewID("step"),
-		TaskID:   spec.Task.ID,
-		RunID:    spec.Run.ID,
-		Index:    1,
-		Kind:     "file",
-		Title:    "File operation",
-		Status:   "failed",
-		Phase:    "execution",
-		Result:   telemetry.ResultError,
-		ToolName: "file",
-		Input: map[string]any{
-			"operation":         operation,
-			"path":              path,
-			"working_directory": spec.Task.WorkingDirectory,
-		},
-		Error:      message,
-		ErrorKind:  errorKind,
-		StartedAt:  spec.StartedAt,
-		FinishedAt: finishedAt,
-		RequestID:  spec.RequestID,
-		TraceID:    spec.TraceID,
+	step := newExecutionStep(spec, "file", "File operation", "file", fileOperationInput(spec.Task, operation))
+	finalizeExecutionStep(&step, finishedAt, "failed", telemetry.ResultError, message, errorKind, nil)
+	artifact := newInlineArtifact(spec, step.ID, "stderr", "file-error.txt", "File executor error output", "", message, "ready", finishedAt)
+	return newExecutionResult("failed", []types.TaskStep{step}, []types.TaskArtifact{artifact}, message, "error", message)
+}
+
+func fileOperationInput(task types.Task, operation string) map[string]any {
+	return map[string]any{
+		"operation":         operation,
+		"path":              task.FilePath,
+		"working_directory": task.WorkingDirectory,
 	}
-	artifact := types.TaskArtifact{
+}
+
+func newExecutionStep(spec ExecutionSpec, kind, title, toolName string, input map[string]any) types.TaskStep {
+	return types.TaskStep{
+		ID:        spec.NewID("step"),
+		TaskID:    spec.Task.ID,
+		RunID:     spec.Run.ID,
+		Index:     1,
+		Kind:      kind,
+		Title:     title,
+		Status:    "running",
+		Phase:     "execution",
+		Result:    telemetry.ResultSuccess,
+		ToolName:  toolName,
+		Input:     input,
+		StartedAt: spec.StartedAt,
+		RequestID: spec.RequestID,
+		TraceID:   spec.TraceID,
+	}
+}
+
+func finalizeExecutionStep(step *types.TaskStep, finishedAt time.Time, status, result, errMessage, errKind string, outputSummary map[string]any) {
+	step.Status = status
+	step.Result = result
+	step.Error = errMessage
+	step.ErrorKind = errKind
+	step.OutputSummary = outputSummary
+	step.FinishedAt = finishedAt
+}
+
+func newInlineArtifact(spec ExecutionSpec, stepID, kind, name, description, path, content, status string, createdAt time.Time) types.TaskArtifact {
+	return types.TaskArtifact{
 		ID:          spec.NewID("artifact"),
 		TaskID:      spec.Task.ID,
 		RunID:       spec.Run.ID,
-		StepID:      step.ID,
-		Kind:        "stderr",
-		Name:        "file-error.txt",
-		Description: "File executor error output",
+		StepID:      stepID,
+		Kind:        kind,
+		Name:        name,
+		Description: description,
 		MimeType:    "text/plain",
 		StorageKind: "inline",
-		ContentText: message,
-		SizeBytes:   int64(len(message)),
-		Status:      "ready",
-		CreatedAt:   finishedAt,
+		Path:        path,
+		ContentText: content,
+		SizeBytes:   int64(len(content)),
+		Status:      status,
+		CreatedAt:   createdAt,
 		RequestID:   spec.RequestID,
 		TraceID:     spec.TraceID,
 	}
+}
+
+func newExecutionResult(status string, steps []types.TaskStep, artifacts []types.TaskArtifact, lastError, otelStatusCode, otelStatusMessage string) *ExecutionResult {
 	return &ExecutionResult{
-		Status:            "failed",
-		Steps:             []types.TaskStep{step},
-		Artifacts:         []types.TaskArtifact{artifact},
-		LastError:         message,
-		OtelStatusCode:    "error",
-		OtelStatusMessage: message,
+		Status:            status,
+		Steps:             steps,
+		Artifacts:         artifacts,
+		LastError:         lastError,
+		OtelStatusCode:    otelStatusCode,
+		OtelStatusMessage: otelStatusMessage,
 	}
 }
