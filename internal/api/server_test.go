@@ -1866,19 +1866,9 @@ func TestTasksCreateListAndGet(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Upgrade TypeScript","prompt":"Upgrade the UI workspace to TypeScript 7 beta.","repo":"hecate","base_branch":"main","workspace_mode":"ephemeral","requested_model":"gpt-5.4-mini","requested_provider":"openai","budget_micros_usd":500000}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Upgrade TypeScript","prompt":"Upgrade the UI workspace to TypeScript 7 beta.","repo":"hecate","base_branch":"main","workspace_mode":"ephemeral","requested_model":"gpt-5.4-mini","requested_provider":"openai","budget_micros_usd":500000}`)
 	if created.Object != "task" {
 		t.Fatalf("object = %q, want task", created.Object)
 	}
@@ -1892,17 +1882,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("repo = %q, want hecate", created.Data.Repo)
 	}
 
-	listRecorder := httptest.NewRecorder()
-	listRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks?limit=10", nil)
-	handler.ServeHTTP(listRecorder, listRequest)
-	if listRecorder.Code != http.StatusOK {
-		t.Fatalf("list status = %d, want %d, body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
-	}
-
-	var listed TasksResponse
-	if err := json.NewDecoder(bytes.NewReader(listRecorder.Body.Bytes())).Decode(&listed); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	listed := mustTaskRequestJSON[TasksResponse](tasks, http.MethodGet, "/v1/tasks?limit=10", "")
 	if listed.Object != "tasks" {
 		t.Fatalf("object = %q, want tasks", listed.Object)
 	}
@@ -1913,17 +1893,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("listed task id = %q, want %q", listed.Data[0].ID, created.Data.ID)
 	}
 
-	getRecorder := httptest.NewRecorder()
-	getRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID, nil)
-	handler.ServeHTTP(getRecorder, getRequest)
-	if getRecorder.Code != http.StatusOK {
-		t.Fatalf("get status = %d, want %d, body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
-	}
-
-	var fetched TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(getRecorder.Body.Bytes())).Decode(&fetched); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	fetched := mustTaskRequestJSON[TaskResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID, "")
 	if fetched.Data.ID != created.Data.ID {
 		t.Fatalf("fetched task id = %q, want %q", fetched.Data.ID, created.Data.ID)
 	}
@@ -1931,12 +1901,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("prompt = %q, want original prompt", fetched.Data.Prompt)
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
+	startRecorder := tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if got := startRecorder.Header().Get("X-Trace-Id"); got == "" {
 		t.Fatal("X-Trace-Id = empty, want trace id")
 	}
@@ -1944,10 +1909,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatal("X-Span-Id = empty, want span id")
 	}
 
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := decodeRecorder[TaskRunResponse](t, startRecorder)
 	if started.Object != "task_run" {
 		t.Fatalf("object = %q, want task_run", started.Object)
 	}
@@ -1959,17 +1921,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 	}
 	completedRun := waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
 
-	runsRecorder := httptest.NewRecorder()
-	runsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs", nil)
-	handler.ServeHTTP(runsRecorder, runsRequest)
-	if runsRecorder.Code != http.StatusOK {
-		t.Fatalf("runs status = %d, want %d, body=%s", runsRecorder.Code, http.StatusOK, runsRecorder.Body.String())
-	}
-
-	var runs TaskRunsResponse
-	if err := json.NewDecoder(bytes.NewReader(runsRecorder.Body.Bytes())).Decode(&runs); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	runs := mustTaskRequestJSON[TaskRunsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs", "")
 	if len(runs.Data) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runs.Data))
 	}
@@ -1977,17 +1929,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("run id = %q, want %q", runs.Data[0].ID, started.Data.ID)
 	}
 
-	runRecorder := httptest.NewRecorder()
-	runRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID, nil)
-	handler.ServeHTTP(runRecorder, runRequest)
-	if runRecorder.Code != http.StatusOK {
-		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
-	}
-
-	var fetchedRun TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(runRecorder.Body.Bytes())).Decode(&fetchedRun); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	fetchedRun := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID, "")
 	if fetchedRun.Data.ID != started.Data.ID {
 		t.Fatalf("fetched run id = %q, want %q", fetchedRun.Data.ID, started.Data.ID)
 	}
@@ -1995,17 +1937,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("fetched run status = %q, want completed", fetchedRun.Data.Status)
 	}
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2013,32 +1945,12 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("step kind = %q, want model", steps.Data[0].Kind)
 	}
 
-	stepRecorder := httptest.NewRecorder()
-	stepRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps/"+steps.Data[0].ID, nil)
-	handler.ServeHTTP(stepRecorder, stepRequest)
-	if stepRecorder.Code != http.StatusOK {
-		t.Fatalf("step detail status = %d, want %d, body=%s", stepRecorder.Code, http.StatusOK, stepRecorder.Body.String())
-	}
-
-	var step TaskStepResponse
-	if err := json.NewDecoder(bytes.NewReader(stepRecorder.Body.Bytes())).Decode(&step); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	step := mustTaskRequestJSON[TaskStepResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps/"+steps.Data[0].ID, "")
 	if step.Data.ID != steps.Data[0].ID {
 		t.Fatalf("step id = %q, want %q", step.Data.ID, steps.Data[0].ID)
 	}
 
-	artifactsRecorder := httptest.NewRecorder()
-	artifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/artifacts", nil)
-	handler.ServeHTTP(artifactsRecorder, artifactsRequest)
-	if artifactsRecorder.Code != http.StatusOK {
-		t.Fatalf("artifacts status = %d, want %d, body=%s", artifactsRecorder.Code, http.StatusOK, artifactsRecorder.Body.String())
-	}
-
-	var artifacts TaskArtifactsResponse
-	if err := json.NewDecoder(bytes.NewReader(artifactsRecorder.Body.Bytes())).Decode(&artifacts); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	artifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/artifacts", "")
 	if len(artifacts.Data) != 1 {
 		t.Fatalf("artifacts = %d, want 1", len(artifacts.Data))
 	}
@@ -2046,17 +1958,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("artifact kind = %q, want summary", artifacts.Data[0].Kind)
 	}
 
-	runArtifactsRecorder := httptest.NewRecorder()
-	runArtifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
-	handler.ServeHTTP(runArtifactsRecorder, runArtifactsRequest)
-	if runArtifactsRecorder.Code != http.StatusOK {
-		t.Fatalf("run artifacts status = %d, want %d, body=%s", runArtifactsRecorder.Code, http.StatusOK, runArtifactsRecorder.Body.String())
-	}
-
-	var runArtifacts TaskArtifactsResponse
-	if err := json.NewDecoder(bytes.NewReader(runArtifactsRecorder.Body.Bytes())).Decode(&runArtifacts); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	runArtifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", "")
 	if len(runArtifacts.Data) != 1 {
 		t.Fatalf("run artifacts = %d, want 1", len(runArtifacts.Data))
 	}
@@ -2064,18 +1966,7 @@ func TestTasksCreateListAndGet(t *testing.T) {
 		t.Fatalf("run artifact id = %q, want %q", runArtifacts.Data[0].ID, artifacts.Data[0].ID)
 	}
 
-	getAfterStartRecorder := httptest.NewRecorder()
-	getAfterStartRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID, nil)
-	handler.ServeHTTP(getAfterStartRecorder, getAfterStartRequest)
-	if getAfterStartRecorder.Code != http.StatusOK {
-		t.Fatalf("get-after-start status = %d, want %d, body=%s", getAfterStartRecorder.Code, http.StatusOK, getAfterStartRecorder.Body.String())
-	}
-
-	var fetchedAfterStart TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(getAfterStartRecorder.Body.Bytes())).Decode(&fetchedAfterStart); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-	fetchedAfterStart = waitForTaskStatus(t, handler, created.Data.ID, "completed")
+	fetchedAfterStart := waitForTaskStatus(t, handler, created.Data.ID, "completed")
 	if fetchedAfterStart.Data.LatestRunID != started.Data.ID {
 		t.Fatalf("latest_run_id = %q, want %q", fetchedAfterStart.Data.LatestRunID, started.Data.ID)
 	}
@@ -2098,34 +1989,14 @@ func TestTaskStartShellExecutor(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Run shell","prompt":"Run a shell command.","execution_kind":"shell","shell_command":"printf 'hello '; sleep 0.2; printf 'from shell\n'","working_directory":".","timeout_ms":2000}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Run shell","prompt":"Run a shell command.","execution_kind":"shell","shell_command":"printf 'hello '; sleep 0.2; printf 'from shell\n'","working_directory":".","timeout_ms":2000}`)
 	if created.Data.ExecutionKind != "shell" {
 		t.Fatalf("execution_kind = %q, want shell", created.Data.ExecutionKind)
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "awaiting_approval" {
 		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
 	}
@@ -2133,17 +2004,7 @@ func TestTaskStartShellExecutor(t *testing.T) {
 		t.Fatalf("approval_count = %d, want 1", started.Data.ApprovalCount)
 	}
 
-	approvalsRecorder := httptest.NewRecorder()
-	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
-	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
-	if approvalsRecorder.Code != http.StatusOK {
-		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
-	}
-
-	var approvals TaskApprovalsResponse
-	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
 	if len(approvals.Data) != 1 {
 		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
 	}
@@ -2154,33 +2015,12 @@ func TestTaskStartShellExecutor(t *testing.T) {
 		t.Fatalf("approval kind = %q, want shell_command", approvals.Data[0].Kind)
 	}
 
-	approvalRecorder := httptest.NewRecorder()
-	approvalRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID, nil)
-	handler.ServeHTTP(approvalRecorder, approvalRequest)
-	if approvalRecorder.Code != http.StatusOK {
-		t.Fatalf("approval detail status = %d, want %d, body=%s", approvalRecorder.Code, http.StatusOK, approvalRecorder.Body.String())
-	}
-
-	var approval TaskApprovalResponse
-	if err := json.NewDecoder(bytes.NewReader(approvalRecorder.Body.Bytes())).Decode(&approval); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	approval := mustTaskRequestJSON[TaskApprovalResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID, "")
 	if approval.Data.ID != approvals.Data[0].ID {
 		t.Fatalf("approval id = %q, want %q", approval.Data.ID, approvals.Data[0].ID)
 	}
 
-	resolveRecorder := httptest.NewRecorder()
-	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"approve","note":"looks safe"}`))
-	resolveRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(resolveRecorder, resolveRequest)
-	if resolveRecorder.Code != http.StatusOK {
-		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
-	}
-
-	var resolved TaskApprovalResponse
-	if err := json.NewDecoder(bytes.NewReader(resolveRecorder.Body.Bytes())).Decode(&resolved); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	resolved := mustTaskRequestJSON[TaskApprovalResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"approve","note":"looks safe"}`)
 	if resolved.Data.Status != "approved" {
 		t.Fatalf("approval status = %q, want approved", resolved.Data.Status)
 	}
@@ -2204,17 +2044,7 @@ func TestTaskStartShellExecutor(t *testing.T) {
 		t.Fatalf("artifact_count = %d, want 2", completedRun.Data.ArtifactCount)
 	}
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2225,17 +2055,7 @@ func TestTaskStartShellExecutor(t *testing.T) {
 		t.Fatalf("exit_code = %d, want 0", steps.Data[0].ExitCode)
 	}
 
-	runArtifactsRecorder := httptest.NewRecorder()
-	runArtifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
-	handler.ServeHTTP(runArtifactsRecorder, runArtifactsRequest)
-	if runArtifactsRecorder.Code != http.StatusOK {
-		t.Fatalf("run artifacts status = %d, want %d, body=%s", runArtifactsRecorder.Code, http.StatusOK, runArtifactsRecorder.Body.String())
-	}
-
-	var runArtifacts TaskArtifactsResponse
-	if err := json.NewDecoder(bytes.NewReader(runArtifactsRecorder.Body.Bytes())).Decode(&runArtifacts); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	runArtifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", "")
 	if len(runArtifacts.Data) != 2 {
 		t.Fatalf("run artifacts = %d, want 2", len(runArtifacts.Data))
 	}
@@ -2255,57 +2075,20 @@ func TestTaskRejectApprovalCancelsRun(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Reject shell","prompt":"Reject a shell command.","execution_kind":"shell","shell_command":"printf 'should not run\n'","working_directory":".","timeout_ms":2000}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Reject shell","prompt":"Reject a shell command.","execution_kind":"shell","shell_command":"printf 'should not run\n'","working_directory":".","timeout_ms":2000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "awaiting_approval" {
 		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
 	}
 
-	approvalsRecorder := httptest.NewRecorder()
-	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
-	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
-	if approvalsRecorder.Code != http.StatusOK {
-		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
-	}
-
-	var approvals TaskApprovalsResponse
-	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
 	if len(approvals.Data) != 1 {
 		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
 	}
 
-	resolveRecorder := httptest.NewRecorder()
-	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"reject","note":"not safe"}`))
-	resolveRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(resolveRecorder, resolveRequest)
-	if resolveRecorder.Code != http.StatusOK {
-		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
-	}
+	resolveRecorder := tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"reject","note":"not safe"}`)
 	if got := resolveRecorder.Header().Get("X-Trace-Id"); got == "" {
 		t.Fatal("X-Trace-Id = empty, want trace id")
 	}
@@ -2313,10 +2096,7 @@ func TestTaskRejectApprovalCancelsRun(t *testing.T) {
 		t.Fatal("X-Span-Id = empty, want span id")
 	}
 
-	var resolved TaskApprovalResponse
-	if err := json.NewDecoder(bytes.NewReader(resolveRecorder.Body.Bytes())).Decode(&resolved); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	resolved := decodeRecorder[TaskApprovalResponse](t, resolveRecorder)
 	if resolved.Data.Status != "rejected" {
 		t.Fatalf("approval status = %q, want rejected", resolved.Data.Status)
 	}
@@ -2337,17 +2117,7 @@ func TestTaskRejectApprovalCancelsRun(t *testing.T) {
 		t.Fatalf("latest_run_id = %q, want %q", cancelledTask.Data.LatestRunID, started.Data.ID)
 	}
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 0 {
 		t.Fatalf("steps = %d, want 0", len(steps.Data))
 	}
@@ -2359,34 +2129,14 @@ func TestTaskStartFileExecutor(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
 	tempDir := t.TempDir()
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Write file","prompt":"Write a file.","execution_kind":"file","file_operation":"write","file_path":"note.txt","file_content":"hello file","working_directory":%q}`, tempDir)))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", fmt.Sprintf(`{"title":"Write file","prompt":"Write a file.","execution_kind":"file","file_operation":"write","file_path":"note.txt","file_content":"hello file","working_directory":%q}`, tempDir))
 	if created.Data.ExecutionKind != "file" {
 		t.Fatalf("execution_kind = %q, want file", created.Data.ExecutionKind)
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "queued" {
 		t.Fatalf("run status = %q, want queued", started.Data.Status)
 	}
@@ -2395,17 +2145,7 @@ func TestTaskStartFileExecutor(t *testing.T) {
 	}
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 || steps.Data[0].Kind != "file" {
 		t.Fatalf("steps = %#v, want one file step", steps.Data)
 	}
@@ -2425,6 +2165,7 @@ func TestTaskStartGitExecutor(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
 	tempDir := t.TempDir()
+	tasks := newTaskTestClient(t, handler)
 
 	initCmd := exec.Command("git", "init")
 	initCmd.Dir = tempDir
@@ -2432,33 +2173,12 @@ func TestTaskStartGitExecutor(t *testing.T) {
 		t.Fatalf("git init failed: %v, output=%s", err, string(output))
 	}
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Run git","prompt":"Run a git command.","execution_kind":"git","git_command":"status --short","working_directory":%q,"timeout_ms":2000}`, tempDir)))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", fmt.Sprintf(`{"title":"Run git","prompt":"Run a git command.","execution_kind":"git","git_command":"status --short","working_directory":%q,"timeout_ms":2000}`, tempDir))
 	if created.Data.ExecutionKind != "git" {
 		t.Fatalf("execution_kind = %q, want git", created.Data.ExecutionKind)
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "queued" {
 		t.Fatalf("run status = %q, want queued", started.Data.Status)
 	}
@@ -2467,32 +2187,12 @@ func TestTaskStartGitExecutor(t *testing.T) {
 	}
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 || steps.Data[0].Kind != "git" {
 		t.Fatalf("steps = %#v, want one git step", steps.Data)
 	}
 
-	artifactsRecorder := httptest.NewRecorder()
-	artifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
-	handler.ServeHTTP(artifactsRecorder, artifactsRequest)
-	if artifactsRecorder.Code != http.StatusOK {
-		t.Fatalf("artifacts status = %d, want %d, body=%s", artifactsRecorder.Code, http.StatusOK, artifactsRecorder.Body.String())
-	}
-
-	var artifacts TaskArtifactsResponse
-	if err := json.NewDecoder(bytes.NewReader(artifactsRecorder.Body.Bytes())).Decode(&artifacts); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	artifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", "")
 	if len(artifacts.Data) != 2 {
 		t.Fatalf("artifacts = %d, want 2", len(artifacts.Data))
 	}
@@ -2503,77 +2203,31 @@ func TestTaskApprovedShellExecutorRespectsReadOnlyPolicy(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Denied shell","prompt":"Attempt a write.","execution_kind":"shell","shell_command":"touch denied.txt","working_directory":".","sandbox_read_only":true,"timeout_ms":2000}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Denied shell","prompt":"Attempt a write.","execution_kind":"shell","shell_command":"touch denied.txt","working_directory":".","sandbox_read_only":true,"timeout_ms":2000}`)
 	if !created.Data.SandboxReadOnly {
 		t.Fatal("sandbox_read_only = false, want true")
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "awaiting_approval" {
 		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
 	}
 
-	approvalsRecorder := httptest.NewRecorder()
-	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
-	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
-	if approvalsRecorder.Code != http.StatusOK {
-		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
-	}
-
-	var approvals TaskApprovalsResponse
-	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
 	if len(approvals.Data) != 1 {
 		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
 	}
 
-	resolveRecorder := httptest.NewRecorder()
-	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"approve"}`))
-	resolveRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(resolveRecorder, resolveRequest)
-	if resolveRecorder.Code != http.StatusOK {
-		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
-	}
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"approve"}`)
 
 	failedRun := waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "failed")
 	if failedRun.Data.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", failedRun.Data.Status)
 	}
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2592,50 +2246,20 @@ func TestTaskStartFileExecutorRespectsAllowedRoot(t *testing.T) {
 	if err := os.MkdirAll(workingDirectory, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Escape root","prompt":"Try escaping allowed root.","execution_kind":"file","file_operation":"write","file_path":"../outside.txt","file_content":"blocked","working_directory":%q,"sandbox_allowed_root":%q}`, workingDirectory, workingDirectory)))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", fmt.Sprintf(`{"title":"Escape root","prompt":"Try escaping allowed root.","execution_kind":"file","file_operation":"write","file_path":"../outside.txt","file_content":"blocked","working_directory":%q,"sandbox_allowed_root":%q}`, workingDirectory, workingDirectory))
 	if created.Data.SandboxAllowedRoot != workingDirectory {
 		t.Fatalf("sandbox_allowed_root = %q, want %q", created.Data.SandboxAllowedRoot, workingDirectory)
 	}
 
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	if started.Data.Status != "queued" {
 		t.Fatalf("run status = %q, want queued", started.Data.Status)
 	}
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "failed")
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2652,77 +2276,23 @@ func TestTaskRunCancellation(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
 
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Cancel shell","prompt":"Cancel a long shell run.","execution_kind":"shell","shell_command":"printf 'starting\n'; sleep 5; printf 'done\n'","working_directory":".","timeout_ms":10000}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created TaskResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	startRecorder := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
-	handler.ServeHTTP(startRecorder, startRequest)
-	if startRecorder.Code != http.StatusOK {
-		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
-	}
-
-	var started TaskRunResponse
-	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	approvalsRecorder := httptest.NewRecorder()
-	approvalsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", nil)
-	handler.ServeHTTP(approvalsRecorder, approvalsRequest)
-	if approvalsRecorder.Code != http.StatusOK {
-		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsRecorder.Code, http.StatusOK, approvalsRecorder.Body.String())
-	}
-
-	var approvals TaskApprovalsResponse
-	if err := json.NewDecoder(bytes.NewReader(approvalsRecorder.Body.Bytes())).Decode(&approvals); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	resolveRecorder := httptest.NewRecorder()
-	resolveRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", strings.NewReader(`{"decision":"approve"}`))
-	resolveRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(resolveRecorder, resolveRequest)
-	if resolveRecorder.Code != http.StatusOK {
-		t.Fatalf("resolve status = %d, want %d, body=%s", resolveRecorder.Code, http.StatusOK, resolveRecorder.Body.String())
-	}
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Cancel shell","prompt":"Cancel a long shell run.","execution_kind":"shell","shell_command":"printf 'starting\n'; sleep 5; printf 'done\n'","working_directory":".","timeout_ms":10000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"approve"}`)
 
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "running")
 
-	cancelRecorder := httptest.NewRecorder()
-	cancelRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/cancel", nil)
-	handler.ServeHTTP(cancelRecorder, cancelRequest)
-	if cancelRecorder.Code != http.StatusOK {
-		t.Fatalf("cancel status = %d, want %d, body=%s", cancelRecorder.Code, http.StatusOK, cancelRecorder.Body.String())
-	}
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/cancel", "")
 
 	cancelledRun := waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "cancelled")
 	if cancelledRun.Data.Status != "cancelled" {
 		t.Fatalf("run status = %q, want cancelled", cancelledRun.Data.Status)
 	}
 
-	stepsRecorder := httptest.NewRecorder()
-	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
-	handler.ServeHTTP(stepsRecorder, stepsRequest)
-	if stepsRecorder.Code != http.StatusOK {
-		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
-	}
-
-	var steps TaskStepsResponse
-	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2849,16 +2419,38 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	}
 }
 
+type taskTestClient struct {
+	t       *testing.T
+	handler http.Handler
+}
+
+func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
+	t.Helper()
+	return taskTestClient{t: t, handler: handler}
+}
+
+func (c taskTestClient) mustRequest(method, path, body string) *httptest.ResponseRecorder {
+	c.t.Helper()
+	recorder := performRequest(c.t, c.handler, method, path, body)
+	if recorder.Code != http.StatusOK {
+		c.t.Fatalf("%s %s status = %d, want %d, body=%s", method, path, recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	return recorder
+}
+
+func mustTaskRequestJSON[T any](client taskTestClient, method, path, body string) T {
+	client.t.Helper()
+	return decodeRecorder[T](client.t, client.mustRequest(method, path, body))
+}
+
 func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, statuses ...string) TaskRunResponse {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID, nil)
-		handler.ServeHTTP(recorder, request)
+		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID, "")
 		if recorder.Code == http.StatusOK {
-			var run TaskRunResponse
-			if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&run); err == nil && containsStatus(run.Data.Status, statuses...) {
+			run, ok := tryDecodeRecorder[TaskRunResponse](recorder)
+			if ok && containsStatus(run.Data.Status, statuses...) {
 				return run
 			}
 		}
@@ -2872,12 +2464,10 @@ func waitForTaskStatus(t *testing.T, handler http.Handler, taskID string, status
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+taskID, nil)
-		handler.ServeHTTP(recorder, request)
+		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID, "")
 		if recorder.Code == http.StatusOK {
-			var task TaskResponse
-			if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&task); err == nil && containsStatus(task.Data.Status, statuses...) {
+			task, ok := tryDecodeRecorder[TaskResponse](recorder)
+			if ok && containsStatus(task.Data.Status, statuses...) {
 				return task
 			}
 		}
@@ -2891,12 +2481,10 @@ func waitForRunArtifactsContaining(t *testing.T, handler http.Handler, taskID, r
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID+"/artifacts", nil)
-		handler.ServeHTTP(recorder, request)
+		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID+"/artifacts", "")
 		if recorder.Code == http.StatusOK {
-			var artifacts TaskArtifactsResponse
-			if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&artifacts); err == nil {
+			artifacts, ok := tryDecodeRecorder[TaskArtifactsResponse](recorder)
+			if ok {
 				for _, artifact := range artifacts.Data {
 					if artifact.Kind == kind && strings.Contains(artifact.ContentText, contains) {
 						return artifacts
@@ -3148,13 +2736,41 @@ func mergeGovernorDefaults(cfg config.GovernorConfig) config.GovernorConfig {
 
 func performJSONRequest(t *testing.T, handler http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return performRequest(t, handler, http.MethodPost, "/v1/chat/completions", body)
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+func performRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var requestBody io.Reader
+	if body != "" {
+		requestBody = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, requestBody)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder
+}
+
+func decodeRecorder[T any](t *testing.T, recorder *httptest.ResponseRecorder) T {
+	t.Helper()
+	payload, ok := tryDecodeRecorder[T](recorder)
+	if !ok {
+		t.Fatalf("Decode() error for body %q", recorder.Body.String())
+	}
+	return payload
+}
+
+func tryDecodeRecorder[T any](recorder *httptest.ResponseRecorder) (T, bool) {
+	var payload T
+	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&payload); err != nil {
+		return payload, false
+	}
+	return payload, true
 }
 
 type fakeProvider struct {
