@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -24,14 +26,28 @@ type Command struct {
 	Policy           Policy
 }
 
+type FileRequest struct {
+	Path             string
+	Content          string
+	WorkingDirectory string
+	Policy           Policy
+}
+
 type Result struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
 }
 
+type FileResult struct {
+	Path         string
+	BytesWritten int
+}
+
 type Executor interface {
 	Run(ctx context.Context, command Command) (Result, error)
+	WriteFile(ctx context.Context, request FileRequest) (FileResult, error)
+	AppendFile(ctx context.Context, request FileRequest) (FileResult, error)
 }
 
 type PolicyError struct {
@@ -102,6 +118,42 @@ func (e *LocalExecutor) Run(ctx context.Context, command Command) (Result, error
 	}
 	result.ExitCode = -1
 	return result, err
+}
+
+func (e *LocalExecutor) WriteFile(_ context.Context, request FileRequest) (FileResult, error) {
+	return writeFile(request, false)
+}
+
+func (e *LocalExecutor) AppendFile(_ context.Context, request FileRequest) (FileResult, error) {
+	return writeFile(request, true)
+}
+
+func writeFile(request FileRequest, appendMode bool) (FileResult, error) {
+	if request.Policy.ReadOnly {
+		return FileResult{}, &PolicyError{Reason: "write access is disabled"}
+	}
+	targetPath, err := ResolvePath(request.WorkingDirectory, request.Path, request.Policy)
+	if err != nil {
+		return FileResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return FileResult{}, err
+	}
+	if !appendMode {
+		if err := os.WriteFile(targetPath, []byte(request.Content), 0o644); err != nil {
+			return FileResult{}, err
+		}
+		return FileResult{Path: targetPath, BytesWritten: len(request.Content)}, nil
+	}
+	handle, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return FileResult{}, err
+	}
+	defer handle.Close()
+	if _, err := io.WriteString(handle, request.Content); err != nil {
+		return FileResult{}, err
+	}
+	return FileResult{Path: targetPath, BytesWritten: len(request.Content)}, nil
 }
 
 func ResolvePath(workingDirectory, targetPath string, policy Policy) (string, error) {

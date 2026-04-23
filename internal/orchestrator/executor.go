@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -237,13 +236,18 @@ func shellErrorKind(err error) string {
 	return "shell_command_failed"
 }
 
-type FileExecutor struct{}
-
-func NewFileExecutor() *FileExecutor {
-	return &FileExecutor{}
+type FileExecutor struct {
+	sandbox sandbox.Executor
 }
 
-func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
+func NewFileExecutor(exec sandbox.Executor) *FileExecutor {
+	if exec == nil {
+		exec = sandbox.NewLocalExecutor()
+	}
+	return &FileExecutor{sandbox: exec}
+}
+
+func (e *FileExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*ExecutionResult, error) {
 	if spec.NewID == nil {
 		return nil, fmt.Errorf("resource id generator is required")
 	}
@@ -258,33 +262,26 @@ func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*Executio
 	if spec.Task.SandboxReadOnly {
 		return fileFailure(spec, operation, spec.Task.FilePath, "sandbox policy denied: write access is disabled", "sandbox_policy_denied"), nil
 	}
-	targetPath, err := sandbox.ResolvePath(spec.Task.WorkingDirectory, spec.Task.FilePath, taskPolicy(spec.Task))
-	if err != nil {
-		return fileFailure(spec, operation, spec.Task.FilePath, err.Error(), fileErrorKind(err)), nil
+	request := sandbox.FileRequest{
+		Path:             spec.Task.FilePath,
+		Content:          spec.Task.FileContent,
+		WorkingDirectory: spec.Task.WorkingDirectory,
+		Policy:           taskPolicy(spec.Task),
 	}
-
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return fileFailure(spec, operation, targetPath, err.Error(), fileErrorKind(err)), nil
-	}
-
+	var (
+		fileResult sandbox.FileResult
+		err        error
+	)
 	switch operation {
 	case "write":
-		err = os.WriteFile(targetPath, []byte(spec.Task.FileContent), 0o644)
+		fileResult, err = e.sandbox.WriteFile(ctx, request)
 	case "append":
-		var handle *os.File
-		handle, err = os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err == nil {
-			_, err = handle.WriteString(spec.Task.FileContent)
-			closeErr := handle.Close()
-			if err == nil {
-				err = closeErr
-			}
-		}
+		fileResult, err = e.sandbox.AppendFile(ctx, request)
 	default:
-		return fileFailure(spec, operation, targetPath, fmt.Sprintf("unsupported file operation %q", operation), "file_operation_unsupported"), nil
+		return fileFailure(spec, operation, spec.Task.FilePath, fmt.Sprintf("unsupported file operation %q", operation), "file_operation_unsupported"), nil
 	}
 	if err != nil {
-		return fileFailure(spec, operation, targetPath, err.Error(), fileErrorKind(err)), nil
+		return fileFailure(spec, operation, spec.Task.FilePath, err.Error(), fileErrorKind(err)), nil
 	}
 
 	finishedAt := time.Now().UTC()
@@ -305,8 +302,8 @@ func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*Executio
 			"working_directory": spec.Task.WorkingDirectory,
 		},
 		OutputSummary: map[string]any{
-			"path":  targetPath,
-			"bytes": len(spec.Task.FileContent),
+			"path":  fileResult.Path,
+			"bytes": fileResult.BytesWritten,
 		},
 		StartedAt:  spec.StartedAt,
 		FinishedAt: finishedAt,
@@ -319,11 +316,11 @@ func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*Executio
 		RunID:       spec.Run.ID,
 		StepID:      step.ID,
 		Kind:        "file",
-		Name:        filepath.Base(targetPath),
+		Name:        filepath.Base(fileResult.Path),
 		Description: "File executor output",
 		MimeType:    "text/plain",
 		StorageKind: "inline",
-		Path:        targetPath,
+		Path:        fileResult.Path,
 		ContentText: spec.Task.FileContent,
 		SizeBytes:   int64(len(spec.Task.FileContent)),
 		Status:      "ready",

@@ -230,7 +230,9 @@ The first coding-runtime slice is also now in place:
 
 - task, run, step, artifact, and approval objects with HTTP read/write APIs
 - bounded shell, file, and git executor paths
-- local sandbox policy enforcement for allowed roots, read-only mode, timeouts, and basic network denial
+- an out-of-process `cmd/sandboxd` worker for sandbox execution
+- per-run workspace provisioning before execution begins
+- sandbox policy enforcement for allowed roots, read-only mode, timeouts, and basic network denial
 - shell approval gating with explicit approve or reject flows before execution
 
 What is still missing is the part that makes Hecate itself a stronger daily-driver coding runtime. The main gaps are:
@@ -256,7 +258,7 @@ Make Hecate excellent as the gateway and control plane under an existing coding 
 
 Add the first runtime slice that can execute bounded coding tasks:
 
-- build `cmd/sandboxd` beyond the current placeholder and move execution behind a stronger runtime boundary
+- add queueing, cancellation, and resume semantics on top of the new sandbox worker boundary
 - extend the task/job model with queueing, cancellation, and resumable state
 - expose tool execution APIs with streaming output and richer progress events
 - enforce policy-driven safety controls like approval classes, allowed paths, timeouts, and network policy
@@ -291,7 +293,7 @@ make ui-build
 
 ```text
 cmd/gateway           Main HTTP server
-cmd/sandboxd          Sandbox daemon placeholder
+cmd/sandboxd          Out-of-process sandbox worker
 internal/api          HTTP handlers and middleware
 internal/auth         Auth and principal resolution
 internal/billing      Static pricebook and cost estimation
@@ -356,11 +358,11 @@ Coding runtime work:
 
 - [x] Basic task, run, step, artifact, and approval lifecycle for coding runs
 - [x] Basic shell, file, and git execution paths
+- [x] Out-of-process sandbox runtime work in `cmd/sandboxd`
+- [x] Workspace isolation and per-run workspace provisioning
 - [x] Basic sandbox policy enforcement for allowed roots, read-only mode, timeouts, and network denial
 - [x] Shell approval gating with approve or reject flow
-- [ ] Out-of-process sandbox runtime work in `cmd/sandboxd`
 - [ ] Queueing, cancellation, and resumable execution for coding runs
 - [ ] Streaming tool execution events and logs
-- [ ] Workspace isolation and per-run workspace provisioning
 - [ ] Policy-driven approvals for broader sensitive actions
 - [ ] Coding-oriented operator views for task traces, tool output, and repo activity

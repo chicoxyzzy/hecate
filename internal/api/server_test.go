@@ -2196,6 +2196,9 @@ func TestTaskStartShellExecutor(t *testing.T) {
 	if completedRun.Data.Status != "completed" {
 		t.Fatalf("run status after approval = %q, want completed", completedRun.Data.Status)
 	}
+	if completedRun.Data.WorkspacePath == "" {
+		t.Fatal("workspace_path is empty")
+	}
 	if completedRun.Data.ArtifactCount != 2 {
 		t.Fatalf("artifact_count = %d, want 2", completedRun.Data.ArtifactCount)
 	}
@@ -2283,6 +2286,9 @@ func TestTaskStartFileExecutor(t *testing.T) {
 	if started.Data.Status != "completed" {
 		t.Fatalf("run status = %q, want completed", started.Data.Status)
 	}
+	if started.Data.WorkspacePath == "" {
+		t.Fatal("workspace_path is empty")
+	}
 
 	stepsRecorder := httptest.NewRecorder()
 	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
@@ -2299,7 +2305,7 @@ func TestTaskStartFileExecutor(t *testing.T) {
 		t.Fatalf("steps = %#v, want one file step", steps.Data)
 	}
 
-	content, err := os.ReadFile(filepath.Join(tempDir, "note.txt"))
+	content, err := os.ReadFile(filepath.Join(started.Data.WorkspacePath, "note.txt"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -2350,6 +2356,9 @@ func TestTaskStartGitExecutor(t *testing.T) {
 	}
 	if started.Data.Status != "completed" {
 		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	}
+	if started.Data.WorkspacePath == "" {
+		t.Fatal("workspace_path is empty")
 	}
 
 	stepsRecorder := httptest.NewRecorder()

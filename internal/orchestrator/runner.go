@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/profiler"
+	"github.com/hecate/agent-runtime/internal/sandbox"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -18,14 +19,15 @@ type Config struct {
 }
 
 type Runner struct {
-	logger *slog.Logger
-	store  taskstate.Store
-	tracer profiler.Tracer
-	exec   Executor
-	shell  Executor
-	file   Executor
-	git    Executor
-	config Config
+	logger     *slog.Logger
+	store      taskstate.Store
+	tracer     profiler.Tracer
+	exec       Executor
+	shell      Executor
+	file       Executor
+	git        Executor
+	workspaces *WorkspaceManager
+	config     Config
 }
 
 type StartTaskResult struct {
@@ -41,15 +43,17 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 	if tracer == nil {
 		tracer = profiler.NewInMemoryTracer(nil)
 	}
+	worker := sandbox.NewWorkerExecutor()
 	return &Runner{
-		logger: logger,
-		store:  store,
-		tracer: tracer,
-		exec:   NewStubExecutor(),
-		shell:  NewShellExecutor(nil),
-		file:   NewFileExecutor(),
-		git:    NewGitExecutor(nil),
-		config: cfg,
+		logger:     logger,
+		store:      store,
+		tracer:     tracer,
+		exec:       NewStubExecutor(),
+		shell:      NewShellExecutor(worker),
+		file:       NewFileExecutor(worker),
+		git:        NewGitExecutor(worker),
+		workspaces: NewWorkspaceManager(""),
+		config:     cfg,
 	}
 }
 
@@ -90,6 +94,9 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	}
 	if r.exec == nil {
 		return nil, fmt.Errorf("executor is not configured")
+	}
+	if r.workspaces == nil {
+		return nil, fmt.Errorf("workspace manager is not configured")
 	}
 
 	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
@@ -147,6 +154,19 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	}
 	if r.approvalRequiredForTask(task) {
 		run.Status = "awaiting_approval"
+	}
+	run.WorkspacePath, err = r.workspaces.Provision(ctx, task, run)
+	if err != nil {
+		trace.Record("orchestrator.run.failed", map[string]any{
+			telemetry.AttrHecatePhase:     "orchestration",
+			telemetry.AttrHecateResult:    telemetry.ResultError,
+			telemetry.AttrHecateErrorKind: "workspace_provision_failed",
+			telemetry.AttrErrorType:       "workspace_provision_failed",
+			telemetry.AttrErrorMessage:    err.Error(),
+			"hecate.task.id":              task.ID,
+			"hecate.run.id":               run.ID,
+		})
+		return nil, err
 	}
 	run, err = r.store.CreateRun(ctx, run)
 	if err != nil {
@@ -275,7 +295,7 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, idgen func(prefix string) string) (*StartTaskResult, error) {
 	executor := r.executorForTask(task)
 	execution, err := executor.Execute(ctx, ExecutionSpec{
-		Task:       task,
+		Task:       taskForRun(task, run),
 		Run:        run,
 		RequestID:  requestID,
 		TraceID:    trace.TraceID,
@@ -411,6 +431,15 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		TraceID:   trace.TraceID,
 		SpanID:    trace.RootSpanID(),
 	}, nil
+}
+
+func taskForRun(task types.Task, run types.TaskRun) types.Task {
+	executionTask := task
+	if strings.TrimSpace(run.WorkspacePath) != "" {
+		executionTask.WorkingDirectory = run.WorkspacePath
+		executionTask.SandboxAllowedRoot = run.WorkspacePath
+	}
+	return executionTask
 }
 
 func (r *Runner) approvalRequiredForTask(task types.Task) bool {
