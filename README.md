@@ -226,12 +226,19 @@ Hecate can already sit behind a coding assistant as the model gateway and runtim
 
 That means a coding client can point its LLM traffic at Hecate today and get central routing, observability, and spend controls.
 
-What is still missing is the part that makes Hecate itself the coding runtime. The main gaps are:
+The first coding-runtime slice is also now in place:
 
-- sandboxed shell, filesystem, and git execution
-- task and job lifecycle management for coding runs
-- tool execution APIs and streaming tool event logs
-- workspace isolation, cancellation, and approval flows
+- task, run, step, artifact, and approval objects with HTTP read/write APIs
+- bounded shell, file, and git executor paths
+- local sandbox policy enforcement for allowed roots, read-only mode, timeouts, and basic network denial
+- shell approval gating with explicit approve or reject flows before execution
+
+What is still missing is the part that makes Hecate itself a stronger daily-driver coding runtime. The main gaps are:
+
+- stronger workspace isolation and an out-of-process sandbox worker
+- cancellation, queueing, and resumable execution for coding runs
+- tool execution APIs with streaming tool event logs
+- policy-driven approval flows for broader sensitive actions like network access or git push
 - coding-oriented operator views for task traces, tool output, and repo activity
 
 The practical roadmap for coding use breaks into three phases:
@@ -249,16 +256,16 @@ Make Hecate excellent as the gateway and control plane under an existing coding 
 
 Add the first runtime slice that can execute bounded coding tasks:
 
-- implement `cmd/sandboxd` and `internal/sandbox`
-- add a task/job model with status, logs, cancellation, and artifacts
-- expose tool execution APIs for shell and file operations
-- enforce basic safety controls like allowed paths, timeouts, and network policy
+- build `cmd/sandboxd` beyond the current placeholder and move execution behind a stronger runtime boundary
+- extend the task/job model with queueing, cancellation, and resumable state
+- expose tool execution APIs with streaming output and richer progress events
+- enforce policy-driven safety controls like approval classes, allowed paths, timeouts, and network policy
 
 ### Phase 3: Team-Ready Coding Platform
 
 Expand the runtime into something teams can trust for daily coding work:
 
-- approval flows for sensitive actions such as network access or git push
+- approval flows for sensitive actions such as network access, destructive filesystem writes, or git push
 - stronger workspace isolation and resumable task state
 - richer UI for task timelines, tool runs, traces, and cost by session or repo
 - smarter model selection policies for different coding task classes
@@ -302,7 +309,7 @@ internal/providers    Provider transports, discovery, and health tracking
 internal/requestscope Tenant/provider request scoping
 internal/retention    Background pruning and retention runs
 internal/router       Routing logic
-internal/sandbox      Sandbox runtime placeholder
+internal/sandbox      Local sandbox executor and policy enforcement
 internal/secrets      Secret encryption helpers
 internal/storage      Redis and Postgres helpers
 internal/telemetry    Metrics and OTLP export wiring
@@ -347,8 +354,13 @@ Near-term foundation work:
 
 Coding runtime work:
 
-- [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
-- [ ] Task and job lifecycle management for coding runs
-- [ ] Tool execution APIs and streaming tool event logs
-- [ ] Workspace isolation, cancellation, and approval flows
+- [x] Basic task, run, step, artifact, and approval lifecycle for coding runs
+- [x] Basic shell, file, and git execution paths
+- [x] Basic sandbox policy enforcement for allowed roots, read-only mode, timeouts, and network denial
+- [x] Shell approval gating with approve or reject flow
+- [ ] Out-of-process sandbox runtime work in `cmd/sandboxd`
+- [ ] Queueing, cancellation, and resumable execution for coding runs
+- [ ] Streaming tool execution events and logs
+- [ ] Workspace isolation and per-run workspace provisioning
+- [ ] Policy-driven approvals for broader sensitive actions
 - [ ] Coding-oriented operator views for task traces, tool output, and repo activity
