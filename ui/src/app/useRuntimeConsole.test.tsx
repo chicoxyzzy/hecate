@@ -555,6 +555,80 @@ describe("useRuntimeConsole", () => {
       key: "openai-secret",
     });
   });
+
+  it("resets an unavailable preset example model for a configured provider", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/healthz") {
+        return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      }
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: {
+            authenticated: false,
+            invalid_token: false,
+            role: "anonymous",
+            source: "no_token",
+          },
+        });
+      }
+      if (url === "/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "llama3.1:8b", owned_by: "ollama", metadata: { provider: "ollama", provider_kind: "local", default: true } }],
+        });
+      }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [
+            {
+              id: "ollama",
+              name: "Ollama",
+              kind: "local",
+              protocol: "openai",
+              base_url: "http://127.0.0.1:11434/v1",
+              default_model: "llama3.1:8b",
+              example_models: ["llama3.1:8b", "qwen2.5:7b"],
+            },
+          ],
+        });
+      }
+      if (url === "/admin/providers") {
+        return jsonResponse({
+          object: "provider_status",
+          data: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b", models: ["llama3.1:8b"] }],
+        });
+      }
+      if (url.startsWith("/admin/retention/runs")) {
+        return unauthorizedResponse();
+      }
+      if (url.startsWith("/admin/accounts/summary")) {
+        return unauthorizedResponse();
+      }
+      if (url.startsWith("/v1/chat/sessions")) {
+        return unauthorizedResponse();
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+    act(() => {
+      result.current.actions.setProviderFilter("ollama");
+    });
+
+    await waitFor(() => expect(result.current.state.model).toBe("llama3.1:8b"));
+
+    act(() => {
+      result.current.actions.setModel("qwen2.5:7b");
+    });
+
+    await waitFor(() => expect(result.current.state.model).toBe("llama3.1:8b"));
+  });
 });
 
 function jsonResponse(payload: unknown): Response {

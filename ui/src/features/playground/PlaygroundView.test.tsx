@@ -12,6 +12,16 @@ describe("PlaygroundView", () => {
         state={createRuntimeConsoleFixture({
           localProviders: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" }],
           cloudProviders: [{ name: "openai", kind: "cloud", healthy: true, status: "healthy", default_model: "gpt-4o-mini" }],
+          providers: [
+            { name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" },
+            { name: "openai", kind: "cloud", healthy: true, status: "healthy", default_model: "gpt-4o-mini" },
+          ],
+          providerPresets: [
+            { id: "anthropic", name: "Anthropic", kind: "cloud", protocol: "anthropic", base_url: "https://api.anthropic.com", default_model: "claude-sonnet-4-6" },
+            { id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com", default_model: "gpt-5.4-mini" },
+            { id: "lmstudio", name: "LM Studio", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1", default_model: "local-model" },
+            { id: "ollama", name: "Ollama", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1", default_model: "llama3.1:8b" },
+          ],
           localModels: [
             {
               id: "llama3.1:8b",
@@ -33,6 +43,8 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByRole("option", { name: "ollama" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "openai" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "anthropic (not configured)" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "lmstudio (not configured, default http://127.0.0.1:1234/v1)" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Auto (route default)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run through Hecate/i })).toBeInTheDocument();
   });
@@ -45,6 +57,18 @@ describe("PlaygroundView", () => {
           providerFilter: "ollama",
           model: "llama3.1:8b",
           localProviders: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" }],
+          providers: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" }],
+          providerPresets: [
+            {
+              id: "ollama",
+              name: "Ollama",
+              kind: "local",
+              protocol: "openai",
+              base_url: "http://127.0.0.1:11434/v1",
+              default_model: "llama3.1:8b",
+              example_models: ["llama3.1:8b", "qwen2.5:7b"],
+            },
+          ],
           providerScopedModels: [
             {
               id: "llama3.1:8b",
@@ -58,6 +82,7 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByRole("option", { name: "Provider default" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "llama3.1:8b" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "qwen2.5:7b" })).not.toBeInTheDocument();
   });
 
   it("shows trace events when a trace has been loaded", () => {

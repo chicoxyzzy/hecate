@@ -66,10 +66,10 @@ providers from core bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or
 Example with one cloud provider and one local provider:
 
 ```bash
+GATEWAY_PROVIDERS=openai,ollama
 GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
 
 PROVIDER_OPENAI_API_KEY=your_api_key_here
-PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 ```
 
 If you want cloud-only startup, a smaller config is enough:
@@ -84,8 +84,8 @@ By default, Hecate considers all available providers. Explicit provider requests
 still pin the route; otherwise healthy providers are considered in alphabetical
 order.
 
-Set `GATEWAY_PROVIDERS` explicitly only when you want to force provider order or
-enable providers that are not discoverable from the core env keys alone.
+Set `GATEWAY_PROVIDERS` explicitly when you want to enable built-in presets
+using their defaults.
 
 3. Run the gateway:
 
@@ -138,6 +138,20 @@ This includes local runtimes such as:
 - LM Studio
 - LocalAI
 - llama.cpp-style servers
+
+Local presets have default OpenAI-compatible base URLs:
+
+- `ollama`: `http://127.0.0.1:11434/v1`
+- `lmstudio`: `http://127.0.0.1:1234/v1`
+- `localai`: `http://127.0.0.1:8080/v1`
+- `llamacpp`: `http://127.0.0.1:8080/v1`
+
+LocalAI and llama.cpp share the same default URL because both commonly run an
+OpenAI-compatible server on port `8080`. Hecate cannot reliably infer which
+runtime is behind a generic OpenAI-compatible URL, so the provider identity is
+the configured provider name. Enable only the matching preset, or override
+`PROVIDER_<NAME>_BASE_URL` so each configured provider points to a unique
+endpoint.
 
 ## Auth And Control Plane
 

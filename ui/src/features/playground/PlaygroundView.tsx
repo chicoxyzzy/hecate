@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatUsd } from "../../lib/format";
 import { describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
+import type { ModelRecord, ProviderPresetRecord, ProviderRecord } from "../../types/runtime";
 import { RouteWorkbench } from "./RouteWorkbench";
 import { TraceWorkbench } from "./TraceWorkbench";
 import { DefinitionList, EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
@@ -24,6 +25,10 @@ export function PlaygroundView({ state, actions }: Props) {
   const routeReport = state.traceRoute;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const routeProviders = buildProviderRouteOptions(state.providers, state.providerPresets, state.session.allowedProviders);
+  const localRouteProviders = routeProviders.filter((provider) => provider.kind === "local");
+  const cloudRouteProviders = routeProviders.filter((provider) => provider.kind === "cloud");
+  const providerScopedModelOptions = buildProviderScopedModelOptions(state.providerFilter, state.providerScopedModels, state.providers, state.providerPresets);
 
   function handleRenameCommit(id: string) {
     const trimmed = editingTitle.trim();
@@ -156,20 +161,20 @@ export function PlaygroundView({ state, actions }: Props) {
               <div className="form-grid form-grid--triple">
                 <SelectField disabled={state.loading} label="Provider route" onChange={actions.setProviderFilter} value={state.providerFilter}>
                   <option value="auto">Auto-select</option>
-                  {state.localProviders.length > 0 ? (
+                  {localRouteProviders.length > 0 ? (
                     <optgroup label="Local">
-                      {state.localProviders.map((provider) => (
-                        <option key={provider.name} value={provider.name}>
-                          {provider.name}
+                      {localRouteProviders.map((provider) => (
+                        <option disabled={!provider.configured} key={provider.name} value={provider.name}>
+                          {providerRouteLabel(provider)}
                         </option>
                       ))}
                     </optgroup>
                   ) : null}
-                  {state.cloudProviders.length > 0 ? (
+                  {cloudRouteProviders.length > 0 ? (
                     <optgroup label="Cloud">
-                      {state.cloudProviders.map((provider) => (
-                        <option key={provider.name} value={provider.name}>
-                          {provider.name}
+                      {cloudRouteProviders.map((provider) => (
+                        <option disabled={!provider.configured} key={provider.name} value={provider.name}>
+                          {providerRouteLabel(provider)}
                         </option>
                       ))}
                     </optgroup>
@@ -188,10 +193,10 @@ export function PlaygroundView({ state, actions }: Props) {
                     null
                   ) : (
                     <>
-                      {state.model && !state.providerScopedModels.some((entry) => entry.id === state.model) ? (
+                      {state.model && !providerScopedModelOptions.some((entry) => entry.id === state.model) ? (
                         <option value={state.model}>{state.model}</option>
                       ) : null}
-                      {state.providerScopedModels.map((entry) => (
+                      {providerScopedModelOptions.map((entry) => (
                         <option key={`${entry.metadata?.provider}-${entry.id}`} value={entry.id}>
                           {entry.id}
                         </option>
@@ -356,4 +361,101 @@ export function PlaygroundView({ state, actions }: Props) {
       </aside>
     </div>
   );
+}
+
+type ProviderRouteOption = {
+  name: string;
+  kind: string;
+  configured: boolean;
+  baseURL?: string;
+};
+
+function buildProviderRouteOptions(providers: ProviderRecord[], presets: ProviderPresetRecord[], allowedProviders: string[]): ProviderRouteOption[] {
+  const byName = new Map<string, ProviderRouteOption>();
+  const isAllowed = (name: string) => allowedProviders.length === 0 || allowedProviders.includes(name);
+
+  for (const provider of providers) {
+    if (!isAllowed(provider.name)) {
+      continue;
+    }
+    byName.set(provider.name, {
+      name: provider.name,
+      kind: provider.kind,
+      configured: true,
+    });
+  }
+
+  for (const preset of presets) {
+    if (!isAllowed(preset.id) || byName.has(preset.id)) {
+      continue;
+    }
+    byName.set(preset.id, {
+      name: preset.id,
+      kind: preset.kind,
+      configured: false,
+      baseURL: preset.base_url,
+    });
+  }
+
+  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function providerRouteLabel(provider: ProviderRouteOption): string {
+  if (provider.configured) {
+    return provider.name;
+  }
+  if (provider.kind === "local" && provider.baseURL) {
+    return `${provider.name} (not configured, default ${provider.baseURL})`;
+  }
+  return `${provider.name} (not configured)`;
+}
+
+function buildProviderScopedModelOptions(provider: string, scopedModels: ModelRecord[], providers: ProviderRecord[], presets: ProviderPresetRecord[]): ModelRecord[] {
+	if (provider === "auto") {
+		return [];
+	}
+
+	const options = new Map<string, ModelRecord>();
+	for (const model of scopedModels) {
+		options.set(model.id, model);
+	}
+
+	const providerRecord = providers.find((entry) => entry.name === provider);
+	if (providerRecord) {
+		for (const id of [providerRecord.default_model, ...(providerRecord.models ?? [])]) {
+			if (!id || options.has(id)) {
+				continue;
+			}
+			options.set(id, {
+				id,
+				owned_by: provider,
+				metadata: {
+					provider,
+					provider_kind: providerRecord.kind,
+					default: id === providerRecord.default_model,
+					discovery_source: "provider_status",
+				},
+			});
+		}
+		return [...options.values()].sort((left, right) => left.id.localeCompare(right.id));
+	}
+
+	const preset = presets.find((entry) => entry.id === provider);
+	for (const id of [preset?.default_model, ...(preset?.example_models ?? [])]) {
+    if (!id || options.has(id)) {
+      continue;
+    }
+    options.set(id, {
+      id,
+      owned_by: provider,
+      metadata: {
+        provider,
+        provider_kind: preset?.kind,
+        default: id === preset?.default_model,
+        discovery_source: "provider_preset",
+      },
+    });
+  }
+
+  return [...options.values()].sort((left, right) => left.id.localeCompare(right.id));
 }

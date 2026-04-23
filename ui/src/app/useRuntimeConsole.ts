@@ -226,13 +226,13 @@ export function useRuntimeConsole() {
       }
       return;
     }
-    const stillValid = models.some((entry) => entry.id === model && entry.metadata?.provider === providerFilter);
+    const stillValid = isModelValidForProvider(model, providerFilter, models, providers, providerPresets);
     if (stillValid) {
       return;
     }
-    const nextModel = defaultModelForProvider(providerFilter, models, providers);
+    const nextModel = defaultModelForProvider(providerFilter, models, providers, providerPresets);
     setModel(nextModel);
-  }, [model, models, providerFilter, providers]);
+  }, [model, models, providerFilter, providers, providerPresets]);
 
   useEffect(() => {
     if (session.kind !== "tenant" || !session.tenant) {
@@ -247,8 +247,8 @@ export function useRuntimeConsole() {
     }
     const scopedModels = models.filter((m) => m.metadata?.provider === providerFilter);
     if (scopedModels.length === 0) return;
-    setModel(defaultModelForProvider(providerFilter, models, providers));
-  }, [model, models, providers, providerFilter]);
+    setModel(defaultModelForProvider(providerFilter, models, providers, providerPresets));
+  }, [model, models, providers, providerFilter, providerPresets]);
 
   useEffect(() => {
     if (providerFilter !== "auto" && session.allowedProviders.length > 0 && !session.allowedProviders.includes(providerFilter)) {
@@ -376,7 +376,7 @@ export function useRuntimeConsole() {
 
   function selectProviderRoute(nextProvider: ProviderFilter) {
     setProviderFilter(nextProvider);
-    setModel(defaultModelForProvider(nextProvider, models, providers));
+    setModel(defaultModelForProvider(nextProvider, models, providers, providerPresets));
   }
 
   async function submitChat(event: SyntheticEvent<HTMLFormElement>) {
@@ -1259,18 +1259,44 @@ function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, mes
   return [...history, { role: "user", content: message }];
 }
 
-function defaultModelForProvider(provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"]): string {
+function defaultModelForProvider(provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"], presets: ProviderPresetRecord[]): string {
   if (provider === "auto") {
     return "";
   }
 
-  const providerRecord = providers.find((entry) => entry.name === provider);
-  const scopedModels = models.filter((entry) => entry.metadata?.provider === provider);
-  if (providerRecord?.default_model) {
-    return providerRecord.default_model;
+	const providerRecord = providers.find((entry) => entry.name === provider);
+	const scopedModels = models.filter((entry) => entry.metadata?.provider === provider);
+	const preset = presets.find((entry) => entry.id === provider);
+	if (providerRecord?.default_model) {
+		return providerRecord.default_model;
+	}
+
+	if (providerRecord) {
+		return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? providerRecord.models?.[0] ?? "";
+	}
+
+	return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? preset?.default_model ?? preset?.example_models?.[0] ?? "";
+}
+
+function isModelValidForProvider(model: string, provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"], presets: ProviderPresetRecord[]): boolean {
+  if (!model || provider === "auto") {
+    return true;
   }
 
-  return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? "";
+  if (models.some((entry) => entry.id === model && entry.metadata?.provider === provider)) {
+    return true;
+  }
+
+	const providerRecord = providers.find((entry) => entry.name === provider);
+	if (providerRecord?.default_model === model || providerRecord?.models?.includes(model)) {
+		return true;
+	}
+	if (providerRecord) {
+		return false;
+	}
+
+	const preset = presets.find((entry) => entry.id === provider);
+	return preset?.default_model === model || preset?.example_models?.includes(model) === true;
 }
 
 function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsResponse["data"][number] {
