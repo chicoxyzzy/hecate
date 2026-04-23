@@ -271,28 +271,10 @@ func TestRetentionRunAndListEndpointsPersistHistory(t *testing.T) {
 			AuthToken: "admin-secret",
 		},
 	})
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
 
-	runRecorder := httptest.NewRecorder()
-	runRequest := httptest.NewRequest(http.MethodPost, "/admin/retention/run", strings.NewReader(`{"subsystems":["trace_snapshots"]}`))
-	runRequest.Header.Set("Content-Type", "application/json")
-	runRequest.Header.Set("Authorization", "Bearer admin-secret")
-	handler.ServeHTTP(runRecorder, runRequest)
-	if runRecorder.Code != http.StatusOK {
-		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
-	}
-
-	listRecorder := httptest.NewRecorder()
-	listRequest := httptest.NewRequest(http.MethodGet, "/admin/retention/runs?limit=5", nil)
-	listRequest.Header.Set("Authorization", "Bearer admin-secret")
-	handler.ServeHTTP(listRecorder, listRequest)
-	if listRecorder.Code != http.StatusOK {
-		t.Fatalf("list status = %d, want %d, body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
-	}
-
-	var response RetentionRunsResponse
-	if err := json.NewDecoder(bytes.NewReader(listRecorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	admin.mustRequest(http.MethodPost, "/admin/retention/run", `{"subsystems":["trace_snapshots"]}`)
+	response := mustRequestJSON[RetentionRunsResponse](admin, http.MethodGet, "/admin/retention/runs?limit=5", "")
 	if len(response.Data) != 1 {
 		t.Fatalf("retention runs = %d, want 1", len(response.Data))
 	}
@@ -420,19 +402,8 @@ func TestTraceEndpointReturnsRecordedRequestTimeline(t *testing.T) {
 	if chat.Code != http.StatusOK {
 		t.Fatalf("chat status = %d, want %d, body=%s", chat.Code, http.StatusOK, chat.Body.String())
 	}
-
-	traceReq := httptest.NewRequest(http.MethodGet, "/v1/traces?request_id="+chat.Header().Get("X-Request-Id"), nil)
-	traceResp := httptest.NewRecorder()
-	handler.ServeHTTP(traceResp, traceReq)
-
-	if traceResp.Code != http.StatusOK {
-		t.Fatalf("trace status = %d, want %d, body=%s", traceResp.Code, http.StatusOK, traceResp.Body.String())
-	}
-
-	var payload TraceResponse
-	if err := json.NewDecoder(bytes.NewReader(traceResp.Body.Bytes())).Decode(&payload); err != nil {
-		t.Fatalf("trace Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	payload := mustRequestJSON[TraceResponse](client, http.MethodGet, "/v1/traces?request_id="+chat.Header().Get("X-Request-Id"), "")
 	if payload.Object != "trace" {
 		t.Fatalf("object = %q, want trace", payload.Object)
 	}
@@ -777,19 +748,8 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response OpenAIModelsResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[OpenAIModelsResponse](client, http.MethodGet, "/v1/models", "")
 	if response.Object != "list" {
 		t.Fatalf("object = %q, want list", response.Object)
 	}
@@ -862,19 +822,8 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response ProviderStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[ProviderStatusResponse](client, http.MethodGet, "/admin/providers", "")
 	if response.Object != "provider_status" {
 		t.Fatalf("object = %q, want provider_status", response.Object)
 	}
@@ -905,19 +854,8 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil))
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/provider-presets", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response ProviderPresetResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[ProviderPresetResponse](client, http.MethodGet, "/v1/provider-presets", "")
 	if response.Object != "provider_presets" {
 		t.Fatalf("object = %q, want provider_presets", response.Object)
 	}
@@ -979,15 +917,8 @@ func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 			BudgetScope:          "global",
 		},
 	}, governor.NewMemoryBudgetStore(), cpStore)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/budget", nil)
-	req.Header.Set("Authorization", "Bearer tenant-secret")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
-	}
+	tenantClient := newAPITestClient(t, handler).withBearerToken("tenant-secret")
+	tenantClient.mustRequestStatus(http.StatusUnauthorized, http.MethodGet, "/admin/budget", "")
 }
 
 func TestChatCompletionAPIKeyRejectsTenantImpersonation(t *testing.T) {
@@ -1013,16 +944,8 @@ func TestChatCompletionAPIKeyRejectsTenantImpersonation(t *testing.T) {
 		t.Fatalf("UpsertAPIKey() error = %v", err)
 	}
 	handler := newTestHTTPHandlerWithControlPlane(logger, []providers.Provider{provider}, config.Config{}, cpStore)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","user":"team-b","messages":[{"role":"user","content":"hello"}]}`))
-	req.Header.Set("Authorization", "Bearer tenant-secret")
-	req.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
-	}
+	tenantClient := newAPITestClient(t, handler).withBearerToken("tenant-secret")
+	tenantClient.mustRequestStatus(http.StatusForbidden, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","user":"team-b","messages":[{"role":"user","content":"hello"}]}`)
 }
 
 func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
@@ -1078,20 +1001,8 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
 	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore))
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer tenant-secret")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response OpenAIModelsResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	tenantClient := newAPITestClient(t, handler).withBearerToken("tenant-secret")
+	response := mustRequestJSON[OpenAIModelsResponse](tenantClient, http.MethodGet, "/v1/models", "")
 	if len(response.Data) != 1 {
 		t.Fatalf("model count = %d, want 1", len(response.Data))
 	}
@@ -1146,21 +1057,11 @@ func TestSessionEndpointReturnsAnonymousTenantAndAdminStates(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/whoami", nil)
+			client := newAPITestClient(t, handler)
 			if tc.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tc.token)
+				client = client.withBearerToken(tc.token)
 			}
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, req)
-
-			if recorder.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d, body=%s", recorder.Code, tc.wantStatus, recorder.Body.String())
-			}
-
-			var response SessionResponse
-			if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-				t.Fatalf("Decode() error = %v", err)
-			}
+			response := mustRequestJSONStatus[SessionResponse](client, tc.wantStatus, http.MethodGet, "/v1/whoami", "")
 			if response.Data.Role != tc.wantRole {
 				t.Fatalf("role = %q, want %q", response.Data.Role, tc.wantRole)
 			}
@@ -1204,37 +1105,10 @@ func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 			BudgetScope:          "global",
 		},
 	}, governor.NewMemoryBudgetStore(), store)
-
-	tenantReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/tenants", strings.NewReader(`{"name":"Team A","description":"Primary tenant","allowed_providers":["ollama"],"enabled":true}`))
-	tenantReq.Header.Set("Authorization", "Bearer admin-secret")
-	tenantReq.Header.Set("Content-Type", "application/json")
-	tenantRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(tenantRecorder, tenantReq)
-	if tenantRecorder.Code != http.StatusOK {
-		t.Fatalf("tenant status = %d, want %d, body=%s", tenantRecorder.Code, http.StatusOK, tenantRecorder.Body.String())
-	}
-
-	keyReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/api-keys", strings.NewReader(`{"name":"Team A Dev","key":"hecate-team-a-dev","tenant":"team-a","role":"tenant","allowed_models":["llama3.1:8b"],"enabled":true}`))
-	keyReq.Header.Set("Authorization", "Bearer admin-secret")
-	keyReq.Header.Set("Content-Type", "application/json")
-	keyRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(keyRecorder, keyReq)
-	if keyRecorder.Code != http.StatusOK {
-		t.Fatalf("api key status = %d, want %d, body=%s", keyRecorder.Code, http.StatusOK, keyRecorder.Body.String())
-	}
-
-	statusReq := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
-	statusReq.Header.Set("Authorization", "Bearer admin-secret")
-	statusRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(statusRecorder, statusReq)
-	if statusRecorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", statusRecorder.Code, http.StatusOK, statusRecorder.Body.String())
-	}
-
-	var response ControlPlaneResponse
-	if err := json.NewDecoder(bytes.NewReader(statusRecorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/tenants", `{"name":"Team A","description":"Primary tenant","allowed_providers":["ollama"],"enabled":true}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys", `{"name":"Team A Dev","key":"hecate-team-a-dev","tenant":"team-a","role":"tenant","allowed_models":["llama3.1:8b"],"enabled":true}`)
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
 	if response.Data.Backend != "file" {
 		t.Fatalf("backend = %q, want file", response.Data.Backend)
 	}
@@ -1266,37 +1140,10 @@ func TestControlPlanePolicyAndPricebookCRUD(t *testing.T) {
 			AuthToken: "admin-secret",
 		},
 	}, governor.NewMemoryBudgetStore(), store)
-
-	policyReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/policy-rules", strings.NewReader(`{"id":"deny-cloud","action":"deny","reason":"cloud denied","provider_kinds":["cloud"]}`))
-	policyReq.Header.Set("Authorization", "Bearer admin-secret")
-	policyReq.Header.Set("Content-Type", "application/json")
-	policyRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(policyRecorder, policyReq)
-	if policyRecorder.Code != http.StatusOK {
-		t.Fatalf("policy status = %d, want %d, body=%s", policyRecorder.Code, http.StatusOK, policyRecorder.Body.String())
-	}
-
-	pricebookReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/pricebook", strings.NewReader(`{"provider":"openai","model":"custom-model","input_micros_usd_per_million_tokens":100000,"output_micros_usd_per_million_tokens":200000}`))
-	pricebookReq.Header.Set("Authorization", "Bearer admin-secret")
-	pricebookReq.Header.Set("Content-Type", "application/json")
-	pricebookRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(pricebookRecorder, pricebookReq)
-	if pricebookRecorder.Code != http.StatusOK {
-		t.Fatalf("pricebook status = %d, want %d, body=%s", pricebookRecorder.Code, http.StatusOK, pricebookRecorder.Body.String())
-	}
-
-	statusReq := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
-	statusReq.Header.Set("Authorization", "Bearer admin-secret")
-	statusRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(statusRecorder, statusReq)
-	if statusRecorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", statusRecorder.Code, http.StatusOK, statusRecorder.Body.String())
-	}
-
-	var response ControlPlaneResponse
-	if err := json.NewDecoder(bytes.NewReader(statusRecorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/policy-rules", `{"id":"deny-cloud","action":"deny","reason":"cloud denied","provider_kinds":["cloud"]}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/pricebook", `{"provider":"openai","model":"custom-model","input_micros_usd_per_million_tokens":100000,"output_micros_usd_per_million_tokens":200000}`)
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
 	if len(response.Data.PolicyRules) != 1 {
 		t.Fatalf("policy rule count = %d, want 1", len(response.Data.PolicyRules))
 	}
@@ -1310,23 +1157,8 @@ func TestControlPlanePolicyAndPricebookCRUD(t *testing.T) {
 		t.Fatalf("pricebook entry = %s/%s, want openai/custom-model", response.Data.Pricebook[0].Provider, response.Data.Pricebook[0].Model)
 	}
 
-	deletePolicyReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/policy-rules/delete", strings.NewReader(`{"id":"deny-cloud"}`))
-	deletePolicyReq.Header.Set("Authorization", "Bearer admin-secret")
-	deletePolicyReq.Header.Set("Content-Type", "application/json")
-	deletePolicyRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(deletePolicyRecorder, deletePolicyReq)
-	if deletePolicyRecorder.Code != http.StatusOK {
-		t.Fatalf("delete policy status = %d, want %d, body=%s", deletePolicyRecorder.Code, http.StatusOK, deletePolicyRecorder.Body.String())
-	}
-
-	deletePricebookReq := httptest.NewRequest(http.MethodPost, "/admin/control-plane/pricebook/delete", strings.NewReader(`{"provider":"openai","model":"custom-model"}`))
-	deletePricebookReq.Header.Set("Authorization", "Bearer admin-secret")
-	deletePricebookReq.Header.Set("Content-Type", "application/json")
-	deletePricebookRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(deletePricebookRecorder, deletePricebookReq)
-	if deletePricebookRecorder.Code != http.StatusOK {
-		t.Fatalf("delete pricebook status = %d, want %d, body=%s", deletePricebookRecorder.Code, http.StatusOK, deletePricebookRecorder.Body.String())
-	}
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/policy-rules/delete", `{"id":"deny-cloud"}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/pricebook/delete", `{"provider":"openai","model":"custom-model"}`)
 }
 
 func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.T) {
@@ -1359,19 +1191,8 @@ func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.
 			AuthToken: "admin-secret",
 		},
 	}, governor.NewMemoryBudgetStore(), store)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
-	req.Header.Set("Authorization", "Bearer admin-secret")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response ControlPlaneResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
 	if len(response.Data.Providers) != 1 {
 		t.Fatalf("provider count = %d, want 1", len(response.Data.Providers))
 	}
@@ -1408,53 +1229,16 @@ func TestControlPlaneLifecycleEndpoints(t *testing.T) {
 			BudgetScope:          "global",
 		},
 	}, governor.NewMemoryBudgetStore(), store)
-
-	postJSON := func(path, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer admin-secret")
-		req.Header.Set("Content-Type", "application/json")
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, req)
-		return recorder
-	}
-
-	if recorder := postJSON("/admin/control-plane/tenants", `{"name":"Team A","enabled":true}`); recorder.Code != http.StatusOK {
-		t.Fatalf("create tenant status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/api-keys", `{"name":"Team A Dev","key":"secret","tenant":"team-a","role":"tenant","enabled":true}`); recorder.Code != http.StatusOK {
-		t.Fatalf("create api key status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/tenants/enabled", `{"id":"team-a","enabled":false}`); recorder.Code != http.StatusOK {
-		t.Fatalf("disable tenant status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/api-keys/enabled", `{"id":"team-a-dev","enabled":false}`); recorder.Code != http.StatusOK {
-		t.Fatalf("disable api key status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/api-keys/rotate", `{"id":"team-a-dev","key":"new-secret"}`); recorder.Code != http.StatusOK {
-		t.Fatalf("rotate api key status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/tenants/delete", `{"id":"team-a"}`); recorder.Code != http.StatusBadRequest {
-		t.Fatalf("delete tenant while referenced status = %d, want %d, body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/api-keys/delete", `{"id":"team-a-dev"}`); recorder.Code != http.StatusOK {
-		t.Fatalf("delete api key status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	if recorder := postJSON("/admin/control-plane/tenants/delete", `{"id":"team-a"}`); recorder.Code != http.StatusOK {
-		t.Fatalf("delete tenant status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/control-plane", nil)
-	req.Header.Set("Authorization", "Bearer admin-secret")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response ControlPlaneResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/tenants", `{"name":"Team A","enabled":true}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys", `{"name":"Team A Dev","key":"secret","tenant":"team-a","role":"tenant","enabled":true}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/tenants/enabled", `{"id":"team-a","enabled":false}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys/enabled", `{"id":"team-a-dev","enabled":false}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys/rotate", `{"id":"team-a-dev","key":"new-secret"}`)
+	admin.mustRequestStatus(http.StatusBadRequest, http.MethodPost, "/admin/control-plane/tenants/delete", `{"id":"team-a"}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys/delete", `{"id":"team-a-dev"}`)
+	admin.mustRequest(http.MethodPost, "/admin/control-plane/tenants/delete", `{"id":"team-a"}`)
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
 	if len(response.Data.Events) != 7 {
 		t.Fatalf("event count = %d, want 7", len(response.Data.Events))
 	}
@@ -1486,18 +1270,8 @@ func TestBudgetStatusReturnsCurrentBalance(t *testing.T) {
 		BudgetScope:          "global",
 	}, budgetStore)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/budget", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response BudgetStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[BudgetStatusResponse](client, http.MethodGet, "/admin/budget", "")
 	if response.Object != "budget_status" {
 		t.Fatalf("object = %q, want budget_status", response.Object)
 	}
@@ -1535,19 +1309,8 @@ func TestBudgetResetSupportsExplicitKey(t *testing.T) {
 		BudgetScope:          "global",
 	}, budgetStore)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/budget/reset", strings.NewReader(`{"key":"team-a"}`))
-	req.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response BudgetStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[BudgetStatusResponse](client, http.MethodPost, "/admin/budget/reset", `{"key":"team-a"}`)
 	if response.Data.Key != "team-a" {
 		t.Fatalf("key = %q, want team-a", response.Data.Key)
 	}
@@ -1580,18 +1343,8 @@ func TestBudgetStatusSupportsTenantProviderScope(t *testing.T) {
 		BudgetTenantFallback: "anonymous",
 	}, budgetStore)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/budget?scope=tenant_provider&tenant=team-a&provider=ollama", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response BudgetStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[BudgetStatusResponse](client, http.MethodGet, "/admin/budget?scope=tenant_provider&tenant=team-a&provider=ollama", "")
 	if response.Data.Scope != "tenant_provider" {
 		t.Fatalf("scope = %q, want tenant_provider", response.Data.Scope)
 	}
@@ -1621,19 +1374,8 @@ func TestBudgetTopUpAndSetLimitEndpoints(t *testing.T) {
 		BudgetTenantFallback: "anonymous",
 	}, budgetStore)
 
-	topUpReq := httptest.NewRequest(http.MethodPost, "/admin/budget/topup", strings.NewReader(`{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","amount_micros_usd":2000000}`))
-	topUpReq.Header.Set("Content-Type", "application/json")
-	topUpRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(topUpRecorder, topUpReq)
-
-	if topUpRecorder.Code != http.StatusOK {
-		t.Fatalf("topup status = %d, want %d, body=%s", topUpRecorder.Code, http.StatusOK, topUpRecorder.Body.String())
-	}
-
-	var topUpResponse BudgetStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(topUpRecorder.Body.Bytes())).Decode(&topUpResponse); err != nil {
-		t.Fatalf("topup Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	topUpResponse := mustRequestJSON[BudgetStatusResponse](client, http.MethodPost, "/admin/budget/topup", `{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","amount_micros_usd":2000000}`)
 	if topUpResponse.Data.BalanceMicrosUSD != 2_000_000 {
 		t.Fatalf("topup balance_micros_usd = %d, want 2000000", topUpResponse.Data.BalanceMicrosUSD)
 	}
@@ -1641,19 +1383,7 @@ func TestBudgetTopUpAndSetLimitEndpoints(t *testing.T) {
 		t.Fatalf("topup balance_source = %q, want store", topUpResponse.Data.BalanceSource)
 	}
 
-	limitReq := httptest.NewRequest(http.MethodPost, "/admin/budget/limit", strings.NewReader(`{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","balance_micros_usd":500000}`))
-	limitReq.Header.Set("Content-Type", "application/json")
-	limitRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(limitRecorder, limitReq)
-
-	if limitRecorder.Code != http.StatusOK {
-		t.Fatalf("limit status = %d, want %d, body=%s", limitRecorder.Code, http.StatusOK, limitRecorder.Body.String())
-	}
-
-	var limitResponse BudgetStatusResponse
-	if err := json.NewDecoder(bytes.NewReader(limitRecorder.Body.Bytes())).Decode(&limitResponse); err != nil {
-		t.Fatalf("limit Decode() error = %v", err)
-	}
+	limitResponse := mustRequestJSON[BudgetStatusResponse](client, http.MethodPost, "/admin/budget/limit", `{"scope":"tenant_provider","tenant":"team-a","provider":"ollama","balance_micros_usd":500000}`)
 	if limitResponse.Data.BalanceMicrosUSD != 500_000 {
 		t.Fatalf("limit balance_micros_usd = %d, want 500000", limitResponse.Data.BalanceMicrosUSD)
 	}
@@ -1685,18 +1415,8 @@ func TestAccountSummaryReturnsModelEstimates(t *testing.T) {
 		BudgetScope:          "global",
 	}, budgetStore)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/accounts/summary", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response AccountSummaryResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[AccountSummaryResponse](client, http.MethodGet, "/admin/accounts/summary", "")
 	if response.Object != "account_summary" {
 		t.Fatalf("object = %q, want account_summary", response.Object)
 	}
@@ -1761,18 +1481,8 @@ func TestRequestLedgerReturnsRecentBudgetEvents(t *testing.T) {
 		BudgetScope:          "global",
 	}, budgetStore)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/requests?limit=1", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-
-	var response RequestLedgerResponse
-	if err := json.NewDecoder(bytes.NewReader(recorder.Body.Bytes())).Decode(&response); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[RequestLedgerResponse](client, http.MethodGet, "/admin/requests?limit=1", "")
 	if response.Object != "request_ledger" {
 		t.Fatalf("object = %q, want request_ledger", response.Object)
 	}
@@ -1813,19 +1523,8 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 			DefaultModel: "claude-sonnet-4-20250514",
 		},
 	})
-
-	createRecorder := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/sessions", strings.NewReader(`{"title":"Claude debugging"}`))
-	createRequest.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
-	}
-
-	var created ChatSessionResponse
-	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	client := newAPITestClient(t, handler)
+	created := mustRequestJSON[ChatSessionResponse](client, http.MethodPost, "/v1/chat/sessions", `{"title":"Claude debugging"}`)
 	if created.Data.ID == "" {
 		t.Fatal("session id = empty, want session id")
 	}
@@ -1836,17 +1535,7 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 		t.Fatalf("chat status = %d, want %d, body=%s", chatRecorder.Code, http.StatusOK, chatRecorder.Body.String())
 	}
 
-	sessionRecorder := httptest.NewRecorder()
-	sessionRequest := httptest.NewRequest(http.MethodGet, "/v1/chat/sessions/"+created.Data.ID, nil)
-	handler.ServeHTTP(sessionRecorder, sessionRequest)
-	if sessionRecorder.Code != http.StatusOK {
-		t.Fatalf("get session status = %d, want %d, body=%s", sessionRecorder.Code, http.StatusOK, sessionRecorder.Body.String())
-	}
-
-	var session ChatSessionResponse
-	if err := json.NewDecoder(bytes.NewReader(sessionRecorder.Body.Bytes())).Decode(&session); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
+	session := mustRequestJSON[ChatSessionResponse](client, http.MethodGet, "/v1/chat/sessions/"+created.Data.ID, "")
 	if len(session.Data.Turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(session.Data.Turns))
 	}
@@ -2292,7 +1981,7 @@ func TestTaskRunCancellation(t *testing.T) {
 		t.Fatalf("run status = %q, want cancelled", cancelledRun.Data.Status)
 	}
 
-	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
+	steps := waitForRunStepStatus(t, handler, created.Data.ID, started.Data.ID, "cancelled")
 	if len(steps.Data) != 1 {
 		t.Fatalf("steps = %d, want 1", len(steps.Data))
 	}
@@ -2419,28 +2108,62 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	}
 }
 
-type taskTestClient struct {
+type apiTestClient struct {
 	t       *testing.T
 	handler http.Handler
+	headers map[string]string
 }
 
-func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
+func newAPITestClient(t *testing.T, handler http.Handler) apiTestClient {
 	t.Helper()
-	return taskTestClient{t: t, handler: handler}
+	return apiTestClient{t: t, handler: handler}
 }
 
-func (c taskTestClient) mustRequest(method, path, body string) *httptest.ResponseRecorder {
+func (c apiTestClient) withBearerToken(token string) apiTestClient {
 	c.t.Helper()
-	recorder := performRequest(c.t, c.handler, method, path, body)
-	if recorder.Code != http.StatusOK {
-		c.t.Fatalf("%s %s status = %d, want %d, body=%s", method, path, recorder.Code, http.StatusOK, recorder.Body.String())
+	if strings.TrimSpace(token) == "" {
+		return c
+	}
+	if c.headers == nil {
+		c.headers = make(map[string]string, 1)
+	}
+	c.headers["Authorization"] = "Bearer " + token
+	return c
+}
+
+func (c apiTestClient) mustRequest(method, path, body string) *httptest.ResponseRecorder {
+	return c.mustRequestStatus(http.StatusOK, method, path, body)
+}
+
+func (c apiTestClient) mustRequestStatus(status int, method, path, body string) *httptest.ResponseRecorder {
+	c.t.Helper()
+	recorder := performRequestWithHeaders(c.t, c.handler, method, path, body, c.headers)
+	if recorder.Code != status {
+		c.t.Fatalf("%s %s status = %d, want %d, body=%s", method, path, recorder.Code, status, recorder.Body.String())
 	}
 	return recorder
 }
 
-func mustTaskRequestJSON[T any](client taskTestClient, method, path, body string) T {
+func mustRequestJSON[T any](client apiTestClient, method, path, body string) T {
 	client.t.Helper()
 	return decodeRecorder[T](client.t, client.mustRequest(method, path, body))
+}
+
+func mustRequestJSONStatus[T any](client apiTestClient, status int, method, path, body string) T {
+	client.t.Helper()
+	return decodeRecorder[T](client.t, client.mustRequestStatus(status, method, path, body))
+}
+
+type taskTestClient = apiTestClient
+
+func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
+	t.Helper()
+	return newAPITestClient(t, handler)
+}
+
+func mustTaskRequestJSON[T any](client taskTestClient, method, path, body string) T {
+	client.t.Helper()
+	return mustRequestJSON[T](client, method, path, body)
 }
 
 func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, statuses ...string) TaskRunResponse {
@@ -2496,6 +2219,23 @@ func waitForRunArtifactsContaining(t *testing.T, handler http.Handler, taskID, r
 	}
 	t.Fatalf("timed out waiting for %s artifact to contain %q", kind, contains)
 	return TaskArtifactsResponse{}
+}
+
+func waitForRunStepStatus(t *testing.T, handler http.Handler, taskID, runID string, status string) TaskStepsResponse {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID+"/steps", "")
+		if recorder.Code == http.StatusOK {
+			steps, ok := tryDecodeRecorder[TaskStepsResponse](recorder)
+			if ok && len(steps.Data) > 0 && steps.Data[0].Status == status {
+				return steps
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run %s step to reach status %q", runID, status)
+	return TaskStepsResponse{}
 }
 
 func containsStatus(status string, statuses ...string) bool {
@@ -2741,7 +2481,11 @@ func performJSONRequest(t *testing.T, handler http.Handler, body string) *httpte
 
 func performRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return performRequestWithHeaders(t, handler, method, path, body, nil)
+}
 
+func performRequestWithHeaders(t *testing.T, handler http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	var requestBody io.Reader
 	if body != "" {
 		requestBody = strings.NewReader(body)
@@ -2749,6 +2493,9 @@ func performRequest(t *testing.T, handler http.Handler, method, path, body strin
 	req := httptest.NewRequest(method, path, requestBody)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 
 	recorder := httptest.NewRecorder()
