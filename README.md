@@ -206,6 +206,8 @@ The operator UI currently includes:
 - preset-driven provider setup
 - managed provider enable/disable/delete and secret rotation
 - playground
+- live task and run monitoring with approvals, cancellation, and streamed stdout/stderr
+- task creation and task start controls in the runs workspace
 - runtime metadata inspection
 - trace inspection
 - budget admin flows
@@ -239,11 +241,11 @@ The first coding-runtime slice is also now in place:
 
 What is still missing is the part that makes Hecate itself a stronger daily-driver coding runtime. The main gaps are:
 
-- stronger workspace isolation and an out-of-process sandbox worker
+- stronger workspace isolation beyond the current per-run sandbox worker and workspace model
 - resumable execution for interrupted or restarted coding runs
 - richer tool execution APIs beyond the current run and artifact streaming surface
 - policy-driven approval flows for broader sensitive actions like network access or git push
-- coding-oriented operator views for task traces, tool output, and repo activity
+- richer coding-oriented operator views for task traces, repo activity, and broader run management
 
 The practical roadmap for coding use breaks into three phases:
 
@@ -366,6 +368,7 @@ Coding runtime work:
 - [x] Shell approval gating with approve or reject flow
 - [x] Queueing and cancellation for coding runs
 - [x] Streaming run updates and stdout/stderr artifact logs
+- [x] Basic operator UI for creating tasks, starting runs, approvals, cancellation, and live stdout/stderr
 - [ ] Resumable execution for coding runs
 - [ ] Policy-driven approvals for broader sensitive actions
-- [ ] Coding-oriented operator views for task traces, tool output, and repo activity
+- [ ] Richer coding-oriented operator views for task traces, repo activity, and aggregate run operations

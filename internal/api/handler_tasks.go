@@ -490,22 +490,8 @@ func (h *Handler) HandleTaskRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
-	if runID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
-		return
-	}
-	run, found, err := h.taskStore.GetRun(ctx, task.ID, runID)
-	if err != nil {
-		telemetry.Error(h.logger, ctx, "gateway.tasks.runs.get.failed",
-			slog.String("event.name", "gateway.tasks.runs.get.failed"),
-			slog.Any("error", err),
-		)
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
-	}
-	if !found {
-		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
 
@@ -534,24 +520,13 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
-	if runID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
-	if _, found, err := h.taskStore.GetRun(ctx, task.ID, runID); err != nil {
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
-	} else if !found {
-		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
-		return
-	}
+	runID := run.ID
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
+	writeSSEHeaders(w)
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -579,7 +554,7 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 				Object: "task_run_stream_event",
 				Data: TaskRunStreamEventData{
 					Sequence:  sequence,
-					Terminal:  isTerminalRunStatus(state.Run.Status),
+					Terminal:  isTerminalTaskRunStatus(state.Run.Status),
 					Run:       state.Run,
 					Steps:     state.Steps,
 					Artifacts: state.Artifacts,
@@ -592,13 +567,13 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 			}
 
 			eventName := "snapshot"
-			if isTerminalRunStatus(state.Run.Status) {
+			if isTerminalTaskRunStatus(state.Run.Status) {
 				eventName = "done"
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, payload)
 			flusher.Flush()
 			lastStateJSON = string(stateJSON)
-			if isTerminalRunStatus(state.Run.Status) {
+			if isTerminalTaskRunStatus(state.Run.Status) {
 				return
 			}
 		}
@@ -632,17 +607,12 @@ func (h *Handler) HandleCancelTaskRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
-	if runID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
-	run, err := h.taskRunner.CancelRun(ctx, task, runID)
+	run, err := h.taskRunner.CancelRun(ctx, task, run.ID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			WriteError(w, http.StatusNotFound, errCodeNotFound, err.Error())
-			return
-		}
 		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
 		return
 	}
@@ -666,18 +636,11 @@ func (h *Handler) HandleTaskRunSteps(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
-	if runID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
-	if _, found, err := h.taskStore.GetRun(ctx, task.ID, runID); err != nil {
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
-	} else if !found {
-		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
-		return
-	}
+	runID := run.ID
 
 	steps, err := h.taskStore.ListSteps(ctx, runID)
 	if err != nil {
@@ -712,19 +675,16 @@ func (h *Handler) HandleTaskRunStep(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
 	stepID := strings.TrimSpace(r.PathValue("step_id"))
-	if runID == "" || stepID == "" {
+	if stepID == "" {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id and step id are required")
 		return
 	}
-	if _, found, err := h.taskStore.GetRun(ctx, task.ID, runID); err != nil {
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
-	} else if !found {
-		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
+	runID := run.ID
 	step, found, err := h.taskStore.GetStep(ctx, runID, stepID)
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gateway.tasks.steps.get.failed",
@@ -792,18 +752,11 @@ func (h *Handler) HandleTaskRunArtifacts(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	runID := strings.TrimSpace(r.PathValue("run_id"))
-	if runID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
 		return
 	}
-	if _, found, err := h.taskStore.GetRun(ctx, task.ID, runID); err != nil {
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
-	} else if !found {
-		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
-		return
-	}
+	runID := run.ID
 
 	artifacts, err := h.taskStore.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: task.ID, RunID: runID})
 	if err != nil {
@@ -856,7 +809,7 @@ func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID str
 	}, nil
 }
 
-func isTerminalRunStatus(status string) bool {
+func isTerminalTaskRunStatus(status string) bool {
 	switch status {
 	case "completed", "failed", "cancelled":
 		return true
@@ -1075,20 +1028,39 @@ func (h *Handler) loadAuthorizedTask(ctx context.Context, w http.ResponseWriter,
 	return task, true
 }
 
+func (h *Handler) loadAuthorizedTaskRun(ctx context.Context, w http.ResponseWriter, r *http.Request, task types.Task) (types.TaskRun, bool) {
+	runID := strings.TrimSpace(r.PathValue("run_id"))
+	if runID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+		return types.TaskRun{}, false
+	}
+
+	run, found, err := h.taskStore.GetRun(ctx, task.ID, runID)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.tasks.runs.load.failed",
+			slog.String("event.name", "gateway.tasks.runs.load.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return types.TaskRun{}, false
+	}
+	if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
+		return types.TaskRun{}, false
+	}
+	return run, true
+}
+
+func writeSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+}
+
 func newTaskID() string {
 	return newOpaqueTaskResourceID("task")
-}
-
-func newTaskRunID() string {
-	return newOpaqueTaskResourceID("run")
-}
-
-func newTaskStepID() string {
-	return newOpaqueTaskResourceID("step")
-}
-
-func newTaskArtifactID() string {
-	return newOpaqueTaskResourceID("artifact")
 }
 
 func normalizeApprovalDecision(value string) (string, bool) {

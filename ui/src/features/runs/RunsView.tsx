@@ -21,7 +21,7 @@ import type {
   TaskRunRecord,
   TaskStepRecord,
 } from "../../types/runtime";
-import { EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import { DefinitionList, EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type SessionState = {
   isAuthenticated: boolean;
@@ -64,6 +64,23 @@ export function RunsView({ authToken, session }: Props) {
   );
   const stdoutArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stdout") ?? null, [artifacts]);
   const stderrArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stderr") ?? null, [artifacts]);
+
+  const loadRunDetail = useCallback(
+    async (taskID: string, runID: string) => {
+      if (!taskID || !runID) {
+        setSteps([]);
+        setArtifacts([]);
+        return;
+      }
+      const [stepsResponse, artifactsResponse] = await Promise.all([
+        getTaskRunSteps(taskID, runID, authToken),
+        getTaskRunArtifacts(taskID, runID, authToken),
+      ]);
+      setSteps(stepsResponse.data ?? []);
+      setArtifacts(artifactsResponse.data ?? []);
+    },
+    [authToken],
+  );
 
   const loadTasks = useCallback(
     async (preferredTaskID = "", preferredRunID = "") => {
@@ -141,14 +158,9 @@ export function RunsView({ authToken, session }: Props) {
         return;
       }
 
-      const [stepsResponse, artifactsResponse] = await Promise.all([
-        getTaskRunSteps(taskID, nextRunID, authToken),
-        getTaskRunArtifacts(taskID, nextRunID, authToken),
-      ]);
-      setSteps(stepsResponse.data ?? []);
-      setArtifacts(artifactsResponse.data ?? []);
+      await loadRunDetail(taskID, nextRunID);
     },
-    [authToken, selectedRunID, session.isAuthenticated],
+    [authToken, loadRunDetail, selectedRunID, session.isAuthenticated],
   );
 
   useEffect(() => {
@@ -227,12 +239,7 @@ export function RunsView({ authToken, session }: Props) {
       return;
     }
     try {
-      const [stepsResponse, artifactsResponse] = await Promise.all([
-        getTaskRunSteps(selectedTaskID, runID, authToken),
-        getTaskRunArtifacts(selectedTaskID, runID, authToken),
-      ]);
-      setSteps(stepsResponse.data ?? []);
-      setArtifacts(artifactsResponse.data ?? []);
+      await loadRunDetail(selectedTaskID, runID);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "failed to load run detail");
     }
@@ -455,32 +462,16 @@ export function RunsView({ authToken, session }: Props) {
                       </ToolbarButton>
                     ) : null}
                   </div>
-                  <dl className="definition-list">
-                    <div className="definition-list__row">
-                      <dt>Workspace</dt>
-                      <dd>{selectedRun.workspace_path || selectedRun.workspace_id || "Not set"}</dd>
-                    </div>
-                    <div className="definition-list__row">
-                      <dt>Request ID</dt>
-                      <dd>{selectedRun.request_id || "n/a"}</dd>
-                    </div>
-                    <div className="definition-list__row">
-                      <dt>Trace ID</dt>
-                      <dd>{selectedRun.trace_id || "n/a"}</dd>
-                    </div>
-                    <div className="definition-list__row">
-                      <dt>Started</dt>
-                      <dd>{selectedRun.started_at ? formatDateTime(selectedRun.started_at) : "n/a"}</dd>
-                    </div>
-                    <div className="definition-list__row">
-                      <dt>Finished</dt>
-                      <dd>{selectedRun.finished_at ? formatDateTime(selectedRun.finished_at) : "Still active"}</dd>
-                    </div>
-                    <div className="definition-list__row">
-                      <dt>Last error</dt>
-                      <dd>{selectedRun.last_error || "None"}</dd>
-                    </div>
-                  </dl>
+                  <DefinitionList
+                    items={[
+                      { label: "Workspace", value: selectedRun.workspace_path || selectedRun.workspace_id || "Not set" },
+                      { label: "Request ID", value: selectedRun.request_id || "n/a" },
+                      { label: "Trace ID", value: selectedRun.trace_id || "n/a" },
+                      { label: "Started", value: selectedRun.started_at ? formatDateTime(selectedRun.started_at) : "n/a" },
+                      { label: "Finished", value: selectedRun.finished_at ? formatDateTime(selectedRun.finished_at) : "Still active" },
+                      { label: "Last error", value: selectedRun.last_error || "None" },
+                    ]}
+                  />
                 </div>
               ) : (
                 <EmptyState title="No run selected" detail="Choose a task and run to inspect live updates and logs." />
@@ -522,24 +513,20 @@ export function RunsView({ authToken, session }: Props) {
 
         <ShellSection eyebrow="Output" title="Live stdout and stderr">
           <div className="two-column-grid">
-            <Surface>
-              <div className="stack-sm">
-                <div className="action-row action-row--wide">
-                  <strong>stdout</strong>
-                  <StatusPill label={stdoutArtifact?.status || "empty"} tone={artifactStatusTone(stdoutArtifact?.status)} />
+            {[
+              { label: "stdout", empty: "No stdout captured yet.", artifact: stdoutArtifact },
+              { label: "stderr", empty: "No stderr captured yet.", artifact: stderrArtifact },
+            ].map(({ label, empty, artifact }) => (
+              <Surface key={label}>
+                <div className="stack-sm">
+                  <div className="action-row action-row--wide">
+                    <strong>{label}</strong>
+                    <StatusPill label={artifact?.status || "empty"} tone={runStatusTone(artifact?.status)} />
+                  </div>
+                  <pre className="runs-log-output">{artifact?.content_text || empty}</pre>
                 </div>
-                <pre className="runs-log-output">{stdoutArtifact?.content_text || "No stdout captured yet."}</pre>
-              </div>
-            </Surface>
-            <Surface>
-              <div className="stack-sm">
-                <div className="action-row action-row--wide">
-                  <strong>stderr</strong>
-                  <StatusPill label={stderrArtifact?.status || "empty"} tone={artifactStatusTone(stderrArtifact?.status)} />
-                </div>
-                <pre className="runs-log-output">{stderrArtifact?.content_text || "No stderr captured yet."}</pre>
-              </div>
-            </Surface>
+              </Surface>
+            ))}
           </div>
         </ShellSection>
 
@@ -556,7 +543,7 @@ export function RunsView({ authToken, session }: Props) {
                       </div>
                       <span className="body-muted">{step.started_at ? formatDateTime(step.started_at) : "No start time"}</span>
                     </div>
-                    <div className="budget-history-item__body">
+                    <div className="runs-inline-meta">
                       <span>tool: {step.tool_name || step.kind}</span>
                       {typeof step.exit_code === "number" ? <span>exit: {step.exit_code}</span> : null}
                       {step.error_kind ? <span>{step.error_kind}</span> : null}
@@ -602,7 +589,7 @@ export function RunsView({ authToken, session }: Props) {
                 ))}
               </div>
             ) : (
-              <EmptyState title="No tasks yet" detail="Create tasks via the API first, then inspect and stream them here." />
+              <EmptyState title="No tasks yet" detail="Create your first task above, then inspect and stream it here." />
             )}
           </Surface>
         </ShellSection>
@@ -622,7 +609,7 @@ export function RunsView({ authToken, session }: Props) {
                       <strong>Run #{run.number}</strong>
                       <StatusPill label={run.status} tone={runStatusTone(run.status)} />
                     </div>
-                    <div className="budget-history-item__body">
+                    <div className="runs-inline-meta">
                       <span>{run.step_count ?? 0} steps</span>
                       <span>{run.artifact_count ?? 0} artifacts</span>
                     </div>
@@ -662,10 +649,6 @@ function runStatusTone(status?: string): "neutral" | "healthy" | "warning" | "da
     default:
       return "neutral";
   }
-}
-
-function artifactStatusTone(status?: string): "neutral" | "healthy" | "warning" | "danger" {
-  return runStatusTone(status);
 }
 
 function streamStatusLabel(state: StreamState): string {
