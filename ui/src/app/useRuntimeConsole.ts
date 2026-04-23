@@ -4,6 +4,7 @@ import { buildLocalProviderIssue } from "../lib/provider-issues";
 import type { LocalProviderIssue } from "../lib/provider-issues";
 import { filterModelsByKind, filterModelsByProvider, parseCSV, usdToMicros } from "../lib/runtime-utils";
 import {
+  type ChatMessage,
   chatCompletionsStream,
   createChatSession as createChatSessionRequest,
   deleteChatSession as deleteChatSessionRequest,
@@ -406,64 +407,22 @@ export function useRuntimeConsole() {
         user: tenant,
         messages,
       };
-
-      let fullContent = "";
-      setStreamingContent("");
       setPendingToolCalls([]);
       setPendingThread(null);
-      const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
-        fullContent += delta;
-        setStreamingContent(fullContent);
-      });
-      setStreamingContent(null);
-      setRuntimeHeaders(response.headers);
 
-      if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
-        // Build the thread for the continuation: history + user msg + assistant tool_call msg.
-        const assistantMsg: import("../lib/api").ChatMessage = {
-          role: "assistant",
-          content: fullContent || null,
-          tool_calls: response.toolCalls.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: { name: tc.name, arguments: tc.arguments },
-          })),
-        };
-        setPendingThread([...chatPayload.messages, assistantMsg]);
-        setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
-        // Don't clear message or set chatResult — stay in tool-call mode.
+      const chatExecution = await executeChatRequest(chatPayload, chatPayload.messages);
+      if (chatExecution.kind === "tool_calls") {
         return;
       }
+      const { headers } = chatExecution;
 
-      // Build a synthetic ChatResponse from the streamed content so the rest
-      // of the UI (trace, budget, session refresh) works without changes.
-      const syntheticResult: ChatResponse = {
-        id: response.headers.requestId || "stream",
-        model: response.headers.resolvedModel || model,
-        choices: [{ index: 0, message: { role: "assistant", content: fullContent }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      };
-
-      setChatResult(syntheticResult);
+      setChatResult(chatExecution.chatResult);
       setMessage("");
-      setTraceLoading(true);
-      try {
-        const trace = await getTrace(response.headers.requestId, authToken);
-        setTraceSpans(trace.data.spans ?? []);
-        setTraceRoute(trace.data.route ?? null);
-        setTraceStartedAt(trace.data.started_at ?? "");
-      } catch (traceLoadError) {
-        setTraceSpans([]);
-        setTraceRoute(null);
-        setTraceStartedAt("");
-        setTraceError(traceLoadError instanceof Error ? traceLoadError.message : "failed to load trace");
-      } finally {
-        setTraceLoading(false);
-      }
+      await refreshTrace(headers.requestId, true);
 
       try {
         const scopedBudget = await getBudget(
-          `?scope=tenant_provider&tenant=${encodeURIComponent(tenant)}&provider=${encodeURIComponent(response.headers.provider)}`,
+          `?scope=tenant_provider&tenant=${encodeURIComponent(tenant)}&provider=${encodeURIComponent(headers.provider)}`,
           authToken,
         );
         setBudget(scopedBudget.data);
@@ -510,13 +469,13 @@ export function useRuntimeConsole() {
     setChatLoading(true);
     setChatError("");
 
-    const toolMessages: import("../lib/api").ChatMessage[] = pendingToolCalls.map((tc) => ({
+    const toolMessages: ChatMessage[] = pendingToolCalls.map((tc) => ({
       role: "tool" as const,
       content: tc.result,
       tool_call_id: tc.id,
     }));
 
-    const messages: import("../lib/api").ChatMessage[] = [...pendingThread, ...toolMessages];
+    const messages: ChatMessage[] = [...pendingThread, ...toolMessages];
     const chatPayload = {
       model,
       provider: providerFilter === "auto" ? "" : providerFilter,
@@ -526,54 +485,77 @@ export function useRuntimeConsole() {
     };
 
     try {
-      let fullContent = "";
-      setStreamingContent("");
-      const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
-        fullContent += delta;
-        setStreamingContent(fullContent);
-      });
-      setStreamingContent(null);
-      setRuntimeHeaders(response.headers);
-
-      if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
-        // Another round of tool calls.
-        const assistantMsg: import("../lib/api").ChatMessage = {
-          role: "assistant",
-          content: fullContent || null,
-          tool_calls: response.toolCalls.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: { name: tc.name, arguments: tc.arguments },
-          })),
-        };
-        setPendingThread([...messages, assistantMsg]);
-        setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
+      const chatExecution = await executeChatRequest(chatPayload, messages);
+      if (chatExecution.kind === "tool_calls") {
         return;
       }
 
       setPendingToolCalls([]);
       setPendingThread(null);
-      setChatResult({
-        id: response.headers.requestId || "stream",
-        model: response.headers.resolvedModel || model,
-        choices: [{ index: 0, message: { role: "assistant", content: fullContent }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      });
-
-      try {
-        const trace = await getTrace(response.headers.requestId, authToken);
-        setTraceSpans(trace.data.spans ?? []);
-        setTraceRoute(trace.data.route ?? null);
-        setTraceStartedAt(trace.data.started_at ?? "");
-      } catch {
-        setTraceSpans([]);
-        setTraceRoute(null);
-        setTraceStartedAt("");
-      }
+      setChatResult(chatExecution.chatResult);
+      await refreshTrace(chatExecution.headers.requestId, false);
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setChatLoading(false);
+    }
+  }
+
+  async function executeChatRequest(
+    chatPayload: {
+      model: string;
+      provider: string;
+      session_id?: string;
+      user: string;
+      messages: ChatMessage[];
+    },
+    toolCallBaseMessages: ChatMessage[],
+  ): Promise<
+    | { kind: "tool_calls" }
+    | { kind: "completed"; headers: RuntimeHeaders; chatResult: ChatResponse }
+  > {
+    let fullContent = "";
+    setStreamingContent("");
+    const response = await chatCompletionsStream(chatPayload, authToken, (delta) => {
+      fullContent += delta;
+      setStreamingContent(fullContent);
+    });
+    setStreamingContent(null);
+    setRuntimeHeaders(response.headers);
+
+    if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
+      const assistantMsg = buildAssistantToolCallMessage(fullContent, response.toolCalls);
+      setPendingThread([...toolCallBaseMessages, assistantMsg]);
+      setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
+      return { kind: "tool_calls" };
+    }
+
+    return {
+      kind: "completed",
+      headers: response.headers,
+      chatResult: buildSyntheticChatResult(response.headers, model, fullContent),
+    };
+  }
+
+  async function refreshTrace(requestID: string, reportErrors: boolean) {
+    setTraceLoading(true);
+    try {
+      const trace = await getTrace(requestID, authToken);
+      setTraceSpans(trace.data.spans ?? []);
+      setTraceRoute(trace.data.route ?? null);
+      setTraceStartedAt(trace.data.started_at ?? "");
+      if (reportErrors) {
+        setTraceError("");
+      }
+    } catch (traceLoadError) {
+      setTraceSpans([]);
+      setTraceRoute(null);
+      setTraceStartedAt("");
+      if (reportErrors) {
+        setTraceError(traceLoadError instanceof Error ? traceLoadError.message : "failed to load trace");
+      }
+    } finally {
+      setTraceLoading(false);
     }
   }
 
@@ -1231,16 +1213,40 @@ function deriveChatSessionTitle(message: string): string {
   return `${normalized.slice(0, 45)}...`;
 }
 
-function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): import("../lib/api").ChatMessage[] {
-  const history: import("../lib/api").ChatMessage[] =
+function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): ChatMessage[] {
+  const history: ChatMessage[] =
     activeSession?.turns?.flatMap((turn) => {
-      const user: import("../lib/api").ChatMessage = { role: "user", content: turn.user_message.content ?? "" };
-      const assistant: import("../lib/api").ChatMessage = turn.assistant_message.tool_calls?.length
+      const user: ChatMessage = { role: "user", content: turn.user_message.content ?? "" };
+      const assistant: ChatMessage = turn.assistant_message.tool_calls?.length
         ? { role: "assistant", content: turn.assistant_message.content ?? null, tool_calls: turn.assistant_message.tool_calls }
         : { role: "assistant", content: turn.assistant_message.content ?? "" };
       return [user, assistant];
     }) ?? [];
   return [...history, { role: "user", content: message }];
+}
+
+function buildAssistantToolCallMessage(
+  content: string,
+  toolCalls: Array<{ id: string; name: string; arguments: string }>,
+): ChatMessage {
+  return {
+    role: "assistant",
+    content: content || null,
+    tool_calls: toolCalls.map((tc) => ({
+      id: tc.id,
+      type: "function",
+      function: { name: tc.name, arguments: tc.arguments },
+    })),
+  };
+}
+
+function buildSyntheticChatResult(headers: RuntimeHeaders, selectedModel: string, content: string): ChatResponse {
+  return {
+    id: headers.requestId || "stream",
+    model: headers.resolvedModel || selectedModel,
+    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
 }
 
 function defaultModelForProvider(provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"], presets: ProviderPresetRecord[]): string {
