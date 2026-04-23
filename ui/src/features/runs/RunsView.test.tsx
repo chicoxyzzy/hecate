@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunsView } from "./RunsView";
@@ -12,6 +12,8 @@ const apiMocks = vi.hoisted(() => {
     getTaskApprovals: vi.fn(),
     getTaskRunSteps: vi.fn(),
     getTaskRunArtifacts: vi.fn(),
+    createTask: vi.fn(),
+    startTask: vi.fn(),
     resolveTaskApproval: vi.fn(),
     cancelTaskRun: vi.fn(),
     streamTaskRun: vi.fn(async (_taskID, _runID, _authToken, onEvent) => {
@@ -36,6 +38,8 @@ vi.mock("../../lib/api", () => ({
   getTaskApprovals: apiMocks.getTaskApprovals,
   getTaskRunSteps: apiMocks.getTaskRunSteps,
   getTaskRunArtifacts: apiMocks.getTaskRunArtifacts,
+  createTask: apiMocks.createTask,
+  startTask: apiMocks.startTask,
   resolveTaskApproval: apiMocks.resolveTaskApproval,
   cancelTaskRun: apiMocks.cancelTaskRun,
   streamTaskRun: apiMocks.streamTaskRun,
@@ -174,5 +178,97 @@ describe("RunsView", () => {
 
     expect(screen.getByText("Authentication required")).toBeInTheDocument();
     expect(screen.getByText(/Add a bearer token in Access/)).toBeInTheDocument();
+  });
+
+  it("creates and starts a shell task from the composer", async () => {
+    apiMocks.getTasks
+      .mockResolvedValueOnce({ object: "tasks", data: [] })
+      .mockResolvedValueOnce({
+        object: "tasks",
+        data: [
+          {
+            id: "task_new",
+            title: "List repo",
+            prompt: "Inspect the workspace.",
+            status: "queued",
+            latest_run_id: "run_new",
+          },
+        ],
+      });
+    apiMocks.createTask.mockResolvedValue({
+      object: "task",
+      data: {
+        id: "task_new",
+        title: "List repo",
+        prompt: "Inspect the workspace.",
+        status: "queued",
+        latest_run_id: "",
+      },
+    });
+    apiMocks.startTask.mockResolvedValue({
+      object: "task_run",
+      data: {
+        id: "run_new",
+        task_id: "task_new",
+        number: 1,
+        status: "awaiting_approval",
+      },
+    });
+    apiMocks.getTask.mockResolvedValue({
+      object: "task",
+      data: {
+        id: "task_new",
+        title: "List repo",
+        prompt: "Inspect the workspace.",
+        status: "awaiting_approval",
+        latest_run_id: "run_new",
+        pending_approval_count: 1,
+      },
+    });
+    apiMocks.getTaskRuns.mockResolvedValue({
+      object: "task_runs",
+      data: [
+        {
+          id: "run_new",
+          task_id: "task_new",
+          number: 1,
+          status: "awaiting_approval",
+        },
+      ],
+    });
+    apiMocks.getTaskApprovals.mockResolvedValue({ object: "task_approvals", data: [] });
+    apiMocks.getTaskRunSteps.mockResolvedValue({ object: "task_steps", data: [] });
+    apiMocks.getTaskRunArtifacts.mockResolvedValue({ object: "task_artifacts", data: [] });
+
+    render(<RunsView authToken="tenant-secret" session={{ isAuthenticated: true }} />);
+
+    await waitFor(() => expect(screen.getByText("No tasks yet")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "List repo" } });
+    fireEvent.change(screen.getByLabelText("Execution kind"), { target: { value: "shell" } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Inspect the workspace." } });
+    fireEvent.change(screen.getByLabelText("Shell command"), { target: { value: "pwd" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create and start" }));
+
+    await waitFor(() =>
+      expect(apiMocks.createTask).toHaveBeenCalledWith(
+        {
+          title: "List repo",
+          prompt: "Inspect the workspace.",
+          execution_kind: "shell",
+          shell_command: "pwd",
+          git_command: undefined,
+          working_directory: undefined,
+          file_operation: undefined,
+          file_path: undefined,
+          file_content: undefined,
+        },
+        "tenant-secret",
+      ),
+    );
+    await waitFor(() => expect(apiMocks.startTask).toHaveBeenCalledWith("task_new", "tenant-secret"));
+    await waitFor(() => expect(screen.getByText("Task created and started.")).toBeInTheDocument());
+    expect(screen.getByText("List repo")).toBeInTheDocument();
   });
 });

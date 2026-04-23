@@ -15,6 +15,7 @@ import type {
   TaskApprovalsResponse,
   TaskArtifactsResponse,
   TaskResponse,
+  TaskRunResponse,
   TaskRunStreamEventResponse,
   TaskRunsResponse,
   TaskStepsResponse,
@@ -102,6 +103,18 @@ export type RetentionRunPayload = {
 
 export type CreateChatSessionPayload = {
   title: string;
+};
+
+export type CreateTaskPayload = {
+  title?: string;
+  prompt: string;
+  execution_kind?: string;
+  shell_command?: string;
+  git_command?: string;
+  working_directory?: string;
+  file_operation?: string;
+  file_path?: string;
+  file_content?: string;
 };
 
 export type ResolveTaskApprovalPayload = {
@@ -237,12 +250,20 @@ export async function getTasks(authToken?: string, limit = 20): Promise<TasksRes
   return fetchJSON<TasksResponse>(`/v1/tasks?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
+export async function createTask(payload: CreateTaskPayload, authToken?: string): Promise<TaskResponse> {
+  return fetchJSON<TaskResponse>("/v1/tasks", { authToken, method: "POST", body: payload });
+}
+
 export async function getTask(taskID: string, authToken?: string): Promise<TaskResponse> {
   return fetchJSON<TaskResponse>(`/v1/tasks/${encodeURIComponent(taskID)}`, { authToken });
 }
 
 export async function getTaskRuns(taskID: string, authToken?: string): Promise<TaskRunsResponse> {
   return fetchJSON<TaskRunsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs`, { authToken });
+}
+
+export async function startTask(taskID: string, authToken?: string): Promise<TaskRunResponse> {
+  return fetchJSON<TaskRunResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/start`, { authToken, method: "POST" });
 }
 
 export async function getTaskApprovals(taskID: string, authToken?: string): Promise<TaskApprovalsResponse> {

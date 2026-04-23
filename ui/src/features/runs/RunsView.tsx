@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   cancelTaskRun,
+  createTask,
   getTask,
   getTaskApprovals,
   getTaskRunArtifacts,
@@ -9,6 +10,7 @@ import {
   getTaskRunSteps,
   getTasks,
   resolveTaskApproval,
+  startTask,
   streamTaskRun,
 } from "../../lib/api";
 import { formatDateTime } from "../../lib/format";
@@ -19,7 +21,7 @@ import type {
   TaskRunRecord,
   TaskStepRecord,
 } from "../../types/runtime";
-import { EmptyState, InlineNotice, MetricTile, ShellSection, StatusPill, Surface, ToolbarButton } from "../shared/ConsolePrimitives";
+import { EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type SessionState = {
   isAuthenticated: boolean;
@@ -44,7 +46,16 @@ export function RunsView({ authToken, session }: Props) {
   const [artifacts, setArtifacts] = useState<TaskArtifactRecord[]>([]);
   const [streamState, setStreamState] = useState<StreamState>("idle");
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [busyAction, setBusyAction] = useState<"" | "approve" | "reject" | "cancel">("");
+  const [busyAction, setBusyAction] = useState<"" | "approve" | "reject" | "cancel" | "create" | "create_start" | "start">("");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskPrompt, setTaskPrompt] = useState("");
+  const [executionKind, setExecutionKind] = useState("stub");
+  const [workingDirectory, setWorkingDirectory] = useState("");
+  const [shellCommand, setShellCommand] = useState("");
+  const [gitCommand, setGitCommand] = useState("");
+  const [fileOperation, setFileOperation] = useState("write");
+  const [filePath, setFilePath] = useState("");
+  const [fileContent, setFileContent] = useState("");
 
   const selectedRun = useMemo(() => runs.find((run) => run.id === selectedRunID) ?? null, [runs, selectedRunID]);
   const pendingApprovals = useMemo(
@@ -262,6 +273,87 @@ export function RunsView({ authToken, session }: Props) {
     }
   }
 
+  async function handleCreateTask(startImmediately: boolean) {
+    if (!taskPrompt.trim()) {
+      setNotice({ tone: "error", message: "Prompt is required." });
+      return;
+    }
+    if (executionKind === "shell" && !shellCommand.trim()) {
+      setNotice({ tone: "error", message: "Shell command is required for shell tasks." });
+      return;
+    }
+    if (executionKind === "git" && !gitCommand.trim()) {
+      setNotice({ tone: "error", message: "Git command is required for git tasks." });
+      return;
+    }
+    if (executionKind === "file" && !filePath.trim()) {
+      setNotice({ tone: "error", message: "File path is required for file tasks." });
+      return;
+    }
+
+    setBusyAction(startImmediately ? "create_start" : "create");
+    setNotice(null);
+    try {
+      const created = await createTask(
+        {
+          title: taskTitle.trim() || undefined,
+          prompt: taskPrompt.trim(),
+          execution_kind: executionKind === "stub" ? undefined : executionKind,
+          shell_command: executionKind === "shell" ? shellCommand.trim() : undefined,
+          git_command: executionKind === "git" ? gitCommand.trim() : undefined,
+          working_directory: workingDirectory.trim() || undefined,
+          file_operation: executionKind === "file" ? fileOperation : undefined,
+          file_path: executionKind === "file" ? filePath.trim() : undefined,
+          file_content: executionKind === "file" ? fileContent : undefined,
+        },
+        authToken,
+      );
+
+      let preferredRunID = "";
+      if (startImmediately) {
+        const started = await startTask(created.data.id, authToken);
+        preferredRunID = started.data.id;
+      }
+
+      resetComposer();
+      setNotice({ tone: "success", message: startImmediately ? "Task created and started." : "Task created." });
+      await loadTasks(created.data.id, preferredRunID);
+    } catch (taskError) {
+      setNotice({ tone: "error", message: taskError instanceof Error ? taskError.message : "failed to create task" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleStartSelectedTask() {
+    if (!selectedTaskID) {
+      return;
+    }
+    setBusyAction("start");
+    setNotice(null);
+    try {
+      const started = await startTask(selectedTaskID, authToken);
+      setNotice({ tone: "success", message: "Task started." });
+      await loadTasks(selectedTaskID, started.data.id);
+    } catch (startError) {
+      setNotice({ tone: "error", message: startError instanceof Error ? startError.message : "failed to start task" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function resetComposer() {
+    setTaskTitle("");
+    setTaskPrompt("");
+    setExecutionKind("stub");
+    setWorkingDirectory("");
+    setShellCommand("");
+    setGitCommand("");
+    setFileOperation("write");
+    setFilePath("");
+    setFileContent("");
+  }
+
   if (!session.isAuthenticated) {
     return (
       <ShellSection eyebrow="Runs" title="Live runs">
@@ -298,6 +390,53 @@ export function RunsView({ authToken, session }: Props) {
 
         {error ? <InlineNotice message={error} tone="error" /> : null}
         {notice ? <InlineNotice message={notice.message} tone={notice.tone === "success" ? "success" : "error"} /> : null}
+
+        <ShellSection eyebrow="Compose" title="Create task">
+          <Surface tone="strong">
+            <div className="stack-md">
+              <p className="body-muted">Create a bounded coding task here, then start it immediately or leave it queued for later inspection.</p>
+              <div className="form-grid">
+                <TextField label="Title" onChange={setTaskTitle} placeholder="Optional task title" value={taskTitle} />
+                <SelectField label="Execution kind" onChange={setExecutionKind} value={executionKind}>
+                  <option value="stub">stub</option>
+                  <option value="shell">shell</option>
+                  <option value="file">file</option>
+                  <option value="git">git</option>
+                </SelectField>
+                <TextField label="Working directory" onChange={setWorkingDirectory} placeholder="Optional working directory" value={workingDirectory} />
+                {executionKind === "file" ? (
+                  <SelectField label="File operation" onChange={setFileOperation} value={fileOperation}>
+                    <option value="write">write</option>
+                    <option value="append">append</option>
+                  </SelectField>
+                ) : (
+                  <div />
+                )}
+              </div>
+              <TextAreaField label="Prompt" onChange={setTaskPrompt} placeholder="Describe the task you want Hecate to execute." rows={4} value={taskPrompt} />
+              {executionKind === "shell" ? (
+                <TextAreaField label="Shell command" onChange={setShellCommand} placeholder="printf 'hello world\n'" rows={3} value={shellCommand} />
+              ) : null}
+              {executionKind === "git" ? (
+                <TextAreaField label="Git command" onChange={setGitCommand} placeholder="status --short" rows={3} value={gitCommand} />
+              ) : null}
+              {executionKind === "file" ? (
+                <div className="stack-sm">
+                  <TextField label="File path" onChange={setFilePath} placeholder="notes/todo.txt" value={filePath} />
+                  <TextAreaField label="File content" onChange={setFileContent} placeholder="Write the file contents here." rows={6} value={fileContent} />
+                </div>
+              ) : null}
+              <div className="action-row">
+                <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleCreateTask(false)} tone="primary">
+                  {busyAction === "create" ? "Creating..." : "Create task"}
+                </ToolbarButton>
+                <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleCreateTask(true)}>
+                  {busyAction === "create_start" ? "Creating and starting..." : "Create and start"}
+                </ToolbarButton>
+              </div>
+            </div>
+          </Surface>
+        </ShellSection>
 
         <ShellSection eyebrow="Execution" title={selectedRun ? `Run #${selectedRun.number}` : "Run detail"}>
           <div className="two-column-grid two-column-grid--compact">
@@ -436,6 +575,13 @@ export function RunsView({ authToken, session }: Props) {
       <aside className="workspace-rail">
         <ShellSection eyebrow="Tasks" title="Recent tasks">
           <Surface>
+            {selectedTaskID ? (
+              <div className="action-row runs-task-actions">
+                <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleStartSelectedTask()} tone="primary">
+                  {busyAction === "start" ? "Starting..." : "Start selected task"}
+                </ToolbarButton>
+              </div>
+            ) : null}
             {loading ? (
               <p className="body-muted">Loading tasks...</p>
             ) : tasks.length > 0 ? (

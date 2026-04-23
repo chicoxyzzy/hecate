@@ -670,6 +670,10 @@ textarea {
   background: rgba(255, 255, 255, 0.76);
 }
 
+.runs-task-actions {
+  margin-bottom: 0.75rem;
+}
+
 .runs-log-output {
   margin: 0;
   min-height: 14rem;
