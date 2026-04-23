@@ -17,7 +17,7 @@ func TestRuleRouterRoute(t *testing.T) {
 		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
 		&fakeProvider{name: "local", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	tests := []struct {
 		name       string
@@ -36,7 +36,7 @@ func TestRuleRouterRoute(t *testing.T) {
 		{
 			name:       "default model is selected",
 			req:        types.ChatRequest{},
-			wantModel:  "gpt-4o-mini",
+			wantModel:  "llama3.1:8b",
 			wantReason: "default_model",
 		},
 	}
@@ -67,7 +67,7 @@ func TestRuleRouterRouteLocalFirst(t *testing.T) {
 		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
 		&fakeProvider{name: "local", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -78,6 +78,42 @@ func TestRuleRouterRouteLocalFirst(t *testing.T) {
 	}
 	if got.Model != "llama3.1:8b" {
 		t.Fatalf("Route() model = %q, want llama3.1:8b", got.Model)
+	}
+}
+
+func TestRuleRouterOrdersProvidersAlphabetically(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-5.4-mini", allowAnyModel: true},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet-4-6", supportedModels: []string{"claude-sonnet-4-6"}},
+		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
+	)
+	router := NewRuleRouter("gpt-5.4-mini", catalog.NewRegistryCatalog(registry, nil))
+
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
+	}
+
+	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, got)
+	if len(fallbacks) < 2 {
+		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
+	}
+	if fallbacks[0].Provider != "ollama" {
+		t.Fatalf("Fallbacks()[0] provider = %q, want ollama", fallbacks[0].Provider)
+	}
+	if fallbacks[0].Model != "llama3.1:8b" {
+		t.Fatalf("Fallbacks()[0] model = %q, want llama3.1:8b", fallbacks[0].Model)
+	}
+	if fallbacks[1].Provider != "openai" {
+		t.Fatalf("Fallbacks()[1] provider = %q, want openai", fallbacks[1].Provider)
+	}
+	if fallbacks[1].Model != "gpt-5.4-mini" {
+		t.Fatalf("Fallbacks()[1] model = %q, want gpt-5.4-mini", fallbacks[1].Model)
 	}
 }
 
@@ -158,7 +194,7 @@ func TestRuleRouterUsesDiscoveredCapabilities(t *testing.T) {
 			},
 		},
 	)
-	router := NewRuleRouter("local", "configured-model", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("configured-model", catalog.NewRegistryCatalog(registry, nil))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -184,7 +220,7 @@ func TestRuleRouterHonorsExplicitProvider(t *testing.T) {
 		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b", "llama3.2:3b"}},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{
 		Scope: types.RequestScope{
@@ -218,7 +254,7 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 			capabilitiesErr: context.DeadlineExceeded,
 		},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -227,12 +263,12 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 	if got.Provider != "openai" {
 		t.Fatalf("Route() provider = %q, want openai", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_local_unavailable" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_local_unavailable", got.Reason)
+	if got.Reason != "default_model" {
+		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
 	}
 }
 
-func TestRuleRouterFallbacksPreferConfiguredFallbackProvider(t *testing.T) {
+func TestRuleRouterFallbacksUseAlphabeticalProviderOrder(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
@@ -240,18 +276,18 @@ func TestRuleRouterFallbacksPreferConfiguredFallbackProvider(t *testing.T) {
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
 	if len(fallbacks) < 2 {
 		t.Fatalf("Fallbacks() count = %d, want at least 2", len(fallbacks))
 	}
-	if fallbacks[0].Provider != "openai" {
-		t.Fatalf("Fallbacks()[0] provider = %q, want openai", fallbacks[0].Provider)
+	if fallbacks[0].Provider != "anthropic" {
+		t.Fatalf("Fallbacks()[0] provider = %q, want anthropic", fallbacks[0].Provider)
 	}
-	if fallbacks[0].Model != "gpt-4o-mini" {
-		t.Fatalf("Fallbacks()[0] model = %q, want gpt-4o-mini", fallbacks[0].Model)
+	if fallbacks[0].Model != "claude-sonnet" {
+		t.Fatalf("Fallbacks()[0] model = %q, want claude-sonnet", fallbacks[0].Model)
 	}
 	if fallbacks[0].Reason != "default_model_local_first_failover" {
 		t.Fatalf("Fallbacks()[0] reason = %q, want failover reason", fallbacks[0].Reason)
@@ -265,7 +301,7 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "openai", catalog.NewRegistryCatalog(registry, nil))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
 
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{
 		Scope: types.RequestScope{ProviderHint: "ollama"},
@@ -275,7 +311,7 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 	}
 }
 
-func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
+func TestRuleRouterSkipsDegradedAlphabeticalProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
@@ -285,7 +321,7 @@ func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
 	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
 	tracker.RecordFailure("openai", context.DeadlineExceeded)
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -294,8 +330,8 @@ func TestRuleRouterSkipsDegradedDefaultProvider(t *testing.T) {
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_default_unavailable" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_default_unavailable", got.Reason)
+	if got.Reason != "default_model" {
+		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
 	}
 }
 
@@ -316,7 +352,7 @@ func TestRuleRouterLocalFirstExplicitModelSkipsUnhealthyFallbackProvider(t *test
 	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
 	tracker.RecordFailure("openai", context.DeadlineExceeded)
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{Model: "gpt-4.1-mini"})
 	if err != nil {
@@ -325,8 +361,8 @@ func TestRuleRouterLocalFirstExplicitModelSkipsUnhealthyFallbackProvider(t *test
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "explicit_model_fallback" {
-		t.Fatalf("Route() reason = %q, want explicit_model_fallback", got.Reason)
+	if got.Reason != "explicit_model" {
+		t.Fatalf("Route() reason = %q, want explicit_model", got.Reason)
 	}
 }
 
@@ -347,7 +383,7 @@ func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testi
 	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
 	tracker.RecordFailure("openai", context.DeadlineExceeded)
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -356,8 +392,8 @@ func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testi
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic", got.Provider)
 	}
-	if got.Reason != "default_model_fallback_default_unavailable" {
-		t.Fatalf("Route() reason = %q, want default_model_fallback_default_unavailable", got.Reason)
+	if got.Reason != "default_model" {
+		t.Fatalf("Route() reason = %q, want default_model", got.Reason)
 	}
 }
 
@@ -372,7 +408,7 @@ func TestRuleRouterFallbacksSkipDegradedProviders(t *testing.T) {
 	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
 	tracker.RecordFailure("openai", context.DeadlineExceeded)
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "local_first", "openai", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	current := types.RouteDecision{Provider: "ollama", Model: "llama3.1:8b", Reason: "default_model_local_first"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)
@@ -395,7 +431,7 @@ func TestRuleRouterPrefersHealthyOverHalfOpen(t *testing.T) {
 		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
 	}}
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -416,7 +452,7 @@ func TestRuleRouterUsesHalfOpenRecoveryWhenNoHealthyAlternativeExists(t *testing
 		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
 	}}
 
-	router := NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
 
 	got, err := router.Route(context.Background(), types.ChatRequest{})
 	if err != nil {
@@ -442,7 +478,7 @@ func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
 		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
 	}}
 
-	router := NewRuleRouter("anthropic", "claude-sonnet", "explicit_or_default", "openai", catalog.NewRegistryCatalog(registry, tracker))
+	router := NewRuleRouter("claude-sonnet", catalog.NewRegistryCatalog(registry, tracker))
 
 	current := types.RouteDecision{Provider: "gemini", Model: "gemini-flash", Reason: "default_model"}
 	fallbacks := router.Fallbacks(context.Background(), types.ChatRequest{}, current)

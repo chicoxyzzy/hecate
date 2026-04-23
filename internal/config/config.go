@@ -43,10 +43,7 @@ type APIKeyConfig struct {
 }
 
 type RouterConfig struct {
-	DefaultModel     string
-	DefaultProvider  string
-	Strategy         string
-	FallbackProvider string
+	DefaultModel string
 }
 
 type ProviderConfig struct {
@@ -221,10 +218,7 @@ func LoadFromEnv() Config {
 			ControlPlaneSecretKey: getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
 		},
 		Router: RouterConfig{
-			DefaultModel:     getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"),
-			DefaultProvider:  getEnv("GATEWAY_DEFAULT_PROVIDER", firstProviderName(providersCfg, "openai")),
-			Strategy:         getEnv("GATEWAY_ROUTER_STRATEGY", "explicit_or_default"),
-			FallbackProvider: getEnv("GATEWAY_ROUTER_FALLBACK_PROVIDER", ""),
+			DefaultModel: getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"),
 		},
 		Provider: ProviderConfig{
 			MaxAttempts:     getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
@@ -400,9 +394,31 @@ func defaultPricebookConfig() PricebookConfig {
 	return PricebookConfig{
 		UnknownModelPolicy: "error",
 		Entries: []ModelPriceConfig{
-			// Seeded from OpenAI's published API pricing/model docs as of 2026-04-22.
+			// Seeded from OpenAI's published API pricing/model docs as of 2026-04-23.
 			// Keep this list small and explicit for sane defaults, but this is not a long-term
 			// source of truth. Hecate still needs a proper pricebook ingestion/update path.
+			// Source: https://developers.openai.com/api/docs/models
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-5.4",
+				InputMicrosUSDPerMillionTokens:       2_500_000,
+				OutputMicrosUSDPerMillionTokens:      15_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 250_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-5.4-mini",
+				InputMicrosUSDPerMillionTokens:       750_000,
+				OutputMicrosUSDPerMillionTokens:      4_500_000,
+				CachedInputMicrosUSDPerMillionTokens: 75_000,
+			},
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-5.4-nano",
+				InputMicrosUSDPerMillionTokens:       200_000,
+				OutputMicrosUSDPerMillionTokens:      1_250_000,
+				CachedInputMicrosUSDPerMillionTokens: 20_000,
+			},
 			{
 				Provider:                             "openai",
 				Model:                                "gpt-4.1",
@@ -450,7 +466,16 @@ func defaultPricebookConfig() PricebookConfig {
 				Provider: "openai",
 				Model:    "text-moderation-latest",
 			},
-			// Seeded from Anthropic's published pricing/docs as of 2026-04-22.
+			// Seeded from Anthropic's published pricing/docs as of 2026-04-23.
+			// Source: https://www.anthropic.com/claude/sonnet
+			// Claude Sonnet 4.6: $3 / MTok input, $15 / MTok output, $0.30 / MTok cache reads.
+			{
+				Provider:                             "anthropic",
+				Model:                                "claude-sonnet-4-6",
+				InputMicrosUSDPerMillionTokens:       3_000_000,
+				OutputMicrosUSDPerMillionTokens:      15_000_000,
+				CachedInputMicrosUSDPerMillionTokens: 300_000,
+			},
 			// Claude Sonnet 4: $3 / MTok input, $15 / MTok output, $0.30 / MTok cache reads.
 			{
 				Provider:                             "anthropic",
@@ -466,6 +491,52 @@ func defaultPricebookConfig() PricebookConfig {
 				InputMicrosUSDPerMillionTokens:       800_000,
 				OutputMicrosUSDPerMillionTokens:      4_000_000,
 				CachedInputMicrosUSDPerMillionTokens: 80_000,
+			},
+			// Seeded from Groq's published model docs as of 2026-04-23.
+			// Source: https://console.groq.com/docs/models
+			{
+				Provider:                             "groq",
+				Model:                                "llama-3.3-70b-versatile",
+				InputMicrosUSDPerMillionTokens:       590_000,
+				OutputMicrosUSDPerMillionTokens:      790_000,
+				CachedInputMicrosUSDPerMillionTokens: 0,
+			},
+			{
+				Provider:                             "groq",
+				Model:                                "llama-3.1-8b-instant",
+				InputMicrosUSDPerMillionTokens:       50_000,
+				OutputMicrosUSDPerMillionTokens:      80_000,
+				CachedInputMicrosUSDPerMillionTokens: 0,
+			},
+			{
+				Provider:                             "groq",
+				Model:                                "openai/gpt-oss-120b",
+				InputMicrosUSDPerMillionTokens:       150_000,
+				OutputMicrosUSDPerMillionTokens:      600_000,
+				CachedInputMicrosUSDPerMillionTokens: 0,
+			},
+			{
+				Provider:                             "groq",
+				Model:                                "openai/gpt-oss-20b",
+				InputMicrosUSDPerMillionTokens:       75_000,
+				OutputMicrosUSDPerMillionTokens:      300_000,
+				CachedInputMicrosUSDPerMillionTokens: 0,
+			},
+			// Seeded from Google Gemini API pricing docs as of 2026-04-23.
+			// Source: https://ai.google.dev/gemini-api/docs/pricing
+			{
+				Provider:                             "gemini",
+				Model:                                "gemini-2.5-flash",
+				InputMicrosUSDPerMillionTokens:       300_000,
+				OutputMicrosUSDPerMillionTokens:      2_500_000,
+				CachedInputMicrosUSDPerMillionTokens: 30_000,
+			},
+			{
+				Provider:                             "gemini",
+				Model:                                "gemini-2.5-flash-lite",
+				InputMicrosUSDPerMillionTokens:       100_000,
+				OutputMicrosUSDPerMillionTokens:      400_000,
+				CachedInputMicrosUSDPerMillionTokens: 10_000,
 			},
 		},
 	}
@@ -565,7 +636,7 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 
-	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-4o-mini"))
+	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"))
 	prefix := providerEnvPrefix(name)
 
 	cfg.Name = getEnv(prefix+"NAME", cfg.Name)
@@ -627,13 +698,6 @@ func normalizeProviders(items []OpenAICompatibleProviderConfig) {
 			items[i].StubResponse = "Stubbed response from the AI Agent Runtime MVP."
 		}
 	}
-}
-
-func firstProviderName(cfg ProvidersConfig, fallback string) string {
-	if len(cfg.OpenAICompatible) == 0 {
-		return fallback
-	}
-	return cfg.OpenAICompatible[0].Name
 }
 
 func getEnv(key, fallback string) string {

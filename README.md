@@ -66,8 +66,7 @@ providers from core bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or
 Example with one cloud provider and one local provider:
 
 ```bash
-GATEWAY_DEFAULT_PROVIDER=openai
-GATEWAY_DEFAULT_MODEL=gpt-4o-mini
+GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
 
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
@@ -76,11 +75,14 @@ PROVIDER_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 If you want cloud-only startup, a smaller config is enough:
 
 ```bash
-GATEWAY_DEFAULT_PROVIDER=openai
-GATEWAY_DEFAULT_MODEL=gpt-4o-mini
+GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
 
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
+
+By default, Hecate considers all available providers. Explicit provider requests
+still pin the route; otherwise healthy providers are considered in alphabetical
+order.
 
 Set `GATEWAY_PROVIDERS` explicitly only when you want to force provider order or
 enable providers that are not discoverable from the core env keys alone.

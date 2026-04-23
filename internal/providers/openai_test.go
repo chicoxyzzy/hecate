@@ -158,6 +158,64 @@ func TestOpenAIProviderChatUpstreamError(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderChatStreamUsesPortableOpenAICompatiblePayload(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost {
+			return nil, fmt.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/chat/completions" {
+			return nil, fmt.Errorf("path = %s, want /v1/chat/completions", r.URL.Path)
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("ReadAll() error = %w", err)
+		}
+		var wireReq map[string]any
+		if err := json.Unmarshal(body, &wireReq); err != nil {
+			return nil, fmt.Errorf("Unmarshal() error = %w", err)
+		}
+		if wireReq["stream"] != true {
+			return nil, fmt.Errorf("stream = %#v, want true", wireReq["stream"])
+		}
+		if _, ok := wireReq["stream_options"]; ok {
+			return nil, fmt.Errorf("stream_options was sent; generic OpenAI-compatible local runtimes may reject it")
+		}
+
+		body = []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})
+
+	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
+		Name:          "ollama",
+		Kind:          "local",
+		BaseURL:       "http://127.0.0.1:11434/v1",
+		Timeout:       time.Second,
+		AllowAnyModel: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	provider.httpClient.Transport = transport
+
+	var out bytes.Buffer
+	err := provider.ChatStream(context.Background(), types.ChatRequest{
+		Model: "llama3.1:8b",
+		Messages: []types.Message{
+			{Role: "user", Content: "hello"},
+		},
+	}, &out)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if got := out.String(); got == "" {
+		t.Fatal("stream output = empty, want proxied SSE")
+	}
+}
+
 func TestOpenAIProviderCapabilitiesDiscovery(t *testing.T) {
 	t.Parallel()
 

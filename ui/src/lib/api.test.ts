@@ -125,6 +125,19 @@ describe("api client", () => {
     expect(result.headers.fallbackFrom).toBe("ollama");
   });
 
+  it("turns browser fetch failures into actionable gateway errors", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Load failed"));
+
+    await expect(
+      chatCompletions({
+        model: "llama3.1:8b",
+        provider: "ollama",
+        user: "team-a",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toThrow("Check that the gateway is running on http://127.0.0.1:8080");
+  });
+
   it("fetches a request trace by request id", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

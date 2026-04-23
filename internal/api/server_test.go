@@ -328,9 +328,7 @@ func TestChatCompletionsExactCacheIsolatedByExplicitProvider(t *testing.T) {
 
 	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{openAI, anthropic}, config.Config{
 		Router: config.RouterConfig{
-			DefaultProvider: "openai",
-			DefaultModel:    "gpt-4o-mini",
-			Strategy:        "explicit_or_default",
+			DefaultModel: "gpt-4o-mini",
 		},
 	})
 
@@ -563,10 +561,7 @@ func TestChatCompletionsFailsOverToConfiguredProvider(t *testing.T) {
 			FailoverEnabled: true,
 		},
 		Router: config.RouterConfig{
-			DefaultProvider:  "openai",
-			DefaultModel:     "gpt-4o-mini",
-			Strategy:         "local_first",
-			FallbackProvider: "openai",
+			DefaultModel: "gpt-4o-mini",
 		},
 	})
 	response := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hello"}]}`)
@@ -589,7 +584,7 @@ func TestChatCompletionsFailsOverToConfiguredProvider(t *testing.T) {
 	if got := response.Header().Get("X-Runtime-Retries"); got != "0" {
 		t.Fatalf("X-Runtime-Retries = %q, want 0", got)
 	}
-	if got := response.Header().Get("X-Runtime-Route-Reason"); got != "default_model_local_first_failover" {
+	if got := response.Header().Get("X-Runtime-Route-Reason"); got != "default_model_failover" {
 		t.Fatalf("X-Runtime-Route-Reason = %q, want failover reason", got)
 	}
 	if localProvider.CallCount() != 1 {
@@ -651,10 +646,7 @@ func TestChatCompletionsSkipsDegradedProviderAfterTransientFailures(t *testing.T
 			HealthCooldown:  time.Hour,
 		},
 		Router: config.RouterConfig{
-			DefaultProvider:  "openai",
-			DefaultModel:     "gpt-4o-mini",
-			Strategy:         "local_first",
-			FallbackProvider: "openai",
+			DefaultModel: "gpt-4o-mini",
 		},
 	})
 
@@ -673,8 +665,8 @@ func TestChatCompletionsSkipsDegradedProviderAfterTransientFailures(t *testing.T
 	if got := second.Header().Get("X-Runtime-Provider"); got != "openai" {
 		t.Fatalf("second X-Runtime-Provider = %q, want openai", got)
 	}
-	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model_fallback_local_unavailable" && got != "default_model_fallback_unhealthy_local" && got != "default_model_fallback_degraded_provider" {
-		t.Fatalf("second X-Runtime-Route-Reason = %q, want degraded fallback reason", got)
+	if got := second.Header().Get("X-Runtime-Route-Reason"); got != "default_model" {
+		t.Fatalf("second X-Runtime-Route-Reason = %q, want default_model", got)
 	}
 	if localProvider.CallCount() != 1 {
 		t.Fatalf("local provider call count = %d, want 1 because degraded provider should be skipped", localProvider.CallCount())
@@ -769,7 +761,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Router:    router.NewRuleRouter("gpt-4o-mini", providerCatalog),
 		Catalog:   providerCatalog,
 		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
@@ -854,7 +846,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Router:    router.NewRuleRouter("gpt-4o-mini", providerCatalog),
 		Catalog:   providerCatalog,
 		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
@@ -1026,7 +1018,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter("openai", "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Router:    router.NewRuleRouter("gpt-4o-mini", providerCatalog),
 		Catalog:   providerCatalog,
 		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
 		Providers: registry,
@@ -1708,9 +1700,7 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 
 	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{provider}, config.Config{
 		Router: config.RouterConfig{
-			DefaultProvider: "anthropic",
-			DefaultModel:    "claude-sonnet-4-20250514",
-			Strategy:        "explicit_or_default",
+			DefaultModel: "claude-sonnet-4-20250514",
 		},
 	})
 
@@ -1776,16 +1766,10 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
 	routerCfg := cfg.Router
-	if routerCfg.DefaultProvider == "" && len(items) > 0 {
-		routerCfg.DefaultProvider = items[0].Name()
-	}
 	if routerCfg.DefaultModel == "" && len(items) > 0 {
 		routerCfg.DefaultModel = items[0].DefaultModel()
 	}
-	if routerCfg.Strategy == "" {
-		routerCfg.Strategy = "explicit_or_default"
-	}
-	routerEngine := router.NewRuleRouter(routerCfg.DefaultProvider, routerCfg.DefaultModel, routerCfg.Strategy, routerCfg.FallbackProvider, providerCatalog)
+	routerEngine := router.NewRuleRouter(routerCfg.DefaultModel, providerCatalog)
 	retentionCfg := cfg.Retention
 	if retentionCfg.TraceSnapshots.MaxCount == 0 {
 		retentionCfg.TraceSnapshots = config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 2000}
@@ -1910,7 +1894,7 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter(provider.Name(), "gpt-4o-mini", "explicit_or_default", "", providerCatalog),
+		Router:    router.NewRuleRouter("gpt-4o-mini", providerCatalog),
 		Catalog:   providerCatalog,
 		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
 		Providers: registry,

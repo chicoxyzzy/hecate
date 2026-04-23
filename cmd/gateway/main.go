@@ -143,10 +143,7 @@ func main() {
 	)
 	providerCatalog := catalog.NewRegistryCatalog(providerRegistry, healthTracker)
 	routerEngine := router.NewRuleRouter(
-		cfg.Router.DefaultProvider,
 		cfg.Router.DefaultModel,
-		cfg.Router.Strategy,
-		cfg.Router.FallbackProvider,
 		providerCatalog,
 	)
 	governorEngine := governor.NewStaticGovernor(cfg.Governor, budgetStore, budgetStore)
@@ -182,9 +179,7 @@ func main() {
 	go func() {
 		logger.Info("gateway starting",
 			slog.String("addr", cfg.Server.Address),
-			slog.String("default_provider", cfg.Router.DefaultProvider),
 			slog.String("default_model", cfg.Router.DefaultModel),
-			slog.String("router_strategy", cfg.Router.Strategy),
 			slog.String("cache_backend", cfg.Cache.Backend),
 			slog.Bool("semantic_cache_enabled", cfg.Cache.Semantic.Enabled),
 			slog.String("semantic_cache_backend", cfg.Cache.Semantic.Backend),

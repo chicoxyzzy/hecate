@@ -51,6 +51,15 @@ func TestLoadFromEnvSemanticAndPostgresSettings(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvUsesCurrentOpenAIDefaultModel(t *testing.T) {
+	t.Setenv("GATEWAY_DEFAULT_MODEL", "")
+
+	cfg := LoadFromEnv()
+	if cfg.Router.DefaultModel != "gpt-5.4-mini" {
+		t.Fatalf("default model = %q, want gpt-5.4-mini", cfg.Router.DefaultModel)
+	}
+}
+
 func TestLoadFromEnvPricebookSettings(t *testing.T) {
 	t.Setenv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "zero")
 	t.Setenv("GATEWAY_PRICEBOOK_JSON", `{
@@ -75,6 +84,38 @@ func TestLoadFromEnvPricebookSettings(t *testing.T) {
 	}
 	if cfg.Pricebook.Entries[0].Model != "gpt-4o-mini" {
 		t.Fatalf("pricebook entry model = %q, want gpt-4o-mini", cfg.Pricebook.Entries[0].Model)
+	}
+}
+
+func TestDefaultPricebookIncludesCurrentProviderDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultPricebookConfig()
+
+	for _, tt := range []struct {
+		provider string
+		model    string
+	}{
+		{provider: "openai", model: "gpt-5.4-mini"},
+		{provider: "openai", model: "gpt-5.4"},
+		{provider: "anthropic", model: "claude-sonnet-4-6"},
+		{provider: "groq", model: "llama-3.3-70b-versatile"},
+		{provider: "gemini", model: "gemini-2.5-flash"},
+	} {
+		tt := tt
+		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
+			t.Parallel()
+
+			for _, entry := range cfg.Entries {
+				if entry.Provider == tt.provider && entry.Model == tt.model {
+					if entry.InputMicrosUSDPerMillionTokens <= 0 || entry.OutputMicrosUSDPerMillionTokens <= 0 {
+						t.Fatalf("pricebook entry for %s/%s has non-positive pricing: %#v", tt.provider, tt.model, entry)
+					}
+					return
+				}
+			}
+			t.Fatalf("pricebook entry for %s/%s not found", tt.provider, tt.model)
+		})
 	}
 }
 
@@ -154,8 +195,11 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	if !ok {
 		t.Fatal("BuiltInProviderByID(openai) = not found")
 	}
-	if got := openai.RuntimeConfig("gpt-4.1-mini").DefaultModel; got != "gpt-4.1-mini" {
-		t.Fatalf("openai default model = %q, want overridden global default", got)
+	if openai.DefaultModel != "gpt-5.4-mini" {
+		t.Fatalf("openai built-in default model = %q, want gpt-5.4-mini", openai.DefaultModel)
+	}
+	if got := openai.RuntimeConfig("gpt-5.4").DefaultModel; got != "gpt-5.4" {
+		t.Fatalf("openai runtime default model = %q, want overridden global default", got)
 	}
 
 	anthropic, ok := BuiltInProviderByID("anthropic")
@@ -165,8 +209,8 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	if anthropic.Protocol != "anthropic" {
 		t.Fatalf("anthropic protocol = %q, want anthropic", anthropic.Protocol)
 	}
-	if got := anthropic.RuntimeConfig("ignored").DefaultModel; got != "claude-sonnet-4-20250514" {
-		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-20250514", got)
+	if got := anthropic.RuntimeConfig("ignored").DefaultModel; got != "claude-sonnet-4-6" {
+		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-6", got)
 	}
 
 	if _, ok := BuiltInProviderByID("LM Studio"); !ok {

@@ -18,11 +18,8 @@ type Router interface {
 }
 
 type RuleRouter struct {
-	defaultModel     string
-	defaultProvider  string
-	fallbackProvider string
-	strategy         string
-	catalog          catalog.Catalog
+	defaultModel string
+	catalog      catalog.Catalog
 }
 
 type routeCandidate struct {
@@ -35,13 +32,10 @@ type routeCandidate struct {
 	Healthy  bool
 }
 
-func NewRuleRouter(defaultProvider, defaultModel, strategy, fallbackProvider string, catalog catalog.Catalog) *RuleRouter {
+func NewRuleRouter(defaultModel string, catalog catalog.Catalog) *RuleRouter {
 	return &RuleRouter{
-		defaultModel:     defaultModel,
-		defaultProvider:  defaultProvider,
-		fallbackProvider: fallbackProvider,
-		strategy:         strategy,
-		catalog:          catalog,
+		defaultModel: defaultModel,
+		catalog:      catalog,
 	}
 }
 
@@ -92,7 +86,7 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 	seen := map[string]struct{}{
 		current.Provider + "/" + current.Model: {},
 	}
-	ordered := r.orderedFallbackProviders()
+	ordered := r.orderedProviders()
 	out := make([]types.RouteDecision, 0, len(ordered))
 
 	for _, provider := range ordered {
@@ -166,37 +160,9 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 }
 
 func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) []routeCandidate {
-	entries := r.catalog.Snapshot(ctx)
+	entries := orderedEntriesByName(r.catalog.Snapshot(ctx))
 	candidates := make([]routeCandidate, 0, len(entries)+2)
 
-	if r.strategy == "local_first" {
-		for _, entry := range entries {
-			if entry.Kind != providers.KindLocal {
-				continue
-			}
-			if !isRoutableCandidate(entry, model) {
-				continue
-			}
-			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_local_first"))
-		}
-		if entry, ok := r.namedSupportingProvider(ctx, r.fallbackProvider, model); ok {
-			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_fallback"))
-		}
-		for _, entry := range entries {
-			if entry.Kind != providers.KindCloud {
-				continue
-			}
-			if !isRoutableCandidate(entry, model) {
-				continue
-			}
-			candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model_fallback"))
-		}
-		return orderCandidates(dedupeCandidates(candidates))
-	}
-
-	if entry, ok := r.namedSupportingProvider(ctx, r.defaultProvider, model); ok {
-		candidates = append(candidates, newRouteCandidate(entry, model, "explicit_model"))
-	}
 	for _, entry := range entries {
 		if !isRoutableCandidate(entry, model) {
 			continue
@@ -207,66 +173,20 @@ func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) 
 }
 
 func (r *RuleRouter) defaultCandidates(ctx context.Context, model string) []routeCandidate {
-	entries := r.catalog.Snapshot(ctx)
-	candidates := make([]routeCandidate, 0, len(entries)+2)
-
-	if r.strategy == "local_first" {
-		skippedPreferredLocal := false
-		for _, entry := range entries {
-			if entry.Kind != providers.KindLocal {
-				continue
-			}
-			if !isRoutableProvider(entry) {
-				skippedPreferredLocal = true
-				continue
-			}
-
-			if localModel := entry.DefaultModel; localModel != "" {
-				candidates = append(candidates, newRouteCandidate(entry, localModel, "default_model_local_first"))
-				continue
-			}
-			if supportsModel(entry, model) {
-				candidates = append(candidates, newRouteCandidate(entry, model, "default_model_local_first"))
-			}
-		}
-		if entry, ok := r.namedProvider(ctx, r.fallbackProvider); ok {
-			reason := "default_model_fallback"
-			if skippedPreferredLocal {
-				reason = "default_model_fallback_local_unavailable"
-			}
-			routedModel := entry.DefaultModel
-			if routedModel == "" {
-				routedModel = model
-			}
-			candidates = append(candidates, newRouteCandidate(entry, routedModel, reason))
-		}
-	}
-
-	skippedPreferredDefault := false
-	if entry, ok := r.catalog.Get(ctx, r.defaultProvider); ok {
-		if !isRoutableProvider(entry) {
-			skippedPreferredDefault = true
-		} else {
-			routedModel := entry.DefaultModel
-			if routedModel == "" {
-				routedModel = model
-			}
-			candidates = append(candidates, newRouteCandidate(entry, routedModel, "default_model"))
-		}
-	}
+	entries := orderedEntriesByName(r.catalog.Snapshot(ctx))
+	candidates := make([]routeCandidate, 0, len(entries))
 	for _, entry := range entries {
 		if !isRoutableProvider(entry) {
 			continue
 		}
-		routedModel := entry.DefaultModel
-		if routedModel == "" {
+
+		if providerModel := entry.DefaultModel; providerModel != "" {
+			candidates = append(candidates, newRouteCandidate(entry, providerModel, "default_model"))
 			continue
 		}
-		reason := "default_model"
-		if skippedPreferredDefault {
-			reason = "default_model_fallback_default_unavailable"
+		if supportsModel(entry, model) {
+			candidates = append(candidates, newRouteCandidate(entry, model, "default_model"))
 		}
-		candidates = append(candidates, newRouteCandidate(entry, routedModel, reason))
 	}
 
 	return orderCandidates(dedupeCandidates(candidates))
@@ -296,25 +216,6 @@ func dedupeCandidates(candidates []routeCandidate) []routeCandidate {
 	return out
 }
 
-func (r *RuleRouter) namedProvider(ctx context.Context, name string) (catalog.Entry, bool) {
-	if name == "" {
-		return catalog.Entry{}, false
-	}
-	entry, ok := r.catalog.Get(ctx, name)
-	if !ok || !isRoutableProvider(entry) {
-		return catalog.Entry{}, false
-	}
-	return entry, true
-}
-
-func (r *RuleRouter) namedSupportingProvider(ctx context.Context, name, model string) (catalog.Entry, bool) {
-	entry, ok := r.namedProvider(ctx, name)
-	if !ok || !supportsModel(entry, model) {
-		return catalog.Entry{}, false
-	}
-	return entry, true
-}
-
 func supportsModel(entry catalog.Entry, model string) bool {
 	for _, candidate := range entry.Models {
 		if candidate == model {
@@ -324,18 +225,11 @@ func supportsModel(entry catalog.Entry, model string) bool {
 	return entry.Provider != nil && entry.Provider.Supports(model)
 }
 
-func (r *RuleRouter) orderedFallbackProviders() []catalog.Entry {
-	entries := r.catalog.Snapshot(context.Background())
-	candidates := make([]catalog.Entry, 0, len(entries)+2)
+func (r *RuleRouter) orderedProviders() []catalog.Entry {
+	entries := orderedEntriesByName(r.catalog.Snapshot(context.Background()))
+	candidates := make([]catalog.Entry, 0, len(entries))
 	seen := make(map[string]struct{}, len(entries)+2)
-	appendProvider := func(name string) {
-		if name == "" {
-			return
-		}
-		entry, ok := r.catalog.Get(context.Background(), name)
-		if !ok {
-			return
-		}
+	appendProvider := func(entry catalog.Entry) {
 		if _, ok := seen[entry.Name]; ok {
 			return
 		}
@@ -343,13 +237,19 @@ func (r *RuleRouter) orderedFallbackProviders() []catalog.Entry {
 		candidates = append(candidates, entry)
 	}
 
-	appendProvider(r.fallbackProvider)
-	appendProvider(r.defaultProvider)
 	for _, entry := range entries {
-		appendProvider(entry.Name)
+		appendProvider(entry)
 	}
 
 	return candidates
+}
+
+func orderedEntriesByName(entries []catalog.Entry) []catalog.Entry {
+	out := append([]catalog.Entry(nil), entries...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
 }
 
 func newRouteCandidate(entry catalog.Entry, model, reason string) routeCandidate {

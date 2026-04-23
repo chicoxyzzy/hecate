@@ -177,34 +177,26 @@ export function PlaygroundView({ state, actions }: Props) {
                 </SelectField>
 
                 <SelectField disabled={state.loading} label="Model" onChange={actions.setModel} value={state.model}>
-                  <option value="">{state.loading ? "Loading models…" : "Select a model"}</option>
+                  <option value="">
+                    {state.loading
+                      ? "Loading models..."
+                      : state.providerFilter === "auto"
+                        ? "Auto (route default)"
+                        : "Provider default"}
+                  </option>
                   {state.providerFilter === "auto" ? (
-                    <>
-                      {state.localModels.length > 0 ? (
-                        <optgroup label="Local models">
-                          {state.localModels.map((entry) => (
-                            <option key={`${entry.metadata?.provider}-${entry.id}`} value={entry.id}>
-                              {entry.id}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ) : null}
-                      {state.cloudModels.length > 0 ? (
-                        <optgroup label="Cloud models">
-                          {state.cloudModels.map((entry) => (
-                            <option key={`${entry.metadata?.provider}-${entry.id}`} value={entry.id}>
-                              {entry.id}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ) : null}
-                    </>
+                    null
                   ) : (
-                    state.providerScopedModels.map((entry) => (
-                      <option key={`${entry.metadata?.provider}-${entry.id}`} value={entry.id}>
-                        {entry.id}
-                      </option>
-                    ))
+                    <>
+                      {state.model && !state.providerScopedModels.some((entry) => entry.id === state.model) ? (
+                        <option value={state.model}>{state.model}</option>
+                      ) : null}
+                      {state.providerScopedModels.map((entry) => (
+                        <option key={`${entry.metadata?.provider}-${entry.id}`} value={entry.id}>
+                          {entry.id}
+                        </option>
+                      ))}
+                    </>
                   )}
                 </SelectField>
 
@@ -227,7 +219,7 @@ export function PlaygroundView({ state, actions }: Props) {
               {state.chatError ? <InlineNotice message={state.chatError} tone="error" /> : null}
 
               <div className="action-row">
-                <ToolbarButton disabled={state.loading || state.chatLoading || !state.model || !state.message.trim()} tone="primary" type="submit">
+                <ToolbarButton disabled={state.loading || state.chatLoading || !state.message.trim()} tone="primary" type="submit">
                   {state.loading ? "Loading…" : state.chatLoading ? "Running request..." : "Run through Hecate"}
                 </ToolbarButton>
                 <StatusPill label={state.activeChatSession ? `Session: ${state.activeChatSession.title}` : "No active session"} tone="neutral" />

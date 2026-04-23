@@ -33,9 +33,31 @@ describe("PlaygroundView", () => {
 
     expect(screen.getByRole("option", { name: "ollama" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "openai" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "llama3.1:8b" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "gpt-4o-mini" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Auto (route default)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run through Hecate/i })).toBeInTheDocument();
+  });
+
+  it("shows provider-scoped models when a provider is pinned", () => {
+    render(
+      <PlaygroundView
+        actions={createRuntimeConsoleActions()}
+        state={createRuntimeConsoleFixture({
+          providerFilter: "ollama",
+          model: "llama3.1:8b",
+          localProviders: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" }],
+          providerScopedModels: [
+            {
+              id: "llama3.1:8b",
+              owned_by: "ollama",
+              metadata: { provider: "ollama", provider_kind: "local", default: true },
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Provider default" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "llama3.1:8b" })).toBeInTheDocument();
   });
 
   it("shows trace events when a trace has been loaded", () => {

@@ -29,19 +29,14 @@ type OpenAICompatibleProvider struct {
 }
 
 type openAIChatCompletionRequest struct {
-	Model         string                `json:"model"`
-	Messages      []openAIChatMessage   `json:"messages"`
-	MaxTokens     int                   `json:"max_tokens,omitempty"`
-	Temperature   float64               `json:"temperature,omitempty"`
-	User          string                `json:"user,omitempty"`
-	Tools         []openAITool          `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage       `json:"tool_choice,omitempty"`
-	Stream        bool                  `json:"stream,omitempty"`
-	StreamOptions *openAIStreamOptions  `json:"stream_options,omitempty"`
-}
-
-type openAIStreamOptions struct {
-	IncludeUsage bool `json:"include_usage"`
+	Model       string              `json:"model"`
+	Messages    []openAIChatMessage `json:"messages"`
+	MaxTokens   int                 `json:"max_tokens,omitempty"`
+	Temperature float64             `json:"temperature,omitempty"`
+	User        string              `json:"user,omitempty"`
+	Tools       []openAITool        `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
+	Stream      bool                `json:"stream,omitempty"`
 }
 
 type openAITool struct {
@@ -486,7 +481,6 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 		User:        requestscope.Normalize(req.Scope).User,
 		ToolChoice:  req.ToolChoice,
 		Stream:      true,
-		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
 	}
 	for _, msg := range req.Messages {
 		wireMsg := openAIChatMessage{

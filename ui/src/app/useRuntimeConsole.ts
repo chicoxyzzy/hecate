@@ -221,15 +221,18 @@ export function useRuntimeConsole() {
 
   useEffect(() => {
     if (providerFilter === "auto") {
+      if (model !== "") {
+        setModel("");
+      }
       return;
     }
     const stillValid = models.some((entry) => entry.id === model && entry.metadata?.provider === providerFilter);
     if (stillValid) {
       return;
     }
-    const nextModel = models.find((entry) => entry.metadata?.provider === providerFilter)?.id ?? "";
+    const nextModel = defaultModelForProvider(providerFilter, models, providers);
     setModel(nextModel);
-  }, [model, models, providerFilter]);
+  }, [model, models, providerFilter, providers]);
 
   useEffect(() => {
     if (session.kind !== "tenant" || !session.tenant) {
@@ -239,18 +242,12 @@ export function useRuntimeConsole() {
   }, [session.kind, session.tenant]);
 
   useEffect(() => {
-    if (model !== "" || models.length === 0) {
+    if (providerFilter === "auto" || model !== "" || models.length === 0) {
       return;
     }
-    const scopedModels = providerFilter === "auto" ? models : models.filter((m) => m.metadata?.provider === providerFilter);
+    const scopedModels = models.filter((m) => m.metadata?.provider === providerFilter);
     if (scopedModels.length === 0) return;
-    // Prefer local providers (no API key needed), then healthy cloud, then any.
-    const healthyProviderNames = new Set(providers.filter((p) => p.healthy).map((p) => p.name));
-    const pick =
-      scopedModels.find((m) => m.metadata?.provider_kind === "local") ??
-      scopedModels.find((m) => healthyProviderNames.has(m.metadata?.provider ?? "")) ??
-      scopedModels[0];
-    if (pick) setModel(pick.id);
+    setModel(defaultModelForProvider(providerFilter, models, providers));
   }, [model, models, providers, providerFilter]);
 
   useEffect(() => {
@@ -375,6 +372,11 @@ export function useRuntimeConsole() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function selectProviderRoute(nextProvider: ProviderFilter) {
+    setProviderFilter(nextProvider);
+    setModel(defaultModelForProvider(nextProvider, models, providers));
   }
 
   async function submitChat(event: SyntheticEvent<HTMLFormElement>) {
@@ -1112,7 +1114,7 @@ export function useRuntimeConsole() {
       setMessage,
       setModel,
       setModelFilter,
-      setProviderFilter,
+      setProviderFilter: selectProviderRoute,
       setProviderEnabled,
       setProviderFormAPIVersion,
       setProviderFormAllowAnyModel,
@@ -1255,6 +1257,20 @@ function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, mes
       return [user, assistant];
     }) ?? [];
   return [...history, { role: "user", content: message }];
+}
+
+function defaultModelForProvider(provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"]): string {
+  if (provider === "auto") {
+    return "";
+  }
+
+  const providerRecord = providers.find((entry) => entry.name === provider);
+  const scopedModels = models.filter((entry) => entry.metadata?.provider === provider);
+  if (providerRecord?.default_model) {
+    return providerRecord.default_model;
+  }
+
+  return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? "";
 }
 
 function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsResponse["data"][number] {

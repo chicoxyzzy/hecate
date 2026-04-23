@@ -230,7 +230,7 @@ export async function chatCompletionsStream(
   authToken: string | undefined,
   onChunk: (delta: string) => void,
 ): Promise<{ headers: RuntimeHeaders; finishReason: string; toolCalls: StreamedToolCall[] }> {
-  const response = await fetch(
+  const response = await fetchWithNetworkError(
     "/v1/chat/completions",
     buildRequestOptions({ authToken, method: "POST", body: { ...payload, stream: true } }),
   );
@@ -329,7 +329,7 @@ export async function chatCompletions(
   payload: ChatCompletionPayload,
   authToken?: string,
 ): Promise<{ data: ChatResponse; headers: RuntimeHeaders }> {
-  const response = await fetch("/v1/chat/completions", buildRequestOptions({ authToken, method: "POST", body: payload }));
+  const response = await fetchWithNetworkError("/v1/chat/completions", buildRequestOptions({ authToken, method: "POST", body: payload }));
   if (!response.ok) {
     throw new Error(await errorMessage(response, "request failed"));
   }
@@ -376,7 +376,7 @@ export function buildRequestOptions(options: RequestOptions): RequestInit {
 }
 
 export async function fetchJSON<T>(url: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(url, buildRequestOptions(options));
+  const response = await fetchWithNetworkError(url, buildRequestOptions(options));
   if (!response.ok) {
     throw new Error(await errorMessage(response, "request failed"));
   }
@@ -384,6 +384,22 @@ export async function fetchJSON<T>(url: string, options: RequestOptions = {}): P
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+async function fetchWithNetworkError(url: string, options: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    throw new Error(networkErrorMessage(url, error));
+  }
+}
+
+function networkErrorMessage(url: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "Load failed" || message === "Failed to fetch" || message.includes("NetworkError")) {
+    return `Gateway request failed to load (${url}). Check that the gateway is running on http://127.0.0.1:8080 and that the Vite dev proxy is active.`;
+  }
+  return `Gateway request failed (${url}): ${message}`;
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
