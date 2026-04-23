@@ -1,22 +1,23 @@
-# Hecate Telemetry Schema
+# Hecate Telemetry
 
-Hecate uses an OpenTelemetry-shaped runtime model for traces, logs, and metrics.
+Hecate uses OpenTelemetry-style traces, metrics, and logs, but the important thing for operators is simpler than that:
 
-The goal is consistency first:
+- every request gets stable runtime identifiers
+- chat responses expose routing and cache metadata in headers
+- traces are inspectable locally over HTTP
+- OTLP export is available for traces, metrics, and logs
 
-- use OpenTelemetry-style keys where they already exist
-- keep `hecate.*` only for product-specific fields
-- keep the same vocabulary across traces, logs, and metrics
+The runtime keeps standard OpenTelemetry keys where they already fit and uses `hecate.*` only for product-specific fields.
 
-## Current Telemetry Surface
+## What You Can Inspect Today
 
-In the current gateway-first state, telemetry comes from three places:
+Telemetry currently shows up in three places:
 
-- response headers on `/v1/chat/completions`
-- in-memory trace inspection over `GET /v1/traces?request_id=...`
-- OTLP HTTP export for traces, metrics, and logs when enabled
+- response headers
+- `GET /v1/traces?request_id=...`
+- OTLP HTTP export when enabled
 
-Important runtime response headers include:
+For chat requests, the most useful headers are:
 
 - `X-Request-Id`
 - `X-Trace-Id`
@@ -24,30 +25,38 @@ Important runtime response headers include:
 - `X-Runtime-Provider`
 - `X-Runtime-Provider-Kind`
 - `X-Runtime-Route-Reason`
+- `X-Runtime-Requested-Model`
 - `X-Runtime-Model`
 - `X-Runtime-Cache`
 - `X-Runtime-Cache-Type`
 - `X-Runtime-Cost-USD`
 
+Task and run lifecycle endpoints also return `X-Trace-Id` and `X-Span-Id` on key execution actions such as run start and approval resolution.
+
 The trace endpoint returns:
 
-- request id and trace id
-- ordered spans
-- route candidate and failover reports
-- normalized timestamps and attributes
+- the request id and trace id
+- ordered spans with timestamps and attributes
+- route candidates
+- failover history
+- the final provider, model, and route reason
 
 ## OTLP Configuration
 
-Hecate exports OTLP over HTTP when the corresponding signal is enabled.
+All OTLP export is over HTTP. Each signal is enabled independently.
 
-Trace export:
+Shared identity:
+
+- `GATEWAY_OTEL_SERVICE_NAME`
+
+Traces:
 
 - `GATEWAY_OTEL_TRACES_ENABLED`
 - `GATEWAY_OTEL_TRACES_ENDPOINT`
 - `GATEWAY_OTEL_TRACES_HEADERS`
 - `GATEWAY_OTEL_TRACES_TIMEOUT`
 
-Metric export:
+Metrics:
 
 - `GATEWAY_OTEL_METRICS_ENABLED`
 - `GATEWAY_OTEL_METRICS_ENDPOINT`
@@ -55,29 +64,23 @@ Metric export:
 - `GATEWAY_OTEL_METRICS_TIMEOUT`
 - `GATEWAY_OTEL_METRICS_INTERVAL`
 
-Log export:
+Logs:
 
 - `GATEWAY_OTEL_LOGS_ENABLED`
 - `GATEWAY_OTEL_LOGS_ENDPOINT`
 - `GATEWAY_OTEL_LOGS_HEADERS`
 - `GATEWAY_OTEL_LOGS_TIMEOUT`
 
-Shared service identity:
-
-- `GATEWAY_OTEL_SERVICE_NAME`
-
-Current runtime behavior to know:
+Behavior to know:
 
 - traces export only when `GATEWAY_OTEL_TRACES_ENABLED=true`
 - metrics export only when `GATEWAY_OTEL_METRICS_ENABLED=true`
 - logs export only when `GATEWAY_OTEL_LOGS_ENABLED=true`
-- if `GATEWAY_OTEL_LOGS_ENDPOINT` is not set, the logger falls back to the traces endpoint
-- if `GATEWAY_OTEL_LOGS_HEADERS` is not set, the logger falls back to the traces headers
-- if `GATEWAY_OTEL_LOGS_TIMEOUT` is not set, the logger falls back to the traces timeout
+- if log endpoint, headers, or timeout are omitted, log export falls back to the trace signal settings
 
-## Core Attributes
+## Core Vocabulary
 
-Standard or standard-shaped attributes used across the runtime:
+Common standard or standard-shaped attributes include:
 
 - `service.name`
 - `request.id`
@@ -94,7 +97,7 @@ Standard or standard-shaped attributes used across the runtime:
 - `gen_ai.usage.output_tokens`
 - `gen_ai.usage.total_tokens`
 
-Hecate-specific runtime attributes:
+Common Hecate-specific attributes include:
 
 - `hecate.phase`
 - `hecate.result`
@@ -111,35 +114,27 @@ Hecate-specific runtime attributes:
 - `hecate.retry.retry_count`
 - `hecate.failover.from_provider`
 
-## Request Results
-
-Request outcomes are normalized to:
+Normalized results are:
 
 - `success`
 - `denied`
 - `error`
 
-These are used in:
+## Traces
 
-- request summary logs
-- request outcome metrics
-- selected trace events
-
-## Trace Event Families
-
-Runtime traces are grouped into a small set of event families:
+Gateway traces are centered around a small set of runtime stages:
 
 - request parsing and validation
 - governor and policy decisions
-- routing decisions
+- routing
 - exact cache lookup
 - semantic cache lookup and writeback
-- provider execution, retry, failover, and health
+- provider execution, retry, and failover
 - usage normalization
 - cost calculation
 - response return
 
-Important spans created by the profiler currently include:
+Important span names include:
 
 - `gateway.request`
 - `gateway.request.parse`
@@ -152,65 +147,31 @@ Important spans created by the profiler currently include:
 - `gateway.cost`
 - `gateway.response`
 
-These spans back both OTLP traces and the in-memory trace inspection endpoint.
-
-## Error Kinds
-
-Hecate-specific error kinds currently include:
-
-- `invalid_request`
-- `request_denied`
-- `router_failed`
-- `budget_estimate_failed`
-- `route_denied`
-- `provider_call_failed`
-- `retry_backoff_failed`
-- `provider_health_degraded`
-- `semantic_cache_store_failed`
-- `usage_record_failed`
-
-These appear in `hecate.error.kind` and are also copied into `error.type` for normalized runtime events.
+These spans back both local trace inspection and OTLP trace export.
 
 ## Metrics
 
-Hecate records metrics using OpenTelemetry instruments and exports them through OTLP when enabled.
+The current metric set is intentionally small and request-focused. Exported instruments include:
 
-The current metric set includes:
+- `hecate.gateway.requests`
+- `hecate.gateway.request.duration`
+- `gen_ai.gateway.chat.requests`
+- `gen_ai.gateway.cost`
+- `gen_ai.client.tokens.input`
+- `gen_ai.client.tokens.output`
+- `gen_ai.client.tokens.total`
+- `hecate.gateway.retries`
+- `hecate.gateway.failovers`
 
-- request totals by `result`
-- request duration histograms
-- finalized chat request totals
-- accumulated estimated cost in micros USD
-- accumulated input, output, and total token counts
-- retry totals
-- failover totals
+Metric attributes reuse the same vocabulary as traces and logs, especially provider, model, cache, failover, and result fields.
 
-Metric attributes reuse the same vocabulary as traces and logs, especially:
+## Local Debugging Workflow
 
-- `gen_ai.provider.name`
-- `gen_ai.request.model`
-- `gen_ai.response.model`
-- `hecate.provider.kind`
-- `hecate.cache.hit`
-- `hecate.cache.type`
-- `hecate.semantic.strategy`
-- `hecate.semantic.index_type`
-- `hecate.failover.from_provider`
-- `result`
+For request-level debugging:
 
-## Debugging Workflow
+1. Send a request through `/v1/chat/completions`.
+2. Capture `X-Request-Id` and `X-Trace-Id` from the response.
+3. Call `GET /v1/traces?request_id=<request-id>`.
+4. Inspect route candidates, failovers, cache decisions, provider latency, final route reason, and span attributes.
 
-For request-level debugging, the most useful workflow today is:
-
-1. send a request through `/v1/chat/completions`
-2. capture `X-Request-Id` and `X-Trace-Id` from the response
-3. call `GET /v1/traces?request_id=<request-id>`
-4. inspect:
-   - route candidates
-   - failovers
-   - cache decisions
-   - provider latency
-   - final route reason
-   - span and event attributes
-
-That path is often faster than going straight to your OTLP backend while you are developing locally.
+That local HTTP path is usually faster than jumping straight into an OTLP backend while developing.

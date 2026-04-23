@@ -1,12 +1,10 @@
 # Hecate
 
-Hecate is an open-source AI agent runtime and LLM gateway for teams running agents across cloud and local models, including coding assistants.
+Hecate is an open-source AI runtime for teams that want one control plane in front of cloud and local models.
 
-It exposes an OpenAI-compatible gateway API while supporting both OpenAI-compatible upstreams and Anthropic's native Messages API behind a vendor-neutral runtime layer.
+Today it is strongest as an LLM gateway and operator console: it exposes an OpenAI-compatible API, supports OpenAI-compatible upstreams plus Anthropic's native Messages API, applies routing and policy decisions, tracks cost and traces, and gives operators a UI for debugging and admin workflows.
 
-The goal is not to build another thin proxy. Hecate is meant to become a runtime control plane for AI-agent workloads: one place to understand which models were used, what each request cost, why routing decisions happened, and how agent execution can eventually be made safer.
-
-Today, Hecate is production-shaped at the model gateway layer. It supports OpenAI-compatible upstreams, Anthropic's native Messages API, local runtimes, provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and an operator UI. That already makes it useful as the gateway and control plane behind coding assistants that know how to execute tools themselves. It is not yet a full coding-agent runtime with sandboxed tool execution and workspace orchestration; that remains the next major track.
+Hecate also now includes the first coding-runtime slice: task, run, step, artifact, and approval APIs; bounded shell, file, and git execution; a worker-backed sandbox; per-run workspaces; cancellation; and live stdout/stderr streaming. It is not yet a full daily-driver coding agent runtime, but the runtime boundary is now in place.
 
 ## Table Of Contents
 
@@ -22,29 +20,17 @@ Today, Hecate is production-shaped at the model gateway layer. It supports OpenA
 - [Repository Layout](#repository-layout)
 - [Checklist](#checklist)
 
-Current runtime capabilities:
+What Hecate already does well:
 
-- OpenAI-compatible and Anthropic provider paths
-- configurable base URLs for OpenAI-compatible upstreams
-- cloud and local provider support
-- persisted provider configs with encrypted control-plane secret storage
-- live provider catalog discovery from upstream model endpoints
-- deterministic routing across configured healthy providers
-- provider health tracking with cooldown-based recovery states
-- retry and failover for transient upstream errors
-- exact cache
-- semantic cache
-- static and persisted pricebook-backed cost estimation
-- budget enforcement
-- persisted policy rules with deny/rewrite decisions by tenant, provider, model, and cost
-- budget limit top-ups, resets, warning thresholds, and history
-- tenant-aware auth and restrictions
-- request tracing and structured logs
-- background retention and pruning with manual admin trigger
-- optional OTLP HTTP export for traces, metrics, and logs
-- React operator UI
+- OpenAI-compatible gateway API with Anthropic and OpenAI-compatible provider support
+- cloud and local model routing with retries, failover, health tracking, and discovery
+- exact and semantic cache paths
+- tenant-aware auth, policy enforcement, budgets, and control-plane persistence
+- structured logs, trace inspection, and OTLP export for traces, metrics, and logs
+- operator UI for models, providers, playground, runs, access, budgets, and control plane
+- basic coding-runtime execution with approvals, sandboxing, workspaces, and live run streaming
 
-Storage backends currently used in different subsystems:
+Storage backends used across the system include:
 
 - file
 - memory
@@ -65,6 +51,12 @@ client
   -> usage normalization
   -> cost calculation
   -> telemetry and response
+
+task client
+  -> task api
+  -> orchestrator
+  -> sandboxd
+  -> artifacts and run stream
 ```
 
 ## Quick Start
@@ -136,9 +128,7 @@ The documented core provider knobs are:
 - `PROVIDER_<NAME>_BASE_URL`
 - `PROVIDER_<NAME>_DEFAULT_MODEL`
 
-Advanced overrides like `PROTOCOL`, `API_VERSION`, and `TIMEOUT` are available
-when needed.
-
+Advanced overrides like `PROTOCOL`, `API_VERSION`, and `TIMEOUT` are available when needed.
 
 Built-in cloud provider presets:
 
@@ -175,7 +165,7 @@ Auth supports:
 - admin bearer token
 - persisted API keys managed through the control plane
 
-The control plane currently supports:
+The control plane supports:
 
 - tenant management
 - API key management
@@ -188,7 +178,7 @@ The control plane currently supports:
 
 ## Observability
 
-Implemented observability features:
+Observability currently includes:
 
 - request IDs
 - trace IDs and span IDs in response headers
@@ -198,9 +188,11 @@ Implemented observability features:
 - OTLP HTTP export for metrics
 - OTLP HTTP export for logs
 
+For a practical telemetry guide, see [`docs/telemetry.md`](docs/telemetry.md).
+
 ## UI
 
-The operator UI currently includes:
+The operator UI includes:
 
 - provider and model visibility
 - preset-driven provider setup
@@ -218,66 +210,26 @@ The app shell lives in `ui/src/app`, shared console primitives and workbench bui
 
 ## Using Hecate For Coding
 
-Hecate can already sit behind a coding assistant as the model gateway and runtime control plane. In that role it is useful today for:
+Hecate is already useful behind a coding assistant even if the client still owns planning and tool orchestration. Today you can use it for:
 
-- provider routing across cloud and local models
-- model and provider policy enforcement
-- tenant-aware API keys and access restrictions
+- routing and failover across cloud and local models
+- tenant-aware auth, policies, and budgets
 - request tracing, route debugging, and structured logs
+- central cost accounting and provider visibility
 - exact and semantic cache paths
-- static and persisted pricebook-backed cost estimation
-- budget enforcement and admin controls
 
-That means a coding client can point its LLM traffic at Hecate today and get central routing, observability, and spend controls.
+The first native coding-runtime slice is also in place:
 
-The first coding-runtime slice is also now in place:
+- task, run, step, artifact, and approval APIs
+- shell, file, and git executors
+- an out-of-process `cmd/sandboxd` worker
+- per-run workspace provisioning
+- basic sandbox policy controls for roots, read-only mode, timeouts, and network denial
+- approval gating for shell execution
+- run queueing, cancellation, and SSE streaming
+- UI support for task creation, live runs, approvals, cancellation, and streamed stdout/stderr
 
-- task, run, step, artifact, and approval objects with HTTP read/write APIs
-- bounded shell, file, and git executor paths
-- an out-of-process `cmd/sandboxd` worker for sandbox execution
-- per-run workspace provisioning before execution begins
-- sandbox policy enforcement for allowed roots, read-only mode, timeouts, and basic network denial
-- shell approval gating with explicit approve or reject flows before execution
-- queued run execution with explicit run cancellation
-- live stdout/stderr artifact streaming plus SSE run updates via `/v1/tasks/{id}/runs/{run_id}/stream`
-
-What is still missing is the part that makes Hecate itself a stronger daily-driver coding runtime. The main gaps are:
-
-- stronger workspace isolation beyond the current per-run sandbox worker and workspace model
-- resumable execution for interrupted or restarted coding runs
-- richer tool execution APIs beyond the current run and artifact streaming surface
-- policy-driven approval flows for broader sensitive actions like network access or git push
-- richer coding-oriented operator views for task traces, repo activity, and broader run management
-
-The practical roadmap for coding use breaks into three phases:
-
-### Phase 1: Coding Gateway
-
-Make Hecate excellent as the gateway and control plane under an existing coding product:
-
-- tighten compatibility for coding-style chat, streaming, and tool-call workloads
-- improve route reason visibility and failure debugging
-- add coding-oriented policies, budgets, and per-session cost views
-- ship local and small-team deployment examples
-
-### Phase 2: Minimal Coding Runtime
-
-Add the first runtime slice that can execute bounded coding tasks:
-
-- add resume semantics on top of the new sandbox worker boundary
-- extend the task/job model with resumable state across process restarts
-- expose richer tool execution APIs on top of the current streamed run snapshots and artifacts
-- enforce policy-driven safety controls like approval classes, allowed paths, timeouts, and network policy
-
-### Phase 3: Team-Ready Coding Platform
-
-Expand the runtime into something teams can trust for daily coding work:
-
-- approval flows for sensitive actions such as network access, destructive filesystem writes, or git push
-- stronger workspace isolation and resumable task state
-- richer UI for task timelines, tool runs, traces, and cost by session or repo
-- smarter model selection policies for different coding task classes
-- stronger reliability features around health, failover, pricing sync, and debug tooling
+The main missing pieces are resumable execution, broader approval classes, stronger workspace isolation, richer tool APIs, and more coding-oriented operator views.
 
 ## Docs
 
