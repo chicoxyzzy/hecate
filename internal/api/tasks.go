@@ -6,6 +6,10 @@ type CreateTaskRequest struct {
 	Repo              string `json:"repo"`
 	BaseBranch        string `json:"base_branch"`
 	WorkspaceMode     string `json:"workspace_mode"`
+	ExecutionKind     string `json:"execution_kind"`
+	ShellCommand      string `json:"shell_command"`
+	WorkingDirectory  string `json:"working_directory"`
+	TimeoutMS         int    `json:"timeout_ms"`
 	Priority          string `json:"priority"`
 	RequestedModel    string `json:"requested_model"`
 	RequestedProvider string `json:"requested_provider"`
@@ -80,6 +84,10 @@ type TaskItem struct {
 	Repo                 string `json:"repo,omitempty"`
 	BaseBranch           string `json:"base_branch,omitempty"`
 	WorkspaceMode        string `json:"workspace_mode,omitempty"`
+	ExecutionKind        string `json:"execution_kind,omitempty"`
+	ShellCommand         string `json:"shell_command,omitempty"`
+	WorkingDirectory     string `json:"working_directory,omitempty"`
+	TimeoutMS            int    `json:"timeout_ms,omitempty"`
 	Status               string `json:"status"`
 	Priority             string `json:"priority,omitempty"`
 	RequestedModel       string `json:"requested_model,omitempty"`

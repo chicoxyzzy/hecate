@@ -21,6 +21,8 @@ type Runner struct {
 	logger *slog.Logger
 	store  taskstate.Store
 	tracer profiler.Tracer
+	exec   Executor
+	shell  Executor
 	config Config
 }
 
@@ -41,8 +43,24 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		logger: logger,
 		store:  store,
 		tracer: tracer,
+		exec:   NewStubExecutor(),
+		shell:  NewShellExecutor(),
 		config: cfg,
 	}
+}
+
+func (r *Runner) SetExecutor(exec Executor) {
+	if exec == nil {
+		return
+	}
+	r.exec = exec
+}
+
+func (r *Runner) SetShellExecutor(exec Executor) {
+	if exec == nil {
+		return
+	}
+	r.shell = exec
 }
 
 func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(prefix string) string) (*StartTaskResult, error) {
@@ -51,6 +69,9 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	}
 	if idgen == nil {
 		return nil, fmt.Errorf("resource id generator is required")
+	}
+	if r.exec == nil {
+		return nil, fmt.Errorf("executor is not configured")
 	}
 
 	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
@@ -130,99 +151,92 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		telemetry.AttrGenAIRequestModel: run.Model,
 	})
 
-	step := types.TaskStep{
-		ID:       idgen("step"),
-		TaskID:   task.ID,
-		RunID:    run.ID,
-		Index:    1,
-		Kind:     "model",
-		Title:    "Stub planning step",
-		Status:   "completed",
-		Phase:    "planning",
-		Result:   telemetry.ResultSuccess,
-		ToolName: "builtin.stub_planner",
-		Input: map[string]any{
-			"title":  task.Title,
-			"prompt": task.Prompt,
-		},
-		OutputSummary: map[string]any{
-			"summary":     "Stub orchestrator generated a first planning step.",
-			"next_action": "review generated summary artifact",
-		},
-		StartedAt:  now,
-		FinishedAt: now,
+	executor := r.executorForTask(task)
+	execution, err := executor.Execute(ctx, ExecutionSpec{
+		Task:       task,
+		Run:        run,
 		RequestID:  requestID,
 		TraceID:    trace.TraceID,
-	}
-	trace.Record("orchestrator.step.completed", map[string]any{
-		telemetry.AttrHecatePhase:  step.Phase,
-		telemetry.AttrHecateResult: step.Result,
-		"hecate.task.id":           task.ID,
-		"hecate.run.id":            run.ID,
-		"hecate.step.id":           step.ID,
-		"hecate.step.kind":         step.Kind,
-		"hecate.step.index":        step.Index,
-		"hecate.step.tool_name":    step.ToolName,
+		RootSpanID: trace.RootSpanID(),
+		StartedAt:  now,
+		NewID:      idgen,
 	})
-	step.SpanID = spanIDByName(trace, "orchestrator.step")
-	step.ParentSpanID = trace.RootSpanID()
-	step, err = r.store.AppendStep(ctx, step)
 	if err != nil {
-		trace.Record("orchestrator.step.failed", map[string]any{
-			telemetry.AttrHecatePhase:     "planning",
+		trace.Record("orchestrator.run.failed", map[string]any{
+			telemetry.AttrHecatePhase:     "orchestration",
 			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "step_create_failed",
-			telemetry.AttrErrorType:       "step_create_failed",
+			telemetry.AttrHecateErrorKind: "executor_failed",
+			telemetry.AttrErrorType:       "executor_failed",
 			telemetry.AttrErrorMessage:    err.Error(),
 			"hecate.task.id":              task.ID,
 			"hecate.run.id":               run.ID,
-			"hecate.step.id":              step.ID,
 		})
 		return nil, err
 	}
 
-	summary := fmt.Sprintf("Stub run %d for task %q created a first planning step and is ready for a real executor.", run.Number, task.Title)
-	artifact := types.TaskArtifact{
-		ID:          idgen("artifact"),
-		TaskID:      task.ID,
-		RunID:       run.ID,
-		StepID:      step.ID,
-		Kind:        "summary",
-		Name:        "run-summary.txt",
-		Description: "Stub run summary artifact",
-		MimeType:    "text/plain",
-		StorageKind: "inline",
-		ContentText: summary,
-		SizeBytes:   int64(len(summary)),
-		Status:      "ready",
-		CreatedAt:   now,
-		RequestID:   requestID,
-		TraceID:     trace.TraceID,
-	}
-	trace.Record("orchestrator.artifact.created", map[string]any{
-		telemetry.AttrHecatePhase:    "artifact",
-		telemetry.AttrHecateResult:   telemetry.ResultSuccess,
-		"hecate.task.id":             task.ID,
-		"hecate.run.id":              run.ID,
-		"hecate.step.id":             step.ID,
-		"hecate.artifact.id":         artifact.ID,
-		"hecate.artifact.kind":       artifact.Kind,
-		"hecate.artifact.size_bytes": artifact.SizeBytes,
-	})
-	artifact.SpanID = spanIDByName(trace, "orchestrator.artifact")
-	artifact, err = r.store.CreateArtifact(ctx, artifact)
-	if err != nil {
-		trace.Record("orchestrator.artifact.failed", map[string]any{
-			telemetry.AttrHecatePhase:     "artifact",
-			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "artifact_create_failed",
-			telemetry.AttrErrorType:       "artifact_create_failed",
-			telemetry.AttrErrorMessage:    err.Error(),
-			"hecate.task.id":              task.ID,
-			"hecate.run.id":               run.ID,
-			"hecate.artifact.id":          artifact.ID,
+	persistedSteps := make([]types.TaskStep, 0, len(execution.Steps))
+	for _, step := range execution.Steps {
+		eventName := "orchestrator.step.completed"
+		if step.Status == "failed" || step.Result == telemetry.ResultError {
+			eventName = "orchestrator.step.failed"
+		}
+		trace.Record(eventName, map[string]any{
+			telemetry.AttrHecatePhase:  firstNonEmpty(step.Phase, "execution"),
+			telemetry.AttrHecateResult: firstNonEmpty(step.Result, telemetry.ResultSuccess),
+			"hecate.task.id":           task.ID,
+			"hecate.run.id":            run.ID,
+			"hecate.step.id":           step.ID,
+			"hecate.step.kind":         step.Kind,
+			"hecate.step.index":        step.Index,
+			"hecate.step.tool_name":    step.ToolName,
 		})
-		return nil, err
+		step.SpanID = spanIDByName(trace, "orchestrator.step")
+		step.ParentSpanID = trace.RootSpanID()
+		step, err = r.store.AppendStep(ctx, step)
+		if err != nil {
+			trace.Record("orchestrator.step.failed", map[string]any{
+				telemetry.AttrHecatePhase:     firstNonEmpty(step.Phase, "execution"),
+				telemetry.AttrHecateResult:    telemetry.ResultError,
+				telemetry.AttrHecateErrorKind: "step_create_failed",
+				telemetry.AttrErrorType:       "step_create_failed",
+				telemetry.AttrErrorMessage:    err.Error(),
+				"hecate.task.id":              task.ID,
+				"hecate.run.id":               run.ID,
+				"hecate.step.id":              step.ID,
+			})
+			return nil, err
+		}
+		persistedSteps = append(persistedSteps, step)
+	}
+
+	persistedArtifacts := make([]types.TaskArtifact, 0, len(execution.Artifacts))
+	for _, artifact := range execution.Artifacts {
+		trace.Record("orchestrator.artifact.created", map[string]any{
+			telemetry.AttrHecatePhase:    "artifact",
+			telemetry.AttrHecateResult:   telemetry.ResultSuccess,
+			"hecate.task.id":             task.ID,
+			"hecate.run.id":              run.ID,
+			"hecate.step.id":             artifact.StepID,
+			"hecate.artifact.id":         artifact.ID,
+			"hecate.artifact.kind":       artifact.Kind,
+			"hecate.artifact.size_bytes": artifact.SizeBytes,
+		})
+		artifact.SpanID = spanIDByName(trace, "orchestrator.artifact")
+		artifact, err = r.store.CreateArtifact(ctx, artifact)
+		if err != nil {
+			trace.Record("orchestrator.artifact.failed", map[string]any{
+				telemetry.AttrHecatePhase:     "artifact",
+				telemetry.AttrHecateResult:    telemetry.ResultError,
+				telemetry.AttrHecateErrorKind: "artifact_create_failed",
+				telemetry.AttrErrorType:       "artifact_create_failed",
+				telemetry.AttrErrorMessage:    err.Error(),
+				"hecate.task.id":              task.ID,
+				"hecate.run.id":               run.ID,
+				"hecate.artifact.id":          artifact.ID,
+			})
+			return nil, err
+		}
+		persistedArtifacts = append(persistedArtifacts, artifact)
 	}
 
 	trace.Record("orchestrator.run.finished", map[string]any{
@@ -237,17 +251,19 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		"hecate.task.id":           task.ID,
 	})
 
-	run.Status = "completed"
-	run.StepCount = 1
-	run.ArtifactCount = 1
+	run.Status = firstNonEmpty(execution.Status, "completed")
+	run.StepCount = len(persistedSteps)
+	run.ArtifactCount = len(persistedArtifacts)
 	run.FinishedAt = now
-	run.OtelStatusCode = "ok"
+	run.LastError = execution.LastError
+	run.OtelStatusCode = firstNonEmpty(execution.OtelStatusCode, "ok")
+	run.OtelStatusMessage = execution.OtelStatusMessage
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
 
 	task.LatestRunID = run.ID
-	task.Status = "completed"
+	task.Status = run.Status
 	if task.StartedAt.IsZero() {
 		task.StartedAt = now
 	}
@@ -263,8 +279,8 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	return &StartTaskResult{
 		Task:      task,
 		Run:       run,
-		Steps:     []types.TaskStep{step},
-		Artifacts: []types.TaskArtifact{artifact},
+		Steps:     persistedSteps,
+		Artifacts: persistedArtifacts,
 		TraceID:   trace.TraceID,
 		SpanID:    trace.RootSpanID(),
 	}, nil
@@ -289,4 +305,11 @@ func spanIDByName(trace *profiler.Trace, name string) string {
 		}
 	}
 	return ""
+}
+
+func (r *Runner) executorForTask(task types.Task) Executor {
+	if task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != "" && r.shell != nil {
+		return r.shell
+	}
+	return r.exec
 }

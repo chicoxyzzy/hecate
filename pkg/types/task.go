@@ -11,6 +11,10 @@ type Task struct {
 	Repo              string
 	BaseBranch        string
 	WorkspaceMode     string
+	ExecutionKind     string
+	ShellCommand      string
+	WorkingDirectory  string
+	TimeoutMS         int
 	Status            string
 	Priority          string
 	RequestedModel    string

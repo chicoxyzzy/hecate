@@ -2088,6 +2088,92 @@ func TestTasksCreateListAndGet(t *testing.T) {
 	}
 }
 
+func TestTaskStartShellExecutor(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Run shell","prompt":"Run a shell command.","execution_kind":"shell","shell_command":"printf 'hello from shell\n'","working_directory":".","timeout_ms":2000}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Data.ExecutionKind != "shell" {
+		t.Fatalf("execution_kind = %q, want shell", created.Data.ExecutionKind)
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Data.Status != "completed" {
+		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	}
+	if started.Data.ArtifactCount != 2 {
+		t.Fatalf("artifact_count = %d, want 2", started.Data.ArtifactCount)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 {
+		t.Fatalf("steps = %d, want 1", len(steps.Data))
+	}
+	if steps.Data[0].Kind != "shell" {
+		t.Fatalf("step kind = %q, want shell", steps.Data[0].Kind)
+	}
+	if steps.Data[0].ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", steps.Data[0].ExitCode)
+	}
+
+	runArtifactsRecorder := httptest.NewRecorder()
+	runArtifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
+	handler.ServeHTTP(runArtifactsRecorder, runArtifactsRequest)
+	if runArtifactsRecorder.Code != http.StatusOK {
+		t.Fatalf("run artifacts status = %d, want %d, body=%s", runArtifactsRecorder.Code, http.StatusOK, runArtifactsRecorder.Body.String())
+	}
+
+	var runArtifacts TaskArtifactsResponse
+	if err := json.NewDecoder(bytes.NewReader(runArtifactsRecorder.Body.Bytes())).Decode(&runArtifacts); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(runArtifacts.Data) != 2 {
+		t.Fatalf("run artifacts = %d, want 2", len(runArtifacts.Data))
+	}
+	foundStdout := false
+	for _, artifact := range runArtifacts.Data {
+		if artifact.Kind == "stdout" && strings.Contains(artifact.ContentText, "hello from shell") {
+			foundStdout = true
+		}
+	}
+	if !foundStdout {
+		t.Fatal("stdout artifact missing shell output")
+	}
+}
+
 func newTestHTTPHandler(logger *slog.Logger, provider providers.Provider) http.Handler {
 	return newTestHTTPHandlerWithConfig(logger, provider, config.Config{})
 }
