@@ -1,18 +1,21 @@
 # Hecate
 
-Hecate is a Go-based LLM gateway and control plane for AI-agent workloads.
+Hecate is an open-source AI agent runtime and LLM gateway for teams running agents across cloud and local models.
 
-It sits between agents and model providers to handle routing, caching, policy enforcement, cost tracking, and observability across cloud and local runtimes. At the gateway boundary, Hecate exposes an OpenAI-compatible API; underneath, it currently supports OpenAI-compatible upstreams and Anthropic's native Messages API.
+It exposes an OpenAI-compatible gateway API while supporting both OpenAI-compatible upstreams and Anthropic's native Messages API behind a vendor-neutral runtime layer.
 
-Today, Hecate is production-shaped at the model gateway layer: provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and a small operator UI are all implemented. It is not yet a full agent runtime with sandboxed tool execution; that remains a future track.
+The goal is not to build another thin proxy. Hecate is meant to become a runtime control plane for AI-agent workloads: one place to understand which models were used, what each request cost, why routing decisions happened, and how agent execution can eventually be made safer.
+
+Today, Hecate is production-shaped at the model gateway layer. It supports OpenAI-compatible upstreams, Anthropic's native Messages API, local runtimes, provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and an operator UI. It is not yet a full agent runtime with sandboxed tool execution; that remains a future track.
 
 Current runtime capabilities:
 
-- OpenAI-compatible provider layer with configurable base URLs
+- OpenAI-compatible and Anthropic provider paths
+- configurable base URLs for OpenAI-compatible upstreams
 - cloud and local provider support
 - persisted provider configs with encrypted control-plane secret storage
 - live provider catalog discovery from upstream model endpoints
-- rule-based routing
+- deterministic routing across configured healthy providers
 - provider health tracking with cooldown-based recovery states
 - retry and failover for transient upstream errors
 - exact cache
@@ -36,7 +39,7 @@ Storage backends currently used in different subsystems:
 ## Architecture
 
 ```text
-clienthello
+client
   -> auth
   -> governor
   -> router
@@ -59,9 +62,10 @@ cp .env.example .env
 
 2. Configure at least one provider in `.env`.
 
-`GATEWAY_PROVIDERS` is optional. For built-in providers, Hecate can infer enabled
-providers from core bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or
-`PROVIDER_<NAME>_BASE_URL`.
+`GATEWAY_PROVIDERS` is optional. Hecate can infer enabled providers from core
+bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or `PROVIDER_<NAME>_BASE_URL`.
+Set `GATEWAY_PROVIDERS` when you want to enable built-in presets using their
+default settings.
 
 Example with one cloud provider and one local provider:
 
@@ -84,9 +88,6 @@ By default, Hecate considers all available providers. Explicit provider requests
 still pin the route; otherwise healthy providers are considered in alphabetical
 order.
 
-Set `GATEWAY_PROVIDERS` explicitly when you want to enable built-in presets
-using their defaults.
-
 3. Run the gateway:
 
 ```bash
@@ -107,9 +108,7 @@ Default addresses:
 
 ## Providers
 
-The provider layer is vendor-neutral at the gateway boundary. Any upstream exposing an OpenAI-compatible API can be integrated through configuration.
-
-Configured provider records tell Hecate how to connect. The model catalog itself is discovered from the provider when possible, rather than treated as hardcoded application state.
+The provider layer is vendor-neutral at the runtime boundary. Hecate supports OpenAI-compatible upstreams and Anthropic's native Messages API as first-class provider paths.
 
 Bootstrap env configuration uses optional `GATEWAY_PROVIDERS` together with
 `PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or
@@ -123,21 +122,22 @@ The documented core provider knobs are:
 - `PROVIDER_<NAME>_DEFAULT_MODEL`
 
 Advanced overrides like `PROTOCOL`, `API_VERSION`, `TIMEOUT`, `MODELS`, and
-`ALLOW_ANY_MODEL` are still supported, but most setups should not need them.
+`ALLOW_ANY_MODEL` are supported, but most setups should not need them.
 
-Hecate currently has two real provider implementations under the hood:
 
-- OpenAI-compatible upstreams
-- Anthropic native Messages API upstreams
+Built-in cloud provider presets:
 
-The built-in provider names are presets on top of those transports.
+- `openai` - OpenAI-compatible provider path
+- `anthropic` - Anthropic native Messages API provider path
+- `groq` - OpenAI-compatible provider path
+- `gemini` - OpenAI-compatible provider path
 
-This includes local runtimes such as:
+Built-in local provider presets:
 
-- Ollama
-- LM Studio
-- LocalAI
-- llama.cpp-style servers
+- `ollama` - Ollama OpenAI-compatible endpoint
+- `lmstudio` - LM Studio OpenAI-compatible server
+- `localai` - LocalAI OpenAI-compatible API
+- `llamacpp` - llama.cpp-style OpenAI-compatible servers
 
 Local presets have default OpenAI-compatible base URLs:
 
@@ -245,9 +245,11 @@ ui                    Operator console
 Implemented:
 
 - [x] OpenAI-compatible chat completions endpoint
+- [x] Anthropic native Messages API provider path
 - [x] Unified model catalog across configured providers
 - [x] Cloud and local provider support behind a vendor-neutral provider layer
-- [x] Rule-based routing with retry, failover, and provider health tracking
+- [x] Deterministic routing across configured healthy providers
+- [x] Retry, failover, and provider health tracking
 - [x] Exact cache
 - [x] Semantic cache
 - [x] Static pricebook and cost estimation
@@ -257,15 +259,17 @@ Implemented:
 - [x] Persisted provider config with encrypted secret storage and runtime reload
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] React operator UI
-- [x] Provider preset catalog for common cloud and local runtimes
+- [x] Provider setup preset catalog for common cloud and local runtimes
 
 Next:
 
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
+- [ ] Cleaner route reason taxonomy and debug views after routing simplification
 - [ ] Deeper policy lifecycle beyond config-driven rules
 - [ ] A real pricebook ingestion/update path instead of only seeded static defaults
 - [ ] Better semantic-cache debugging and trace visibility in the UI
 - [ ] Better budget UX and trend visibility in the UI
-- [ ] More provider discovery paths and richer preset coverage
+- [ ] Provider setup UX that keeps presets separate from runtime routing truth
+- [ ] More provider discovery paths
 - [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
 - [ ] Deployment examples for local and production-style environments
