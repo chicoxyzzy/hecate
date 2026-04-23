@@ -554,7 +554,7 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 				Object: "task_run_stream_event",
 				Data: TaskRunStreamEventData{
 					Sequence:  sequence,
-					Terminal:  isTerminalTaskRunStatus(state.Run.Status),
+					Terminal:  types.IsTerminalTaskRunStatus(state.Run.Status),
 					Run:       state.Run,
 					Steps:     state.Steps,
 					Artifacts: state.Artifacts,
@@ -567,13 +567,13 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 			}
 
 			eventName := "snapshot"
-			if isTerminalTaskRunStatus(state.Run.Status) {
+			if types.IsTerminalTaskRunStatus(state.Run.Status) {
 				eventName = "done"
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, payload)
 			flusher.Flush()
 			lastStateJSON = string(stateJSON)
-			if isTerminalTaskRunStatus(state.Run.Status) {
+			if types.IsTerminalTaskRunStatus(state.Run.Status) {
 				return
 			}
 		}
@@ -677,7 +677,7 @@ func (h *Handler) HandleTaskRunStep(w http.ResponseWriter, r *http.Request) {
 	}
 	stepID := strings.TrimSpace(r.PathValue("step_id"))
 	if stepID == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id and step id are required")
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "step id is required")
 		return
 	}
 	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
@@ -809,16 +809,22 @@ func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID str
 	}, nil
 }
 
-func isTerminalTaskRunStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "cancelled":
-		return true
-	default:
-		return false
-	}
+func buildTaskItem(ctx context.Context, store taskstate.Store, task types.Task) TaskItem {
+	item := renderTaskItem(task)
+	counts := loadTaskItemCounts(ctx, store, task.ID)
+	item.PendingApprovalCount = counts.PendingApprovalCount
+	item.StepCount = counts.StepCount
+	item.ArtifactCount = counts.ArtifactCount
+	return item
 }
 
-func buildTaskItem(ctx context.Context, store taskstate.Store, task types.Task) TaskItem {
+type taskItemCounts struct {
+	PendingApprovalCount int
+	StepCount            int
+	ArtifactCount        int
+}
+
+func renderTaskItem(task types.Task) TaskItem {
 	item := TaskItem{
 		ID:                 task.ID,
 		Title:              task.Title,
@@ -862,26 +868,33 @@ func buildTaskItem(ctx context.Context, store taskstate.Store, task types.Task) 
 	if !task.FinishedAt.IsZero() {
 		item.FinishedAt = task.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
-	if store != nil {
-		runs, _ := store.ListRuns(ctx, task.ID)
-		approvals, _ := store.ListApprovals(ctx, task.ID)
-		artifacts, _ := store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: task.ID})
-		item.ArtifactCount = len(artifacts)
-		pending := 0
-		stepCount := 0
+	return item
+}
+
+func loadTaskItemCounts(ctx context.Context, store taskstate.Store, taskID string) taskItemCounts {
+	if store == nil {
+		return taskItemCounts{}
+	}
+
+	counts := taskItemCounts{}
+	runs, err := store.ListRuns(ctx, taskID)
+	if err == nil {
+		for _, run := range runs {
+			counts.StepCount += run.StepCount
+			counts.ArtifactCount += run.ArtifactCount
+		}
+	}
+
+	approvals, err := store.ListApprovals(ctx, taskID)
+	if err == nil {
 		for _, approval := range approvals {
 			if approval.Status == "pending" {
-				pending++
+				counts.PendingApprovalCount++
 			}
 		}
-		item.PendingApprovalCount = pending
-		for _, run := range runs {
-			steps, _ := store.ListSteps(ctx, run.ID)
-			stepCount += len(steps)
-		}
-		item.StepCount = stepCount
 	}
-	return item
+
+	return counts
 }
 
 func renderTaskRun(run types.TaskRun) TaskRunItem {

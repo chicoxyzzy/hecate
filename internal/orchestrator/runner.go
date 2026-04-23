@@ -317,7 +317,7 @@ func (r *Runner) CancelRun(ctx context.Context, task types.Task, runID string) (
 	if !found {
 		return types.TaskRun{}, fmt.Errorf("task run %q not found", runID)
 	}
-	if run.Status == "completed" || run.Status == "failed" || run.Status == "cancelled" {
+	if types.IsTerminalTaskRunStatus(run.Status) {
 		return run, nil
 	}
 

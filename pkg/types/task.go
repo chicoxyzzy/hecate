@@ -128,3 +128,12 @@ type TaskArtifact struct {
 	TraceID     string
 	SpanID      string
 }
+
+func IsTerminalTaskRunStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
