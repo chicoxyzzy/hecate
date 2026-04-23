@@ -146,6 +146,8 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 	w.Header().Set("X-Runtime-Provider", handle.Metadata.Provider)
 	w.Header().Set("X-Runtime-Provider-Kind", handle.Metadata.ProviderKind)
 	w.Header().Set("X-Runtime-Route-Reason", handle.Metadata.RouteReason)
+	w.Header().Set("X-Runtime-Requested-Model", handle.Metadata.RequestedModel)
+	w.Header().Set("X-Runtime-Model", handle.Metadata.Model)
 	w.Header().Set("X-Trace-Id", handle.Metadata.TraceID)
 	w.Header().Set("X-Span-Id", handle.Metadata.SpanID)
 	w.WriteHeader(http.StatusOK)

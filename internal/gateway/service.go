@@ -461,12 +461,14 @@ func (s *Service) RouteForStream(ctx context.Context, req types.ChatRequest) (*S
 	streamReq.Model = plan.Route.Model
 
 	meta := ResponseMetadata{
-		RequestID:    req.RequestID,
-		Provider:     plan.Route.Provider,
-		ProviderKind: plan.ProviderKind,
-		RouteReason:  plan.Route.Reason,
-		TraceID:      trace.TraceID,
-		SpanID:       trace.RootSpanID(),
+		RequestID:      req.RequestID,
+		Provider:       plan.Route.Provider,
+		ProviderKind:   plan.ProviderKind,
+		RouteReason:    plan.Route.Reason,
+		RequestedModel: req.Model,
+		Model:          plan.Route.Model,
+		TraceID:        trace.TraceID,
+		SpanID:         trace.RootSpanID(),
 	}
 
 	handle := &StreamHandle{

@@ -36,7 +36,7 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 						telemetry.AttrHecateProviderKind:           "local",
 						telemetry.AttrHecateRouteReason:            "provider_default_model",
 						telemetry.AttrHecateProviderIndex:          0,
-						telemetry.AttrHecateRouteSkipReason:        "route_denied",
+						telemetry.AttrHecateRouteSkipReason:        "budget_denied",
 						telemetry.AttrErrorMessage:                 "budget denied",
 						telemetry.AttrHecateCostEstimatedMicrosUSD: int64(1200),
 					},
@@ -120,8 +120,8 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 	if report.Candidates[0].Outcome != "denied" {
 		t.Fatalf("candidate[0].Outcome = %q, want denied", report.Candidates[0].Outcome)
 	}
-	if report.Candidates[0].SkipReason != "route_denied" {
-		t.Fatalf("candidate[0].SkipReason = %q, want route_denied", report.Candidates[0].SkipReason)
+	if report.Candidates[0].SkipReason != "budget_denied" {
+		t.Fatalf("candidate[0].SkipReason = %q, want budget_denied", report.Candidates[0].SkipReason)
 	}
 	if report.Candidates[1].Outcome != "completed" {
 		t.Fatalf("candidate[1].Outcome = %q, want completed", report.Candidates[1].Outcome)
@@ -143,5 +143,74 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 	}
 	if report.Failovers[0].ToProvider != "openai" {
 		t.Fatalf("failover[0].ToProvider = %q, want openai", report.Failovers[0].ToProvider)
+	}
+}
+
+func TestBuildRouteDecisionReportNormalizesUnfinishedCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 21, 11, 0, 0, 0, time.UTC)
+	report := buildRouteDecisionReport([]types.TraceSpan{
+		{
+			Name: "gateway.router",
+			Events: []types.TraceEvent{
+				{
+					Name:      "router.candidate.considered",
+					Timestamp: now,
+					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:   "ollama",
+						telemetry.AttrGenAIRequestModel:   "llama3.1:8b",
+						telemetry.AttrHecateProviderKind:  "local",
+						telemetry.AttrHecateRouteReason:   "provider_default_model",
+						telemetry.AttrHecateProviderIndex: 0,
+					},
+				},
+			},
+		},
+	})
+
+	if len(report.Candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(report.Candidates))
+	}
+	if report.Candidates[0].Outcome != "skipped" {
+		t.Fatalf("candidate outcome = %q, want skipped", report.Candidates[0].Outcome)
+	}
+	if report.Candidates[0].SkipReason != "not_selected" {
+		t.Fatalf("candidate skip reason = %q, want not_selected", report.Candidates[0].SkipReason)
+	}
+}
+
+func TestBuildRouteDecisionReportInfersFinalRouteFromCompletedCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+	report := buildRouteDecisionReport([]types.TraceSpan{
+		{
+			Name: "gateway.provider",
+			Events: []types.TraceEvent{
+				{
+					Name:      "provider.call.finished",
+					Timestamp: now,
+					Attributes: map[string]any{
+						telemetry.AttrGenAIProviderName:       "openai",
+						telemetry.AttrGenAIRequestModel:       "gpt-4o-mini",
+						telemetry.AttrHecateProviderKind:      "cloud",
+						telemetry.AttrHecateRouteReason:       "provider_default_model",
+						telemetry.AttrHecateProviderIndex:     0,
+						telemetry.AttrHecateProviderLatencyMS: int64(100),
+					},
+				},
+			},
+		},
+	})
+
+	if report.FinalProvider != "openai" {
+		t.Fatalf("FinalProvider = %q, want openai", report.FinalProvider)
+	}
+	if report.FinalModel != "gpt-4o-mini" {
+		t.Fatalf("FinalModel = %q, want gpt-4o-mini", report.FinalModel)
+	}
+	if len(report.Candidates) != 1 || report.Candidates[0].Outcome != "completed" {
+		t.Fatalf("candidate = %#v, want one completed candidate", report.Candidates)
 	}
 }

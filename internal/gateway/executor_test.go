@@ -214,6 +214,46 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 	if fallback.callCount != 1 {
 		t.Fatalf("fallback call_count = %d, want 1", fallback.callCount)
 	}
+
+	report := buildRouteDecisionReport(trace.Spans())
+	if len(report.Candidates) < 2 {
+		t.Fatalf("candidate count = %d, want at least 2", len(report.Candidates))
+	}
+	if report.Candidates[0].Outcome != "failed" {
+		t.Fatalf("primary outcome = %q, want failed", report.Candidates[0].Outcome)
+	}
+	if report.Candidates[0].Retryable != true {
+		t.Fatalf("primary retryable = false, want true")
+	}
+	if report.Candidates[1].Outcome != "completed" {
+		t.Fatalf("fallback outcome = %q, want completed", report.Candidates[1].Outcome)
+	}
+	if report.FinalProvider != "ollama" {
+		t.Fatalf("final provider = %q, want ollama", report.FinalProvider)
+	}
+}
+
+func TestClassifyRouteDenied(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "budget", err: errors.New("estimated request cost 100 would exceed account balance 50"), want: "budget_denied"},
+		{name: "policy", err: errors.New("provider \"openai\" is not allowed by policy"), want: "policy_denied"},
+		{name: "generic", err: errors.New("route unavailable"), want: "route_denied"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyRouteDenied(tt.err); got != tt.want {
+				t.Fatalf("classifyRouteDenied() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
@@ -288,5 +328,22 @@ func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
 	}
 	if fallback.callCount != 1 {
 		t.Fatalf("fallback call_count = %d, want 1", fallback.callCount)
+	}
+
+	report := buildRouteDecisionReport(trace.Spans())
+	if len(report.Candidates) < 2 {
+		t.Fatalf("candidate count = %d, want at least 2", len(report.Candidates))
+	}
+	if report.Candidates[0].Outcome != "skipped" {
+		t.Fatalf("primary outcome = %q, want skipped", report.Candidates[0].Outcome)
+	}
+	if report.Candidates[0].SkipReason != "preflight_price_missing" {
+		t.Fatalf("primary skip reason = %q, want preflight_price_missing", report.Candidates[0].SkipReason)
+	}
+	if report.Candidates[1].Outcome != "completed" {
+		t.Fatalf("fallback outcome = %q, want completed", report.Candidates[1].Outcome)
+	}
+	if report.FinalProvider != "ollama" {
+		t.Fatalf("final provider = %q, want ollama", report.FinalProvider)
 	}
 }

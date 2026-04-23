@@ -60,6 +60,15 @@ func buildRouteDecisionReport(spans []types.TraceSpan) types.RouteDecisionReport
 		}
 		return candidates[i].Provider < candidates[j].Provider
 	})
+	for i := range candidates {
+		normalizeRouteCandidate(&candidates[i])
+		if report.FinalProvider == "" && candidates[i].Outcome == "completed" {
+			report.FinalProvider = candidates[i].Provider
+			report.FinalProviderKind = candidates[i].ProviderKind
+			report.FinalModel = candidates[i].Model
+			report.FinalReason = candidates[i].Reason
+		}
+	}
 	report.Candidates = candidates
 	report.Failovers = failovers
 	return report
@@ -128,6 +137,23 @@ func routeOutcomeFromEvent(name string, attrs map[string]any) string {
 			return value
 		}
 		return "unknown"
+	}
+}
+
+func normalizeRouteCandidate(candidate *types.RouteCandidateReport) {
+	switch candidate.Outcome {
+	case "selected", "skipped", "denied", "failed", "completed":
+		return
+	case "", "unknown", "considered":
+		candidate.Outcome = "skipped"
+		if candidate.SkipReason == "" {
+			candidate.SkipReason = "not_selected"
+		}
+	default:
+		if candidate.SkipReason == "" {
+			candidate.SkipReason = candidate.Outcome
+		}
+		candidate.Outcome = "skipped"
 	}
 }
 

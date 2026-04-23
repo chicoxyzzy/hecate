@@ -23,6 +23,15 @@ function formatToolArgs(args: string): string {
 export function PlaygroundView({ state, actions }: Props) {
   const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const routeReport = state.traceRoute;
+  const selectedRouteCandidate = routeReport?.candidates?.find((candidate) => candidate.outcome === "selected" || candidate.outcome === "completed") ?? null;
+  const receiptProvider = state.runtimeHeaders?.provider || routeReport?.final_provider || selectedRouteCandidate?.provider || "unknown";
+  const receiptModel =
+    state.runtimeHeaders?.resolvedModel ||
+    routeReport?.final_model ||
+    selectedRouteCandidate?.model ||
+    state.runtimeHeaders?.requestedModel ||
+    state.chatResult?.model ||
+    "unknown model";
   const cacheLabel = state.runtimeHeaders?.cache === "true"
     ? `${state.runtimeHeaders.cacheType || "cache"} hit`
     : state.runtimeHeaders
@@ -333,7 +342,7 @@ export function PlaygroundView({ state, actions }: Props) {
                     <div>
                       <p className="console-eyebrow">Request receipt</p>
                       <h3 className="request-receipt__title">
-                        {state.runtimeHeaders.provider || "unknown"} · {state.runtimeHeaders.resolvedModel || state.chatResult?.model || "unknown model"}
+                        {receiptProvider} · {receiptModel}
                       </h3>
                     </div>
                     <StatusPill label={formatUsd(state.runtimeHeaders.costUsd)} tone="warning" />
@@ -352,8 +361,8 @@ export function PlaygroundView({ state, actions }: Props) {
                   <DefinitionList
                     compact
                     items={[
-                      { label: "Provider", value: state.runtimeHeaders.provider || "unknown" },
-                      { label: "Model", value: state.runtimeHeaders.resolvedModel || state.runtimeHeaders.requestedModel || state.model || "n/a" },
+                      { label: "Provider", value: receiptProvider },
+                      { label: "Model", value: receiptModel },
                       { label: "Route", value: describeRouteReason(state.runtimeHeaders.routeReason) },
                       { label: "Attempts", value: `${state.runtimeHeaders.attempts || "1"} attempt(s), ${state.runtimeHeaders.retries || "0"} retries` },
                       { label: "Cache", value: cacheLabel },

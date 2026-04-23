@@ -25,7 +25,7 @@ type RoutePreflightErrorKind string
 
 const (
 	RoutePreflightProviderNotFound RoutePreflightErrorKind = "provider_not_found"
-	RoutePreflightCostEstimate     RoutePreflightErrorKind = "cost_estimate_failed"
+	RoutePreflightCostEstimate     RoutePreflightErrorKind = "preflight_price_missing"
 	RoutePreflightRouteDenied      RoutePreflightErrorKind = "route_denied"
 )
 

@@ -85,6 +85,55 @@ describe("PlaygroundView", () => {
     expect(screen.queryByRole("option", { name: "qwen2.5:7b" })).not.toBeInTheDocument();
   });
 
+  it("falls back to route candidate model when response headers omit resolved model", () => {
+    render(
+      <PlaygroundView
+        actions={createRuntimeConsoleActions()}
+        state={createRuntimeConsoleFixture({
+          providers: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b" }],
+          runtimeHeaders: {
+            requestId: "req-local",
+            traceId: "trace-local",
+            spanId: "span-local",
+            provider: "ollama",
+            providerKind: "local",
+            routeReason: "provider_default_model",
+            requestedModel: "",
+            resolvedModel: "",
+            cache: "false",
+            cacheType: "false",
+            semanticStrategy: "",
+            semanticIndex: "",
+            semanticSimilarity: "",
+            attempts: "1",
+            retries: "0",
+            fallbackFrom: "",
+            costUsd: "0.000000",
+          },
+          traceRoute: {
+            final_provider: "ollama",
+            final_provider_kind: "local",
+            final_model: "",
+            final_reason: "provider_default_model",
+            candidates: [
+              {
+                provider: "ollama",
+                provider_kind: "local",
+                model: "llama3.1:8b",
+                reason: "provider_default_model",
+                outcome: "completed",
+                health_status: "healthy",
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getAllByText(/ollama · llama3\.1:8b/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/No resolved model/i)).not.toBeInTheDocument();
+  });
+
   it("shows trace events when a trace has been loaded", () => {
     render(
       <PlaygroundView
@@ -123,7 +172,7 @@ describe("PlaygroundView", () => {
                 model: "llama3.1:8b",
                 reason: "provider_default_model",
                 outcome: "denied",
-                skip_reason: "route_denied",
+                skip_reason: "budget_denied",
                 health_status: "open",
                 estimated_usd: "0.000000",
               },
@@ -182,7 +231,7 @@ describe("PlaygroundView", () => {
     expect(screen.getByText("Semantic cache")).toBeInTheDocument();
     expect(screen.getAllByText("Semantic lookup miss").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Writeback stored").length).toBeGreaterThan(0);
-    expect(screen.getByText("route_denied")).toBeInTheDocument();
+    expect(screen.getByText("budget_denied")).toBeInTheDocument();
     expect(screen.getByText("Provider Retry Exhausted")).toBeInTheDocument();
     expect(screen.getByText("Provider path")).toBeInTheDocument();
   });

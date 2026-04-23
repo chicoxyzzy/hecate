@@ -23,12 +23,14 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
   const cachePath = describeCachePath(runtimeHeaders);
   const candidateCount = route?.candidates?.length ?? 0;
   const failoverCount = route?.failovers?.length ?? 0;
-  const selectedCandidate = route?.candidates?.find((candidate) => candidate.outcome === "selected") ?? null;
+  const selectedCandidate = route?.candidates?.find((candidate) => candidate.outcome === "selected" || candidate.outcome === "completed") ?? null;
   const skippedCount = route?.candidates?.filter((candidate) => candidate.outcome === "skipped" || candidate.outcome === "denied" || candidate.skip_reason).length ?? 0;
   const healthCounts = countRouteHealthStatuses(route);
   const finalHealth = selectedCandidate?.health_status;
   const finalHealthLabel = finalHealth ? describeHealthStatus(finalHealth) : "No health signal";
   const finalHealthTone = healthStatusTone(finalHealth);
+  const finalProvider = route?.final_provider || selectedCandidate?.provider || runtimeHeaders?.provider || "Unknown provider";
+  const finalModel = route?.final_model || selectedCandidate?.model || runtimeHeaders?.resolvedModel || runtimeHeaders?.requestedModel || "No resolved model";
   const routeRecovery = describeRouteRecovery(route, runtimeHeaders);
   const semanticInsight = buildSemanticCacheInsight(runtimeHeaders, spans);
 
@@ -50,7 +52,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
                   </div>
                   <div className="route-summary__title-row">
                     <h3 className="route-summary__title">
-                      {route?.final_provider || runtimeHeaders?.provider || "Unknown provider"} · {route?.final_model || runtimeHeaders?.resolvedModel || "No resolved model"}
+                      {finalProvider} · {finalModel}
                     </h3>
                     <p className="body-muted">{describeRouteReason(route?.final_reason || runtimeHeaders?.routeReason)}</p>
                   </div>
@@ -87,8 +89,8 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
             <div className="metric-grid metric-grid--wide">
               <MetricTile
                 label="Final route"
-                value={route?.final_provider || runtimeHeaders?.provider || "Unknown"}
-                detail={route?.final_model || runtimeHeaders?.resolvedModel || "No resolved model"}
+                value={finalProvider}
+                detail={finalModel}
                 tone={finalHealthTone === "healthy" ? "healthy" : finalHealthTone === "warning" ? "warning" : "neutral"}
               />
               <MetricTile
@@ -143,7 +145,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
                     compact
                     items={[
                       { label: "Requested model", value: runtimeHeaders?.requestedModel || "n/a" },
-                      { label: "Resolved model", value: runtimeHeaders?.resolvedModel || route?.final_model || "n/a" },
+                      { label: "Resolved model", value: finalModel },
                       { label: "Recovery path", value: routeRecovery },
                       {
                         label: "Semantic details",
@@ -221,7 +223,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
                 </div>
                 <strong>{candidate.provider || "unknown provider"} · {candidate.model || "unknown model"}</strong>
                 <p className="body-muted">
-                  {candidate.outcome === "selected"
+                  {candidate.outcome === "selected" || candidate.outcome === "completed"
                     ? `Selected because ${describeRouteReason(candidate.reason).toLowerCase()}.`
                     : candidate.skip_reason
                       ? `Skipped: ${candidate.skip_reason}. ${describeRouteReason(candidate.reason)}.`
