@@ -226,6 +226,13 @@ func NewService(deps Dependencies) *Service {
 	}
 }
 
+func (s *Service) Tracer() profiler.Tracer {
+	if s == nil {
+		return nil
+	}
+	return s.tracer
+}
+
 func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (result *ChatResult, err error) {
 	startedAt := time.Now()
 	defer s.recordRequestOutcome(ctx, err, time.Since(startedAt))

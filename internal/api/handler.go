@@ -13,6 +13,8 @@ import (
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
+	"github.com/hecate/agent-runtime/internal/orchestrator"
+	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
@@ -23,6 +25,8 @@ type Handler struct {
 	authenticator   *auth.Authenticator
 	controlPlane    controlplane.Store
 	providerRuntime ProviderRuntime
+	taskStore       taskstate.Store
+	taskRunner      *orchestrator.Runner
 }
 
 type ProviderRuntime interface {
@@ -39,6 +43,7 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	if len(providerRuntimes) > 0 {
 		providerRuntime = providerRuntimes[0]
 	}
+	taskStore := taskstate.NewMemoryStore()
 	return &Handler{
 		config:          cfg,
 		logger:          logger,
@@ -46,6 +51,10 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		authenticator:   auth.NewAuthenticator(cfg.Server, cpStore),
 		controlPlane:    cpStore,
 		providerRuntime: providerRuntime,
+		taskStore:       taskStore,
+		taskRunner: orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
+			DefaultModel: cfg.Router.DefaultModel,
+		}),
 	}
 }
 

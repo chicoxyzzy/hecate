@@ -1858,6 +1858,236 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 	}
 }
 
+func TestTasksCreateListAndGet(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Upgrade TypeScript","prompt":"Upgrade the UI workspace to TypeScript 7 beta.","repo":"hecate","base_branch":"main","workspace_mode":"ephemeral","requested_model":"gpt-5.4-mini","requested_provider":"openai","budget_micros_usd":500000}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Object != "task" {
+		t.Fatalf("object = %q, want task", created.Object)
+	}
+	if created.Data.ID == "" {
+		t.Fatal("task id = empty, want task id")
+	}
+	if created.Data.Status != "queued" {
+		t.Fatalf("status = %q, want queued", created.Data.Status)
+	}
+	if created.Data.Repo != "hecate" {
+		t.Fatalf("repo = %q, want hecate", created.Data.Repo)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks?limit=10", nil)
+	handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
+	}
+
+	var listed TasksResponse
+	if err := json.NewDecoder(bytes.NewReader(listRecorder.Body.Bytes())).Decode(&listed); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if listed.Object != "tasks" {
+		t.Fatalf("object = %q, want tasks", listed.Object)
+	}
+	if len(listed.Data) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(listed.Data))
+	}
+	if listed.Data[0].ID != created.Data.ID {
+		t.Fatalf("listed task id = %q, want %q", listed.Data[0].ID, created.Data.ID)
+	}
+
+	getRecorder := httptest.NewRecorder()
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID, nil)
+	handler.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d, body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	var fetched TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(getRecorder.Body.Bytes())).Decode(&fetched); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if fetched.Data.ID != created.Data.ID {
+		t.Fatalf("fetched task id = %q, want %q", fetched.Data.ID, created.Data.ID)
+	}
+	if fetched.Data.Prompt != "Upgrade the UI workspace to TypeScript 7 beta." {
+		t.Fatalf("prompt = %q, want original prompt", fetched.Data.Prompt)
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+	if got := startRecorder.Header().Get("X-Trace-Id"); got == "" {
+		t.Fatal("X-Trace-Id = empty, want trace id")
+	}
+	if got := startRecorder.Header().Get("X-Span-Id"); got == "" {
+		t.Fatal("X-Span-Id = empty, want span id")
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Object != "task_run" {
+		t.Fatalf("object = %q, want task_run", started.Object)
+	}
+	if started.Data.ID == "" {
+		t.Fatal("run id = empty, want run id")
+	}
+	if started.Data.Status != "completed" {
+		t.Fatalf("run status = %q, want completed", started.Data.Status)
+	}
+	if started.Data.StepCount != 1 {
+		t.Fatalf("step_count = %d, want 1", started.Data.StepCount)
+	}
+	if started.Data.ArtifactCount != 1 {
+		t.Fatalf("artifact_count = %d, want 1", started.Data.ArtifactCount)
+	}
+
+	runsRecorder := httptest.NewRecorder()
+	runsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs", nil)
+	handler.ServeHTTP(runsRecorder, runsRequest)
+	if runsRecorder.Code != http.StatusOK {
+		t.Fatalf("runs status = %d, want %d, body=%s", runsRecorder.Code, http.StatusOK, runsRecorder.Body.String())
+	}
+
+	var runs TaskRunsResponse
+	if err := json.NewDecoder(bytes.NewReader(runsRecorder.Body.Bytes())).Decode(&runs); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(runs.Data) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs.Data))
+	}
+	if runs.Data[0].ID != started.Data.ID {
+		t.Fatalf("run id = %q, want %q", runs.Data[0].ID, started.Data.ID)
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID, nil)
+	handler.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want %d, body=%s", runRecorder.Code, http.StatusOK, runRecorder.Body.String())
+	}
+
+	var fetchedRun TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(runRecorder.Body.Bytes())).Decode(&fetchedRun); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if fetchedRun.Data.ID != started.Data.ID {
+		t.Fatalf("fetched run id = %q, want %q", fetchedRun.Data.ID, started.Data.ID)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 {
+		t.Fatalf("steps = %d, want 1", len(steps.Data))
+	}
+	if steps.Data[0].Kind != "model" {
+		t.Fatalf("step kind = %q, want model", steps.Data[0].Kind)
+	}
+
+	stepRecorder := httptest.NewRecorder()
+	stepRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps/"+steps.Data[0].ID, nil)
+	handler.ServeHTTP(stepRecorder, stepRequest)
+	if stepRecorder.Code != http.StatusOK {
+		t.Fatalf("step detail status = %d, want %d, body=%s", stepRecorder.Code, http.StatusOK, stepRecorder.Body.String())
+	}
+
+	var step TaskStepResponse
+	if err := json.NewDecoder(bytes.NewReader(stepRecorder.Body.Bytes())).Decode(&step); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if step.Data.ID != steps.Data[0].ID {
+		t.Fatalf("step id = %q, want %q", step.Data.ID, steps.Data[0].ID)
+	}
+
+	artifactsRecorder := httptest.NewRecorder()
+	artifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/artifacts", nil)
+	handler.ServeHTTP(artifactsRecorder, artifactsRequest)
+	if artifactsRecorder.Code != http.StatusOK {
+		t.Fatalf("artifacts status = %d, want %d, body=%s", artifactsRecorder.Code, http.StatusOK, artifactsRecorder.Body.String())
+	}
+
+	var artifacts TaskArtifactsResponse
+	if err := json.NewDecoder(bytes.NewReader(artifactsRecorder.Body.Bytes())).Decode(&artifacts); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(artifacts.Data) != 1 {
+		t.Fatalf("artifacts = %d, want 1", len(artifacts.Data))
+	}
+	if artifacts.Data[0].Kind != "summary" {
+		t.Fatalf("artifact kind = %q, want summary", artifacts.Data[0].Kind)
+	}
+
+	runArtifactsRecorder := httptest.NewRecorder()
+	runArtifactsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", nil)
+	handler.ServeHTTP(runArtifactsRecorder, runArtifactsRequest)
+	if runArtifactsRecorder.Code != http.StatusOK {
+		t.Fatalf("run artifacts status = %d, want %d, body=%s", runArtifactsRecorder.Code, http.StatusOK, runArtifactsRecorder.Body.String())
+	}
+
+	var runArtifacts TaskArtifactsResponse
+	if err := json.NewDecoder(bytes.NewReader(runArtifactsRecorder.Body.Bytes())).Decode(&runArtifacts); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(runArtifacts.Data) != 1 {
+		t.Fatalf("run artifacts = %d, want 1", len(runArtifacts.Data))
+	}
+	if runArtifacts.Data[0].ID != artifacts.Data[0].ID {
+		t.Fatalf("run artifact id = %q, want %q", runArtifacts.Data[0].ID, artifacts.Data[0].ID)
+	}
+
+	getAfterStartRecorder := httptest.NewRecorder()
+	getAfterStartRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID, nil)
+	handler.ServeHTTP(getAfterStartRecorder, getAfterStartRequest)
+	if getAfterStartRecorder.Code != http.StatusOK {
+		t.Fatalf("get-after-start status = %d, want %d, body=%s", getAfterStartRecorder.Code, http.StatusOK, getAfterStartRecorder.Body.String())
+	}
+
+	var fetchedAfterStart TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(getAfterStartRecorder.Body.Bytes())).Decode(&fetchedAfterStart); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if fetchedAfterStart.Data.Status != "completed" {
+		t.Fatalf("task status = %q, want completed", fetchedAfterStart.Data.Status)
+	}
+	if fetchedAfterStart.Data.LatestRunID != started.Data.ID {
+		t.Fatalf("latest_run_id = %q, want %q", fetchedAfterStart.Data.LatestRunID, started.Data.ID)
+	}
+	if fetchedAfterStart.Data.StepCount != 1 {
+		t.Fatalf("task step_count = %d, want 1", fetchedAfterStart.Data.StepCount)
+	}
+	if fetchedAfterStart.Data.ArtifactCount != 1 {
+		t.Fatalf("task artifact_count = %d, want 1", fetchedAfterStart.Data.ArtifactCount)
+	}
+}
+
 func newTestHTTPHandler(logger *slog.Logger, provider providers.Provider) http.Handler {
 	return newTestHTTPHandlerWithConfig(logger, provider, config.Config{})
 }

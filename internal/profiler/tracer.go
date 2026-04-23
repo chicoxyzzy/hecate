@@ -279,6 +279,16 @@ func spanSpecForEvent(name string) spanSpec {
 	switch {
 	case name == "request.received" || name == "request.invalid":
 		return spanSpec{name: "gateway.request.parse", kind: "internal"}
+	case hasPrefix(name, "orchestrator.task."):
+		return spanSpec{name: "orchestrator.task", kind: "internal"}
+	case hasPrefix(name, "orchestrator.run."):
+		return spanSpec{name: "orchestrator.run", kind: "internal"}
+	case hasPrefix(name, "orchestrator.step."):
+		return spanSpec{name: "orchestrator.step", kind: "internal"}
+	case hasPrefix(name, "orchestrator.artifact."):
+		return spanSpec{name: "orchestrator.artifact", kind: "internal"}
+	case hasPrefix(name, "orchestrator.approval."):
+		return spanSpec{name: "orchestrator.approval", kind: "internal"}
 	case hasPrefix(name, "governor."):
 		return spanSpec{name: "gateway.governor", kind: "internal"}
 	case hasPrefix(name, "cache."):
@@ -309,6 +319,14 @@ func otelAttributesForEvent(name string, attrs map[string]any) map[string]any {
 	switch name {
 	case "request.received":
 		out[telemetry.AttrHecatePhase] = "request"
+	case "orchestrator.task.started", "orchestrator.task.finished", "orchestrator.run.started", "orchestrator.run.finished":
+		out[telemetry.AttrHecatePhase] = "orchestration"
+	case "orchestrator.step.completed", "orchestrator.step.failed":
+		if _, ok := out[telemetry.AttrHecatePhase]; !ok {
+			out[telemetry.AttrHecatePhase] = "planning"
+		}
+	case "orchestrator.artifact.created", "orchestrator.artifact.failed":
+		out[telemetry.AttrHecatePhase] = "artifact"
 	case "cache.hit", "cache.miss":
 		out[telemetry.AttrHecatePhase] = "cache"
 	case "router.selected", "router.candidate.considered", "router.candidate.skipped", "router.candidate.denied", "router.candidate.selected":
