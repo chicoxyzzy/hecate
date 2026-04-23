@@ -13,6 +13,9 @@ type CreateTaskRequest struct {
 	FileOperation     string `json:"file_operation"`
 	FilePath          string `json:"file_path"`
 	FileContent       string `json:"file_content"`
+	SandboxAllowedRoot string `json:"sandbox_allowed_root"`
+	SandboxReadOnly    bool   `json:"sandbox_read_only"`
+	SandboxNetwork     bool   `json:"sandbox_network"`
 	TimeoutMS         int    `json:"timeout_ms"`
 	Priority          string `json:"priority"`
 	RequestedModel    string `json:"requested_model"`
@@ -95,6 +98,9 @@ type TaskItem struct {
 	FileOperation        string `json:"file_operation,omitempty"`
 	FilePath             string `json:"file_path,omitempty"`
 	FileContent          string `json:"file_content,omitempty"`
+	SandboxAllowedRoot   string `json:"sandbox_allowed_root,omitempty"`
+	SandboxReadOnly      bool   `json:"sandbox_read_only,omitempty"`
+	SandboxNetwork       bool   `json:"sandbox_network,omitempty"`
 	TimeoutMS            int    `json:"timeout_ms,omitempty"`
 	Status               string `json:"status"`
 	Priority             string `json:"priority,omitempty"`

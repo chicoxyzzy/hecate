@@ -2313,6 +2313,126 @@ func TestTaskStartGitExecutor(t *testing.T) {
 	}
 }
 
+func TestTaskStartShellExecutorRespectsReadOnlyPolicy(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"title":"Denied shell","prompt":"Attempt a write.","execution_kind":"shell","shell_command":"touch denied.txt","working_directory":".","sandbox_read_only":true,"timeout_ms":2000}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !created.Data.SandboxReadOnly {
+		t.Fatal("sandbox_read_only = false, want true")
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Data.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", started.Data.Status)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 {
+		t.Fatalf("steps = %d, want 1", len(steps.Data))
+	}
+	if steps.Data[0].ErrorKind != "sandbox_policy_denied" {
+		t.Fatalf("error_kind = %q, want sandbox_policy_denied", steps.Data[0].ErrorKind)
+	}
+}
+
+func TestTaskStartFileExecutorRespectsAllowedRoot(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tempDir := t.TempDir()
+	workingDirectory := filepath.Join(tempDir, "workspace")
+	if err := os.MkdirAll(workingDirectory, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(fmt.Sprintf(`{"title":"Escape root","prompt":"Try escaping allowed root.","execution_kind":"file","file_operation":"write","file_path":"../outside.txt","file_content":"blocked","working_directory":%q,"sandbox_allowed_root":%q}`, workingDirectory, workingDirectory)))
+	createRequest.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body=%s", createRecorder.Code, http.StatusOK, createRecorder.Body.String())
+	}
+
+	var created TaskResponse
+	if err := json.NewDecoder(bytes.NewReader(createRecorder.Body.Bytes())).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if created.Data.SandboxAllowedRoot != workingDirectory {
+		t.Fatalf("sandbox_allowed_root = %q, want %q", created.Data.SandboxAllowedRoot, workingDirectory)
+	}
+
+	startRecorder := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", nil)
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body=%s", startRecorder.Code, http.StatusOK, startRecorder.Body.String())
+	}
+
+	var started TaskRunResponse
+	if err := json.NewDecoder(bytes.NewReader(startRecorder.Body.Bytes())).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if started.Data.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", started.Data.Status)
+	}
+
+	stepsRecorder := httptest.NewRecorder()
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", nil)
+	handler.ServeHTTP(stepsRecorder, stepsRequest)
+	if stepsRecorder.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want %d, body=%s", stepsRecorder.Code, http.StatusOK, stepsRecorder.Body.String())
+	}
+
+	var steps TaskStepsResponse
+	if err := json.NewDecoder(bytes.NewReader(stepsRecorder.Body.Bytes())).Decode(&steps); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(steps.Data) != 1 {
+		t.Fatalf("steps = %d, want 1", len(steps.Data))
+	}
+	if steps.Data[0].ErrorKind != "sandbox_policy_denied" {
+		t.Fatalf("error_kind = %q, want sandbox_policy_denied", steps.Data[0].ErrorKind)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "outside.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside.txt exists or unexpected stat error: %v", err)
+	}
+}
+
 func newTestHTTPHandler(logger *slog.Logger, provider providers.Provider) http.Handler {
 	return newTestHTTPHandlerWithConfig(logger, provider, config.Config{})
 }

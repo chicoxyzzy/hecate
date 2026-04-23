@@ -3,36 +3,39 @@ package types
 import "time"
 
 type Task struct {
-	ID                string
-	Title             string
-	Prompt            string
-	Tenant            string
-	User              string
-	Repo              string
-	BaseBranch        string
-	WorkspaceMode     string
-	ExecutionKind     string
-	ShellCommand      string
-	GitCommand        string
-	WorkingDirectory  string
-	FileOperation     string
-	FilePath          string
-	FileContent       string
-	TimeoutMS         int
-	Status            string
-	Priority          string
-	RequestedModel    string
-	RequestedProvider string
-	BudgetMicrosUSD   int64
-	LatestRunID       string
-	LastError         string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	StartedAt         time.Time
-	FinishedAt        time.Time
-	RootTraceID       string
-	LatestTraceID     string
-	LatestRequestID   string
+	ID                 string
+	Title              string
+	Prompt             string
+	Tenant             string
+	User               string
+	Repo               string
+	BaseBranch         string
+	WorkspaceMode      string
+	ExecutionKind      string
+	ShellCommand       string
+	GitCommand         string
+	WorkingDirectory   string
+	FileOperation      string
+	FilePath           string
+	FileContent        string
+	SandboxAllowedRoot string
+	SandboxReadOnly    bool
+	SandboxNetwork     bool
+	TimeoutMS          int
+	Status             string
+	Priority           string
+	RequestedModel     string
+	RequestedProvider  string
+	BudgetMicrosUSD    int64
+	LatestRunID        string
+	LastError          string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StartedAt          time.Time
+	FinishedAt         time.Time
+	RootTraceID        string
+	LatestTraceID      string
+	LatestRequestID    string
 }
 
 type TaskRun struct {

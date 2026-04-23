@@ -131,6 +131,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execu
 		Command:          command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
+		Policy:           taskPolicy(spec.Task),
 	})
 
 	status := "completed"
@@ -227,6 +228,9 @@ func shellErrorKind(err error) string {
 	if err == nil {
 		return ""
 	}
+	if sandbox.IsPolicyDenied(err) {
+		return "sandbox_policy_denied"
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "shell_timeout"
 	}
@@ -251,15 +255,18 @@ func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*Executio
 	if operation == "" {
 		operation = "write"
 	}
-	targetPath := spec.Task.FilePath
-	if spec.Task.WorkingDirectory != "" && !filepath.IsAbs(targetPath) {
-		targetPath = filepath.Join(spec.Task.WorkingDirectory, targetPath)
+	if spec.Task.SandboxReadOnly {
+		return fileFailure(spec, operation, spec.Task.FilePath, "sandbox policy denied: write access is disabled", "sandbox_policy_denied"), nil
 	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return nil, err
+	targetPath, err := sandbox.ResolvePath(spec.Task.WorkingDirectory, spec.Task.FilePath, taskPolicy(spec.Task))
+	if err != nil {
+		return fileFailure(spec, operation, spec.Task.FilePath, err.Error(), fileErrorKind(err)), nil
 	}
 
-	var err error
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return fileFailure(spec, operation, targetPath, err.Error(), fileErrorKind(err)), nil
+	}
+
 	switch operation {
 	case "write":
 		err = os.WriteFile(targetPath, []byte(spec.Task.FileContent), 0o644)
@@ -274,10 +281,10 @@ func (e *FileExecutor) Execute(_ context.Context, spec ExecutionSpec) (*Executio
 			}
 		}
 	default:
-		return nil, fmt.Errorf("unsupported file operation %q", operation)
+		return fileFailure(spec, operation, targetPath, fmt.Sprintf("unsupported file operation %q", operation), "file_operation_unsupported"), nil
 	}
 	if err != nil {
-		return nil, err
+		return fileFailure(spec, operation, targetPath, err.Error(), fileErrorKind(err)), nil
 	}
 
 	finishedAt := time.Now().UTC()
@@ -365,6 +372,7 @@ func (e *GitExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Executi
 		Command:          "git " + command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
+		Policy:           taskPolicy(spec.Task),
 	})
 
 	status := "completed"
@@ -460,8 +468,81 @@ func gitErrorKind(err error) string {
 	if err == nil {
 		return ""
 	}
+	if sandbox.IsPolicyDenied(err) {
+		return "sandbox_policy_denied"
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "git_timeout"
 	}
 	return "git_command_failed"
+}
+
+func fileErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if sandbox.IsPolicyDenied(err) {
+		return "sandbox_policy_denied"
+	}
+	return "file_operation_failed"
+}
+
+func taskPolicy(task types.Task) sandbox.Policy {
+	return sandbox.Policy{
+		AllowedRoot: task.SandboxAllowedRoot,
+		ReadOnly:    task.SandboxReadOnly,
+		Network:     task.SandboxNetwork,
+	}
+}
+
+func fileFailure(spec ExecutionSpec, operation, path, message, errorKind string) *ExecutionResult {
+	finishedAt := time.Now().UTC()
+	step := types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    1,
+		Kind:     "file",
+		Title:    "File operation",
+		Status:   "failed",
+		Phase:    "execution",
+		Result:   telemetry.ResultError,
+		ToolName: "file",
+		Input: map[string]any{
+			"operation":         operation,
+			"path":              path,
+			"working_directory": spec.Task.WorkingDirectory,
+		},
+		Error:      message,
+		ErrorKind:  errorKind,
+		StartedAt:  spec.StartedAt,
+		FinishedAt: finishedAt,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+	artifact := types.TaskArtifact{
+		ID:          spec.NewID("artifact"),
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		StepID:      step.ID,
+		Kind:        "stderr",
+		Name:        "file-error.txt",
+		Description: "File executor error output",
+		MimeType:    "text/plain",
+		StorageKind: "inline",
+		ContentText: message,
+		SizeBytes:   int64(len(message)),
+		Status:      "ready",
+		CreatedAt:   finishedAt,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	return &ExecutionResult{
+		Status:            "failed",
+		Steps:             []types.TaskStep{step},
+		Artifacts:         []types.TaskArtifact{artifact},
+		LastError:         message,
+		OtelStatusCode:    "error",
+		OtelStatusMessage: message,
+	}
 }
