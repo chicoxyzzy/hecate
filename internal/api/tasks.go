@@ -1,26 +1,26 @@
 package api
 
 type CreateTaskRequest struct {
-	Title             string `json:"title"`
-	Prompt            string `json:"prompt"`
-	Repo              string `json:"repo"`
-	BaseBranch        string `json:"base_branch"`
-	WorkspaceMode     string `json:"workspace_mode"`
-	ExecutionKind     string `json:"execution_kind"`
-	ShellCommand      string `json:"shell_command"`
-	GitCommand        string `json:"git_command"`
-	WorkingDirectory  string `json:"working_directory"`
-	FileOperation     string `json:"file_operation"`
-	FilePath          string `json:"file_path"`
-	FileContent       string `json:"file_content"`
+	Title              string `json:"title"`
+	Prompt             string `json:"prompt"`
+	Repo               string `json:"repo"`
+	BaseBranch         string `json:"base_branch"`
+	WorkspaceMode      string `json:"workspace_mode"`
+	ExecutionKind      string `json:"execution_kind"`
+	ShellCommand       string `json:"shell_command"`
+	GitCommand         string `json:"git_command"`
+	WorkingDirectory   string `json:"working_directory"`
+	FileOperation      string `json:"file_operation"`
+	FilePath           string `json:"file_path"`
+	FileContent        string `json:"file_content"`
 	SandboxAllowedRoot string `json:"sandbox_allowed_root"`
 	SandboxReadOnly    bool   `json:"sandbox_read_only"`
 	SandboxNetwork     bool   `json:"sandbox_network"`
-	TimeoutMS         int    `json:"timeout_ms"`
-	Priority          string `json:"priority"`
-	RequestedModel    string `json:"requested_model"`
-	RequestedProvider string `json:"requested_provider"`
-	BudgetMicrosUSD   int64  `json:"budget_micros_usd"`
+	TimeoutMS          int    `json:"timeout_ms"`
+	Priority           string `json:"priority"`
+	RequestedModel     string `json:"requested_model"`
+	RequestedProvider  string `json:"requested_provider"`
+	BudgetMicrosUSD    int64  `json:"budget_micros_usd"`
 }
 
 type TaskLifecycleRequest struct {
@@ -45,6 +45,11 @@ type TasksResponse struct {
 type TaskRunResponse struct {
 	Object string      `json:"object"`
 	Data   TaskRunItem `json:"data"`
+}
+
+type TaskRunStreamEventResponse struct {
+	Object string                 `json:"object"`
+	Data   TaskRunStreamEventData `json:"data"`
 }
 
 type TaskRunsResponse struct {
@@ -144,6 +149,14 @@ type TaskRunItem struct {
 	RootSpanID         string `json:"root_span_id,omitempty"`
 	OtelStatusCode     string `json:"otel_status_code,omitempty"`
 	OtelStatusMessage  string `json:"otel_status_message,omitempty"`
+}
+
+type TaskRunStreamEventData struct {
+	Sequence  int                `json:"sequence"`
+	Terminal  bool               `json:"terminal,omitempty"`
+	Run       TaskRunItem        `json:"run"`
+	Steps     []TaskStepItem     `json:"steps,omitempty"`
+	Artifacts []TaskArtifactItem `json:"artifacts,omitempty"`
 }
 
 type TaskStepItem struct {

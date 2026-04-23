@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -513,6 +515,105 @@ func (h *Handler) HandleTaskRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, "streaming not supported by server")
+		return
+	}
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	runID := strings.TrimSpace(r.PathValue("run_id"))
+	if runID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run id is required")
+		return
+	}
+	if _, found, err := h.taskStore.GetRun(ctx, task.ID, runID); err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	} else if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task run not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	lastStateJSON := ""
+	sequence := 0
+	for {
+		state, err := h.buildTaskRunStreamState(ctx, task.ID, runID)
+		if err != nil {
+			fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		stateJSON, err := json.Marshal(state)
+		if err != nil {
+			fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		if string(stateJSON) != lastStateJSON {
+			sequence++
+			payload, err := json.Marshal(TaskRunStreamEventResponse{
+				Object: "task_run_stream_event",
+				Data: TaskRunStreamEventData{
+					Sequence:  sequence,
+					Terminal:  isTerminalRunStatus(state.Run.Status),
+					Run:       state.Run,
+					Steps:     state.Steps,
+					Artifacts: state.Artifacts,
+				},
+			})
+			if err != nil {
+				fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+				flusher.Flush()
+				return
+			}
+
+			eventName := "snapshot"
+			if isTerminalRunStatus(state.Run.Status) {
+				eventName = "done"
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, payload)
+			flusher.Flush()
+			lastStateJSON = string(stateJSON)
+			if isTerminalRunStatus(state.Run.Status) {
+				return
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": keep-alive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
 func (h *Handler) HandleCancelTaskRun(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAny(w, r)
 	if !ok {
@@ -721,6 +822,47 @@ func (h *Handler) HandleTaskRunArtifacts(w http.ResponseWriter, r *http.Request)
 		Object: "task_artifacts",
 		Data:   items,
 	})
+}
+
+func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID string) (TaskRunStreamEventData, error) {
+	run, found, err := h.taskStore.GetRun(ctx, taskID, runID)
+	if err != nil {
+		return TaskRunStreamEventData{}, err
+	}
+	if !found {
+		return TaskRunStreamEventData{}, fmt.Errorf("task run not found")
+	}
+	steps, err := h.taskStore.ListSteps(ctx, runID)
+	if err != nil {
+		return TaskRunStreamEventData{}, err
+	}
+	artifacts, err := h.taskStore.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: taskID, RunID: runID})
+	if err != nil {
+		return TaskRunStreamEventData{}, err
+	}
+
+	stepItems := make([]TaskStepItem, 0, len(steps))
+	for _, step := range steps {
+		stepItems = append(stepItems, renderTaskStep(step))
+	}
+	artifactItems := make([]TaskArtifactItem, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactItems = append(artifactItems, renderTaskArtifact(artifact))
+	}
+	return TaskRunStreamEventData{
+		Run:       renderTaskRun(run),
+		Steps:     stepItems,
+		Artifacts: artifactItems,
+	}, nil
+}
+
+func isTerminalRunStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildTaskItem(ctx context.Context, store taskstate.Store, task types.Task) TaskItem {

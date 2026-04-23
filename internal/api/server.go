@@ -19,6 +19,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /v1/tasks/{id}/approvals/{approval_id}/resolve", handler.HandleResolveTaskApproval)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs", handler.HandleTaskRuns)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}", handler.HandleTaskRun)
+	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/stream", handler.HandleTaskRunStream)
 	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/cancel", handler.HandleCancelTaskRun)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/steps", handler.HandleTaskRunSteps)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/steps/{step_id}", handler.HandleTaskRunStep)

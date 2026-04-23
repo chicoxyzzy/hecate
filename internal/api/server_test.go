@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -2627,6 +2628,124 @@ func TestTaskRunCancellation(t *testing.T) {
 	}
 }
 
+func TestTaskRunStreamSSE(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createResp := postJSONToURL(t, server.URL+"/v1/tasks", `{"title":"Stream shell","prompt":"Stream a shell command.","execution_kind":"shell","shell_command":"printf 'hello '; sleep 0.3; printf 'stream\n'","working_directory":".","timeout_ms":3000}`)
+	if createResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d, want %d, body=%s", createResp.StatusCode, http.StatusOK, string(body))
+	}
+	var created TaskResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	createResp.Body.Close()
+
+	startResp := postJSONToURL(t, server.URL+"/v1/tasks/"+created.Data.ID+"/start", "")
+	if startResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(startResp.Body)
+		t.Fatalf("start status = %d, want %d, body=%s", startResp.StatusCode, http.StatusOK, string(body))
+	}
+	var started TaskRunResponse
+	if err := json.NewDecoder(startResp.Body).Decode(&started); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	startResp.Body.Close()
+
+	approvalsResp, err := http.Get(server.URL + "/v1/tasks/" + created.Data.ID + "/approvals")
+	if err != nil {
+		t.Fatalf("Get approvals error = %v", err)
+	}
+	if approvalsResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(approvalsResp.Body)
+		t.Fatalf("approvals status = %d, want %d, body=%s", approvalsResp.StatusCode, http.StatusOK, string(body))
+	}
+	var approvals TaskApprovalsResponse
+	if err := json.NewDecoder(approvalsResp.Body).Decode(&approvals); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	approvalsResp.Body.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, server.URL+"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/stream", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	streamCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	streamReq = streamReq.WithContext(streamCtx)
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("stream request error = %v", err)
+	}
+	defer streamResp.Body.Close()
+	if got := streamResp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("content-type = %q, want text/event-stream", got)
+	}
+
+	resolveErrCh := make(chan error, 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		resolveResp, err := http.Post(server.URL+"/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", "application/json", strings.NewReader(`{"decision":"approve"}`))
+		if err != nil {
+			resolveErrCh <- err
+			return
+		}
+		defer resolveResp.Body.Close()
+		io.Copy(io.Discard, resolveResp.Body)
+		if resolveResp.StatusCode != http.StatusOK {
+			resolveErrCh <- fmt.Errorf("resolve status = %d", resolveResp.StatusCode)
+			return
+		}
+		resolveErrCh <- nil
+	}()
+
+	var sawAwaitingApproval bool
+	var sawPartialStdout bool
+	var sawCompleted bool
+	for event := range readSSEEvents(t, streamResp.Body) {
+		if event.Event != "snapshot" && event.Event != "done" {
+			continue
+		}
+		var payload TaskRunStreamEventResponse
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if payload.Data.Run.Status == "awaiting_approval" {
+			sawAwaitingApproval = true
+		}
+		for _, artifact := range payload.Data.Artifacts {
+			if artifact.Kind == "stdout" && strings.Contains(artifact.ContentText, "hello ") && !strings.Contains(artifact.ContentText, "stream\n") {
+				sawPartialStdout = true
+			}
+		}
+		if payload.Data.Run.Status == "completed" {
+			sawCompleted = true
+		}
+		if event.Event == "done" {
+			break
+		}
+	}
+
+	if !sawAwaitingApproval {
+		t.Fatal("did not observe awaiting_approval stream snapshot")
+	}
+	if !sawPartialStdout {
+		t.Fatal("did not observe partial stdout in stream snapshot")
+	}
+	if !sawCompleted {
+		t.Fatal("did not observe completed stream snapshot")
+	}
+	if err := <-resolveErrCh; err != nil {
+		t.Fatalf("approval resolve error = %v", err)
+	}
+}
+
 func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, statuses ...string) TaskRunResponse {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2695,6 +2814,52 @@ func containsStatus(status string, statuses ...string) bool {
 		}
 	}
 	return false
+}
+
+type sseEvent struct {
+	Event string
+	Data  string
+}
+
+func readSSEEvents(t *testing.T, body io.Reader) <-chan sseEvent {
+	t.Helper()
+	events := make(chan sseEvent)
+	go func() {
+		defer close(events)
+		scanner := bufio.NewScanner(body)
+		scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
+		var current sseEvent
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				if current.Event != "" || current.Data != "" {
+					events <- current
+					current = sseEvent{}
+				}
+				continue
+			}
+			if strings.HasPrefix(line, "event: ") {
+				current.Event = strings.TrimPrefix(line, "event: ")
+				continue
+			}
+			if strings.HasPrefix(line, "data: ") {
+				if current.Data != "" {
+					current.Data += "\n"
+				}
+				current.Data += strings.TrimPrefix(line, "data: ")
+			}
+		}
+	}()
+	return events
+}
+
+func postJSONToURL(t *testing.T, url, body string) *http.Response {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("Post(%s) error = %v", url, err)
+	}
+	return resp
 }
 
 func newTestHTTPHandler(logger *slog.Logger, provider providers.Provider) http.Handler {
