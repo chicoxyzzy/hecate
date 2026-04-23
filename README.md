@@ -315,7 +315,7 @@ internal/providers    Provider transports, discovery, and health tracking
 internal/requestscope Tenant/provider request scoping
 internal/retention    Background pruning and retention runs
 internal/router       Routing logic
-internal/sandbox      Local sandbox executor and policy enforcement
+internal/sandbox      Local and worker-backed sandbox execution
 internal/secrets      Secret encryption helpers
 internal/storage      Redis and Postgres helpers
 internal/telemetry    Metrics and OTLP export wiring

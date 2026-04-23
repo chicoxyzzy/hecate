@@ -73,31 +73,11 @@ func (e *WorkerExecutor) RunStreaming(ctx context.Context, command Command, onCh
 }
 
 func (e *WorkerExecutor) WriteFile(ctx context.Context, request FileRequest) (FileResult, error) {
-	response, err := invokeWorker(ctx, workerRequest{
-		Operation: workerOperationWriteFile,
-		File:      &request,
-	}, 5*time.Second)
-	if err != nil {
-		return FileResult{}, err
-	}
-	if response.Error != "" {
-		return response.FileResult, decodeWorkerError(response.Error, response.ErrorKind)
-	}
-	return response.FileResult, nil
+	return invokeFileWorker(ctx, workerOperationWriteFile, request)
 }
 
 func (e *WorkerExecutor) AppendFile(ctx context.Context, request FileRequest) (FileResult, error) {
-	response, err := invokeWorker(ctx, workerRequest{
-		Operation: workerOperationAppendFile,
-		File:      &request,
-	}, 5*time.Second)
-	if err != nil {
-		return FileResult{}, err
-	}
-	if response.Error != "" {
-		return response.FileResult, decodeWorkerError(response.Error, response.ErrorKind)
-	}
-	return response.FileResult, nil
+	return invokeFileWorker(ctx, workerOperationAppendFile, request)
 }
 
 func ServeWorker(ctx context.Context, input io.Reader, output io.Writer) error {
@@ -162,75 +142,27 @@ func ServeWorker(ctx context.Context, input io.Reader, output io.Writer) error {
 }
 
 func invokeWorker(ctx context.Context, request workerRequest, defaultTimeout time.Duration) (workerResponse, error) {
-	binaryPath, err := sandboxdBinaryPath()
+	cmd, stderr, execCtx, cancel, err := prepareWorkerCommand(ctx, request, defaultTimeout)
 	if err != nil {
 		return workerResponse{}, err
-	}
-
-	execCtx := ctx
-	cancel := func() {}
-	if defaultTimeout > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, defaultTimeout)
 	}
 	defer cancel()
-
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return workerResponse{}, err
-	}
-
-	cmd := exec.CommandContext(execCtx, binaryPath, "worker")
-	cmd.Stdin = bytes.NewReader(payload)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &bytes.Buffer{}
+	cmd.Stdout = stdout
 
 	if err := cmd.Run(); err != nil {
-		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return workerResponse{}, context.DeadlineExceeded
-		}
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return workerResponse{}, fmt.Errorf("sandbox worker failed: %s", message)
+		return workerResponse{}, workerCommandError(execCtx, stderr, err)
 	}
 
-	var event workerEvent
-	if err := json.NewDecoder(&stdout).Decode(&event); err != nil {
-		return workerResponse{}, err
-	}
-	if event.Response == nil {
-		return workerResponse{}, fmt.Errorf("sandbox worker response missing")
-	}
-	return *event.Response, nil
+	return decodeWorkerResponse(stdout)
 }
 
 func invokeStreamingWorker(ctx context.Context, request workerRequest, defaultTimeout time.Duration, onChunk func(OutputChunk)) (Result, error) {
-	binaryPath, err := sandboxdBinaryPath()
+	cmd, stderr, execCtx, cancel, err := prepareWorkerCommand(ctx, request, defaultTimeout)
 	if err != nil {
 		return Result{ExitCode: -1}, err
-	}
-
-	execCtx := ctx
-	cancel := func() {}
-	if defaultTimeout > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, defaultTimeout)
 	}
 	defer cancel()
-
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return Result{ExitCode: -1}, err
-	}
-
-	cmd := exec.CommandContext(execCtx, binaryPath, "worker")
-	cmd.Stdin = bytes.NewReader(payload)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return Result{ExitCode: -1}, err
@@ -264,19 +196,82 @@ func invokeStreamingWorker(ctx context.Context, request workerRequest, defaultTi
 		}
 	}
 	if err := cmd.Wait(); err != nil {
-		if errors.Is(execCtx.Err(), context.Canceled) {
-			return finalResult, context.Canceled
-		}
-		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return finalResult, context.DeadlineExceeded
-		}
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return finalResult, fmt.Errorf("sandbox worker failed: %s", message)
+		return finalResult, workerCommandError(execCtx, stderr, err)
 	}
 	return finalResult, finalErr
+}
+
+func invokeFileWorker(ctx context.Context, operation string, request FileRequest) (FileResult, error) {
+	response, err := invokeWorker(ctx, workerRequest{
+		Operation: operation,
+		File:      &request,
+	}, 5*time.Second)
+	if err != nil {
+		return FileResult{}, err
+	}
+	if response.Error != "" {
+		return response.FileResult, decodeWorkerError(response.Error, response.ErrorKind)
+	}
+	return response.FileResult, nil
+}
+
+func prepareWorkerCommand(ctx context.Context, request workerRequest, defaultTimeout time.Duration) (*exec.Cmd, *bytes.Buffer, context.Context, context.CancelFunc, error) {
+	execCtx, cancel := workerExecContext(ctx, defaultTimeout)
+	payload, err := json.Marshal(request)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, nil, err
+	}
+	cmd, stderr, err := newWorkerCommand(execCtx, payload)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, nil, err
+	}
+	return cmd, stderr, execCtx, cancel, nil
+}
+
+func workerExecContext(ctx context.Context, defaultTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if defaultTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultTimeout)
+}
+
+func newWorkerCommand(ctx context.Context, payload []byte) (*exec.Cmd, *bytes.Buffer, error) {
+	binaryPath, err := sandboxdBinaryPath()
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.CommandContext(ctx, binaryPath, "worker")
+	cmd.Stdin = bytes.NewReader(payload)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	return cmd, stderr, nil
+}
+
+func workerCommandError(execCtx context.Context, stderr *bytes.Buffer, err error) error {
+	if errors.Is(execCtx.Err(), context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	message := strings.TrimSpace(stderr.String())
+	if message == "" {
+		message = err.Error()
+	}
+	return fmt.Errorf("sandbox worker failed: %s", message)
+}
+
+func decodeWorkerResponse(stdout *bytes.Buffer) (workerResponse, error) {
+	var event workerEvent
+	if err := json.NewDecoder(stdout).Decode(&event); err != nil {
+		return workerResponse{}, err
+	}
+	if event.Response == nil {
+		return workerResponse{}, fmt.Errorf("sandbox worker response missing")
+	}
+	return *event.Response, nil
 }
 
 func classifyWorkerError(err error) string {
