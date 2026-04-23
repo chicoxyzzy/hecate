@@ -1,12 +1,12 @@
 # Hecate
 
-Hecate is an open-source AI agent runtime and LLM gateway for teams running agents across cloud and local models.
+Hecate is an open-source AI agent runtime and LLM gateway for teams running agents across cloud and local models, including coding assistants.
 
 It exposes an OpenAI-compatible gateway API while supporting both OpenAI-compatible upstreams and Anthropic's native Messages API behind a vendor-neutral runtime layer.
 
 The goal is not to build another thin proxy. Hecate is meant to become a runtime control plane for AI-agent workloads: one place to understand which models were used, what each request cost, why routing decisions happened, and how agent execution can eventually be made safer.
 
-Today, Hecate is production-shaped at the model gateway layer. It supports OpenAI-compatible upstreams, Anthropic's native Messages API, local runtimes, provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and an operator UI. It is not yet a full agent runtime with sandboxed tool execution; that remains a future track.
+Today, Hecate is production-shaped at the model gateway layer. It supports OpenAI-compatible upstreams, Anthropic's native Messages API, local runtimes, provider routing, health-aware failover, exact and semantic cache paths, tenant-aware auth, persisted control-plane state, tracing, OTLP export, and an operator UI. That already makes it useful as the gateway and control plane behind coding assistants that know how to execute tools themselves. It is not yet a full coding-agent runtime with sandboxed tool execution and workspace orchestration; that remains the next major track.
 
 Current runtime capabilities:
 
@@ -198,6 +198,58 @@ The operator UI currently includes:
 - tenant and API key management
 - control-plane activity view
 
+## Using Hecate For Coding
+
+Hecate can already sit behind a coding assistant as the model gateway and runtime control plane. In that role it is useful today for:
+
+- provider routing across cloud and local models
+- model and provider policy enforcement
+- tenant-aware API keys and access restrictions
+- request tracing, route debugging, and structured logs
+- exact and semantic cache paths
+- static and persisted pricebook-backed cost estimation
+- budget enforcement and admin controls
+
+That means a coding client can point its LLM traffic at Hecate today and get central routing, observability, and spend controls.
+
+What is still missing is the part that makes Hecate itself the coding runtime. The main gaps are:
+
+- sandboxed shell, filesystem, and git execution
+- task and job lifecycle management for coding runs
+- tool execution APIs and streaming tool event logs
+- workspace isolation, cancellation, and approval flows
+- coding-oriented operator views for task traces, tool output, and repo activity
+
+The practical roadmap for coding use breaks into three phases:
+
+### Phase 1: Coding Gateway
+
+Make Hecate excellent as the gateway and control plane under an existing coding product:
+
+- tighten compatibility for coding-style chat, streaming, and tool-call workloads
+- improve route reason visibility and failure debugging
+- add coding-oriented policies, budgets, and per-session cost views
+- ship local and small-team deployment examples
+
+### Phase 2: Minimal Coding Runtime
+
+Add the first runtime slice that can execute bounded coding tasks:
+
+- implement `cmd/sandboxd` and `internal/sandbox`
+- add a task/job model with status, logs, cancellation, and artifacts
+- expose tool execution APIs for shell and file operations
+- enforce basic safety controls like allowed paths, timeouts, and network policy
+
+### Phase 3: Team-Ready Coding Platform
+
+Expand the runtime into something teams can trust for daily coding work:
+
+- approval flows for sensitive actions such as network access or git push
+- stronger workspace isolation and resumable task state
+- richer UI for task timelines, tool runs, traces, and cost by session or repo
+- smarter model selection policies for different coding task classes
+- stronger reliability features around health, failover, pricing sync, and debug tooling
+
 ## Commands
 
 ```bash
@@ -248,6 +300,7 @@ Implemented:
 - [x] Anthropic native Messages API provider path
 - [x] Unified model catalog across configured providers
 - [x] Cloud and local provider support behind a vendor-neutral provider layer
+- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
 - [x] Deterministic routing across configured healthy providers
 - [x] Retry, failover, and provider health tracking
 - [x] Exact cache
@@ -262,7 +315,7 @@ Implemented:
 - [x] React operator UI
 - [x] Provider setup preset catalog for common cloud and local runtimes
 
-Next:
+Near-term foundation work:
 
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
 - [ ] Cleaner route reason taxonomy and debug views after routing simplification
@@ -272,5 +325,12 @@ Next:
 - [ ] Better budget UX and trend visibility in the UI
 - [ ] Provider setup UX that keeps presets separate from runtime routing truth
 - [ ] More provider discovery paths
-- [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
 - [ ] Deployment examples for local and production-style environments
+
+Coding runtime work:
+
+- [ ] Sandbox runtime work in `cmd/sandboxd` and `internal/sandbox`
+- [ ] Task and job lifecycle management for coding runs
+- [ ] Tool execution APIs and streaming tool event logs
+- [ ] Workspace isolation, cancellation, and approval flows
+- [ ] Coding-oriented operator views for task traces, tool output, and repo activity
