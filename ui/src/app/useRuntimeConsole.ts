@@ -266,6 +266,111 @@ export function useRuntimeConsole() {
     }
   }, [model, models, providerFilter, session.allowedModels, session.allowedProviders]);
 
+  function clearPendingToolState() {
+    setPendingToolCalls([]);
+    setPendingThread(null);
+  }
+
+  function resetTraceState() {
+    setTraceSpans([]);
+    setTraceRoute(null);
+    setTraceStartedAt("");
+  }
+
+  function resetChatWorkspaceState() {
+    setChatResult(null);
+    setStreamingContent(null);
+    setRuntimeHeaders(null);
+    clearPendingToolState();
+    resetTraceState();
+    setChatError("");
+    setTraceError("");
+  }
+
+  function activateChatSession(sessionRecord: ChatSessionRecord) {
+    setActiveChatSessionID(sessionRecord.id);
+    setActiveChatSession(sessionRecord);
+  }
+
+  function upsertChatSessionSummary(sessionRecord: ChatSessionRecord) {
+    setChatSessions((current) => [renderChatSessionSummary(sessionRecord), ...current.filter((entry) => entry.id !== sessionRecord.id)]);
+  }
+
+  async function createChatSessionRecord(title: string): Promise<ChatSessionRecord> {
+    const payload = await createChatSessionRequest({ title }, authToken);
+    activateChatSession(payload.data);
+    upsertChatSessionSummary(payload.data);
+    return payload.data;
+  }
+
+  async function refreshChatSessionState(sessionID: string) {
+    if (!sessionID) {
+      return;
+    }
+    try {
+      const [sessionsResult, sessionResult] = await Promise.all([
+        getChatSessions(authToken, 20),
+        getChatSession(sessionID, authToken),
+      ]);
+      setChatSessions(sessionsResult.data ?? []);
+      setActiveChatSession(sessionResult.data);
+    } catch {
+      // Keep the primary request flow resilient.
+    }
+  }
+
+  async function refreshAdminRuntimeState() {
+    if (!session.isAdmin) {
+      return;
+    }
+    try {
+      const [accountSummaryResult, requestLedgerResult] = await Promise.all([
+        getAccountSummary("", authToken),
+        getRequestLedger(authToken, 20),
+      ]);
+      setAccountSummary(accountSummaryResult.data);
+      setRequestLedger(requestLedgerResult.data ?? []);
+    } catch {
+      // Keep chat responsive even if admin-only refresh paths fail.
+    }
+  }
+
+  function buildChatPayload(messages: ChatMessage[], sessionID?: string) {
+    return {
+      model,
+      provider: providerFilter === "auto" ? "" : providerFilter,
+      session_id: sessionID,
+      user: tenant,
+      messages,
+    };
+  }
+
+  function resetTenantForm() {
+    setTenantFormID("");
+    setTenantFormName("");
+    setTenantFormProviders("");
+    setTenantFormModels("");
+  }
+
+  function resetAPIKeyForm() {
+    setAPIKeyFormID("");
+    setAPIKeyFormName("");
+    setAPIKeyFormSecret("");
+    setAPIKeyFormTenant("");
+    setAPIKeyFormProviders("");
+    setAPIKeyFormModels("");
+  }
+
+  function resetRotateProviderForm() {
+    setRotateProviderID("");
+    setRotateProviderSecret("");
+  }
+
+  function resetRotateAPIKeyForm() {
+    setRotateAPIKeyID("");
+    setRotateAPIKeySecret("");
+  }
+
   async function loadDashboard() {
     setLoading(true);
     setError("");
@@ -323,30 +428,14 @@ export function useRuntimeConsole() {
     try {
       let sessionID = activeChatSessionID;
       if (!sessionID) {
-        const createdSession = await createChatSessionRequest(
-          {
-            title: deriveChatSessionTitle(message),
-          },
-          authToken,
-        );
-        sessionID = createdSession.data.id;
-        setActiveChatSessionID(sessionID);
-        setActiveChatSession(createdSession.data);
-        setChatSessions((current) => [renderChatSessionSummary(createdSession.data), ...current.filter((entry) => entry.id !== createdSession.data.id)]);
+        const createdSession = await createChatSessionRecord(deriveChatSessionTitle(message));
+        sessionID = createdSession.id;
       }
 
       const messages = buildMessagesForSubmission(activeChatSession, message);
-      const chatPayload = {
-        model,
-        provider: providerFilter === "auto" ? "" : providerFilter,
-        session_id: sessionID,
-        user: tenant,
-        messages,
-      };
-      setPendingToolCalls([]);
-      setPendingThread(null);
+      clearPendingToolState();
 
-      const chatExecution = await executeChatRequest(chatPayload, chatPayload.messages);
+      const chatExecution = await executeChatRequest(buildChatPayload(messages, sessionID), messages);
       if (chatExecution.kind === "tool_calls") {
         return;
       }
@@ -366,29 +455,8 @@ export function useRuntimeConsole() {
         // Tenant-key users may not be authorized for admin budget views.
       }
 
-      try {
-        const [sessionsResult, sessionResult] = await Promise.all([
-          getChatSessions(authToken, 20),
-          getChatSession(sessionID, authToken),
-        ]);
-        setChatSessions(sessionsResult.data ?? []);
-        setActiveChatSession(sessionResult.data);
-      } catch {
-        // Keep the primary request flow resilient.
-      }
-
-      if (session.isAdmin) {
-        try {
-          const [accountSummaryResult, requestLedgerResult] = await Promise.all([
-            getAccountSummary("", authToken),
-            getRequestLedger(authToken, 20),
-          ]);
-          setAccountSummary(accountSummaryResult.data);
-          setRequestLedger(requestLedgerResult.data ?? []);
-        } catch {
-          // Keep chat responsive even if admin-only refresh paths fail.
-        }
-      }
+      await refreshChatSessionState(sessionID);
+      await refreshAdminRuntimeState();
     } catch (submitError) {
       setChatError(submitError instanceof Error ? submitError.message : "unknown request error");
     } finally {
@@ -412,24 +480,18 @@ export function useRuntimeConsole() {
     }));
 
     const messages: ChatMessage[] = [...pendingThread, ...toolMessages];
-    const chatPayload = {
-      model,
-      provider: providerFilter === "auto" ? "" : providerFilter,
-      session_id: activeChatSessionID || undefined,
-      user: tenant,
-      messages,
-    };
 
     try {
-      const chatExecution = await executeChatRequest(chatPayload, messages);
+      const chatExecution = await executeChatRequest(buildChatPayload(messages, activeChatSessionID || undefined), messages);
       if (chatExecution.kind === "tool_calls") {
         return;
       }
 
-      setPendingToolCalls([]);
-      setPendingThread(null);
+      clearPendingToolState();
       setChatResult(chatExecution.chatResult);
       await refreshTrace(chatExecution.headers.requestId, false);
+      await refreshChatSessionState(activeChatSessionID);
+      await refreshAdminRuntimeState();
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -626,19 +688,16 @@ export function useRuntimeConsole() {
       failureDetail: "failed to save tenant",
       action: async () => {
         await upsertTenantRequest(
-        {
-          id: tenantFormID,
-          name: tenantFormName,
-          allowed_providers: parseCSV(tenantFormProviders),
-          allowed_models: parseCSV(tenantFormModels),
-          enabled: true,
-        },
-        authToken,
-      );
-        setTenantFormID("");
-        setTenantFormName("");
-        setTenantFormProviders("");
-        setTenantFormModels("");
+          {
+            id: tenantFormID,
+            name: tenantFormName,
+            allowed_providers: parseCSV(tenantFormProviders),
+            allowed_models: parseCSV(tenantFormModels),
+            enabled: true,
+          },
+          authToken,
+        );
+        resetTenantForm();
       },
     });
   }
@@ -650,24 +709,19 @@ export function useRuntimeConsole() {
       failureDetail: "failed to save api key",
       action: async () => {
         await upsertAPIKeyRequest(
-        {
-          id: apiKeyFormID,
-          name: apiKeyFormName,
-          key: apiKeyFormSecret,
-          tenant: apiKeyFormTenant,
-          role: apiKeyFormRole,
-          allowed_providers: parseCSV(apiKeyFormProviders),
-          allowed_models: parseCSV(apiKeyFormModels),
-          enabled: true,
-        },
-        authToken,
-      );
-        setAPIKeyFormID("");
-        setAPIKeyFormName("");
-        setAPIKeyFormSecret("");
-        setAPIKeyFormTenant("");
-        setAPIKeyFormProviders("");
-        setAPIKeyFormModels("");
+          {
+            id: apiKeyFormID,
+            name: apiKeyFormName,
+            key: apiKeyFormSecret,
+            tenant: apiKeyFormTenant,
+            role: apiKeyFormRole,
+            allowed_providers: parseCSV(apiKeyFormProviders),
+            allowed_models: parseCSV(apiKeyFormModels),
+            enabled: true,
+          },
+          authToken,
+        );
+        resetAPIKeyForm();
       },
     });
   }
@@ -696,22 +750,22 @@ export function useRuntimeConsole() {
       failureDetail: "failed to save provider",
       action: async () => {
         const payload = buildProviderUpsertPayload({
-        presetID: providerFormPresetID,
-        id: providerFormID,
-        name: providerFormName,
-        kind: providerFormKind,
-        protocol: providerFormProtocol,
-        baseURL: providerFormBaseURL,
-        apiVersion: providerFormAPIVersion,
-        defaultModel: providerFormDefaultModel,
-        enabled: providerFormEnabled === "true",
-        key: providerFormSecret,
-        presets: providerPresets,
-      });
+          presetID: providerFormPresetID,
+          id: providerFormID,
+          name: providerFormName,
+          kind: providerFormKind,
+          protocol: providerFormProtocol,
+          baseURL: providerFormBaseURL,
+          apiVersion: providerFormAPIVersion,
+          defaultModel: providerFormDefaultModel,
+          enabled: providerFormEnabled === "true",
+          key: providerFormSecret,
+          presets: providerPresets,
+        });
         await upsertProviderRequest(
-        payload,
-        authToken,
-      );
+          payload,
+          authToken,
+        );
         setProviderFormSecret("");
       },
     });
@@ -735,8 +789,7 @@ export function useRuntimeConsole() {
       failureDetail: "failed to rotate provider secret",
       action: async () => {
         await rotateProviderSecretRequest({ id: rotateProviderID, key: rotateProviderSecret }, authToken);
-        setRotateProviderID("");
-        setRotateProviderSecret("");
+        resetRotateProviderForm();
       },
     });
   }
@@ -800,8 +853,7 @@ export function useRuntimeConsole() {
       failureDetail: "failed to rotate api key",
       action: async () => {
         await rotateAPIKeyRequest({ id: rotateAPIKeyID, key: rotateAPIKeySecret }, authToken);
-        setRotateAPIKeyID("");
-        setRotateAPIKeySecret("");
+        resetRotateAPIKeyForm();
       },
     });
   }
@@ -858,19 +910,11 @@ export function useRuntimeConsole() {
   async function createChatSession() {
     setNotice(null);
     try {
-      const payload = await createChatSessionRequest(
-        {
-          title: deriveChatSessionTitle(message),
-        },
-        authToken,
-      );
-      setActiveChatSessionID(payload.data.id);
-      setActiveChatSession(payload.data);
-      setChatSessions((current) => [renderChatSessionSummary(payload.data), ...current.filter((entry) => entry.id !== payload.data.id)]);
-      setNotice({ kind: "success", message: "Chat session created." });
+      await createChatSessionRecord(deriveChatSessionTitle(message));
+      setNoticeMessage("success", "Chat session created.");
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "failed to create chat session");
-      setNotice({ kind: "error", message: "Failed to create chat session." });
+      setNoticeMessage("error", "Failed to create chat session.");
     }
   }
 
@@ -891,13 +935,7 @@ export function useRuntimeConsole() {
   function startNewChat() {
     setActiveChatSessionID("");
     setActiveChatSession(null);
-    setChatResult(null);
-    setRuntimeHeaders(null);
-    setTraceSpans([]);
-    setTraceRoute(null);
-    setTraceStartedAt("");
-    setChatError("");
-    setTraceError("");
+    resetChatWorkspaceState();
   }
 
   async function deleteChatSession(id: string) {
@@ -907,9 +945,9 @@ export function useRuntimeConsole() {
       if (activeChatSessionID === id) {
         startNewChat();
       }
-      setNotice({ kind: "success", message: "Session deleted." });
+      setNoticeMessage("success", "Session deleted.");
     } catch (error) {
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Failed to delete session." });
+      setNoticeMessage("error", error instanceof Error ? error.message : "Failed to delete session.");
     }
   }
 
@@ -923,7 +961,7 @@ export function useRuntimeConsole() {
         setActiveChatSession((current) => (current ? { ...current, title: payload.data.title } : current));
       }
     } catch (error) {
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Failed to rename session." });
+      setNoticeMessage("error", error instanceof Error ? error.message : "Failed to rename session.");
     }
   }
 

@@ -21,6 +21,10 @@
   padding: 1.25rem;
 }
 
+.console-layout--single {
+  grid-template-columns: 1fr;
+}
+
 .console-sidebar {
   position: sticky;
   top: 1.25rem;
@@ -193,6 +197,11 @@
   color: inherit;
 }
 
+.error-boundary__surface {
+  margin-top: 2rem;
+  padding: 2rem;
+}
+
 .console-sidebar__session-btn {
   width: 100%;
   padding: 0.45rem 0.5rem;
@@ -243,5 +252,9 @@
   .console-sidebar {
     padding: 0.9rem;
     border-radius: 16px;
+  }
+
+  .error-boundary__surface {
+    padding: 1.25rem;
   }
 }

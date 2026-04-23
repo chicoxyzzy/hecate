@@ -214,6 +214,8 @@ The operator UI currently includes:
 - tenant and API key management
 - control-plane activity view
 
+The app shell lives in `ui/src/app`, shared console primitives and workbench building blocks live in `ui/src/features/shared`, and feature-owned styles now sit beside the feature views that use them.
+
 ## Using Hecate For Coding
 
 Hecate can already sit behind a coding assistant as the model gateway and runtime control plane. In that role it is useful today for:
