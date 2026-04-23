@@ -121,6 +121,8 @@ describe("ProvidersView", () => {
             backend: "file",
             tenants: [],
             api_keys: [],
+            policy_rules: [],
+            pricebook: [],
             events: [],
             providers: [
               {

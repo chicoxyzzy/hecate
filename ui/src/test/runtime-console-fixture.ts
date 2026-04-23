@@ -150,6 +150,7 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     setTenantFormProviders: () => undefined,
     setBudgetLimit: async () => undefined,
     submitChat: async () => undefined,
+    submitToolResults: async () => undefined,
     runRetention: async () => undefined,
     selectChatSession: async () => undefined,
     populateProviderFormFromPreset: () => undefined,
@@ -158,6 +159,7 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     upsertAPIKey: async () => undefined,
     upsertProvider: async () => undefined,
     upsertTenant: async () => undefined,
+    updateToolResult: () => undefined,
     clearAuthToken: () => undefined,
     dismissNotice: () => undefined,
   };

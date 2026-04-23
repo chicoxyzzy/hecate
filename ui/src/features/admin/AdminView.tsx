@@ -20,6 +20,7 @@ type Props = {
 
 export function AdminView({ state, actions }: Props) {
   const budgetPercent = budgetConsumedPercent(state.budget);
+  const retentionLastRun = state.retentionLastRun;
 
   return (
     <div className="workspace-grid">
@@ -223,26 +224,26 @@ export function AdminView({ state, actions }: Props) {
             </Surface>
 
             <Surface>
-              {state.retentionLastRun ? (
+              {retentionLastRun ? (
                 <div className="stack-md">
                   <div className="action-row action-row--wide">
-                    <StatusPill label={state.retentionLastRun.trigger} tone="neutral" />
+                    <StatusPill label={retentionLastRun.trigger} tone="neutral" />
                     <StatusPill
-                      label={`${state.retentionLastRun.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`}
+                      label={`${retentionLastRun.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`}
                       tone="healthy"
                     />
                   </div>
                   <DefinitionList
                     items={[
-                      { label: "Started", value: formatDateTime(state.retentionLastRun.started_at) },
-                      { label: "Finished", value: formatDateTime(state.retentionLastRun.finished_at) },
-                      { label: "Actor", value: state.retentionLastRun.actor || "system" },
-                      { label: "Subsystems", value: state.retentionLastRun.results.length.toString() },
+                      { label: "Started", value: formatDateTime(retentionLastRun.started_at) },
+                      { label: "Finished", value: formatDateTime(retentionLastRun.finished_at) },
+                      { label: "Actor", value: retentionLastRun.actor || "system" },
+                      { label: "Subsystems", value: retentionLastRun.results.length.toString() },
                     ]}
                   />
                   <div className="trace-inline-grid">
-                    {state.retentionLastRun.results.map((result) => (
-                      <div className="trace-inline-card" key={`${state.retentionLastRun.finished_at}-${result.name}`}>
+                    {retentionLastRun.results.map((result) => (
+                      <div className="trace-inline-card" key={`${retentionLastRun.finished_at}-${result.name}`}>
                         <p className="trace-inline-card__title">{result.name}</p>
                         <div className="action-row">
                           <StatusPill
