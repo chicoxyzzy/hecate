@@ -44,8 +44,6 @@ type Provider struct {
 	BaseURL        string    `json:"base_url"`
 	APIVersion     string    `json:"api_version,omitempty"`
 	DefaultModel   string    `json:"default_model,omitempty"`
-	Models         []string  `json:"models,omitempty"`
-	AllowAnyModel  bool      `json:"allow_any_model"`
 	ExplicitFields []string  `json:"explicit_fields,omitempty"`
 	Enabled        bool      `json:"enabled"`
 	CredentialID   string    `json:"credential_id,omitempty"`
@@ -740,8 +738,6 @@ func cloneState(state State) State {
 			BaseURL:        provider.BaseURL,
 			APIVersion:     provider.APIVersion,
 			DefaultModel:   provider.DefaultModel,
-			Models:         append([]string(nil), provider.Models...),
-			AllowAnyModel:  provider.AllowAnyModel,
 			ExplicitFields: append([]string(nil), provider.ExplicitFields...),
 			Enabled:        provider.Enabled,
 			CredentialID:   provider.CredentialID,

@@ -14,7 +14,7 @@ func TestRuleRouterRoute(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4o-mini", "gpt-4.1-mini"}},
 		&fakeProvider{name: "local", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
@@ -64,7 +64,7 @@ func TestRuleRouterRouteLocalFirst(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "local", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
@@ -85,7 +85,7 @@ func TestRuleRouterOrdersProvidersAlphabetically(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-5.4-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-5.4-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet-4-6", supportedModels: []string{"claude-sonnet-4-6"}},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
@@ -122,7 +122,6 @@ type fakeProvider struct {
 	kind            providers.Kind
 	defaultModel    string
 	supportedModels []string
-	allowAnyModel   bool
 	capabilities    providers.Capabilities
 	capabilitiesErr error
 }
@@ -167,9 +166,6 @@ func (p *fakeProvider) Capabilities(_ context.Context) (providers.Capabilities, 
 	}, nil
 }
 func (p *fakeProvider) Supports(model string) bool {
-	if p.allowAnyModel {
-		return true
-	}
 	for _, candidate := range p.supportedModels {
 		if candidate == model {
 			return true
@@ -217,7 +213,7 @@ func TestRuleRouterHonorsExplicitProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b", "llama3.2:3b"}},
 	)
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
@@ -245,7 +241,7 @@ func TestRuleRouterLocalFirstFallsBackWhenLocalIsUnhealthy(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{
 			name:            "ollama",
 			kind:            providers.KindLocal,
@@ -272,7 +268,7 @@ func TestRuleRouterFallbacksUseAlphabeticalProviderOrder(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
@@ -298,7 +294,7 @@ func TestRuleRouterFallbacksEmptyForExplicitProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
 	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
@@ -315,7 +311,7 @@ func TestRuleRouterSkipsDegradedAlphabeticalProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 	)
 	tracker := providers.NewMemoryHealthTracker(1, time.Minute)
@@ -339,8 +335,8 @@ func TestRuleRouterLocalFirstExplicitModelSkipsUnhealthyFallbackProvider(t *test
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
-		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4o-mini", "gpt-4.1-mini"}},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet", "gpt-4.1-mini"}},
 		&fakeProvider{
 			name:            "ollama",
 			kind:            providers.KindLocal,
@@ -370,7 +366,7 @@ func TestRuleRouterLocalFirstDefaultModelSkipsUnhealthyFallbackProvider(t *testi
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 		&fakeProvider{
 			name:            "ollama",
@@ -401,7 +397,7 @@ func TestRuleRouterFallbacksSkipDegradedProviders(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
 	)
@@ -424,7 +420,7 @@ func TestRuleRouterPrefersHealthyOverHalfOpen(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 	)
 	tracker := staticHealthTracker{states: map[string]providers.HealthState{
@@ -446,7 +442,7 @@ func TestRuleRouterUsesHalfOpenRecoveryWhenNoHealthyAlternativeExists(t *testing
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 	)
 	tracker := staticHealthTracker{states: map[string]providers.HealthState{
 		"openai": {Available: true, Status: providers.HealthStatusHalfOpen},
@@ -470,7 +466,7 @@ func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
 	t.Parallel()
 
 	registry := providers.NewRegistry(
-		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", allowAnyModel: true},
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini"},
 		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
 		&fakeProvider{name: "gemini", kind: providers.KindCloud, defaultModel: "gemini-flash", supportedModels: []string{"gemini-flash"}},
 	)

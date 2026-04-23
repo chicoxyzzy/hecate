@@ -213,8 +213,17 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-6", got)
 	}
 
-	if _, ok := BuiltInProviderByID("LM Studio"); !ok {
-		t.Fatal("BuiltInProviderByID(LM Studio) = not found")
+	for _, id := range []string{"ollama", "LM Studio", "localai", "llamacpp"} {
+		local, ok := BuiltInProviderByID(id)
+		if !ok {
+			t.Fatalf("BuiltInProviderByID(%s) = not found", id)
+		}
+		if local.DefaultModel != "" {
+			t.Fatalf("%s built-in default model = %q, want empty for discovery", local.ID, local.DefaultModel)
+		}
+		if got := local.RuntimeConfig("ignored").DefaultModel; got != "" {
+			t.Fatalf("%s runtime default model = %q, want empty for discovery", local.ID, got)
+		}
 	}
 }
 

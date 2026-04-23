@@ -28,7 +28,6 @@ func TestDefaultResponseFinalizerFinalizeExecution(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "gpt-4o-mini",
-					Models:       []string{"gpt-4o-mini"},
 				},
 			},
 		}, config.PricebookConfig{
@@ -136,7 +135,6 @@ func TestDefaultResponseFinalizerFinalizeExecutionAllowsUnpricedResolvedModel(t 
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "gpt-4o-mini",
-					Models:       []string{"gpt-4o-mini"},
 				},
 			},
 		}, config.PricebookConfig{

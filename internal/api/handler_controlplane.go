@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
@@ -311,14 +310,6 @@ func (h *Handler) HandleControlPlaneUpsertProvider(w http.ResponseWriter, r *htt
 		providerInput.DefaultModel = *req.DefaultModel
 		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "default_model")
 	}
-	if req.Models != nil {
-		providerInput.Models = req.Models
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "models")
-	}
-	if req.AllowAnyModel != nil {
-		providerInput.AllowAnyModel = *req.AllowAnyModel
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "allow_any_model")
-	}
 
 	provider, err := h.providerRuntime.Upsert(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), providerInput, req.Key)
 	if err != nil {
@@ -462,8 +453,6 @@ func renderControlPlaneProvider(provider controlplane.Provider, secrets []contro
 		BaseURL:         provider.BaseURL,
 		APIVersion:      provider.APIVersion,
 		DefaultModel:    provider.DefaultModel,
-		Models:          provider.Models,
-		AllowAnyModel:   provider.AllowAnyModel,
 		ExplicitFields:  append([]string(nil), provider.ExplicitFields...),
 		InheritedFields: inheritedFields,
 		Enabled:         provider.Enabled,
@@ -511,8 +500,6 @@ func controlPlaneInheritedFields(provider controlplane.Provider) []string {
 	maybeAppend("base_url", provider.BaseURL == builtIn.BaseURL)
 	maybeAppend("api_version", provider.APIVersion == builtIn.APIVersion)
 	maybeAppend("default_model", provider.DefaultModel == builtIn.DefaultModel)
-	maybeAppend("allow_any_model", provider.AllowAnyModel == builtIn.AllowAnyModel)
-	maybeAppend("models", slices.Equal(provider.Models, builtIn.ExampleModels))
 	return inherited
 }
 

@@ -85,8 +85,6 @@ export type ProviderUpsertPayload = {
   base_url?: string;
   api_version?: string;
   default_model?: string;
-  models?: string[];
-  allow_any_model?: boolean;
   enabled: boolean;
   key: string;
 };

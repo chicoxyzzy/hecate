@@ -60,13 +60,11 @@ func TestServiceHandleChatFallsBackWhenPrimaryPriceMissing(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "priced-model",
-					Models:       []string{"priced-model"},
 				},
 				{
 					Name:         "ollama",
 					Kind:         "local",
 					DefaultModel: "model-b",
-					Models:       []string{"model-b"},
 				},
 			},
 		}, config.PricebookConfig{}),

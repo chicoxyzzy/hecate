@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatRelativeCount } from "../../lib/format";
-import { EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import { EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -19,7 +19,6 @@ export function ProvidersView({ state, actions }: Props) {
   );
   const usingCustomProvider = !selectedPreset;
   const showAdvanced = usingCustomProvider || advancedOpen;
-  const presetAllowAnyModel = selectedPreset ? (selectedPreset.kind === "local" ? "false" : "true") : "";
   const presetSummary = selectedPreset
     ? [
         selectedPreset.kind,
@@ -78,15 +77,6 @@ export function ProvidersView({ state, actions }: Props) {
                           {selectedPreset.description ? ` — ${selectedPreset.description}` : ""}
                         </p>
                         <p className="body-muted">{presetSummary}</p>
-                        {selectedPreset.example_models && selectedPreset.example_models.length > 0 ? (
-                          <div className="action-row">
-                            {selectedPreset.example_models.map((model) => (
-                              <span className="mono-chip" key={`${selectedPreset.id}-${model}`}>
-                                {model}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
                       </div>
                     </Surface>
                   ) : null}
@@ -147,12 +137,7 @@ export function ProvidersView({ state, actions }: Props) {
                             </>
                           ) : null}
                           <TextField label="API version" onChange={actions.setProviderFormAPIVersion} value={state.providerFormAPIVersion} />
-                          <SelectField label="Allow any model" onChange={actions.setProviderFormAllowAnyModel} value={state.providerFormAllowAnyModel}>
-                            <option value="true">true</option>
-                            <option value="false">false</option>
-                          </SelectField>
                         </div>
-                        <TextAreaField label="Models (comma separated)" onChange={actions.setProviderFormModels} rows={3} value={state.providerFormModels} />
                       </div>
                     </Surface>
                   ) : null}
@@ -160,11 +145,8 @@ export function ProvidersView({ state, actions }: Props) {
                     Secrets are write-only. They are encrypted before persistence and never returned to the UI after save.
                   </p>
                   <p className="body-muted">
-                    Leave model fields blank to use the provider's live catalog discovery. Hecate will prefer upstream discovery over configured example lists when possible.
+                    Model catalogs are discovered from each provider at runtime. Use the default model override only when you want Hecate to prefer a specific discovered model.
                   </p>
-                  {!usingCustomProvider && state.providerFormAllowAnyModel !== presetAllowAnyModel ? (
-                    <InlineNotice message="Allow-any-model is overridden from the preset default." tone="warning" />
-                  ) : null}
                   {state.controlPlaneError ? <InlineNotice message={state.controlPlaneError} tone="error" /> : null}
                   <div className="action-row">
                     <ToolbarButton onClick={() => void actions.upsertProvider()} tone="primary">
@@ -191,7 +173,6 @@ export function ProvidersView({ state, actions }: Props) {
                           <p className="body-muted">
                             {provider.base_url}
                             {provider.default_model ? ` • default ${provider.default_model}` : ""}
-                            {provider.models?.length ? ` • ${provider.models.length} configured model(s)` : ""}
                           </p>
                           {provider.inherited_fields?.length ? (
                             <p className="body-muted">
@@ -367,15 +348,6 @@ function renderPresetGroup(
                   {preset.default_model ? ` • Default model: ${preset.default_model}` : ""}
                 </p>
                 <p className="body-muted">Startup env only. Save the preset into managed providers if you want durable control-plane state.</p>
-                {preset.example_models && preset.example_models.length > 0 ? (
-                  <div className="action-row">
-                    {preset.example_models.map((model) => (
-                      <span className="mono-chip" key={`${preset.id}-${model}`}>
-                        {model}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
               </div>
               <div className="data-row__secondary">
                 {preset.docs_url ? (

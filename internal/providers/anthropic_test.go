@@ -17,16 +17,22 @@ func TestAnthropicProviderChatMapsMessagesAPI(t *testing.T) {
 	t.Parallel()
 
 	provider := NewAnthropicProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "anthropic",
-		Kind:          "cloud",
-		Protocol:      "anthropic",
-		BaseURL:       "https://api.anthropic.test",
-		APIKey:        "secret",
-		APIVersion:    "2023-06-01",
-		Timeout:       5 * time.Second,
-		DefaultModel:  "claude-sonnet-4-20250514",
-		AllowAnyModel: true,
+		Name:         "anthropic",
+		Kind:         "cloud",
+		Protocol:     "anthropic",
+		BaseURL:      "https://api.anthropic.test",
+		APIKey:       "secret",
+		APIVersion:   "2023-06-01",
+		Timeout:      5 * time.Second,
+		DefaultModel: "claude-sonnet-4-20250514",
 	}, nil)
+	provider.cachedCaps = Capabilities{
+		Name:         "anthropic",
+		Kind:         KindCloud,
+		DefaultModel: "claude-sonnet-4-20250514",
+		Models:       []string{"claude-sonnet-4-20250514"},
+	}
+	provider.capsExpiry = time.Now().Add(time.Minute)
 	provider.httpClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			if r.URL.Path != "/v1/messages" {

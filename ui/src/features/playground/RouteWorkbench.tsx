@@ -6,6 +6,7 @@ import {
   describeHealthStatus,
   describeRouteReason,
   describeRouteRecovery,
+  findModelInTrace,
   healthStatusTone,
   routeOutcomeTone,
   type TraceRouteRecord,
@@ -30,7 +31,7 @@ export function RouteWorkbench({ runtimeHeaders, route, spans = [] }: Props) {
   const finalHealthLabel = finalHealth ? describeHealthStatus(finalHealth) : "No health signal";
   const finalHealthTone = healthStatusTone(finalHealth);
   const finalProvider = route?.final_provider || selectedCandidate?.provider || runtimeHeaders?.provider || "Unknown provider";
-  const finalModel = route?.final_model || selectedCandidate?.model || runtimeHeaders?.resolvedModel || runtimeHeaders?.requestedModel || "No resolved model";
+  const finalModel = route?.final_model || selectedCandidate?.model || runtimeHeaders?.resolvedModel || runtimeHeaders?.requestedModel || findModelInTrace(spans, finalProvider) || "No resolved model";
   const routeRecovery = describeRouteRecovery(route, runtimeHeaders);
   const semanticInsight = buildSemanticCacheInsight(runtimeHeaders, spans);
 

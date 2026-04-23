@@ -19,8 +19,8 @@ describe("PlaygroundView", () => {
           providerPresets: [
             { id: "anthropic", name: "Anthropic", kind: "cloud", protocol: "anthropic", base_url: "https://api.anthropic.com", default_model: "claude-sonnet-4-6" },
             { id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com", default_model: "gpt-5.4-mini" },
-            { id: "lmstudio", name: "LM Studio", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1", default_model: "local-model" },
-            { id: "ollama", name: "Ollama", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1", default_model: "llama3.1:8b" },
+            { id: "lmstudio", name: "LM Studio", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1" },
+            { id: "ollama", name: "Ollama", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1" },
           ],
           localModels: [
             {
@@ -65,8 +65,6 @@ describe("PlaygroundView", () => {
               kind: "local",
               protocol: "openai",
               base_url: "http://127.0.0.1:11434/v1",
-              default_model: "llama3.1:8b",
-              example_models: ["llama3.1:8b", "qwen2.5:7b"],
             },
           ],
           providerScopedModels: [
@@ -119,13 +117,30 @@ describe("PlaygroundView", () => {
               {
                 provider: "ollama",
                 provider_kind: "local",
-                model: "llama3.1:8b",
+                model: "",
                 reason: "provider_default_model",
                 outcome: "completed",
                 health_status: "healthy",
               },
             ],
           },
+          traceSpans: [
+            {
+              trace_id: "trace-local",
+              span_id: "span-provider",
+              name: "gateway.provider",
+              events: [
+                {
+                  name: "provider.call.finished",
+                  timestamp: "2026-04-21T10:00:00Z",
+                  attributes: {
+                    "gen_ai.provider.name": "ollama",
+                    "gen_ai.request.model": "llama3.1:8b",
+                  },
+                },
+              ],
+            },
+          ],
         })}
       />,
     );

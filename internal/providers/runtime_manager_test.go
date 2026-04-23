@@ -26,7 +26,7 @@ func TestControlPlaneRuntimeManagerUpsertReloadsRegistryAndEncryptsSecrets(t *te
 	}
 
 	manager := NewControlPlaneRuntimeManager(logger, []config.OpenAICompatibleProviderConfig{
-		{Name: "openai", Kind: "cloud", Protocol: "openai", BaseURL: "https://api.openai.com", APIKey: "env-secret", DefaultModel: "gpt-4o-mini", AllowAnyModel: true},
+		{Name: "openai", Kind: "cloud", Protocol: "openai", BaseURL: "https://api.openai.com", APIKey: "env-secret", DefaultModel: "gpt-4o-mini"},
 	}, store, cipher)
 
 	if err := manager.Reload(context.Background()); err != nil {
@@ -34,13 +34,12 @@ func TestControlPlaneRuntimeManagerUpsertReloadsRegistryAndEncryptsSecrets(t *te
 	}
 
 	if _, err := manager.Upsert(context.Background(), controlplane.Provider{
-		Name:          "groq",
-		Kind:          "cloud",
-		Protocol:      "openai",
-		BaseURL:       "https://api.groq.com/openai/v1",
-		DefaultModel:  "llama-3.3-70b-versatile",
-		AllowAnyModel: true,
-		Enabled:       true,
+		Name:         "groq",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.groq.com/openai/v1",
+		DefaultModel: "llama-3.3-70b-versatile",
+		Enabled:      true,
 	}, "groq-secret"); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
@@ -107,9 +106,6 @@ func TestControlPlaneRuntimeManagerHydratesBuiltInProviderDefaults(t *testing.T)
 	}
 	if got.Kind != "cloud" {
 		t.Fatalf("kind = %q, want cloud", got.Kind)
-	}
-	if !got.AllowAnyModel {
-		t.Fatal("allow any model = false, want true from built-in preset")
 	}
 	if got.PresetID != "groq" {
 		t.Fatalf("preset id = %q, want groq", got.PresetID)

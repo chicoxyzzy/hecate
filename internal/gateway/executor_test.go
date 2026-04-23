@@ -93,7 +93,6 @@ func TestResilientExecutorRetriesRetryableError(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "model-a",
-					Models:       []string{"model-a"},
 				},
 			},
 		}, config.PricebookConfig{
@@ -162,13 +161,11 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "model-a",
-					Models:       []string{"model-a"},
 				},
 				{
 					Name:         "ollama",
 					Kind:         "local",
 					DefaultModel: "model-b",
-					Models:       []string{"model-b"},
 				},
 			},
 		}, config.PricebookConfig{
@@ -281,13 +278,11 @@ func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "priced-model",
-					Models:       []string{"priced-model"},
 				},
 				{
 					Name:         "ollama",
 					Kind:         "local",
 					DefaultModel: "model-b",
-					Models:       []string{"model-b"},
 				},
 			},
 		}, config.PricebookConfig{

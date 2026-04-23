@@ -121,7 +121,6 @@ export type ProviderPresetRecord = {
   api_key_env?: string;
   api_version?: string;
   default_model?: string;
-  example_models?: string[];
   docs_url?: string;
   description?: string;
   env_snippet?: string;
@@ -304,8 +303,6 @@ export type ControlPlaneProviderRecord = {
   base_url: string;
   api_version?: string;
   default_model?: string;
-  models?: string[];
-  allow_any_model: boolean;
   explicit_fields?: string[];
   inherited_fields?: string[];
   enabled: boolean;

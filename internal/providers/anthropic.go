@@ -132,23 +132,12 @@ func (p *AnthropicProvider) Supports(model string) bool {
 	if model == "" {
 		return p.config.DefaultModel != ""
 	}
-	if p.config.AllowAnyModel {
-		return true
-	}
-	for _, candidate := range p.config.Models {
-		if candidate == model {
-			return true
-		}
-	}
 	return p.config.DefaultModel != "" && p.config.DefaultModel == model
 }
 
 func (p *AnthropicProvider) supportsResolvedModel(ctx context.Context, model string) bool {
 	if model == "" {
 		return p.config.DefaultModel != ""
-	}
-	if p.config.AllowAnyModel {
-		return true
 	}
 	caps, err := p.Capabilities(ctx)
 	if err == nil {
@@ -229,7 +218,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req types.ChatRequest) (*t
 }
 
 func (p *AnthropicProvider) staticCapabilities(source string) Capabilities {
-	models := append([]string(nil), p.config.Models...)
+	models := make([]string, 0, 1)
 	if p.config.DefaultModel != "" && !contains(models, p.config.DefaultModel) {
 		models = append(models, p.config.DefaultModel)
 	}

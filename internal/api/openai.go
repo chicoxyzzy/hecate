@@ -253,18 +253,17 @@ type ProviderStatusResponseItem struct {
 }
 
 type ProviderPresetResponseItem struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Kind          string   `json:"kind"`
-	Protocol      string   `json:"protocol"`
-	BaseURL       string   `json:"base_url"`
-	APIKeyEnv     string   `json:"api_key_env,omitempty"`
-	APIVersion    string   `json:"api_version,omitempty"`
-	DefaultModel  string   `json:"default_model,omitempty"`
-	ExampleModels []string `json:"example_models,omitempty"`
-	DocsURL       string   `json:"docs_url,omitempty"`
-	Description   string   `json:"description,omitempty"`
-	EnvSnippet    string   `json:"env_snippet,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Protocol     string `json:"protocol"`
+	BaseURL      string `json:"base_url"`
+	APIKeyEnv    string `json:"api_key_env,omitempty"`
+	APIVersion   string `json:"api_version,omitempty"`
+	DefaultModel string `json:"default_model,omitempty"`
+	DocsURL      string `json:"docs_url,omitempty"`
+	Description  string `json:"description,omitempty"`
+	EnvSnippet   string `json:"env_snippet,omitempty"`
 }
 
 type BudgetStatusResponse struct {
@@ -447,8 +446,6 @@ type ControlPlaneProviderRecord struct {
 	BaseURL              string   `json:"base_url"`
 	APIVersion           string   `json:"api_version,omitempty"`
 	DefaultModel         string   `json:"default_model,omitempty"`
-	Models               []string `json:"models,omitempty"`
-	AllowAnyModel        bool     `json:"allow_any_model"`
 	ExplicitFields       []string `json:"explicit_fields,omitempty"`
 	InheritedFields      []string `json:"inherited_fields,omitempty"`
 	Enabled              bool     `json:"enabled"`
@@ -488,18 +485,16 @@ type ControlPlaneAPIKeyUpsertRequest struct {
 }
 
 type ControlPlaneProviderUpsertRequest struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	PresetID      string   `json:"preset_id"`
-	Kind          *string  `json:"kind,omitempty"`
-	Protocol      *string  `json:"protocol,omitempty"`
-	BaseURL       *string  `json:"base_url,omitempty"`
-	APIVersion    *string  `json:"api_version,omitempty"`
-	DefaultModel  *string  `json:"default_model,omitempty"`
-	Models        []string `json:"models,omitempty"`
-	AllowAnyModel *bool    `json:"allow_any_model,omitempty"`
-	Enabled       bool     `json:"enabled"`
-	Key           string   `json:"key"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	PresetID     string  `json:"preset_id"`
+	Kind         *string `json:"kind,omitempty"`
+	Protocol     *string `json:"protocol,omitempty"`
+	BaseURL      *string `json:"base_url,omitempty"`
+	APIVersion   *string `json:"api_version,omitempty"`
+	DefaultModel *string `json:"default_model,omitempty"`
+	Enabled      bool    `json:"enabled"`
+	Key          string  `json:"key"`
 }
 
 type ControlPlaneTenantLifecycleRequest struct {

@@ -9,18 +9,17 @@ import (
 )
 
 type providerPreset struct {
-	ID            string
-	Name          string
-	Kind          string
-	Protocol      string
-	BaseURL       string
-	APIKeyEnv     string
-	APIVersion    string
-	DefaultModel  string
-	ExampleModels []string
-	DocsURL       string
-	Description   string
-	EnvSnippet    string
+	ID           string
+	Name         string
+	Kind         string
+	Protocol     string
+	BaseURL      string
+	APIKeyEnv    string
+	APIVersion   string
+	DefaultModel string
+	DocsURL      string
+	Description  string
+	EnvSnippet   string
 }
 
 func (h *Handler) HandleProviderPresets(w http.ResponseWriter, r *http.Request) {
@@ -28,18 +27,17 @@ func (h *Handler) HandleProviderPresets(w http.ResponseWriter, r *http.Request) 
 	data := make([]ProviderPresetResponseItem, 0, len(items))
 	for _, item := range items {
 		data = append(data, ProviderPresetResponseItem{
-			ID:            item.ID,
-			Name:          item.Name,
-			Kind:          item.Kind,
-			Protocol:      item.Protocol,
-			BaseURL:       item.BaseURL,
-			APIKeyEnv:     item.APIKeyEnv,
-			APIVersion:    item.APIVersion,
-			DefaultModel:  item.DefaultModel,
-			ExampleModels: append([]string(nil), item.ExampleModels...),
-			DocsURL:       item.DocsURL,
-			Description:   item.Description,
-			EnvSnippet:    item.EnvSnippet,
+			ID:           item.ID,
+			Name:         item.Name,
+			Kind:         item.Kind,
+			Protocol:     item.Protocol,
+			BaseURL:      item.BaseURL,
+			APIKeyEnv:    item.APIKeyEnv,
+			APIVersion:   item.APIVersion,
+			DefaultModel: item.DefaultModel,
+			DocsURL:      item.DocsURL,
+			Description:  item.Description,
+			EnvSnippet:   item.EnvSnippet,
 		})
 	}
 
@@ -62,7 +60,6 @@ func providerPresets() []providerPreset {
 			item.APIKeyEnv,
 			item.APIVersion,
 			item.DefaultModel,
-			item.ExampleModels,
 			item.DocsURL,
 			item.Description,
 		))
@@ -70,7 +67,7 @@ func providerPresets() []providerPreset {
 	return out
 }
 
-func newProviderPreset(id, name, kind, protocol, baseURL, apiKeyEnv, apiVersion, defaultModel string, exampleModels []string, docsURL, description string) providerPreset {
+func newProviderPreset(id, name, kind, protocol, baseURL, apiKeyEnv, apiVersion, defaultModel, docsURL, description string) providerPreset {
 	var envLines []string
 	prefix := "PROVIDER_" + strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(id, "-", "_"), ".", "_")) + "_"
 	envLines = append(envLines, fmt.Sprintf("GATEWAY_PROVIDERS=%s", id))
@@ -85,17 +82,16 @@ func newProviderPreset(id, name, kind, protocol, baseURL, apiKeyEnv, apiVersion,
 	}
 
 	return providerPreset{
-		ID:            id,
-		Name:          name,
-		Kind:          kind,
-		Protocol:      protocol,
-		BaseURL:       baseURL,
-		APIKeyEnv:     apiKeyEnv,
-		APIVersion:    apiVersion,
-		DefaultModel:  defaultModel,
-		ExampleModels: append([]string(nil), exampleModels...),
-		DocsURL:       docsURL,
-		Description:   description,
-		EnvSnippet:    strings.Join(envLines, "\n"),
+		ID:           id,
+		Name:         name,
+		Kind:         kind,
+		Protocol:     protocol,
+		BaseURL:      baseURL,
+		APIKeyEnv:    apiKeyEnv,
+		APIVersion:   apiVersion,
+		DefaultModel: defaultModel,
+		DocsURL:      docsURL,
+		Description:  description,
+		EnvSnippet:   strings.Join(envLines, "\n"),
 	}
 }

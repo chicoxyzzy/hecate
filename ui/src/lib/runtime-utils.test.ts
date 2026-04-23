@@ -8,6 +8,7 @@ import {
   describeRouteReason,
   filterModelsByKind,
   filterModelsByProvider,
+  findModelInTrace,
   formatTraceAttributeKey,
   formatTraceAttributeValue,
   findProvider,
@@ -87,6 +88,29 @@ describe("runtime-utils", () => {
       expect.objectContaining({ name: "request.received", phase: "request", offsetMs: 0 }),
       expect.objectContaining({ name: "router.selected", phase: "routing", offsetMs: 1000 }),
     ]);
+  });
+
+  it("finds a model from OTel-shaped trace attributes", () => {
+    const spans: TraceSpanRecord[] = [
+      {
+        trace_id: "trace-1",
+        span_id: "span-1",
+        name: "gateway.provider",
+        events: [
+          {
+            name: "provider.call.finished",
+            timestamp: "2026-04-21T10:00:01Z",
+            attributes: {
+              "gen_ai.provider.name": "ollama",
+              "gen_ai.request.model": "llama3.1:8b",
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(findModelInTrace(spans, "ollama")).toBe("llama3.1:8b");
+    expect(findModelInTrace(spans, "openai")).toBe("");
   });
 
   it("formats route and provider diagnostics", () => {

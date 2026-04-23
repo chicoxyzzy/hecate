@@ -121,8 +121,9 @@ The documented core provider knobs are:
 - `PROVIDER_<NAME>_BASE_URL`
 - `PROVIDER_<NAME>_DEFAULT_MODEL`
 
-Advanced overrides like `PROTOCOL`, `API_VERSION`, `TIMEOUT`, `MODELS`, and
-`ALLOW_ANY_MODEL` are supported, but most setups should not need them.
+Advanced overrides like `PROTOCOL`, `API_VERSION`, and `TIMEOUT` are available
+when needed. Provider model catalogs are discovered from provider APIs instead
+of maintained as static env lists.
 
 
 Built-in cloud provider presets:

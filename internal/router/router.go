@@ -222,7 +222,7 @@ func supportsModel(entry catalog.Entry, model string) bool {
 			return true
 		}
 	}
-	return entry.Provider != nil && entry.Provider.Supports(model)
+	return entry.DefaultModel != "" && entry.DefaultModel == model
 }
 
 func (r *RuleRouter) orderedProviders() []catalog.Entry {

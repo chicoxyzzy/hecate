@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatUsd } from "../../lib/format";
-import { describeRouteReason, findProvider, providerStatusTone } from "../../lib/runtime-utils";
+import { describeRouteReason, findModelInTrace, findProvider, providerStatusTone } from "../../lib/runtime-utils";
 import type { ModelRecord, ProviderPresetRecord, ProviderRecord } from "../../types/runtime";
 import { RouteWorkbench } from "./RouteWorkbench";
 import { TraceWorkbench } from "./TraceWorkbench";
@@ -25,11 +25,13 @@ export function PlaygroundView({ state, actions }: Props) {
   const routeReport = state.traceRoute;
   const selectedRouteCandidate = routeReport?.candidates?.find((candidate) => candidate.outcome === "selected" || candidate.outcome === "completed") ?? null;
   const receiptProvider = state.runtimeHeaders?.provider || routeReport?.final_provider || selectedRouteCandidate?.provider || "unknown";
+  const traceModel = findModelInTrace(state.traceSpans, receiptProvider);
   const receiptModel =
     state.runtimeHeaders?.resolvedModel ||
     routeReport?.final_model ||
     selectedRouteCandidate?.model ||
     state.runtimeHeaders?.requestedModel ||
+    traceModel ||
     state.chatResult?.model ||
     "unknown model";
   const cacheLabel = state.runtimeHeaders?.cache === "true"
@@ -466,7 +468,7 @@ function buildProviderScopedModelOptions(provider: string, scopedModels: ModelRe
 	}
 
 	const preset = presets.find((entry) => entry.id === provider);
-	for (const id of [preset?.default_model, ...(preset?.example_models ?? [])]) {
+	for (const id of [preset?.default_model]) {
     if (!id || options.has(id)) {
       continue;
     }

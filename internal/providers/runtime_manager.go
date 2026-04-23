@@ -182,16 +182,14 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 			apiKey = decrypted
 		}
 		cfg := config.OpenAICompatibleProviderConfig{
-			Name:          item.Name,
-			Kind:          item.Kind,
-			Protocol:      item.Protocol,
-			BaseURL:       item.BaseURL,
-			APIKey:        apiKey,
-			APIVersion:    item.APIVersion,
-			DefaultModel:  item.DefaultModel,
-			Models:        append([]string(nil), item.Models...),
-			AllowAnyModel: item.AllowAnyModel,
-			Timeout:       30 * time.Second,
+			Name:         item.Name,
+			Kind:         item.Kind,
+			Protocol:     item.Protocol,
+			BaseURL:      item.BaseURL,
+			APIKey:       apiKey,
+			APIVersion:   item.APIVersion,
+			DefaultModel: item.DefaultModel,
+			Timeout:      30 * time.Second,
 		}
 		if _, ok := byName[cfg.Name]; !ok {
 			order = append(order, cfg.Name)
@@ -225,13 +223,6 @@ func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) control
 			provider.PresetID = builtIn.ID
 		}
 		provider.ExplicitFields = normalizeFieldNames(provider.ExplicitFields)
-		minimalPreset := strings.TrimSpace(provider.Kind) == "" &&
-			strings.TrimSpace(provider.Protocol) == "" &&
-			strings.TrimSpace(provider.BaseURL) == "" &&
-			strings.TrimSpace(provider.APIVersion) == "" &&
-			strings.TrimSpace(provider.DefaultModel) == "" &&
-			len(provider.Models) == 0 &&
-			!provider.AllowAnyModel
 		if strings.TrimSpace(provider.Name) == "" {
 			provider.Name = builtIn.ID
 		}
@@ -249,12 +240,6 @@ func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) control
 		}
 		if strings.TrimSpace(provider.DefaultModel) == "" {
 			provider.DefaultModel = builtIn.DefaultModel
-		}
-		if len(provider.Models) == 0 {
-			provider.Models = append([]string(nil), builtIn.ExampleModels...)
-		}
-		if minimalPreset {
-			provider.AllowAnyModel = builtIn.AllowAnyModel
 		}
 		return provider
 	}
@@ -304,12 +289,6 @@ func mergeProviderWithExisting(next, existing controlplane.Provider) controlplan
 	}
 	if _, ok := explicit["default_model"]; !ok && strings.TrimSpace(next.DefaultModel) == "" {
 		next.DefaultModel = existing.DefaultModel
-	}
-	if _, ok := explicit["models"]; !ok && len(next.Models) == 0 {
-		next.Models = append([]string(nil), existing.Models...)
-	}
-	if _, ok := explicit["allow_any_model"]; !ok {
-		next.AllowAnyModel = existing.AllowAnyModel
 	}
 	next.ExplicitFields = normalizeFieldNames(append(append([]string(nil), existing.ExplicitFields...), next.ExplicitFields...))
 	return next

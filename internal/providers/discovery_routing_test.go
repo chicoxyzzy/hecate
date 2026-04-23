@@ -17,13 +17,12 @@ func TestOpenAIProviderChatAcceptsDiscoveredModelWithoutConfiguredModelList(t *t
 	t.Parallel()
 
 	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "test",
-		Kind:          "cloud",
-		Protocol:      "openai",
-		BaseURL:       "https://example.test",
-		APIKey:        "secret",
-		AllowAnyModel: false,
-		Timeout:       2 * time.Second,
+		Name:     "test",
+		Kind:     "cloud",
+		Protocol: "openai",
+		BaseURL:  "https://example.test",
+		APIKey:   "secret",
+		Timeout:  2 * time.Second,
 	}, nil)
 	provider.cachedCaps = Capabilities{
 		Name:         "test",

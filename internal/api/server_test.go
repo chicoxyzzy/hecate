@@ -1233,7 +1233,6 @@ func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.
 		Protocol:       "openai",
 		BaseURL:        "https://api.groq.com/openai/v1",
 		DefaultModel:   "openai/gpt-oss-20b",
-		AllowAnyModel:  true,
 		ExplicitFields: []string{"default_model"},
 		Enabled:        true,
 	}, &controlplane.ProviderSecret{

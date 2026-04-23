@@ -24,7 +24,6 @@ func TestDefaultRoutePreflightEvaluateReturnsResult(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "model-a",
-					Models:       []string{"model-a"},
 				},
 			},
 		}, config.PricebookConfig{
@@ -65,7 +64,6 @@ func TestDefaultRoutePreflightEvaluateDenied(t *testing.T) {
 					Name:         "openai",
 					Kind:         "cloud",
 					DefaultModel: "model-a",
-					Models:       []string{"model-a"},
 				},
 			},
 		}, config.PricebookConfig{

@@ -589,8 +589,6 @@ describe("useRuntimeConsole", () => {
               kind: "local",
               protocol: "openai",
               base_url: "http://127.0.0.1:11434/v1",
-              default_model: "llama3.1:8b",
-              example_models: ["llama3.1:8b", "qwen2.5:7b"],
             },
           ],
         });

@@ -70,6 +70,50 @@ export function buildTraceTimeline(spans: TraceSpanRecord[], traceStartedAt?: st
   return flattened;
 }
 
+export function findModelInTrace(spans: TraceSpanRecord[], provider?: string): string {
+  const normalizedProvider = provider?.trim();
+  const candidates: Array<{ priority: number; timestamp: number; model: string }> = [];
+
+  for (const span of spans) {
+    for (const event of span.events ?? []) {
+      const attrs = event.attributes ?? {};
+      if (normalizedProvider) {
+        const eventProvider = traceStringAttr(attrs, "gen_ai.provider.name");
+        if (eventProvider && eventProvider !== normalizedProvider) {
+          continue;
+        }
+      }
+
+      const responseModel = traceStringAttr(attrs, "gen_ai.response.model");
+      if (responseModel) {
+        candidates.push({ priority: 3, timestamp: Date.parse(event.timestamp), model: responseModel });
+      }
+
+      const requestModel = traceStringAttr(attrs, "gen_ai.request.model");
+      if (requestModel) {
+        const priority = event.name === "provider.call.finished" || event.name === "router.candidate.selected" ? 2 : 1;
+        candidates.push({ priority, timestamp: Date.parse(event.timestamp), model: requestModel });
+      }
+    }
+  }
+
+  candidates.sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return right.priority - left.priority;
+    }
+    const leftTime = Number.isFinite(left.timestamp) ? left.timestamp : 0;
+    const rightTime = Number.isFinite(right.timestamp) ? right.timestamp : 0;
+    return rightTime - leftTime;
+  });
+
+  return candidates[0]?.model ?? "";
+}
+
+function traceStringAttr(attrs: Record<string, unknown>, key: string): string {
+  const value = attrs[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export function describeRouteReason(reason?: string): string {
   if (!reason) {
     return "No route reason";

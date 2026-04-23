@@ -77,13 +77,13 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 	})
 
 	provider := NewOpenAIProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "openai",
-		Kind:          "cloud",
-		BaseURL:       "https://example.test",
-		APIKey:        "test-key",
-		Timeout:       time.Second,
-		StubMode:      false,
-		AllowAnyModel: true,
+		Name:         "openai",
+		Kind:         "cloud",
+		BaseURL:      "https://example.test",
+		APIKey:       "test-key",
+		Timeout:      time.Second,
+		StubMode:     false,
+		DefaultModel: "gpt-4o-mini",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	provider.httpClient.Transport = transport
 
@@ -129,13 +129,13 @@ func TestOpenAIProviderChatUpstreamError(t *testing.T) {
 	})
 
 	provider := NewOpenAIProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "openai",
-		Kind:          "cloud",
-		BaseURL:       "https://example.test",
-		APIKey:        "bad-key",
-		Timeout:       time.Second,
-		StubMode:      false,
-		AllowAnyModel: true,
+		Name:         "openai",
+		Kind:         "cloud",
+		BaseURL:      "https://example.test",
+		APIKey:       "bad-key",
+		Timeout:      time.Second,
+		StubMode:     false,
+		DefaultModel: "gpt-4o-mini",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	provider.httpClient.Transport = transport
 
@@ -193,11 +193,11 @@ func TestOpenAIProviderChatStreamUsesPortableOpenAICompatiblePayload(t *testing.
 	})
 
 	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "ollama",
-		Kind:          "local",
-		BaseURL:       "http://127.0.0.1:11434/v1",
-		Timeout:       time.Second,
-		AllowAnyModel: true,
+		Name:         "ollama",
+		Kind:         "local",
+		BaseURL:      "http://127.0.0.1:11434/v1",
+		Timeout:      time.Second,
+		DefaultModel: "llama3.1:8b",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	provider.httpClient.Transport = transport
 
@@ -247,12 +247,11 @@ func TestOpenAIProviderCapabilitiesDiscovery(t *testing.T) {
 	})
 
 	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "ollama",
-		Kind:          "local",
-		BaseURL:       "http://127.0.0.1:11434",
-		Timeout:       time.Second,
-		DefaultModel:  "configured-default",
-		AllowAnyModel: false,
+		Name:         "ollama",
+		Kind:         "local",
+		BaseURL:      "http://127.0.0.1:11434",
+		Timeout:      time.Second,
+		DefaultModel: "configured-default",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	provider.httpClient.Transport = transport
 
@@ -287,13 +286,11 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	})
 
 	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
-		Name:          "localai",
-		Kind:          "local",
-		BaseURL:       "http://127.0.0.1:8080/v1",
-		Timeout:       time.Second,
-		DefaultModel:  "llama3",
-		Models:        []string{"llama3", "mistral"},
-		AllowAnyModel: false,
+		Name:         "localai",
+		Kind:         "local",
+		BaseURL:      "http://127.0.0.1:8080/v1",
+		Timeout:      time.Second,
+		DefaultModel: "llama3",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	provider.httpClient.Transport = transport
 
@@ -304,8 +301,8 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	if caps.DefaultModel != "llama3" {
 		t.Fatalf("default model = %q, want llama3", caps.DefaultModel)
 	}
-	if len(caps.Models) != 2 {
-		t.Fatalf("models len = %d, want 2", len(caps.Models))
+	if len(caps.Models) != 1 || caps.Models[0] != "llama3" {
+		t.Fatalf("models = %#v, want default model fallback only", caps.Models)
 	}
 	if caps.DiscoverySource != "config_fallback" {
 		t.Fatalf("discovery source = %q, want config_fallback", caps.DiscoverySource)

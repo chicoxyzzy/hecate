@@ -143,8 +143,6 @@ export function useRuntimeConsole() {
   const [providerFormBaseURL, setProviderFormBaseURL] = useState("");
   const [providerFormAPIVersion, setProviderFormAPIVersion] = useState("");
   const [providerFormDefaultModel, setProviderFormDefaultModel] = useState("");
-  const [providerFormModels, setProviderFormModels] = useState("");
-  const [providerFormAllowAnyModel, setProviderFormAllowAnyModel] = useState("true");
   const [providerFormEnabled, setProviderFormEnabled] = useState("true");
   const [providerFormSecret, setProviderFormSecret] = useState("");
   const [providerFormPresetID, setProviderFormPresetID] = useState("");
@@ -745,8 +743,6 @@ export function useRuntimeConsole() {
     setProviderFormBaseURL(preset.base_url);
     setProviderFormAPIVersion(preset.api_version ?? "");
     setProviderFormDefaultModel("");
-    setProviderFormModels("");
-    setProviderFormAllowAnyModel(preset.kind === "local" ? "false" : "true");
     setProviderFormEnabled("true");
     setProviderFormSecret("");
   }
@@ -764,8 +760,6 @@ export function useRuntimeConsole() {
         baseURL: providerFormBaseURL,
         apiVersion: providerFormAPIVersion,
         defaultModel: providerFormDefaultModel,
-        models: parseCSV(providerFormModels),
-        allowAnyModel: providerFormAllowAnyModel === "true",
         enabled: providerFormEnabled === "true",
         key: providerFormSecret,
         presets: providerPresets,
@@ -1051,13 +1045,11 @@ export function useRuntimeConsole() {
       providerFilter,
       providerScopedModels,
       providerFormAPIVersion,
-      providerFormAllowAnyModel,
       providerFormBaseURL,
       providerFormDefaultModel,
       providerFormEnabled,
       providerFormID,
       providerFormKind,
-      providerFormModels,
       providerFormName,
       providerFormPresetID,
       providerFormProtocol,
@@ -1117,13 +1109,11 @@ export function useRuntimeConsole() {
       setProviderFilter: selectProviderRoute,
       setProviderEnabled,
       setProviderFormAPIVersion,
-      setProviderFormAllowAnyModel,
       setProviderFormBaseURL,
       setProviderFormDefaultModel,
       setProviderFormEnabled,
       setProviderFormID,
       setProviderFormKind,
-      setProviderFormModels,
       setProviderFormName,
       setProviderFormPresetID,
       setProviderFormProtocol,
@@ -1166,8 +1156,6 @@ function buildProviderUpsertPayload(args: {
   baseURL: string;
   apiVersion: string;
   defaultModel: string;
-  models: string[];
-  allowAnyModel: boolean;
   enabled: boolean;
   key: string;
   presets: ProviderPresetRecord[];
@@ -1181,8 +1169,6 @@ function buildProviderUpsertPayload(args: {
     base_url?: string;
     api_version?: string;
     default_model?: string;
-    models?: string[];
-    allow_any_model?: boolean;
     enabled: boolean;
     key: string;
   } = {
@@ -1203,10 +1189,6 @@ function buildProviderUpsertPayload(args: {
     if (args.defaultModel) {
       payload.default_model = args.defaultModel;
     }
-    if (args.models.length > 0) {
-      payload.models = args.models;
-    }
-    payload.allow_any_model = args.allowAnyModel;
     return payload;
   }
 
@@ -1225,13 +1207,6 @@ function buildProviderUpsertPayload(args: {
   }
   if (args.defaultModel) {
     payload.default_model = args.defaultModel;
-  }
-  if (args.models.length > 0) {
-    payload.models = args.models;
-  }
-  const presetAllowAnyModel = preset.kind !== "local";
-  if (args.allowAnyModel !== presetAllowAnyModel) {
-    payload.allow_any_model = args.allowAnyModel;
   }
   return payload;
 }
@@ -1275,7 +1250,7 @@ function defaultModelForProvider(provider: ProviderFilter, models: ModelResponse
 		return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? providerRecord.models?.[0] ?? "";
 	}
 
-	return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? preset?.default_model ?? preset?.example_models?.[0] ?? "";
+	return scopedModels.find((entry) => entry.metadata?.default)?.id ?? scopedModels[0]?.id ?? preset?.default_model ?? "";
 }
 
 function isModelValidForProvider(model: string, provider: ProviderFilter, models: ModelResponse["data"], providers: ProviderStatusResponse["data"], presets: ProviderPresetRecord[]): boolean {
@@ -1296,7 +1271,7 @@ function isModelValidForProvider(model: string, provider: ProviderFilter, models
 	}
 
 	const preset = presets.find((entry) => entry.id === provider);
-	return preset?.default_model === model || preset?.example_models?.includes(model) === true;
+	return preset?.default_model === model;
 }
 
 function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsResponse["data"][number] {

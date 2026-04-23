@@ -191,18 +191,16 @@ type ModelPriceConfig struct {
 }
 
 type OpenAICompatibleProviderConfig struct {
-	Name          string        `json:"name"`
-	Kind          string        `json:"kind"`
-	Protocol      string        `json:"protocol"`
-	BaseURL       string        `json:"base_url"`
-	APIKey        string        `json:"api_key"`
-	APIVersion    string        `json:"api_version"`
-	Timeout       time.Duration `json:"timeout"`
-	StubMode      bool          `json:"stub_mode"`
-	StubResponse  string        `json:"stub_response"`
-	DefaultModel  string        `json:"default_model"`
-	Models        []string      `json:"models"`
-	AllowAnyModel bool          `json:"allow_any_model"`
+	Name         string        `json:"name"`
+	Kind         string        `json:"kind"`
+	Protocol     string        `json:"protocol"`
+	BaseURL      string        `json:"base_url"`
+	APIKey       string        `json:"api_key"`
+	APIVersion   string        `json:"api_version"`
+	Timeout      time.Duration `json:"timeout"`
+	StubMode     bool          `json:"stub_mode"`
+	StubResponse string        `json:"stub_response"`
+	DefaultModel string        `json:"default_model"`
 }
 
 func LoadFromEnv() Config {
@@ -649,8 +647,6 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 	cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
 	cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
 	cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)
-	cfg.Models = splitCSV(getEnv(prefix+"MODELS", strings.Join(cfg.Models, ",")))
-	cfg.AllowAnyModel = getEnvBool(prefix+"ALLOW_ANY_MODEL", cfg.AllowAnyModel)
 
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		return OpenAICompatibleProviderConfig{}, false
@@ -663,13 +659,12 @@ func providerDefaults(name, globalDefaultModel string) OpenAICompatibleProviderC
 		return builtIn.RuntimeConfig(globalDefaultModel)
 	}
 	return OpenAICompatibleProviderConfig{
-		Name:          strings.ToLower(strings.TrimSpace(name)),
-		Kind:          "cloud",
-		Protocol:      "openai",
-		Timeout:       30 * time.Second,
-		StubMode:      false,
-		StubResponse:  "Stubbed response from the AI Agent Runtime MVP.",
-		AllowAnyModel: true,
+		Name:         strings.ToLower(strings.TrimSpace(name)),
+		Kind:         "cloud",
+		Protocol:     "openai",
+		Timeout:      30 * time.Second,
+		StubMode:     false,
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	}
 }
 
