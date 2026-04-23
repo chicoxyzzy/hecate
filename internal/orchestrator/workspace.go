@@ -29,32 +29,19 @@ func (m *WorkspaceManager) Provision(ctx context.Context, task types.Task, run t
 		return "", fmt.Errorf("workspace manager is not configured")
 	}
 	workspacePath := filepath.Join(m.root, task.ID, run.ID)
-	sourcePath, sourceKind := workspaceSource(task)
-
-	switch sourceKind {
-	case "git":
-		if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
-			return "", err
-		}
-		if output, err := exec.CommandContext(ctx, "git", "clone", "--quiet", "--no-hardlinks", sourcePath, workspacePath).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("clone workspace: %w: %s", err, string(output))
-		}
-	case "directory":
-		if err := os.MkdirAll(workspacePath, 0o755); err != nil {
-			return "", err
-		}
-		if err := copyDirectory(sourcePath, workspacePath); err != nil {
-			return "", err
-		}
-	default:
-		if err := os.MkdirAll(workspacePath, 0o755); err != nil {
-			return "", err
-		}
+	source := workspaceSource(task)
+	if err := provisionWorkspaceSource(ctx, workspacePath, source); err != nil {
+		return "", err
 	}
 	return workspacePath, nil
 }
 
-func workspaceSource(task types.Task) (string, string) {
+type workspaceSourceSpec struct {
+	path string
+	kind string
+}
+
+func workspaceSource(task types.Task) workspaceSourceSpec {
 	for _, candidate := range []string{task.WorkingDirectory, task.Repo} {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" || !filepath.IsAbs(candidate) {
@@ -65,11 +52,47 @@ func workspaceSource(task types.Task) (string, string) {
 			continue
 		}
 		if isGitRepository(candidate) {
-			return candidate, "git"
+			return workspaceSourceSpec{path: candidate, kind: "git"}
 		}
-		return candidate, "directory"
+		return workspaceSourceSpec{path: candidate, kind: "directory"}
 	}
-	return "", ""
+	return workspaceSourceSpec{}
+}
+
+func provisionWorkspaceSource(ctx context.Context, workspacePath string, source workspaceSourceSpec) error {
+	switch source.kind {
+	case "git":
+		return provisionGitWorkspace(ctx, source.path, workspacePath)
+	case "directory":
+		return provisionDirectoryWorkspace(source.path, workspacePath)
+	default:
+		return ensureWorkspaceRoot(workspacePath)
+	}
+}
+
+func provisionGitWorkspace(ctx context.Context, sourcePath, workspacePath string) error {
+	if err := ensureWorkspaceParent(workspacePath); err != nil {
+		return err
+	}
+	if output, err := exec.CommandContext(ctx, "git", "clone", "--quiet", "--no-hardlinks", sourcePath, workspacePath).CombinedOutput(); err != nil {
+		return fmt.Errorf("clone workspace: %w: %s", err, string(output))
+	}
+	return nil
+}
+
+func provisionDirectoryWorkspace(sourcePath, workspacePath string) error {
+	if err := ensureWorkspaceRoot(workspacePath); err != nil {
+		return err
+	}
+	return copyDirectory(sourcePath, workspacePath)
+}
+
+func ensureWorkspaceParent(workspacePath string) error {
+	return os.MkdirAll(filepath.Dir(workspacePath), 0o755)
+}
+
+func ensureWorkspaceRoot(workspacePath string) error {
+	return os.MkdirAll(workspacePath, 0o755)
 }
 
 func isGitRepository(path string) bool {
