@@ -178,3 +178,70 @@ func TestControlPlanePricebookUsesPersistedEntry(t *testing.T) {
 		t.Fatalf("total = %d, want 350", got.TotalMicrosUSD)
 	}
 }
+
+func TestControlPlanePricebookCanonicalOverrideReflectsLiveControlPlaneUpdates(t *testing.T) {
+	t.Parallel()
+
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	base := NewStaticPricebook(config.ProvidersConfig{
+		OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+	}, config.PricebookConfig{
+		Entries: []config.ModelPriceConfig{
+			{
+				Provider:                             "openai",
+				Model:                                "gpt-4o-mini",
+				InputMicrosUSDPerMillionTokens:       150_000,
+				OutputMicrosUSDPerMillionTokens:      600_000,
+				CachedInputMicrosUSDPerMillionTokens: 75_000,
+			},
+		},
+	})
+	pricebook := NewControlPlanePricebook(base, store)
+	usage := types.Usage{
+		PromptTokens:       1000,
+		CompletionTokens:   1000,
+		CachedPromptTokens: 1000,
+	}
+
+	before, err := pricebook.Estimate("openai", "gpt-4o-mini-2024-07-18", usage)
+	if err != nil {
+		t.Fatalf("Estimate(before override) error = %v", err)
+	}
+	if before.TotalMicrosUSD != 825 {
+		t.Fatalf("before override total = %d, want 825 from base pricebook", before.TotalMicrosUSD)
+	}
+
+	if _, err := store.UpsertPricebookEntry(context.Background(), config.ModelPriceConfig{
+		Provider:                             "openai",
+		Model:                                "gpt-4o-mini",
+		InputMicrosUSDPerMillionTokens:       10_000,
+		OutputMicrosUSDPerMillionTokens:      20_000,
+		CachedInputMicrosUSDPerMillionTokens: 5_000,
+	}); err != nil {
+		t.Fatalf("UpsertPricebookEntry() error = %v", err)
+	}
+
+	after, err := pricebook.Estimate("openai", "gpt-4o-mini-2024-07-18", usage)
+	if err != nil {
+		t.Fatalf("Estimate(after override) error = %v", err)
+	}
+	if after.TotalMicrosUSD != 35 {
+		t.Fatalf("after override total = %d, want 35 from control plane override", after.TotalMicrosUSD)
+	}
+
+	if err := store.DeletePricebookEntry(context.Background(), "openai", "gpt-4o-mini"); err != nil {
+		t.Fatalf("DeletePricebookEntry() error = %v", err)
+	}
+
+	reverted, err := pricebook.Estimate("openai", "gpt-4o-mini-2024-07-18", usage)
+	if err != nil {
+		t.Fatalf("Estimate(after delete) error = %v", err)
+	}
+	if reverted.TotalMicrosUSD != 825 {
+		t.Fatalf("after delete total = %d, want 825 from base pricebook again", reverted.TotalMicrosUSD)
+	}
+}

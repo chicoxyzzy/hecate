@@ -283,3 +283,68 @@ func TestControlPlaneGovernorUsesPersistedPolicyRule(t *testing.T) {
 		t.Fatalf("error = %q, want persisted policy reason", err.Error())
 	}
 }
+
+func TestControlPlaneGovernorReflectsLivePolicyUpdatesAndKeepsConfiguredRules(t *testing.T) {
+	t.Parallel()
+
+	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	gov := NewControlPlaneGovernor(config.GovernorConfig{
+		PolicyRules: []config.PolicyRuleConfig{
+			{
+				ID:             "tenant-default-downgrade",
+				Action:         "rewrite_model",
+				Tenants:        []string{"team-a"},
+				Models:         []string{"gpt-4o"},
+				RewriteModelTo: "gpt-4o-mini",
+			},
+		},
+	}, NewMemoryBudgetStore(), NewMemoryBudgetStore(), store)
+
+	req := types.ChatRequest{
+		Model: "gpt-4o",
+		Scope: types.RequestScope{
+			Tenant: "team-a",
+		},
+	}
+	rewritten := gov.Rewrite(req)
+	if rewritten.Model != "gpt-4o-mini" {
+		t.Fatalf("rewritten model = %q, want gpt-4o-mini from configured rule", rewritten.Model)
+	}
+
+	decision := types.RouteDecision{
+		Provider: "openai",
+		Model:    "gpt-4o-mini",
+	}
+	if err := gov.CheckRoute(context.Background(), rewritten, decision, "cloud", 0); err != nil {
+		t.Fatalf("CheckRoute(before control plane rule) error = %v, want nil", err)
+	}
+
+	if _, err := store.UpsertPolicyRule(context.Background(), config.PolicyRuleConfig{
+		ID:            "deny-cloud",
+		Action:        "deny",
+		Reason:        "cloud denied from control plane",
+		ProviderKinds: []string{"cloud"},
+	}); err != nil {
+		t.Fatalf("UpsertPolicyRule() error = %v", err)
+	}
+
+	err = gov.CheckRoute(context.Background(), rewritten, decision, "cloud", 0)
+	if err == nil {
+		t.Fatal("CheckRoute(after control plane rule) error = nil, want denial")
+	}
+	if err.Error() != "cloud denied from control plane" {
+		t.Fatalf("error = %q, want control plane denial reason", err.Error())
+	}
+
+	if err := store.DeletePolicyRule(context.Background(), "deny-cloud"); err != nil {
+		t.Fatalf("DeletePolicyRule() error = %v", err)
+	}
+
+	if err := gov.CheckRoute(context.Background(), rewritten, decision, "cloud", 0); err != nil {
+		t.Fatalf("CheckRoute(after delete) error = %v, want nil", err)
+	}
+}

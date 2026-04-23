@@ -32,6 +32,7 @@ Current runtime capabilities:
 
 Storage backends currently used in different subsystems:
 
+- file
 - memory
 - Redis
 - Postgres
@@ -207,7 +208,7 @@ make ui-dev
 make ui-build
 ```
 
-`.env.example` is the source of truth for configuration.
+`.env.example` is the baseline configuration reference. For the full set of supported environment variables, check `internal/config/config.go`.
 
 ## Repository Layout
 
