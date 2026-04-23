@@ -44,7 +44,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		store:  store,
 		tracer: tracer,
 		exec:   NewStubExecutor(),
-		shell:  NewShellExecutor(),
+		shell:  NewShellExecutor(nil),
 		config: cfg,
 	}
 }
