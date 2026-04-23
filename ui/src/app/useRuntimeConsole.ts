@@ -80,6 +80,8 @@ type NoticeState = {
   message: string;
 };
 
+const invalidBearerTokenMessage = "missing or invalid bearer token";
+
 export function useRuntimeConsole() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [models, setModels] = useState<ModelResponse["data"]>([]);
@@ -270,102 +272,36 @@ export function useRuntimeConsole() {
     setControlPlaneError("");
 
     try {
-      const [healthResult, sessionResult, modelsResult, providersResult, providerPresetsResult, budgetResult, accountSummaryResult, chatSessionsResult, requestLedgerResult, controlPlaneResult, retentionRunsResult] = await Promise.allSettled([
-        getHealth(),
-        getSession(authToken),
-        getModels(authToken),
-        getProviders(authToken),
-        getProviderPresets(authToken),
-        getBudget("", authToken),
-        getAccountSummary("", authToken),
-        getChatSessions(authToken, 20),
-        getRequestLedger(authToken, 20),
-        getControlPlane(authToken),
-        getRetentionRuns(authToken, 10),
-      ]);
+      const snapshot = await resolveDashboardSnapshot({
+        authToken,
+        activeChatSessionID,
+        previous: {
+          providers,
+          budget,
+          accountSummary,
+          chatSessions,
+          activeChatSession,
+          requestLedger,
+          controlPlane,
+          retentionRuns,
+          retentionLastRun,
+        },
+      });
 
-      if (healthResult.status !== "fulfilled") {
-        throw new Error("failed to load runtime console data");
-      }
-
-      setHealth(healthResult.value);
-      if (sessionResult.status === "fulfilled") {
-        setSessionInfo(sessionResult.value.data);
-      } else {
-        setSessionInfo(null);
-      }
-      if (modelsResult.status === "fulfilled") {
-        setModels(modelsResult.value.data);
-      } else if (modelsResult.reason instanceof Error && modelsResult.reason.message === "missing or invalid bearer token") {
-        setModels([]);
-      } else {
-        throw new Error("failed to load runtime console data");
-      }
-
-      if (providersResult.status === "fulfilled") {
-        setProviders(providersResult.value.data);
-      } else if (providersResult.reason instanceof Error && providersResult.reason.message === "missing or invalid bearer token") {
-        setProviders([]);
-      }
-
-      if (providerPresetsResult.status === "fulfilled") {
-        setProviderPresets(providerPresetsResult.value.data);
-      } else {
-        setProviderPresets([]);
-      }
-
-      if (budgetResult.status === "fulfilled") {
-        setBudget(budgetResult.value.data);
-      } else if (budgetResult.reason instanceof Error && budgetResult.reason.message === "missing or invalid bearer token") {
-        setBudget(null);
-      }
-
-      if (accountSummaryResult.status === "fulfilled") {
-        setAccountSummary(accountSummaryResult.value.data);
-      } else if (accountSummaryResult.reason instanceof Error && accountSummaryResult.reason.message === "missing or invalid bearer token") {
-        setAccountSummary(null);
-      }
-
-      if (chatSessionsResult.status === "fulfilled") {
-        const sessions = chatSessionsResult.value.data ?? [];
-        setChatSessions(sessions);
-        const selectedSessionID = sessions.some((entry) => entry.id === activeChatSessionID) ? activeChatSessionID : sessions[0]?.id ?? "";
-        setActiveChatSessionID(selectedSessionID);
-        if (selectedSessionID) {
-          try {
-            const sessionResult = await getChatSession(selectedSessionID, authToken);
-            setActiveChatSession(sessionResult.data);
-          } catch {
-            setActiveChatSession(null);
-          }
-        } else {
-          setActiveChatSession(null);
-        }
-      } else if (chatSessionsResult.reason instanceof Error && chatSessionsResult.reason.message === "missing or invalid bearer token") {
-        setChatSessions([]);
-        setActiveChatSession(null);
-        setActiveChatSessionID("");
-      }
-
-      if (requestLedgerResult.status === "fulfilled") {
-        setRequestLedger(requestLedgerResult.value.data ?? []);
-      } else if (requestLedgerResult.reason instanceof Error && requestLedgerResult.reason.message === "missing or invalid bearer token") {
-        setRequestLedger([]);
-      }
-
-      if (controlPlaneResult.status === "fulfilled") {
-        setControlPlane(controlPlaneResult.value.data);
-      } else if (controlPlaneResult.reason instanceof Error && controlPlaneResult.reason.message === "missing or invalid bearer token") {
-        setControlPlane(null);
-      }
-
-      if (retentionRunsResult.status === "fulfilled") {
-        setRetentionRuns(retentionRunsResult.value.data);
-        setRetentionLastRun(retentionRunsResult.value.data[0] ?? null);
-      } else if (retentionRunsResult.reason instanceof Error && retentionRunsResult.reason.message === "missing or invalid bearer token") {
-        setRetentionRuns([]);
-        setRetentionLastRun(null);
-      }
+      setHealth(snapshot.health);
+      setSessionInfo(snapshot.sessionInfo);
+      setModels(snapshot.models);
+      setProviders(snapshot.providers);
+      setProviderPresets(snapshot.providerPresets);
+      setBudget(snapshot.budget);
+      setAccountSummary(snapshot.accountSummary);
+      setChatSessions(snapshot.chatSessions);
+      setActiveChatSessionID(snapshot.activeChatSessionID);
+      setActiveChatSession(snapshot.activeChatSession);
+      setRequestLedger(snapshot.requestLedger);
+      setControlPlane(snapshot.controlPlane);
+      setRetentionRuns(snapshot.retentionRuns);
+      setRetentionLastRun(snapshot.retentionLastRun);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "unknown load error");
     } finally {
@@ -1308,6 +1244,241 @@ function renderChatSessionSummary(session: ChatSessionRecord): ChatSessionsRespo
 }
 
 export type RuntimeConsoleViewModel = ReturnType<typeof useRuntimeConsole>;
+
+type DashboardResults = {
+  health: PromiseSettledResult<HealthResponse>;
+  session: PromiseSettledResult<SessionResponse>;
+  models: PromiseSettledResult<ModelResponse>;
+  providers: PromiseSettledResult<ProviderStatusResponse>;
+  providerPresets: PromiseSettledResult<{ object: string; data: ProviderPresetRecord[] }>;
+  budget: PromiseSettledResult<BudgetStatusResponse>;
+  accountSummary: PromiseSettledResult<AccountSummaryResponse>;
+  chatSessions: PromiseSettledResult<ChatSessionsResponse>;
+  requestLedger: PromiseSettledResult<RequestLedgerResponse>;
+  controlPlane: PromiseSettledResult<ControlPlaneResponse>;
+  retentionRuns: PromiseSettledResult<{ object: string; data: RetentionRunData[] }>;
+};
+
+type DashboardPreviousState = {
+  providers: ProviderStatusResponse["data"];
+  budget: BudgetStatusResponse["data"] | null;
+  accountSummary: AccountSummaryResponse["data"] | null;
+  chatSessions: ChatSessionsResponse["data"];
+  activeChatSession: ChatSessionRecord | null;
+  requestLedger: RequestLedgerResponse["data"];
+  controlPlane: ControlPlaneResponse["data"] | null;
+  retentionRuns: RetentionRunData[];
+  retentionLastRun: RetentionRunData | null;
+};
+
+type DashboardSnapshot = {
+  health: HealthResponse;
+  sessionInfo: SessionResponse["data"] | null;
+  models: ModelResponse["data"];
+  providers: ProviderStatusResponse["data"];
+  providerPresets: ProviderPresetRecord[];
+  budget: BudgetStatusResponse["data"] | null;
+  accountSummary: AccountSummaryResponse["data"] | null;
+  chatSessions: ChatSessionsResponse["data"];
+  activeChatSessionID: string;
+  activeChatSession: ChatSessionRecord | null;
+  requestLedger: RequestLedgerResponse["data"];
+  controlPlane: ControlPlaneResponse["data"] | null;
+  retentionRuns: RetentionRunData[];
+  retentionLastRun: RetentionRunData | null;
+};
+
+async function resolveDashboardSnapshot(args: {
+  authToken: string;
+  activeChatSessionID: string;
+  previous: DashboardPreviousState;
+}): Promise<DashboardSnapshot> {
+  const results = await loadDashboardResults(args.authToken);
+  const health = requireFulfilledDashboardResult(results.health);
+  const sessionInfo = results.session.status === "fulfilled" ? results.session.value.data : null;
+  const models = resolveModelsResult(results.models);
+  const providers = resolveAuthorizedDashboardResult(results.providers, {
+    unauthorized: [],
+    other: args.previous.providers,
+  });
+  const providerPresets = results.providerPresets.status === "fulfilled" ? results.providerPresets.value.data : [];
+  const budget = resolveAuthorizedDashboardResult(results.budget, {
+    unauthorized: null,
+    other: args.previous.budget,
+  });
+  const accountSummary = resolveAuthorizedDashboardResult(results.accountSummary, {
+    unauthorized: null,
+    other: args.previous.accountSummary,
+  });
+  const requestLedger = resolveAuthorizedDashboardResult(results.requestLedger, {
+    unauthorized: [],
+    other: args.previous.requestLedger,
+  });
+  const controlPlane = resolveAuthorizedDashboardResult(results.controlPlane, {
+    unauthorized: null,
+    other: args.previous.controlPlane,
+  });
+  const retentionRuns = resolveAuthorizedDashboardResult(results.retentionRuns, {
+    unauthorized: [],
+    other: args.previous.retentionRuns,
+  });
+  const retentionLastRun = retentionRuns[0] ?? null;
+  const chatState = await resolveChatDashboardState({
+    authToken: args.authToken,
+    activeChatSessionID: args.activeChatSessionID,
+    previousSessions: args.previous.chatSessions,
+    previousActiveSession: args.previous.activeChatSession,
+    result: results.chatSessions,
+  });
+
+  return {
+    health,
+    sessionInfo,
+    models,
+    providers,
+    providerPresets,
+    budget,
+    accountSummary,
+    chatSessions: chatState.sessions,
+    activeChatSessionID: chatState.activeChatSessionID,
+    activeChatSession: chatState.activeChatSession,
+    requestLedger,
+    controlPlane,
+    retentionRuns,
+    retentionLastRun,
+  };
+}
+
+async function loadDashboardResults(authToken: string): Promise<DashboardResults> {
+  const [
+    health,
+    session,
+    models,
+    providers,
+    providerPresets,
+    budget,
+    accountSummary,
+    chatSessions,
+    requestLedger,
+    controlPlane,
+    retentionRuns,
+  ] = await Promise.allSettled([
+    getHealth(),
+    getSession(authToken),
+    getModels(authToken),
+    getProviders(authToken),
+    getProviderPresets(authToken),
+    getBudget("", authToken),
+    getAccountSummary("", authToken),
+    getChatSessions(authToken, 20),
+    getRequestLedger(authToken, 20),
+    getControlPlane(authToken),
+    getRetentionRuns(authToken, 10),
+  ]);
+
+  return {
+    health,
+    session,
+    models,
+    providers,
+    providerPresets,
+    budget,
+    accountSummary,
+    chatSessions,
+    requestLedger,
+    controlPlane,
+    retentionRuns,
+  };
+}
+
+function requireFulfilledDashboardResult<T>(result: PromiseSettledResult<T>): T {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+  throw new Error("failed to load runtime console data");
+}
+
+function resolveModelsResult(result: PromiseSettledResult<ModelResponse>): ModelResponse["data"] {
+  if (result.status === "fulfilled") {
+    return result.value.data;
+  }
+  if (isInvalidBearerTokenError(result.reason)) {
+    return [];
+  }
+  throw new Error("failed to load runtime console data");
+}
+
+function resolveAuthorizedDashboardResult<T>(
+  result: PromiseSettledResult<{ data: T }>,
+  fallbacks: { unauthorized: T; other: T },
+): T {
+  if (result.status === "fulfilled") {
+    return result.value.data;
+  }
+  if (isInvalidBearerTokenError(result.reason)) {
+    return fallbacks.unauthorized;
+  }
+  return fallbacks.other;
+}
+
+async function resolveChatDashboardState(args: {
+  authToken: string;
+  activeChatSessionID: string;
+  previousSessions: ChatSessionsResponse["data"];
+  previousActiveSession: ChatSessionRecord | null;
+  result: PromiseSettledResult<ChatSessionsResponse>;
+}): Promise<{
+  sessions: ChatSessionsResponse["data"];
+  activeChatSessionID: string;
+  activeChatSession: ChatSessionRecord | null;
+}> {
+  if (args.result.status !== "fulfilled") {
+    if (isInvalidBearerTokenError(args.result.reason)) {
+      return {
+        sessions: [],
+        activeChatSessionID: "",
+        activeChatSession: null,
+      };
+    }
+    return {
+      sessions: args.previousSessions,
+      activeChatSessionID: args.activeChatSessionID,
+      activeChatSession: args.previousActiveSession,
+    };
+  }
+
+  const sessions = args.result.value.data ?? [];
+  const activeChatSessionID = sessions.some((entry) => entry.id === args.activeChatSessionID)
+    ? args.activeChatSessionID
+    : sessions[0]?.id ?? "";
+
+  if (!activeChatSessionID) {
+    return {
+      sessions,
+      activeChatSessionID,
+      activeChatSession: null,
+    };
+  }
+
+  try {
+    const sessionResult = await getChatSession(activeChatSessionID, args.authToken);
+    return {
+      sessions,
+      activeChatSessionID,
+      activeChatSession: sessionResult.data,
+    };
+  } catch {
+    return {
+      sessions,
+      activeChatSessionID,
+      activeChatSession: null,
+    };
+  }
+}
+
+function isInvalidBearerTokenError(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidBearerTokenMessage;
+}
 
 function deriveSessionState(sessionInfo: SessionResponse["data"] | null): SessionState {
   const role = sessionInfo?.role ?? "anonymous";
