@@ -6,6 +6,7 @@ import type { ModelRecord, ProviderPresetRecord, ProviderRecord } from "../../ty
 import { RouteWorkbench } from "./RouteWorkbench";
 import { TraceWorkbench } from "./TraceWorkbench";
 import { DefinitionList, EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import "./PlaygroundView.css";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -21,30 +22,16 @@ function formatToolArgs(args: string): string {
 }
 
 export function PlaygroundView({ state, actions }: Props) {
-  const activeProvider = findProvider(state.providers, state.runtimeHeaders?.provider);
   const routeReport = state.traceRoute;
-  const selectedRouteCandidate = routeReport?.candidates?.find((candidate) => candidate.outcome === "selected" || candidate.outcome === "completed") ?? null;
-  const receiptProvider = state.runtimeHeaders?.provider || routeReport?.final_provider || selectedRouteCandidate?.provider || "unknown";
-  const traceModel = findModelInTrace(state.traceSpans, receiptProvider);
-  const receiptModel =
-    state.runtimeHeaders?.resolvedModel ||
-    routeReport?.final_model ||
-    selectedRouteCandidate?.model ||
-    state.runtimeHeaders?.requestedModel ||
-    traceModel ||
-    state.chatResult?.model ||
-    "unknown model";
-  const cacheLabel = state.runtimeHeaders?.cache === "true"
-    ? `${state.runtimeHeaders.cacheType || "cache"} hit`
-    : state.runtimeHeaders
-      ? "cache miss"
-      : "no cache data";
+  const receipt = buildReceiptSummary(state);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const routeProviders = buildProviderRouteOptions(state.providers, state.providerPresets, state.session.allowedProviders);
   const localRouteProviders = routeProviders.filter((provider) => provider.kind === "local");
   const cloudRouteProviders = routeProviders.filter((provider) => provider.kind === "cloud");
   const providerScopedModelOptions = buildProviderScopedModelOptions(state.providerFilter, state.providerScopedModels, state.providers, state.providerPresets);
+  const activeSessionTitle = state.activeChatSession ? state.activeChatSession.title : "Unsaved draft";
+  const activeSessionTurns = state.activeChatSession?.turns?.length ?? 0;
 
   function handleRenameCommit(id: string) {
     const trimmed = editingTitle.trim();
@@ -52,6 +39,11 @@ export function PlaygroundView({ state, actions }: Props) {
       void actions.renameChatSession(id, trimmed);
     }
     setEditingId(null);
+  }
+
+  function handleRenameStart(id: string, title: string) {
+    setEditingId(id);
+    setEditingTitle(title);
   }
 
   return (
@@ -62,8 +54,8 @@ export function PlaygroundView({ state, actions }: Props) {
             <Surface>
               <div className="stack-sm">
                 <div className="action-row action-row--wide">
-                  <StatusPill label={state.activeChatSession ? state.activeChatSession.title : "Unsaved draft"} tone="neutral" />
-                  {state.activeChatSession ? <StatusPill label={`${(state.activeChatSession.turns?.length ?? 0)} turns`} tone="healthy" /> : null}
+                  <StatusPill label={activeSessionTitle} tone="neutral" />
+                  {state.activeChatSession ? <StatusPill label={`${activeSessionTurns} turns`} tone="healthy" /> : null}
                 </div>
                 <div className="action-row">
                   <ToolbarButton onClick={() => void actions.createChatSession()} tone="primary">
@@ -81,6 +73,7 @@ export function PlaygroundView({ state, actions }: Props) {
                         <div className="session-card__header">
                           {editingId === chatSession.id ? (
                             <input
+                              aria-label="Rename session"
                               autoFocus
                               className="session-card__rename-input"
                               onBlur={() => handleRenameCommit(chatSession.id)}
@@ -89,13 +82,14 @@ export function PlaygroundView({ state, actions }: Props) {
                                 if (e.key === "Enter") handleRenameCommit(chatSession.id);
                                 if (e.key === "Escape") setEditingId(null);
                               }}
+                              title="Rename session"
                               type="text"
                               value={editingTitle}
                             />
                           ) : (
                             <button
                               className="session-card__title"
-                              onClick={() => { setEditingId(chatSession.id); setEditingTitle(chatSession.title); }}
+                              onClick={() => handleRenameStart(chatSession.id, chatSession.title)}
                               title="Click to rename"
                               type="button"
                             >
@@ -308,7 +302,7 @@ export function PlaygroundView({ state, actions }: Props) {
                       {state.chatLoading ? "Running…" : "Submit tool results"}
                     </button>
                   </div>
-                  {state.chatError ? <p className="body-muted" style={{ color: "var(--danger)" }}>{state.chatError}</p> : null}
+                  {state.chatError ? <p className="body-muted playground-error-text">{state.chatError}</p> : null}
                 </div>
               ) : state.chatResult ? (
                 <div className="stack-md">
@@ -344,7 +338,7 @@ export function PlaygroundView({ state, actions }: Props) {
                     <div>
                       <p className="console-eyebrow">Request receipt</p>
                       <h3 className="request-receipt__title">
-                        {receiptProvider} · {receiptModel}
+                        {receipt.provider} · {receipt.model}
                       </h3>
                     </div>
                     <StatusPill label={formatUsd(state.runtimeHeaders.costUsd)} tone="warning" />
@@ -352,10 +346,10 @@ export function PlaygroundView({ state, actions }: Props) {
 
                   <div className="action-row action-row--wide">
                     <StatusPill label={describeRouteReason(state.runtimeHeaders.routeReason)} tone="neutral" />
-                    <StatusPill label={cacheLabel} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
+                    <StatusPill label={receipt.cacheLabel} tone={state.runtimeHeaders.cache === "true" ? "healthy" : "neutral"} />
                     <StatusPill
-                      label={activeProvider ? `${activeProvider.name} ${activeProvider.status}` : routeReport?.final_provider || state.runtimeHeaders.provider || "unknown provider"}
-                      tone={providerStatusTone(activeProvider ?? undefined)}
+                      label={receipt.activeProvider ? `${receipt.activeProvider.name} ${receipt.activeProvider.status}` : routeReport?.final_provider || state.runtimeHeaders.provider || "unknown provider"}
+                      tone={providerStatusTone(receipt.activeProvider ?? undefined)}
                     />
                     {state.runtimeHeaders.fallbackFrom ? <StatusPill label={`fallback from ${state.runtimeHeaders.fallbackFrom}`} tone="warning" /> : null}
                   </div>
@@ -363,11 +357,11 @@ export function PlaygroundView({ state, actions }: Props) {
                   <DefinitionList
                     compact
                     items={[
-                      { label: "Provider", value: receiptProvider },
-                      { label: "Model", value: receiptModel },
+                      { label: "Provider", value: receipt.provider },
+                      { label: "Model", value: receipt.model },
                       { label: "Route", value: describeRouteReason(state.runtimeHeaders.routeReason) },
                       { label: "Attempts", value: `${state.runtimeHeaders.attempts || "1"} attempt(s), ${state.runtimeHeaders.retries || "0"} retries` },
-                      { label: "Cache", value: cacheLabel },
+                      { label: "Cache", value: receipt.cacheLabel },
                       { label: "Request ID", value: <span className="mono-value">{state.runtimeHeaders.requestId || "n/a"}</span> },
                       { label: "Trace ID", value: <span className="mono-value">{state.runtimeHeaders.traceId || "n/a"}</span> },
                     ]}
@@ -388,6 +382,29 @@ export function PlaygroundView({ state, actions }: Props) {
       </aside>
     </div>
   );
+}
+
+function buildReceiptSummary(state: RuntimeConsoleViewModel["state"]) {
+  const routeReport = state.traceRoute;
+  const selectedRouteCandidate = routeReport?.candidates?.find((candidate) => candidate.outcome === "selected" || candidate.outcome === "completed") ?? null;
+  const provider = state.runtimeHeaders?.provider || routeReport?.final_provider || selectedRouteCandidate?.provider || "unknown";
+  const traceModel = findModelInTrace(state.traceSpans, provider);
+  const model =
+    state.runtimeHeaders?.resolvedModel ||
+    routeReport?.final_model ||
+    selectedRouteCandidate?.model ||
+    state.runtimeHeaders?.requestedModel ||
+    traceModel ||
+    state.chatResult?.model ||
+    "unknown model";
+  const cacheLabel = state.runtimeHeaders?.cache === "true" ? `${state.runtimeHeaders.cacheType || "cache"} hit` : state.runtimeHeaders ? "cache miss" : "no cache data";
+
+  return {
+    activeProvider: findProvider(state.providers, state.runtimeHeaders?.provider),
+    provider,
+    model,
+    cacheLabel,
+  };
 }
 
 type ProviderRouteOption = {
