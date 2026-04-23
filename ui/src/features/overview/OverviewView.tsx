@@ -6,7 +6,7 @@ import { EmptyState, MetricTile, ShellSection, StatusPill, Surface, ToolbarButto
 type Props = {
   state: RuntimeConsoleViewModel["state"];
   actions: RuntimeConsoleViewModel["actions"];
-  onOpenWorkspace: (workspace: "playground" | "providers" | "access" | "admin") => void;
+  onOpenWorkspace: (workspace: "runs" | "playground" | "providers" | "access" | "admin") => void;
 };
 
 export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
@@ -54,6 +54,7 @@ export function OverviewView({ state, actions, onOpenWorkspace }: Props) {
               <ToolbarButton onClick={() => onOpenWorkspace("playground")} tone="primary">
                 Playground
               </ToolbarButton>
+              <ToolbarButton onClick={() => onOpenWorkspace("runs")}>Runs</ToolbarButton>
               <ToolbarButton onClick={() => onOpenWorkspace("providers")}>Providers</ToolbarButton>
               <ToolbarButton onClick={() => onOpenWorkspace("access")}>Access</ToolbarButton>
               {state.session.isAdmin ? <ToolbarButton onClick={() => onOpenWorkspace("admin")}>Admin</ToolbarButton> : null}

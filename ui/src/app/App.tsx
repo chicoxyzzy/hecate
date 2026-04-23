@@ -5,11 +5,12 @@ import { AdminView } from "../features/admin/AdminView";
 import { OverviewView } from "../features/overview/OverviewView";
 import { PlaygroundView } from "../features/playground/PlaygroundView";
 import { ProvidersView } from "../features/providers/ProvidersView";
+import { RunsView } from "../features/runs/RunsView";
 import { StatusPill, ToolbarButton } from "../features/shared/ConsolePrimitives";
 import { titleFromKind } from "../lib/format";
 import { useRuntimeConsole } from "./useRuntimeConsole";
 
-type WorkspaceID = "overview" | "playground" | "providers" | "access" | "admin";
+type WorkspaceID = "overview" | "runs" | "playground" | "providers" | "access" | "admin";
 
 export default function App() {
   const { state, actions } = useRuntimeConsole();
@@ -19,6 +20,7 @@ export default function App() {
     () =>
       [
         { id: "overview", label: "Overview", description: "Runtime picture" },
+        { id: "runs", label: "Runs", description: "Watch task execution" },
         { id: "playground", label: "Playground", description: "Run requests" },
         { id: "providers", label: "Providers", description: "Inspect routing surfaces" },
         { id: "access", label: "Access", description: "Auth and restrictions" },
@@ -127,6 +129,7 @@ export default function App() {
 
           <div className="console-content">
             {activeWorkspace === "overview" ? <OverviewView actions={actions} onOpenWorkspace={setActiveWorkspace} state={state} /> : null}
+            {activeWorkspace === "runs" ? <RunsView authToken={state.authToken} session={state.session} /> : null}
             {activeWorkspace === "playground" ? <PlaygroundView actions={actions} state={state} /> : null}
             {activeWorkspace === "providers" ? <ProvidersView actions={actions} state={state} /> : null}
             {activeWorkspace === "access" ? <AccessView actions={actions} state={state} /> : null}
@@ -142,6 +145,8 @@ function workspaceTitle(workspace: WorkspaceID): string {
   switch (workspace) {
     case "overview":
       return "Overview";
+    case "runs":
+      return "Live runs";
     case "playground":
       return "Playground";
     case "providers":

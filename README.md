@@ -234,12 +234,14 @@ The first coding-runtime slice is also now in place:
 - per-run workspace provisioning before execution begins
 - sandbox policy enforcement for allowed roots, read-only mode, timeouts, and basic network denial
 - shell approval gating with explicit approve or reject flows before execution
+- queued run execution with explicit run cancellation
+- live stdout/stderr artifact streaming plus SSE run updates via `/v1/tasks/{id}/runs/{run_id}/stream`
 
 What is still missing is the part that makes Hecate itself a stronger daily-driver coding runtime. The main gaps are:
 
 - stronger workspace isolation and an out-of-process sandbox worker
-- cancellation, queueing, and resumable execution for coding runs
-- tool execution APIs with streaming tool event logs
+- resumable execution for interrupted or restarted coding runs
+- richer tool execution APIs beyond the current run and artifact streaming surface
 - policy-driven approval flows for broader sensitive actions like network access or git push
 - coding-oriented operator views for task traces, tool output, and repo activity
 
@@ -258,9 +260,9 @@ Make Hecate excellent as the gateway and control plane under an existing coding 
 
 Add the first runtime slice that can execute bounded coding tasks:
 
-- add queueing, cancellation, and resume semantics on top of the new sandbox worker boundary
-- extend the task/job model with queueing, cancellation, and resumable state
-- expose tool execution APIs with streaming output and richer progress events
+- add resume semantics on top of the new sandbox worker boundary
+- extend the task/job model with resumable state across process restarts
+- expose richer tool execution APIs on top of the current streamed run snapshots and artifacts
 - enforce policy-driven safety controls like approval classes, allowed paths, timeouts, and network policy
 
 ### Phase 3: Team-Ready Coding Platform
@@ -362,7 +364,8 @@ Coding runtime work:
 - [x] Workspace isolation and per-run workspace provisioning
 - [x] Basic sandbox policy enforcement for allowed roots, read-only mode, timeouts, and network denial
 - [x] Shell approval gating with approve or reject flow
-- [ ] Queueing, cancellation, and resumable execution for coding runs
-- [ ] Streaming tool execution events and logs
+- [x] Queueing and cancellation for coding runs
+- [x] Streaming run updates and stdout/stderr artifact logs
+- [ ] Resumable execution for coding runs
 - [ ] Policy-driven approvals for broader sensitive actions
 - [ ] Coding-oriented operator views for task traces, tool output, and repo activity

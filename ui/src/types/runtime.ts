@@ -416,6 +416,184 @@ export type ChatResponse = {
   };
 };
 
+export type TaskRecord = {
+  id: string;
+  title: string;
+  prompt: string;
+  tenant?: string;
+  user?: string;
+  repo?: string;
+  base_branch?: string;
+  workspace_mode?: string;
+  execution_kind?: string;
+  shell_command?: string;
+  git_command?: string;
+  working_directory?: string;
+  file_operation?: string;
+  file_path?: string;
+  file_content?: string;
+  sandbox_allowed_root?: string;
+  sandbox_read_only?: boolean;
+  sandbox_network?: boolean;
+  timeout_ms?: number;
+  status: string;
+  priority?: string;
+  requested_model?: string;
+  requested_provider?: string;
+  budget_micros_usd?: number;
+  latest_run_id?: string;
+  pending_approval_count?: number;
+  step_count?: number;
+  artifact_count?: number;
+  last_error?: string;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  root_trace_id?: string;
+  latest_trace_id?: string;
+  latest_request_id?: string;
+};
+
+export type TasksResponse = {
+  object: string;
+  data: TaskRecord[];
+};
+
+export type TaskResponse = {
+  object: string;
+  data: TaskRecord;
+};
+
+export type TaskRunRecord = {
+  id: string;
+  task_id: string;
+  number: number;
+  status: string;
+  orchestrator?: string;
+  model?: string;
+  provider?: string;
+  provider_kind?: string;
+  workspace_id?: string;
+  workspace_path?: string;
+  step_count?: number;
+  approval_count?: number;
+  artifact_count?: number;
+  total_cost_micros_usd?: number;
+  last_error?: string;
+  started_at?: string;
+  finished_at?: string;
+  request_id?: string;
+  trace_id?: string;
+  root_span_id?: string;
+  otel_status_code?: string;
+  otel_status_message?: string;
+};
+
+export type TaskRunsResponse = {
+  object: string;
+  data: TaskRunRecord[];
+};
+
+export type TaskRunResponse = {
+  object: string;
+  data: TaskRunRecord;
+};
+
+export type TaskStepRecord = {
+  id: string;
+  task_id: string;
+  run_id: string;
+  parent_step_id?: string;
+  index: number;
+  kind: string;
+  title?: string;
+  status: string;
+  phase?: string;
+  result?: string;
+  tool_name?: string;
+  input?: Record<string, unknown>;
+  output_summary?: Record<string, unknown>;
+  exit_code?: number;
+  error?: string;
+  error_kind?: string;
+  approval_id?: string;
+  started_at?: string;
+  finished_at?: string;
+  request_id?: string;
+  trace_id?: string;
+  span_id?: string;
+  parent_span_id?: string;
+};
+
+export type TaskStepsResponse = {
+  object: string;
+  data: TaskStepRecord[];
+};
+
+export type TaskArtifactRecord = {
+  id: string;
+  task_id: string;
+  run_id: string;
+  step_id?: string;
+  kind: string;
+  name?: string;
+  description?: string;
+  mime_type?: string;
+  storage_kind?: string;
+  path?: string;
+  content_text?: string;
+  object_ref?: string;
+  size_bytes?: number;
+  sha256?: string;
+  status?: string;
+  created_at?: string;
+  request_id?: string;
+  trace_id?: string;
+  span_id?: string;
+};
+
+export type TaskArtifactsResponse = {
+  object: string;
+  data: TaskArtifactRecord[];
+};
+
+export type TaskApprovalRecord = {
+  id: string;
+  task_id: string;
+  run_id: string;
+  step_id?: string;
+  kind: string;
+  status: string;
+  reason?: string;
+  requested_by?: string;
+  resolved_by?: string;
+  resolution_note?: string;
+  created_at?: string;
+  resolved_at?: string;
+  request_id?: string;
+  trace_id?: string;
+  span_id?: string;
+};
+
+export type TaskApprovalsResponse = {
+  object: string;
+  data: TaskApprovalRecord[];
+};
+
+export type TaskRunStreamEventData = {
+  sequence: number;
+  terminal?: boolean;
+  run: TaskRunRecord;
+  steps?: TaskStepRecord[];
+  artifacts?: TaskArtifactRecord[];
+};
+
+export type TaskRunStreamEventResponse = {
+  object: string;
+  data: TaskRunStreamEventData;
+};
+
 export type RuntimeHeaders = {
   requestId: string;
   traceId: string;

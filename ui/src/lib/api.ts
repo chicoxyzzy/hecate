@@ -12,6 +12,13 @@ import type {
   RequestLedgerResponse,
   RuntimeHeaders,
   SessionResponse,
+  TaskApprovalsResponse,
+  TaskArtifactsResponse,
+  TaskResponse,
+  TaskRunStreamEventResponse,
+  TaskRunsResponse,
+  TaskStepsResponse,
+  TasksResponse,
   TraceResponse,
   RetentionRunResponse,
   RetentionRunsResponse,
@@ -95,6 +102,11 @@ export type RetentionRunPayload = {
 
 export type CreateChatSessionPayload = {
   title: string;
+};
+
+export type ResolveTaskApprovalPayload = {
+  decision: "approve" | "reject";
+  note?: string;
 };
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -219,6 +231,111 @@ export async function runRetention(payload: RetentionRunPayload, authToken?: str
 
 export async function getRetentionRuns(authToken?: string, limit = 10): Promise<RetentionRunsResponse> {
   return fetchJSON<RetentionRunsResponse>(`/admin/retention/runs?limit=${encodeURIComponent(String(limit))}`, { authToken });
+}
+
+export async function getTasks(authToken?: string, limit = 20): Promise<TasksResponse> {
+  return fetchJSON<TasksResponse>(`/v1/tasks?limit=${encodeURIComponent(String(limit))}`, { authToken });
+}
+
+export async function getTask(taskID: string, authToken?: string): Promise<TaskResponse> {
+  return fetchJSON<TaskResponse>(`/v1/tasks/${encodeURIComponent(taskID)}`, { authToken });
+}
+
+export async function getTaskRuns(taskID: string, authToken?: string): Promise<TaskRunsResponse> {
+  return fetchJSON<TaskRunsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs`, { authToken });
+}
+
+export async function getTaskApprovals(taskID: string, authToken?: string): Promise<TaskApprovalsResponse> {
+  return fetchJSON<TaskApprovalsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/approvals`, { authToken });
+}
+
+export async function getTaskRunSteps(taskID: string, runID: string, authToken?: string): Promise<TaskStepsResponse> {
+  return fetchJSON<TaskStepsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/steps`, { authToken });
+}
+
+export async function getTaskRunArtifacts(taskID: string, runID: string, authToken?: string): Promise<TaskArtifactsResponse> {
+  return fetchJSON<TaskArtifactsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/artifacts`, { authToken });
+}
+
+export async function resolveTaskApproval(taskID: string, approvalID: string, payload: ResolveTaskApprovalPayload, authToken?: string): Promise<void> {
+  await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}/approvals/${encodeURIComponent(approvalID)}/resolve`, {
+    authToken,
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function cancelTaskRun(taskID: string, runID: string, authToken?: string): Promise<void> {
+  await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/cancel`, {
+    authToken,
+    method: "POST",
+  });
+}
+
+export async function streamTaskRun(
+  taskID: string,
+  runID: string,
+  authToken: string | undefined,
+  onEvent: (event: { event: string; payload: TaskRunStreamEventResponse }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetchWithNetworkError(
+    `/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/stream`,
+    { ...buildRequestOptions({ authToken }), signal },
+  );
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "request failed"));
+  }
+  if (!response.body) {
+    throw new Error("stream response body is unavailable");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEvent = "message";
+  let currentData = "";
+
+  const flushEvent = () => {
+    if (!currentData.trim()) {
+      currentEvent = "message";
+      currentData = "";
+      return;
+    }
+    const payload = JSON.parse(currentData) as TaskRunStreamEventResponse;
+    onEvent({ event: currentEvent, payload });
+    currentEvent = "message";
+    currentData = "";
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      flushEvent();
+      return;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.replace(/\r$/, "");
+      if (trimmed === "") {
+        flushEvent();
+        continue;
+      }
+      if (trimmed.startsWith(":")) {
+        continue;
+      }
+      if (trimmed.startsWith("event: ")) {
+        currentEvent = trimmed.slice(7).trim() || "message";
+        continue;
+      }
+      if (trimmed.startsWith("data: ")) {
+        currentData += trimmed.slice(6);
+      }
+    }
+  }
 }
 
 type StreamedToolCall = { id: string; name: string; arguments: string };
