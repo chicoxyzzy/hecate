@@ -2,6 +2,7 @@ import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { formatDateTime, formatRelativeCount, formatUsd } from "../../lib/format";
 import { describeRouteReason } from "../../lib/runtime-utils";
 import { EmptyState, MetricTile, ShellSection, StatusPill, Surface, ToolbarButton } from "../shared/ConsolePrimitives";
+import "../shared/Workbench.css";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];

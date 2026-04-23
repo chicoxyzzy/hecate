@@ -12,6 +12,8 @@ import {
   TextField,
   ToolbarButton,
 } from "../shared/ConsolePrimitives";
+import "../shared/Workbench.css";
+import "./AdminView.css";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];

@@ -6,6 +6,7 @@ import type { ModelRecord, ProviderPresetRecord, ProviderRecord } from "../../ty
 import { RouteWorkbench } from "./RouteWorkbench";
 import { TraceWorkbench } from "./TraceWorkbench";
 import { DefinitionList, EmptyState, InlineNotice, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
+import "../shared/Workbench.css";
 import "./PlaygroundView.css";
 
 type Props = {

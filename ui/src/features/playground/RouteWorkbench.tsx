@@ -13,6 +13,7 @@ import {
 } from "../../lib/runtime-utils";
 import type { RuntimeHeaders, TraceSpanRecord } from "../../types/runtime";
 import { DefinitionList, EmptyState, MetricTile, ShellSection, StatusPill, Surface } from "../shared/ConsolePrimitives";
+import "../shared/Workbench.css";
 
 type Props = {
   runtimeHeaders: RuntimeHeaders | null;

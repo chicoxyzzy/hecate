@@ -1,6 +1,7 @@
 import { buildTraceTimeline, formatTraceAttributeKey, formatTraceAttributeValue } from "../../lib/runtime-utils";
 import type { TraceSpanRecord } from "../../types/runtime";
 import { DefinitionList, EmptyState, InlineNotice, ShellSection, StatusPill, Surface } from "../shared/ConsolePrimitives";
+import "../shared/Workbench.css";
 
 type Props = {
   loading: boolean;
