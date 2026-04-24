@@ -299,3 +299,7 @@ Next focus areas:
 - improved route-reason taxonomy and debug ergonomics
 - automated provider pricebook ingestion and sync
 - deployment examples for local and production environments
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
