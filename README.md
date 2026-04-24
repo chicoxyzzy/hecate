@@ -1,10 +1,10 @@
 # Hecate
 
-Hecate is an open-source AI runtime for teams that want one control plane in front of cloud and local models.
+Hecate is an open-source AI gateway and emerging agent runtime for teams that want one control plane across cloud and local models.
 
-Today it is strongest as an LLM gateway and operator console: it exposes an OpenAI-compatible API, supports OpenAI-compatible upstreams plus Anthropic's native Messages API, applies routing and policy decisions, tracks cost and traces, and gives operators a UI for debugging and admin workflows.
+Today, the most mature part of the project is the gateway and operator layer: OpenAI-compatible chat completions, Anthropic-native `/v1/messages`, provider routing, policy and budget enforcement, tracing, and a UI for inspecting runtime behavior.
 
-Hecate also now includes the first coding-runtime slice: task, run, step, artifact, and approval APIs; bounded shell, file, and git execution; a worker-backed sandbox; per-run workspaces; cancellation; and live stdout/stderr streaming. It is not yet a full daily-driver coding agent runtime, but the runtime boundary is now in place.
+Hecate also includes an early coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; and live stdout/stderr streaming. It is not yet a full resumable coding runtime, but the execution boundary is now in place.
 
 ## Table Of Contents
 
@@ -22,12 +22,14 @@ Hecate also now includes the first coding-runtime slice: task, run, step, artifa
 
 What Hecate already does well:
 
-- OpenAI-compatible gateway API with Anthropic and OpenAI-compatible provider support
+- OpenAI-compatible chat completions plus Anthropic-native `/v1/messages`
+- Anthropic and OpenAI-compatible provider support behind one runtime layer
+- tool-call and tool-use compatibility across OpenAI and Anthropic request/response shapes
 - Anthropic extended thinking pass-through (thinking/redacted_thinking blocks, streaming)
 - cloud and local model routing with retries, failover, health tracking, and discovery
 - exact and semantic cache paths
 - tenant-aware auth, policy enforcement, budgets, and control-plane persistence
-- per-API-key rate limiting with token-bucket enforcement and standard rate-limit headers
+- budget exhaustion as HTTP 402 and per-API-key rate limiting with token-bucket enforcement and standard rate-limit headers
 - structured logs, trace inspection, and OTLP export for traces, metrics, and logs
 - opt-in request/response body capture in traces (`GATEWAY_TRACE_BODIES=true`)
 - operator UI for models, providers, playground, runs, access, budgets, and control plane
@@ -185,6 +187,7 @@ Observability currently includes:
 
 - request IDs
 - trace IDs and span IDs in response headers
+- standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers when rate limiting is enabled
 - structured logs
 - in-memory trace snapshots over HTTP
 - OTLP HTTP export for traces
@@ -221,6 +224,7 @@ Hecate is already useful behind a coding assistant even if the client still owns
 - request tracing, route debugging, and structured logs
 - central cost accounting and provider visibility
 - exact and semantic cache paths
+- OpenAI tool-calls and Anthropic tool-use through one gateway boundary
 
 The first native coding-runtime slice is also in place:
 
@@ -251,74 +255,40 @@ make ui-build
 
 `.env.example` is the baseline configuration reference. For the full set of supported environment variables, check `internal/config/config.go`.
 
-## Repository Layout
-
-```text
-cmd/gateway           Main HTTP server
-cmd/sandboxd          Out-of-process sandbox worker
-internal/api          HTTP handlers and middleware
-internal/auth         Auth and principal resolution
-internal/billing      Static pricebook and cost estimation
-internal/cache        Exact and semantic cache backends
-internal/catalog      Provider/model catalog views
-internal/chatstate    Persisted chat session state
-internal/config       Environment-based configuration
-internal/controlplane Tenant, API-key, and audit-history persistence
-internal/gateway      Core runtime pipeline
-internal/governor     Policy and budget enforcement
-internal/models       Canonical model identity helpers
-internal/policy       Policy matching helpers
-internal/profiler     Tracing and trace snapshots
-internal/providers    Provider transports, discovery, and health tracking
-internal/requestscope Tenant/provider request scoping
-internal/retention    Background pruning and retention runs
-internal/router       Routing logic
-internal/sandbox      Local and worker-backed sandbox execution
-internal/secrets      Secret encryption helpers
-internal/storage      Redis and Postgres helpers
-internal/telemetry    Metrics and OTLP export wiring
-pkg/types             Vendor-neutral runtime types
-ui                    Operator console
-```
-
 ## Checklist
 
-Implemented:
+Gateway And Model Runtime
 
 - [x] OpenAI-compatible chat completions endpoint
+- [x] Anthropic-native `/v1/messages` endpoint
 - [x] Anthropic native Messages API provider path
+- [x] Tool-call and tool-use compatibility across OpenAI and Anthropic request shapes
 - [x] Unified model catalog across configured providers
 - [x] Cloud and local provider support behind a vendor-neutral provider layer
-- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
 - [x] Deterministic routing across configured healthy providers
 - [x] Retry, failover, and provider health tracking
+- [x] Anthropic extended thinking pass-through (thinking/redacted_thinking, streaming delta events)
 - [x] Exact cache
 - [x] Semantic cache
-- [x] Static and persisted pricebook-backed cost estimation
-- [x] Budget enforcement with top-ups, resets, warning thresholds, history, and 402 on exhaustion
-- [x] Per-API-key rate limiting with configurable burst and RPM (`GATEWAY_RATE_LIMIT_*`)
-- [x] Anthropic extended thinking pass-through (thinking/redacted_thinking, streaming delta events)
-- [x] Background retention and pruning for traces, cache, budget history, and audit events
+
+Control Plane, Policy, And Spend
+
 - [x] Tenant-aware auth and persisted control-plane state
 - [x] Persisted provider config with encrypted secret storage and runtime reload
 - [x] Persisted policy and pricebook control-plane CRUD
+- [x] Static and persisted pricebook-backed cost estimation
+- [x] Budget enforcement with top-ups, resets, warning thresholds, history, and 402 on exhaustion
+- [x] Per-API-key rate limiting with configurable burst and RPM (`GATEWAY_RATE_LIMIT_*`)
+
+Observability And Operations
+
 - [x] Structured logs, traces, metrics, and OTLP export support
+- [x] Background retention and pruning for traces, cache, budget history, and audit events
 - [x] React operator UI
 - [x] Provider setup preset catalog for common cloud and local runtimes
+- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
 
-Near-term foundation work:
-
-- [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
-- [ ] Cleaner route reason taxonomy and debug views after routing simplification
-- [ ] Richer policy lifecycle UI, history, and validation helpers
-- [ ] Automated pricebook ingestion/sync from provider pricing sources
-- [ ] Better semantic-cache debugging and trace visibility in the UI
-- [ ] Better budget UX and trend visibility in the UI
-- [ ] Provider setup UX that keeps presets separate from runtime routing truth
-- [ ] More provider discovery paths
-- [ ] Deployment examples for local and production-style environments
-
-Coding runtime work:
+Coding Runtime Foundation
 
 - [x] Basic task, run, step, artifact, and approval lifecycle for coding runs
 - [x] Basic shell, file, and git execution paths
@@ -329,6 +299,18 @@ Coding runtime work:
 - [x] Queueing and cancellation for coding runs
 - [x] Streaming run updates and stdout/stderr artifact logs
 - [x] Basic operator UI for creating tasks, starting runs, approvals, cancellation, and live stdout/stderr
+
+Next Up
+
 - [ ] Resumable execution for coding runs
 - [ ] Policy-driven approvals for broader sensitive actions
 - [ ] Richer coding-oriented operator views for task traces, repo activity, and aggregate run operations
+- [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
+- [ ] Cleaner route reason taxonomy and debug views after routing simplification
+- [ ] Richer policy lifecycle UI, history, and validation helpers
+- [ ] Automated pricebook ingestion and sync from provider pricing sources
+- [ ] Better semantic-cache debugging and trace visibility in the UI
+- [ ] Better budget UX and trend visibility in the UI
+- [ ] Provider setup UX that keeps presets separate from runtime routing truth
+- [ ] More provider discovery paths
+- [ ] Deployment examples for local and production-style environments

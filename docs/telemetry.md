@@ -17,7 +17,7 @@ Telemetry currently shows up in three places:
 - `GET /v1/traces?request_id=...`
 - OTLP HTTP export when enabled
 
-For chat requests, the most useful headers are:
+For request responses, the most useful headers are:
 
 - `X-Request-Id`
 - `X-Trace-Id`
@@ -30,6 +30,11 @@ For chat requests, the most useful headers are:
 - `X-Runtime-Cache`
 - `X-Runtime-Cache-Type`
 - `X-Runtime-Cost-USD`
+- `X-RateLimit-Limit`
+- `X-RateLimit-Remaining`
+- `X-RateLimit-Reset`
+
+The runtime metadata headers are most relevant on `/v1/chat/completions` and `/v1/messages`.
 
 Task and run lifecycle endpoints also return `X-Trace-Id` and `X-Span-Id` on key execution actions such as run start and approval resolution.
 
@@ -77,6 +82,11 @@ Behavior to know:
 - metrics export only when `GATEWAY_OTEL_METRICS_ENABLED=true`
 - logs export only when `GATEWAY_OTEL_LOGS_ENABLED=true`
 - if log endpoint, headers, or timeout are omitted, log export falls back to the trace signal settings
+
+Trace body capture is configured separately from OTLP export:
+
+- `GATEWAY_TRACE_BODIES`
+- `GATEWAY_TRACE_BODY_MAX_BYTES`
 
 ## Core Vocabulary
 
@@ -149,6 +159,13 @@ Important span names include:
 
 These spans back both local trace inspection and OTLP trace export.
 
+When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
+
+- `request.body.captured`
+- `response.body.captured`
+
+These events contain truncated message or choice snapshots and are intended for local debugging and carefully controlled observability setups, not blanket production payload capture.
+
 ## Metrics
 
 The current metric set is intentionally small and request-focused. Exported instruments include:
@@ -164,6 +181,15 @@ The current metric set is intentionally small and request-focused. Exported inst
 - `hecate.gateway.failovers`
 
 Metric attributes reuse the same vocabulary as traces and logs, especially provider, model, cache, failover, and result fields.
+
+## Error And Limit Signals
+
+Two operational response classes are worth calling out:
+
+- budget exhaustion is returned as HTTP `402` with a `payment_required` error shape
+- rate limiting is returned as HTTP `429` with a `rate_limit_error` error shape
+
+When rate limiting is enabled, the token-bucket limiter also exposes reset and remaining-budget information through the `X-RateLimit-*` headers above.
 
 ## Local Debugging Workflow
 
