@@ -4,7 +4,7 @@ Hecate is an open-source AI gateway and emerging agent runtime for teams that wa
 
 Today, the most mature part of the project is the gateway and operator layer: OpenAI-compatible chat completions, Anthropic-native `/v1/messages`, provider routing, policy and budget enforcement, tracing, and a UI for inspecting runtime behavior.
 
-Hecate also includes a coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; persisted run events; and live stdout/stderr streaming with reconnect cursors. It is still evolving toward full platform-scale orchestration, but the durable execution boundary is now in place.
+Hecate also includes a coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; persisted run events; and live stdout/stderr streaming with reconnect cursors. Queue execution now supports both in-memory workers and a Postgres-backed leased queue for durable multi-worker processing.
 
 ## Table Of Contents
 
@@ -59,6 +59,7 @@ client
 task client
   -> task api
   -> orchestrator
+  -> lease queue (memory or postgres)
   -> sandboxd
   -> artifacts and run stream
 ```
@@ -234,7 +235,25 @@ The first native coding-runtime slice is also in place:
 - basic sandbox policy controls for roots, read-only mode, timeouts, and network denial
 - policy-driven approval gating (`shell_exec`, `git_exec`, `file_write`, `network_egress`)
 - run queueing, cancellation, retry/resume APIs, and SSE streaming with `after_sequence` replay
+- durable distributed queue semantics with claim/ack/nack lease flow when `GATEWAY_TASK_QUEUE_BACKEND=postgres`
 - UI support for task creation, live runs, approvals, cancellation, and streamed stdout/stderr
+
+### Durable Queue Execution Flow
+
+```mermaid
+flowchart LR
+    C[Task client or UI] --> API[/v1/tasks]
+    API --> ORCH[orchestrator runner]
+    ORCH --> Q[(run queue)]
+    Q -->|claim lease| W1[worker A]
+    Q -->|claim lease| W2[worker B]
+    W1 -->|heartbeat/extend lease| Q
+    W2 -->|ack or nack| Q
+    W1 --> SB[sandboxd]
+    W2 --> SB
+    SB --> ES[(task state + run events)]
+    ES --> SSE[SSE stream with replay cursor]
+```
 
 The main missing pieces are resumable execution, broader approval classes, stronger workspace isolation, richer tool APIs, and more coding-oriented operator views.
 
@@ -306,6 +325,7 @@ Coding Runtime Foundation
 - [x] Basic sandbox policy enforcement for allowed roots, read-only mode, timeouts, and network denial
 - [x] Shell approval gating with approve or reject flow
 - [x] Queueing and cancellation for coding runs
+- [x] Durable leased queue backend for distributed workers (`GATEWAY_TASK_QUEUE_BACKEND=postgres`)
 - [x] Streaming run updates and stdout/stderr artifact logs
 - [x] Persisted run events with resumable stream cursors (`after_sequence` / `Last-Event-ID`)
 - [x] Retry/resume runtime APIs and external run-event append API

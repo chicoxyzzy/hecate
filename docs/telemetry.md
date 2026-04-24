@@ -38,6 +38,8 @@ The runtime metadata headers are most relevant on `/v1/chat/completions` and `/v
 
 Task and run lifecycle endpoints also return `X-Trace-Id` and `X-Span-Id` on key execution actions such as run start and approval resolution.
 
+For coding-runtime operations, `GET /admin/runtime/stats` is the primary live health snapshot. It includes queue depth/capacity, worker count, in-flight jobs, backend type (`queue_backend` / `store_backend`), and run-state counters.
+
 The trace endpoint returns:
 
 - the request id and trace id
@@ -158,6 +160,8 @@ Important span names include:
 - `gateway.response`
 
 These spans back both local trace inspection and OTLP trace export.
+
+Coding-runtime spans and events are also emitted during orchestration, including run queueing, lease-claimed run starts, approval decisions, step/artifact upserts, and terminal run outcomes.
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
 

@@ -45,6 +45,38 @@ Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchest
 
 Stream resume also supports `Last-Event-ID`.
 
+## Queue execution model
+
+When a run is queued, workers consume it through a claim/lease protocol:
+
+1. enqueue `task_id` + `run_id`
+2. worker claims with a time-bound lease
+3. worker heartbeats to extend lease while work is running
+4. worker `ack`s on success/terminal handling or `nack`s to requeue
+5. expired leases can be reclaimed by another worker
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant Queue
+    participant Worker
+    participant Store
+    Client->>API: POST /v1/tasks/{id}/start
+    API->>Queue: enqueue(task_id, run_id)
+    Worker->>Queue: claim(worker_id, lease)
+    Queue-->>Worker: claim_id, run_id
+    Worker->>Store: set run status=running
+    loop while running
+      Worker->>Queue: extend_lease(claim_id)
+    end
+    alt completed
+      Worker->>Queue: ack(claim_id)
+    else retryable / throttled
+      Worker->>Queue: nack(claim_id, reason)
+    end
+```
+
 ## Runtime backend and queue configuration
 
 - `GATEWAY_TASKS_BACKEND=memory|postgres`
@@ -56,3 +88,5 @@ Stream resume also supports `Last-Event-ID`.
 - `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>` (`0` disables the limit)
 
 When `GATEWAY_TASKS_BACKEND=postgres`, tasks/runs/steps/approvals/artifacts/run-events are persisted and the stream replay cursor is durable across restarts. When `GATEWAY_TASK_QUEUE_BACKEND=postgres`, workers claim queue items with renewable leases, so pending runs survive process restarts and can be recovered by another worker when a lease expires.
+
+`GET /admin/runtime/stats` also reports queue health fields including queue depth, queue capacity, worker count, and `queue_backend`.
