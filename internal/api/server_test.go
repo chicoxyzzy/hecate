@@ -2110,6 +2110,115 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	}
 }
 
+func TestTaskRunEventsAppendAndList(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Event run","prompt":"Run with events."}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+
+	initial := mustTaskRequestJSON[TaskRunEventsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events", "")
+	if len(initial.Data) == 0 {
+		t.Fatal("events = 0, want at least one event")
+	}
+	baseSequence := initial.Data[len(initial.Data)-1].Sequence
+
+	appendRecorder := tasks.mustRequest(
+		http.MethodPost,
+		"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events",
+		`{"event_type":"external.tool_result","step_id":"step_external","status":"ok","note":"client injected event","data":{"tool":"lint","result":"ok"}}`,
+	)
+	var appended map[string]any
+	if err := json.NewDecoder(appendRecorder.Body).Decode(&appended); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+
+	after := mustTaskRequestJSON[TaskRunEventsResponse](tasks, http.MethodGet, fmt.Sprintf("/v1/tasks/%s/runs/%s/events?after_sequence=%d", created.Data.ID, started.Data.ID, baseSequence), "")
+	foundExternal := false
+	for _, event := range after.Data {
+		if event.Sequence <= baseSequence {
+			t.Fatalf("event sequence = %d, want > %d", event.Sequence, baseSequence)
+		}
+		if event.EventType == "external.tool_result" {
+			foundExternal = true
+		}
+	}
+	if !foundExternal {
+		t.Fatal("missing appended external.tool_result event")
+	}
+}
+
+func TestTaskRunRetryCreatesNewAttempt(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Retry run","prompt":"Trigger retry flow."}`)
+	first := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, first.Data.ID, "completed")
+
+	retried := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+first.Data.ID+"/retry", `{}`)
+	if retried.Data.ID == first.Data.ID {
+		t.Fatal("retry run id matches original run id")
+	}
+	waitForRunStatus(t, handler, created.Data.ID, retried.Data.ID, "completed")
+
+	runs := mustTaskRequestJSON[TaskRunsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs", "")
+	if len(runs.Data) < 2 {
+		t.Fatalf("runs = %d, want at least 2", len(runs.Data))
+	}
+}
+
+func TestTaskRunResumeFromCancelledRun(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Resume shell","prompt":"Resume cancelled shell run.","execution_kind":"shell","shell_command":"printf 'resume'\n","working_directory":".","timeout_ms":1000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"reject","note":"force cancellation for resume test"}`)
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "cancelled")
+
+	resumed := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume", `{}`)
+	if resumed.Data.ID == started.Data.ID {
+		t.Fatal("resume returned original run id, want new run id")
+	}
+	if resumed.Data.Status != "awaiting_approval" && resumed.Data.Status != "queued" {
+		t.Fatalf("resume status = %q, want awaiting_approval or queued", resumed.Data.Status)
+	}
+}
+
+func TestTaskRunArtifactFetchByID(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Artifact fetch","prompt":"Produce an artifact."}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+
+	runArtifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", "")
+	if len(runArtifacts.Data) == 0 {
+		t.Fatal("run artifacts = 0, want at least one")
+	}
+	artifactID := runArtifacts.Data[0].ID
+	fetched := mustTaskRequestJSON[TaskArtifactResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts/"+artifactID, "")
+	if fetched.Data.ID != artifactID {
+		t.Fatalf("artifact id = %q, want %q", fetched.Data.ID, artifactID)
+	}
+}
+
 type apiTestClient struct {
 	t       *testing.T
 	handler http.Handler
