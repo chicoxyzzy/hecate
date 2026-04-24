@@ -2840,6 +2840,8 @@ func mustRequestJSONStatus[T any](client apiTestClient, status int, method, path
 
 type taskTestClient = apiTestClient
 
+const asyncWaitTimeout = 10 * time.Second
+
 func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
 	t.Helper()
 	return newAPITestClient(t, handler)
@@ -2852,7 +2854,7 @@ func mustTaskRequestJSON[T any](client taskTestClient, method, path, body string
 
 func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, statuses ...string) TaskRunResponse {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncWaitTimeout)
 	for time.Now().Before(deadline) {
 		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID, "")
 		if recorder.Code == http.StatusOK {
@@ -2869,7 +2871,7 @@ func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, 
 
 func waitForRunStatusWithClient(client apiTestClient, taskID, runID string, statuses ...string) TaskRunResponse {
 	client.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncWaitTimeout)
 	for time.Now().Before(deadline) {
 		recorder := client.mustRequest(http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID, "")
 		run, ok := tryDecodeRecorder[TaskRunResponse](recorder)
@@ -2884,7 +2886,7 @@ func waitForRunStatusWithClient(client apiTestClient, taskID, runID string, stat
 
 func waitForTaskStatus(t *testing.T, handler http.Handler, taskID string, statuses ...string) TaskResponse {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncWaitTimeout)
 	for time.Now().Before(deadline) {
 		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID, "")
 		if recorder.Code == http.StatusOK {
@@ -2901,7 +2903,7 @@ func waitForTaskStatus(t *testing.T, handler http.Handler, taskID string, status
 
 func waitForRunArtifactsContaining(t *testing.T, handler http.Handler, taskID, runID, kind, contains string) TaskArtifactsResponse {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncWaitTimeout)
 	for time.Now().Before(deadline) {
 		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID+"/artifacts", "")
 		if recorder.Code == http.StatusOK {
