@@ -198,6 +198,20 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-6", got)
 	}
 
+	deepseek, ok := BuiltInProviderByID("deepseek")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(deepseek) = not found")
+	}
+	if deepseek.Protocol != "openai" {
+		t.Fatalf("deepseek protocol = %q, want openai", deepseek.Protocol)
+	}
+	if deepseek.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("deepseek base url = %q, want https://api.deepseek.com/v1", deepseek.BaseURL)
+	}
+	if got := deepseek.RuntimeConfig("ignored").DefaultModel; got != "deepseek-chat" {
+		t.Fatalf("deepseek default model = %q, want deepseek-chat", got)
+	}
+
 	grok, ok := BuiltInProviderByID("grok")
 	if !ok {
 		t.Fatal("BuiltInProviderByID(grok) = not found")
@@ -210,6 +224,20 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	}
 	if got := grok.RuntimeConfig("ignored").DefaultModel; got != "grok-3-mini" {
 		t.Fatalf("grok default model = %q, want grok-3-mini", got)
+	}
+
+	mistral, ok := BuiltInProviderByID("mistral")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(mistral) = not found")
+	}
+	if mistral.Protocol != "openai" {
+		t.Fatalf("mistral protocol = %q, want openai", mistral.Protocol)
+	}
+	if mistral.BaseURL != "https://api.mistral.ai/v1" {
+		t.Fatalf("mistral base url = %q, want https://api.mistral.ai/v1", mistral.BaseURL)
+	}
+	if got := mistral.RuntimeConfig("ignored").DefaultModel; got != "mistral-small-latest" {
+		t.Fatalf("mistral default model = %q, want mistral-small-latest", got)
 	}
 
 	for _, id := range []string{"ollama", "LM Studio", "localai", "llamacpp"} {

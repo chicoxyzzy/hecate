@@ -139,9 +139,11 @@ available when needed.
 Built-in cloud presets:
 
 - `anthropic`
+- `deepseek`
 - `gemini`
 - `grok`
 - `groq`
+- `mistral`
 - `openai`
 
 Built-in local presets:
