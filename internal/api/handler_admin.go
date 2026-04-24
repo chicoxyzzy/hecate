@@ -83,6 +83,7 @@ func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
 			CheckedAt:               stats.CheckedAt.UTC().Format(time.RFC3339Nano),
 			QueueDepth:              stats.QueueDepth,
 			QueueCapacity:           stats.QueueCapacity,
+			QueueBackend:            stats.QueueBackend,
 			WorkerCount:             stats.WorkerCount,
 			InFlightJobs:            stats.InFlightJobs,
 			QueuedRuns:              stats.QueuedRuns,

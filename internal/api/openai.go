@@ -290,6 +290,7 @@ type RuntimeStatsResponseItem struct {
 	CheckedAt               string `json:"checked_at"`
 	QueueDepth              int    `json:"queue_depth"`
 	QueueCapacity           int    `json:"queue_capacity"`
+	QueueBackend            string `json:"queue_backend,omitempty"`
 	WorkerCount             int    `json:"worker_count"`
 	InFlightJobs            int    `json:"in_flight_jobs"`
 	QueuedRuns              int    `json:"queued_runs"`

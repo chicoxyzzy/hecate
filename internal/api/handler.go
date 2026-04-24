@@ -65,10 +65,15 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	runner := orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
 		DefaultModel:           cfg.Router.DefaultModel,
 		ApprovalPolicies:       cfg.Server.TaskApprovalPolicies,
+		QueueBackend:           cfg.Server.TaskQueueBackend,
 		QueueWorkers:           cfg.Server.TaskQueueWorkers,
 		QueueBuffer:            cfg.Server.TaskQueueBuffer,
+		QueueLeaseSeconds:      cfg.Server.TaskQueueLeaseSeconds,
 		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
 	})
+	if queue := buildTaskQueue(cfg, logger, postgresClient); queue != nil {
+		runner.SetQueue(queue)
+	}
 	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
 		logger.Warn("task runner reconciliation failed", slog.Any("error", err))
 	}
@@ -97,6 +102,24 @@ func buildTaskStore(cfg config.Config, logger *slog.Logger, postgresClient *stor
 		return store
 	default:
 		return taskstate.NewMemoryStore()
+	}
+}
+
+func buildTaskQueue(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) orchestrator.RunQueue {
+	lease := time.Duration(cfg.Server.TaskQueueLeaseSeconds) * time.Second
+	if lease <= 0 {
+		lease = 30 * time.Second
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.TaskQueueBackend)) {
+	case "postgres":
+		queue, err := orchestrator.NewPostgresRunQueue(context.Background(), postgresClient, lease)
+		if err != nil {
+			logger.Error("task queue init failed", slog.Any("error", err))
+			return orchestrator.NewMemoryRunQueue(cfg.Server.TaskQueueBuffer, lease)
+		}
+		return queue
+	default:
+		return orchestrator.NewMemoryRunQueue(cfg.Server.TaskQueueBuffer, lease)
 	}
 }
 

@@ -49,8 +49,10 @@ Stream resume also supports `Last-Event-ID`.
 
 - `GATEWAY_TASKS_BACKEND=memory|postgres`
 - `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
+- `GATEWAY_TASK_QUEUE_BACKEND=memory|postgres`
 - `GATEWAY_TASK_QUEUE_WORKERS=<int>`
 - `GATEWAY_TASK_QUEUE_BUFFER=<int>`
+- `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
 - `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>` (`0` disables the limit)
 
-When `GATEWAY_TASKS_BACKEND=postgres`, tasks/runs/steps/approvals/artifacts/run-events are persisted and the stream replay cursor is durable across restarts.
+When `GATEWAY_TASKS_BACKEND=postgres`, tasks/runs/steps/approvals/artifacts/run-events are persisted and the stream replay cursor is durable across restarts. When `GATEWAY_TASK_QUEUE_BACKEND=postgres`, workers claim queue items with renewable leases, so pending runs survive process restarts and can be recovered by another worker when a lease expires.

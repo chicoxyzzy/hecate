@@ -533,7 +533,8 @@ func postgresRequired(cfg config.Config) bool {
 		cfg.Governor.BudgetBackend == "postgres" ||
 		cfg.Server.ControlPlaneBackend == "postgres" ||
 		cfg.Chat.SessionsBackend == "postgres" ||
-		cfg.Server.TasksBackend == "postgres"
+		cfg.Server.TasksBackend == "postgres" ||
+		cfg.Server.TaskQueueBackend == "postgres"
 }
 
 func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {

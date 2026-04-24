@@ -32,8 +32,10 @@ type ServerConfig struct {
 	ControlPlaneSecretKey      string
 	TasksBackend               string
 	TaskApprovalPolicies       []string
+	TaskQueueBackend           string
 	TaskQueueWorkers           int
 	TaskQueueBuffer            int
+	TaskQueueLeaseSeconds      int
 	TaskMaxConcurrentPerTenant int
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
@@ -231,8 +233,10 @@ func LoadFromEnv() Config {
 			ControlPlaneSecretKey:      getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
 			TasksBackend:               getEnv("GATEWAY_TASKS_BACKEND", "memory"),
 			TaskApprovalPolicies:       splitCSV(getEnv("GATEWAY_TASK_APPROVAL_POLICIES", "shell_exec")),
+			TaskQueueBackend:           getEnv("GATEWAY_TASK_QUEUE_BACKEND", "memory"),
 			TaskQueueWorkers:           getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
 			TaskQueueBuffer:            getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
+			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),
