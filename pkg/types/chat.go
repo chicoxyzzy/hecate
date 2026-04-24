@@ -6,17 +6,20 @@ import (
 )
 
 type ChatRequest struct {
-	RequestID    string
-	SessionID    string
-	SessionTitle string
-	Model        string
-	Messages     []Message
-	MaxTokens    int
-	Temperature  float64
-	Scope        RequestScope
-	Tools        []Tool
-	ToolChoice   json.RawMessage
-	Stream       bool
+	RequestID     string
+	SessionID     string
+	SessionTitle  string
+	Model         string
+	Messages      []Message
+	MaxTokens     int
+	Temperature   float64
+	TopP          float64
+	TopK          int
+	StopSequences []string
+	Scope         RequestScope
+	Tools         []Tool
+	ToolChoice    json.RawMessage
+	Stream        bool
 }
 
 type RequestScope struct {

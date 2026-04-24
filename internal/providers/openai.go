@@ -33,6 +33,8 @@ type openAIChatCompletionRequest struct {
 	Messages    []openAIChatMessage `json:"messages"`
 	MaxTokens   int                 `json:"max_tokens,omitempty"`
 	Temperature float64             `json:"temperature,omitempty"`
+	TopP        float64             `json:"top_p,omitempty"`
+	Stop        []string            `json:"stop,omitempty"`
 	User        string              `json:"user,omitempty"`
 	Tools       []openAITool        `json:"tools,omitempty"`
 	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
@@ -330,6 +332,8 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		Stop:        append([]string(nil), req.StopSequences...),
 		User:        requestscope.Normalize(req.Scope).User,
 		ToolChoice:  req.ToolChoice,
 	}
@@ -467,6 +471,8 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		Stop:        append([]string(nil), req.StopSequences...),
 		User:        requestscope.Normalize(req.Scope).User,
 		ToolChoice:  req.ToolChoice,
 		Stream:      true,

@@ -31,15 +31,18 @@ type AnthropicProvider struct {
 }
 
 type anthropicMessagesRequest struct {
-	Model       string                     `json:"model"`
-	System      string                     `json:"system,omitempty"`
-	Messages    []anthropicMessage         `json:"messages"`
-	MaxTokens   int                        `json:"max_tokens"`
-	Temperature float64                    `json:"temperature,omitempty"`
-	Metadata    *anthropicMessagesMetadata `json:"metadata,omitempty"`
-	Tools       []anthropicTool            `json:"tools,omitempty"`
-	ToolChoice  json.RawMessage            `json:"tool_choice,omitempty"`
-	Stream      bool                       `json:"stream,omitempty"`
+	Model         string                     `json:"model"`
+	System        string                     `json:"system,omitempty"`
+	Messages      []anthropicMessage         `json:"messages"`
+	MaxTokens     int                        `json:"max_tokens"`
+	Temperature   float64                    `json:"temperature,omitempty"`
+	TopP          float64                    `json:"top_p,omitempty"`
+	TopK          int                        `json:"top_k,omitempty"`
+	StopSequences []string                   `json:"stop_sequences,omitempty"`
+	Metadata      *anthropicMessagesMetadata `json:"metadata,omitempty"`
+	Tools         []anthropicTool            `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage            `json:"tool_choice,omitempty"`
+	Stream        bool                       `json:"stream,omitempty"`
 }
 
 type anthropicMessagesMetadata struct {
@@ -294,10 +297,13 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 		return nil, fmt.Errorf("anthropic messages request requires at least one non-system message")
 	}
 	wireReq := anthropicMessagesRequest{
-		Model:     req.Model,
-		System:    system,
-		Messages:  messages,
-		MaxTokens: req.MaxTokens,
+		Model:         req.Model,
+		System:        system,
+		Messages:      messages,
+		MaxTokens:     req.MaxTokens,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
+		StopSequences: append([]string(nil), req.StopSequences...),
 	}
 	if wireReq.MaxTokens <= 0 {
 		wireReq.MaxTokens = 1024
@@ -524,11 +530,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 		return fmt.Errorf("anthropic messages request requires at least one non-system message")
 	}
 	wireReq := anthropicMessagesRequest{
-		Model:     req.Model,
-		System:    system,
-		Messages:  messages,
-		MaxTokens: req.MaxTokens,
-		Stream:    true,
+		Model:         req.Model,
+		System:        system,
+		Messages:      messages,
+		MaxTokens:     req.MaxTokens,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
+		StopSequences: append([]string(nil), req.StopSequences...),
+		Stream:        true,
 	}
 	if wireReq.MaxTokens <= 0 {
 		wireReq.MaxTokens = 1024

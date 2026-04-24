@@ -1,0 +1,759 @@
+package api
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/hecate/agent-runtime/internal/auth"
+	"github.com/hecate/agent-runtime/internal/gateway"
+	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/requestscope"
+	"github.com/hecate/agent-runtime/internal/telemetry"
+	"github.com/hecate/agent-runtime/pkg/types"
+)
+
+// HandleMessages implements POST /v1/messages — the Anthropic-native shape.
+// Requests and responses are translated to/from the internal types.ChatRequest
+// / ChatResponse so that an Anthropic SDK pointed at Hecate (ANTHROPIC_BASE_URL)
+// can route through any configured provider (including OpenAI-compatible ones).
+func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	var wireReq AnthropicMessagesRequest
+	if !decodeJSON(w, r, &wireReq) {
+		return
+	}
+
+	internalReq, err := normalizeAnthropicRequest(wireReq, RequestIDFromContext(ctx), principal)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	if internalReq.Stream {
+		h.handleMessagesStream(w, r, ctx, internalReq)
+		return
+	}
+
+	result, err := h.service.HandleChat(ctx, internalReq)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gen_ai.gateway.request.failed",
+			slog.String("event.name", "gen_ai.gateway.request.failed"),
+			slog.String(telemetry.AttrGenAIRequestModel, internalReq.Model),
+			slog.Any("error", err),
+		)
+		writeMessagesError(w, err)
+		return
+	}
+
+	if internalReq.SessionID != "" {
+		if _, err := h.service.RecordChatTurn(ctx, internalReq.SessionID, internalReq, result); err != nil {
+			telemetry.Warn(h.logger, ctx, "gateway.chat.sessions.record_failed",
+				slog.String("event.name", "gateway.chat.sessions.record_failed"),
+				slog.String("hecate.chat.session_id", internalReq.SessionID),
+				slog.Any("error", err),
+			)
+		}
+	}
+
+	wireResp := renderAnthropicMessagesResponse(result.Response)
+	applyRuntimeHeaders(w, result.Metadata.Provider, result.Metadata.ProviderKind, result.Metadata.RouteReason,
+		result.Metadata.RequestedModel, result.Metadata.CanonicalRequestedModel,
+		result.Metadata.Model, result.Metadata.CanonicalResolvedModel,
+		result.Metadata.CacheHit, result.Metadata.CacheType,
+		result.Metadata.TraceID, result.Metadata.SpanID,
+		result.Metadata.SemanticStrategy, result.Metadata.SemanticIndexType, result.Metadata.SemanticSimilarity,
+		result.Metadata.AttemptCount, result.Metadata.RetryCount, result.Metadata.FallbackFromProvider,
+		result.Metadata.CostMicrosUSD,
+	)
+	WriteJSON(w, http.StatusOK, wireResp)
+}
+
+func (h *Handler) handleMessagesStream(w http.ResponseWriter, r *http.Request, ctx context.Context, req types.ChatRequest) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, "streaming not supported by server")
+		return
+	}
+
+	handle, streamCtx, err := h.service.RouteForStream(ctx, req)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gen_ai.gateway.stream.route_failed",
+			slog.String("event.name", "gen_ai.gateway.stream.route_failed"),
+			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
+			slog.Any("error", err),
+		)
+		writeMessagesError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Runtime-Provider", handle.Metadata.Provider)
+	w.Header().Set("X-Runtime-Provider-Kind", handle.Metadata.ProviderKind)
+	w.Header().Set("X-Runtime-Route-Reason", handle.Metadata.RouteReason)
+	w.Header().Set("X-Runtime-Requested-Model", handle.Metadata.RequestedModel)
+	w.Header().Set("X-Runtime-Model", handle.Metadata.Model)
+	w.Header().Set("X-Trace-Id", handle.Metadata.TraceID)
+	w.Header().Set("X-Span-Id", handle.Metadata.SpanID)
+	w.WriteHeader(http.StatusOK)
+
+	// handle.Execute writes OpenAI-format SSE (chat.completion.chunk). Translate
+	// each chunk into Anthropic's event-based stream as we read.
+	pr, pw := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handle.Execute(pw)
+		_ = pw.Close()
+	}()
+
+	translateErr := translateOpenAIToAnthropicSSE(streamCtx, req.Model, handle.Metadata.Model, pr, flushWriter{w: w, flusher: flusher})
+	runErr := <-errCh
+	if runErr != nil {
+		telemetry.Error(h.logger, streamCtx, "gen_ai.gateway.stream.failed",
+			slog.String("event.name", "gen_ai.gateway.stream.failed"),
+			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
+			slog.Any("error", runErr),
+		)
+		errMsg := runErr.Error()
+		var upstreamErr *providers.UpstreamError
+		if errors.As(runErr, &upstreamErr) {
+			errMsg = upstreamErr.Message
+		}
+		fmt.Fprintf(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":%q}}\n\n", errMsg)
+		flusher.Flush()
+		return
+	}
+	if translateErr != nil {
+		telemetry.Error(h.logger, streamCtx, "gen_ai.gateway.stream.translate_failed",
+			slog.String("event.name", "gen_ai.gateway.stream.translate_failed"),
+			slog.Any("error", translateErr),
+		)
+	}
+}
+
+// applyRuntimeHeaders sets X-Runtime-* headers consistent with the chat completion handler.
+func applyRuntimeHeaders(w http.ResponseWriter,
+	provider, providerKind, routeReason,
+	requestedModel, canonicalRequestedModel,
+	model, canonicalModel string,
+	cacheHit bool, cacheType string,
+	traceID, spanID string,
+	semanticStrategy, semanticIndex string, semanticSimilarity float64,
+	attempts, retries int, fallbackFrom string,
+	costMicrosUSD int64,
+) {
+	w.Header().Set("X-Runtime-Provider", provider)
+	w.Header().Set("X-Runtime-Provider-Kind", providerKind)
+	w.Header().Set("X-Runtime-Route-Reason", routeReason)
+	w.Header().Set("X-Runtime-Requested-Model", requestedModel)
+	w.Header().Set("X-Runtime-Requested-Model-Canonical", canonicalRequestedModel)
+	w.Header().Set("X-Runtime-Model", model)
+	w.Header().Set("X-Runtime-Model-Canonical", canonicalModel)
+	w.Header().Set("X-Runtime-Cache", strconv.FormatBool(cacheHit))
+	w.Header().Set("X-Runtime-Cache-Type", cacheType)
+	w.Header().Set("X-Trace-Id", traceID)
+	w.Header().Set("X-Span-Id", spanID)
+	if semanticStrategy != "" {
+		w.Header().Set("X-Runtime-Semantic-Strategy", semanticStrategy)
+	}
+	if semanticIndex != "" {
+		w.Header().Set("X-Runtime-Semantic-Index", semanticIndex)
+	}
+	if semanticSimilarity > 0 {
+		w.Header().Set("X-Runtime-Semantic-Similarity", fmt.Sprintf("%.6f", semanticSimilarity))
+	}
+	w.Header().Set("X-Runtime-Attempts", strconv.Itoa(attempts))
+	w.Header().Set("X-Runtime-Retries", strconv.Itoa(retries))
+	if fallbackFrom != "" {
+		w.Header().Set("X-Runtime-Fallback-From", fallbackFrom)
+	}
+	w.Header().Set("X-Runtime-Cost-USD", formatUSD(costMicrosUSD))
+}
+
+func writeMessagesError(w http.ResponseWriter, err error) {
+	statusCode := http.StatusInternalServerError
+	if gateway.IsClientError(err) {
+		statusCode = http.StatusBadRequest
+	}
+	if gateway.IsDeniedError(err) {
+		statusCode = http.StatusForbidden
+	}
+	errMsg := err.Error()
+	errType := "api_error"
+	var upstreamErr *providers.UpstreamError
+	if errors.As(err, &upstreamErr) {
+		statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
+		errMsg = upstreamErr.Message
+		if upstreamErr.Type != "" {
+			errType = upstreamErr.Type
+		}
+	}
+	WriteJSON(w, statusCode, map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    errType,
+			"message": errMsg,
+		},
+	})
+}
+
+func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
+	if strings.TrimSpace(req.Model) == "" {
+		return types.ChatRequest{}, fmt.Errorf("field \"model\" is required")
+	}
+	if len(req.Messages) == 0 {
+		return types.ChatRequest{}, fmt.Errorf("field \"messages\" must not be empty")
+	}
+	if req.MaxTokens <= 0 {
+		return types.ChatRequest{}, fmt.Errorf("field \"max_tokens\" is required")
+	}
+
+	messages := make([]types.Message, 0, len(req.Messages)+1)
+
+	if system, err := decodeAnthropicSystem(req.System); err != nil {
+		return types.ChatRequest{}, err
+	} else if system != "" {
+		messages = append(messages, types.Message{Role: "system", Content: system})
+	}
+
+	for i, m := range req.Messages {
+		converted, err := convertAnthropicInboundMessage(m)
+		if err != nil {
+			return types.ChatRequest{}, fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		messages = append(messages, converted...)
+	}
+
+	tools := make([]types.Tool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		schema := t.InputSchema
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{}`)
+		}
+		tools = append(tools, types.Tool{
+			Type: "function",
+			Function: types.ToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  schema,
+			},
+		})
+	}
+
+	toolChoice := anthropicInboundToolChoice(req.ToolChoice)
+
+	tenant := ""
+	if req.Metadata != nil {
+		tenant = req.Metadata.UserID
+	}
+	if principal.Tenant != "" {
+		tenant = principal.Tenant
+	}
+	scope := requestscope.Build(principal, tenant, req.Provider)
+
+	return types.ChatRequest{
+		RequestID:     requestID,
+		SessionID:     req.SessionID,
+		SessionTitle:  req.SessionTitle,
+		Model:         req.Model,
+		Messages:      messages,
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
+		StopSequences: req.StopSequences,
+		Scope:         scope,
+		Tools:         tools,
+		ToolChoice:    toolChoice,
+		Stream:        req.Stream,
+	}, nil
+}
+
+// decodeAnthropicSystem accepts either a plain string or an array of text blocks.
+func decodeAnthropicSystem(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil
+	}
+	var blocks []AnthropicInboundContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", fmt.Errorf("field \"system\" must be a string or an array of content blocks")
+	}
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == "" || b.Type == "text" {
+			if text := strings.TrimSpace(b.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// convertAnthropicInboundMessage converts one Anthropic message into one or more
+// internal messages (tool_result blocks become individual "tool" role messages
+// so the OpenAI provider can emit them as tool messages).
+func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message, error) {
+	role := strings.TrimSpace(m.Role)
+	if role != "user" && role != "assistant" {
+		return nil, fmt.Errorf("role %q is not supported", role)
+	}
+
+	// Content may be a string.
+	var asString string
+	if err := json.Unmarshal(m.Content, &asString); err == nil {
+		return []types.Message{{Role: role, Content: asString}}, nil
+	}
+
+	var blocks []AnthropicInboundContentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return nil, fmt.Errorf("content must be a string or an array of content blocks")
+	}
+
+	out := make([]types.Message, 0, 1)
+	var textParts []string
+	var toolCalls []types.ToolCall
+
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if t := b.Text; t != "" {
+				textParts = append(textParts, t)
+			}
+		case "tool_use":
+			args := string(b.Input)
+			if args == "" {
+				args = "{}"
+			}
+			toolCalls = append(toolCalls, types.ToolCall{
+				ID:   b.ID,
+				Type: "function",
+				Function: types.ToolCallFunction{Name: b.Name, Arguments: args},
+			})
+		case "tool_result":
+			// Emit accumulated text/tool_use first.
+			if len(textParts) > 0 || len(toolCalls) > 0 {
+				out = append(out, buildAssistantOrUserMessage(role, textParts, toolCalls))
+				textParts = nil
+				toolCalls = nil
+			}
+			resultText, err := decodeToolResultContent(b.Content)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, types.Message{
+				Role:       "tool",
+				Content:    resultText,
+				ToolCallID: b.ToolUseID,
+			})
+		default:
+			// Unknown block types (image, document, thinking, ...): ignore for now.
+		}
+	}
+
+	if len(textParts) > 0 || len(toolCalls) > 0 || len(out) == 0 {
+		out = append(out, buildAssistantOrUserMessage(role, textParts, toolCalls))
+	}
+	return out, nil
+}
+
+func buildAssistantOrUserMessage(role string, textParts []string, toolCalls []types.ToolCall) types.Message {
+	msg := types.Message{
+		Role:    role,
+		Content: strings.Join(textParts, "\n"),
+	}
+	if len(toolCalls) > 0 {
+		msg.ToolCalls = toolCalls
+	}
+	return msg
+}
+
+func decodeToolResultContent(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil
+	}
+	var blocks []AnthropicInboundContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", fmt.Errorf("tool_result content must be a string or an array of content blocks")
+	}
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == "" || b.Type == "text" {
+			if t := b.Text; t != "" {
+				parts = append(parts, t)
+			}
+		}
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+// anthropicInboundToolChoice converts Anthropic tool_choice ({"type":"auto"|"any"|"tool","name":...})
+// to the OpenAI tool_choice shape used internally.
+func anthropicInboundToolChoice(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var obj struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil
+	}
+	switch obj.Type {
+	case "auto":
+		return json.RawMessage(`"auto"`)
+	case "any":
+		return json.RawMessage(`"required"`)
+	case "tool":
+		if obj.Name == "" {
+			return nil
+		}
+		b, _ := json.Marshal(map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": obj.Name},
+		})
+		return b
+	}
+	return nil
+}
+
+// renderAnthropicMessagesResponse converts the internal ChatResponse back to the
+// Anthropic /v1/messages shape.
+func renderAnthropicMessagesResponse(resp *types.ChatResponse) AnthropicMessagesResponse {
+	out := AnthropicMessagesResponse{
+		ID:    resp.ID,
+		Type:  "message",
+		Role:  "assistant",
+		Model: resp.Model,
+		Usage: AnthropicOutboundUsage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		},
+	}
+	if out.ID == "" {
+		out.ID = "msg_" + strings.TrimSpace(resp.Model)
+	}
+	if len(resp.Choices) == 0 {
+		out.StopReason = "end_turn"
+		return out
+	}
+	choice := resp.Choices[0]
+	blocks := make([]AnthropicOutboundContentBlock, 0, 1+len(choice.Message.ToolCalls))
+	if text := strings.TrimSpace(choice.Message.Content); text != "" {
+		blocks = append(blocks, AnthropicOutboundContentBlock{Type: "text", Text: choice.Message.Content})
+	}
+	for _, tc := range choice.Message.ToolCalls {
+		input := json.RawMessage(tc.Function.Arguments)
+		if len(input) == 0 || !json.Valid(input) {
+			input = json.RawMessage(`{}`)
+		}
+		blocks = append(blocks, AnthropicOutboundContentBlock{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: input,
+		})
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, AnthropicOutboundContentBlock{Type: "text", Text: ""})
+	}
+	out.Content = blocks
+	out.StopReason = openAIFinishToAnthropicStopReason(choice.FinishReason)
+	return out
+}
+
+func openAIFinishToAnthropicStopReason(finish string) string {
+	switch finish {
+	case "stop", "":
+		return "end_turn"
+	case "length":
+		return "max_tokens"
+	case "tool_calls", "tool_use":
+		return "tool_use"
+	case "content_filter":
+		return "end_turn"
+	default:
+		return finish
+	}
+}
+
+// translateOpenAIToAnthropicSSE reads OpenAI chat.completion.chunk SSE lines
+// from src and writes Anthropic event-stream events to dst.
+func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolvedModel string, src io.Reader, dst io.Writer) error {
+	type openAIDelta struct {
+		Role      string `json:"role"`
+		Content   string `json:"content"`
+		ToolCalls []struct {
+			Index    int    `json:"index"`
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+	}
+	type openAIChoice struct {
+		Index        int         `json:"index"`
+		Delta        openAIDelta `json:"delta"`
+		FinishReason *string     `json:"finish_reason"`
+	}
+	type openAIUsageChunk struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	}
+	type openAIChunk struct {
+		ID      string            `json:"id"`
+		Model   string            `json:"model"`
+		Choices []openAIChoice    `json:"choices"`
+		Usage   *openAIUsageChunk `json:"usage,omitempty"`
+	}
+
+	messageID := ""
+	model := resolvedModel
+	if model == "" {
+		model = requestedModel
+	}
+
+	// Block bookkeeping: index 0 is text block (lazily opened on first text).
+	textOpen := false
+	textIndex := 0
+	nextBlockIndex := 1
+	// toolBlocks tracks OpenAI tool_calls-index -> anthropic block index (and name/id)
+	type toolState struct {
+		blockIndex int
+		id         string
+		name       string
+		started    bool
+	}
+	toolBlocks := make(map[int]*toolState)
+
+	promptTokens := 0
+	completionTokens := 0
+	var stopReason string
+	started := false
+
+	writeEvent := func(event string, payload any) error {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(dst, "event: %s\ndata: %s\n\n", event, b); err != nil {
+			return err
+		}
+		if f, ok := dst.(interface{ Flush() }); ok {
+			f.Flush()
+		}
+		return nil
+	}
+
+	ensureMessageStart := func() error {
+		if started {
+			return nil
+		}
+		started = true
+		if messageID == "" {
+			messageID = "msg_stream"
+		}
+		return writeEvent("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":            messageID,
+				"type":          "message",
+				"role":          "assistant",
+				"model":         model,
+				"content":       []any{},
+				"stop_reason":   nil,
+				"stop_sequence": nil,
+				"usage": map[string]any{
+					"input_tokens":  0,
+					"output_tokens": 0,
+				},
+			},
+		})
+	}
+
+	ensureTextBlockOpen := func() error {
+		if textOpen {
+			return nil
+		}
+		textOpen = true
+		return writeEvent("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         textIndex,
+			"content_block": map[string]any{"type": "text", "text": ""},
+		})
+	}
+
+	scanner := bufio.NewScanner(src)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk openAIChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.ID != "" && messageID == "" {
+			messageID = chunk.ID
+		}
+		if chunk.Model != "" {
+			model = chunk.Model
+		}
+		if err := ensureMessageStart(); err != nil {
+			return err
+		}
+
+		if chunk.Usage != nil {
+			if chunk.Usage.PromptTokens > 0 {
+				promptTokens = chunk.Usage.PromptTokens
+			}
+			if chunk.Usage.CompletionTokens > 0 {
+				completionTokens = chunk.Usage.CompletionTokens
+			}
+		}
+
+		for _, choice := range chunk.Choices {
+			// Text delta
+			if choice.Delta.Content != "" {
+				if err := ensureTextBlockOpen(); err != nil {
+					return err
+				}
+				if err := writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": textIndex,
+					"delta": map[string]any{"type": "text_delta", "text": choice.Delta.Content},
+				}); err != nil {
+					return err
+				}
+			}
+			// Tool call deltas
+			for _, tc := range choice.Delta.ToolCalls {
+				state, ok := toolBlocks[tc.Index]
+				if !ok {
+					state = &toolState{blockIndex: nextBlockIndex}
+					nextBlockIndex++
+					toolBlocks[tc.Index] = state
+				}
+				if tc.ID != "" {
+					state.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					state.name = tc.Function.Name
+				}
+				if !state.started && state.id != "" && state.name != "" {
+					state.started = true
+					if err := writeEvent("content_block_start", map[string]any{
+						"type":  "content_block_start",
+						"index": state.blockIndex,
+						"content_block": map[string]any{
+							"type":  "tool_use",
+							"id":    state.id,
+							"name":  state.name,
+							"input": map[string]any{},
+						},
+					}); err != nil {
+						return err
+					}
+				}
+				if tc.Function.Arguments != "" && state.started {
+					if err := writeEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": state.blockIndex,
+						"delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments},
+					}); err != nil {
+						return err
+					}
+				}
+			}
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				stopReason = openAIFinishToAnthropicStopReason(*choice.FinishReason)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Ensure message_start even for empty streams.
+	if err := ensureMessageStart(); err != nil {
+		return err
+	}
+
+	// Close blocks.
+	if textOpen {
+		if err := writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": textIndex,
+		}); err != nil {
+			return err
+		}
+	}
+	for _, state := range toolBlocks {
+		if !state.started {
+			continue
+		}
+		if err := writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": state.blockIndex,
+		}); err != nil {
+			return err
+		}
+	}
+
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	if err := writeEvent("message_delta", map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   stopReason,
+			"stop_sequence": nil,
+		},
+		"usage": map[string]any{
+			"input_tokens":  promptTokens,
+			"output_tokens": completionTokens,
+		},
+	}); err != nil {
+		return err
+	}
+	if err := writeEvent("message_stop", map[string]any{"type": "message_stop"}); err != nil {
+		return err
+	}
+	return nil
+}

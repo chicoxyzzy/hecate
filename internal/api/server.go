@@ -58,6 +58,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("GET /admin/providers", handler.HandleProviderStatus)
 	mux.HandleFunc("GET /v1/models", handler.HandleModels)
 	mux.HandleFunc("POST /v1/chat/completions", handler.HandleChatCompletions)
+	mux.HandleFunc("POST /v1/messages", handler.HandleMessages)
 
 	return Chain(
 		mux,
