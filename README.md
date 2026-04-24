@@ -23,10 +23,13 @@ Hecate also now includes the first coding-runtime slice: task, run, step, artifa
 What Hecate already does well:
 
 - OpenAI-compatible gateway API with Anthropic and OpenAI-compatible provider support
+- Anthropic extended thinking pass-through (thinking/redacted_thinking blocks, streaming)
 - cloud and local model routing with retries, failover, health tracking, and discovery
 - exact and semantic cache paths
 - tenant-aware auth, policy enforcement, budgets, and control-plane persistence
+- per-API-key rate limiting with token-bucket enforcement and standard rate-limit headers
 - structured logs, trace inspection, and OTLP export for traces, metrics, and logs
+- opt-in request/response body capture in traces (`GATEWAY_TRACE_BODIES=true`)
 - operator UI for models, providers, playground, runs, access, budgets, and control plane
 - basic coding-runtime execution with approvals, sandboxing, workspaces, and live run streaming
 
@@ -187,6 +190,7 @@ Observability currently includes:
 - OTLP HTTP export for traces
 - OTLP HTTP export for metrics
 - OTLP HTTP export for logs
+- opt-in request/response body capture in traces (set `GATEWAY_TRACE_BODIES=true`; max size tunable via `GATEWAY_TRACE_BODY_MAX_BYTES`, default 4096)
 
 For a practical telemetry guide, see [`docs/telemetry.md`](docs/telemetry.md).
 
@@ -291,7 +295,9 @@ Implemented:
 - [x] Exact cache
 - [x] Semantic cache
 - [x] Static and persisted pricebook-backed cost estimation
-- [x] Budget enforcement with top-ups, resets, warning thresholds, and history
+- [x] Budget enforcement with top-ups, resets, warning thresholds, history, and 402 on exhaustion
+- [x] Per-API-key rate limiting with configurable burst and RPM (`GATEWAY_RATE_LIMIT_*`)
+- [x] Anthropic extended thinking pass-through (thinking/redacted_thinking, streaming delta events)
 - [x] Background retention and pruning for traces, cache, budget history, and audit events
 - [x] Tenant-aware auth and persisted control-plane state
 - [x] Persisted provider config with encrypted secret storage and runtime reload
