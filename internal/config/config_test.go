@@ -150,26 +150,34 @@ func TestSplitCSVTrimsAndDropsEmptyValues(t *testing.T) {
 }
 
 func TestLoadProvidersFromEnvUsesGenericProviderPrefixes(t *testing.T) {
-	t.Setenv("GATEWAY_PROVIDERS", "openai,ollama,anthropic")
 	t.Setenv("PROVIDER_OPENAI_API_KEY", "openai-secret")
 	t.Setenv("PROVIDER_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
 	t.Setenv("PROVIDER_ANTHROPIC_API_KEY", "anthropic-secret")
 
 	cfg := LoadFromEnv()
-	if len(cfg.Providers.OpenAICompatible) != 3 {
-		t.Fatalf("provider count = %d, want 3", len(cfg.Providers.OpenAICompatible))
+	if len(cfg.Providers.OpenAICompatible) != len(BuiltInProviders()) {
+		t.Fatalf("provider count = %d, want %d built-ins", len(cfg.Providers.OpenAICompatible), len(BuiltInProviders()))
 	}
-	if cfg.Providers.OpenAICompatible[0].Name != "openai" {
-		t.Fatalf("first provider = %q, want openai", cfg.Providers.OpenAICompatible[0].Name)
+	openai, ok := testProviderByName(cfg.Providers.OpenAICompatible, "openai")
+	if !ok {
+		t.Fatal("openai provider missing")
 	}
-	if cfg.Providers.OpenAICompatible[0].APIKey != "openai-secret" {
-		t.Fatalf("openai api key = %q, want openai-secret", cfg.Providers.OpenAICompatible[0].APIKey)
+	if openai.APIKey != "openai-secret" {
+		t.Fatalf("openai api key = %q, want openai-secret", openai.APIKey)
 	}
-	if cfg.Providers.OpenAICompatible[1].Kind != "local" {
-		t.Fatalf("ollama kind = %q, want local", cfg.Providers.OpenAICompatible[1].Kind)
+	ollama, ok := testProviderByName(cfg.Providers.OpenAICompatible, "ollama")
+	if !ok {
+		t.Fatal("ollama provider missing")
 	}
-	if cfg.Providers.OpenAICompatible[2].Protocol != "anthropic" {
-		t.Fatalf("anthropic protocol = %q, want anthropic", cfg.Providers.OpenAICompatible[2].Protocol)
+	if ollama.Kind != "local" {
+		t.Fatalf("ollama kind = %q, want local", ollama.Kind)
+	}
+	anthropic, ok := testProviderByName(cfg.Providers.OpenAICompatible, "anthropic")
+	if !ok {
+		t.Fatal("anthropic provider missing")
+	}
+	if anthropic.Protocol != "anthropic" {
+		t.Fatalf("anthropic protocol = %q, want anthropic", anthropic.Protocol)
 	}
 }
 
@@ -254,19 +262,31 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadProvidersFromEnvDerivesProvidersFromCoreEnvKeys(t *testing.T) {
-	t.Setenv("GATEWAY_PROVIDERS", "")
-	t.Setenv("PROVIDER_OPENAI_API_KEY", "openai-secret")
-	t.Setenv("PROVIDER_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+func TestLoadProvidersFromEnvIncludesCustomProviderFromCoreEnvKeys(t *testing.T) {
+	t.Setenv("PROVIDER_CUSTOM_BASE_URL", "https://example.com/v1")
+	t.Setenv("PROVIDER_CUSTOM_API_KEY", "custom-secret")
 
 	cfg := LoadFromEnv()
-	if len(cfg.Providers.OpenAICompatible) != 2 {
-		t.Fatalf("provider count = %d, want 2", len(cfg.Providers.OpenAICompatible))
+	if len(cfg.Providers.OpenAICompatible) != len(BuiltInProviders())+1 {
+		t.Fatalf("provider count = %d, want %d built-ins + custom", len(cfg.Providers.OpenAICompatible), len(BuiltInProviders()))
 	}
-	if cfg.Providers.OpenAICompatible[0].Name != "openai" {
-		t.Fatalf("first provider = %q, want openai", cfg.Providers.OpenAICompatible[0].Name)
+	custom, ok := testProviderByName(cfg.Providers.OpenAICompatible, "custom")
+	if !ok {
+		t.Fatal("custom provider missing")
 	}
-	if cfg.Providers.OpenAICompatible[1].Name != "ollama" {
-		t.Fatalf("second provider = %q, want ollama", cfg.Providers.OpenAICompatible[1].Name)
+	if custom.BaseURL != "https://example.com/v1" {
+		t.Fatalf("custom base_url = %q, want https://example.com/v1", custom.BaseURL)
 	}
+	if custom.APIKey != "custom-secret" {
+		t.Fatalf("custom api key = %q, want custom-secret", custom.APIKey)
+	}
+}
+
+func testProviderByName(items []OpenAICompatibleProviderConfig, name string) (OpenAICompatibleProviderConfig, bool) {
+	for _, item := range items {
+		if item.Name == name {
+			return item, true
+		}
+	}
+	return OpenAICompatibleProviderConfig{}, false
 }

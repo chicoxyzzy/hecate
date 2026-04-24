@@ -576,12 +576,18 @@ func defaultPricebookConfig() PricebookConfig {
 }
 
 func loadProvidersFromEnv() ProvidersConfig {
-	names := splitCSV(os.Getenv("GATEWAY_PROVIDERS"))
-	if len(names) == 0 {
-		names = deriveProviderNamesFromEnv()
+	names := make([]string, 0, len(BuiltInProviders()))
+	seen := make(map[string]struct{}, len(BuiltInProviders()))
+	for _, builtIn := range BuiltInProviders() {
+		names = append(names, builtIn.ID)
+		seen[builtIn.ID] = struct{}{}
 	}
-	if len(names) == 0 {
-		names = []string{"openai"}
+	for _, name := range deriveProviderNamesFromEnv() {
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		names = append(names, name)
+		seen[name] = struct{}{}
 	}
 	items := make([]OpenAICompatibleProviderConfig, 0, len(names))
 	for _, name := range names {

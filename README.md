@@ -85,17 +85,8 @@ cp .env.example .env
 ```
 
 2. Configure at least one provider in `.env`.
-
-`GATEWAY_PROVIDERS` is optional. Hecate can infer enabled providers from core
-provider envs like `PROVIDER_<NAME>_API_KEY` and `PROVIDER_<NAME>_BASE_URL`.
-
-Example cloud + local:
-
-```bash
-GATEWAY_PROVIDERS=openai,ollama
-GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
-PROVIDER_OPENAI_API_KEY=your_api_key_here
-```
+Configure each provider with core envs
+like `PROVIDER_<NAME>_API_KEY` and `PROVIDER_<NAME>_BASE_URL`.
 
 Example cloud-only:
 

@@ -70,7 +70,6 @@ func providerPresets() []providerPreset {
 func newProviderPreset(id, name, kind, protocol, baseURL, apiKeyEnv, apiVersion, defaultModel, docsURL, description string) providerPreset {
 	var envLines []string
 	prefix := "PROVIDER_" + strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(id, "-", "_"), ".", "_")) + "_"
-	envLines = append(envLines, fmt.Sprintf("GATEWAY_PROVIDERS=%s", id))
 	if apiKeyEnv != "" {
 		envLines = append(envLines, fmt.Sprintf("%s=your_api_key_here", apiKeyEnv))
 	}
