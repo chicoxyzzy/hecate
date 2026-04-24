@@ -64,17 +64,23 @@ Task client flow:
 
 ```mermaid
 flowchart TD
-    TaskClient["Task client"] --> TaskApi["Task API"];
-    TaskApi --> Orchestrator["Orchestrator runner"];
-    Orchestrator --> LeaseQueue["Lease queue (memory or postgres)"];
-    LeaseQueue --> WorkerA["Worker A claim"];
-    LeaseQueue --> WorkerB["Worker B claim"];
+    Client["Task client or UI"] --> TasksApi["/v1/tasks"];
+    TasksApi --> Runner["Orchestrator runner"];
+    Runner --> Queue["Run queue"];
+    Queue -->|"Claim lease"| WorkerA["Worker A"];
+    Queue -->|"Claim lease"| WorkerB["Worker B"];
+    WorkerA -->|"Heartbeat and extend lease"| Queue;
+    WorkerB -->|"Ack or nack"| Queue;
     WorkerA --> Sandboxd["sandboxd"];
     WorkerB --> Sandboxd;
-    Sandboxd --> TaskState["Task state"];
-    Sandboxd --> Events["Run events"];
-    TaskState --> Stream["SSE stream and replay"];
-    Events --> Stream;
+    Sandboxd --> State["Task state store"];
+    Sandboxd --> RunEvents["Run events"];
+    Queue --> Stats["Runtime stats"];
+    State --> Stats;
+    RunEvents --> Stats;
+    State --> Snapshot["Run snapshot"];
+    RunEvents --> Snapshot;
+    Snapshot --> Stream["SSE stream with replay cursor"];
 ```
 
 ## Quick Start
@@ -238,29 +244,6 @@ Use:
 - Discovery: `GET /v1/models`
 
 For copy-paste setup and auth/header examples, see [`docs/client-integration.md`](docs/client-integration.md).
-
-## Durable Queue Execution Flow
-
-```mermaid
-flowchart TD
-    Client["Task client or UI"] --> TasksApi["/v1/tasks"];
-    TasksApi --> Runner["Orchestrator runner"];
-    Runner --> Queue["Run queue"];
-    Queue -->|"Claim lease"| WorkerA["Worker A"];
-    Queue -->|"Claim lease"| WorkerB["Worker B"];
-    WorkerA -->|"Heartbeat and extend lease"| Queue;
-    WorkerB -->|"Ack or nack"| Queue;
-    WorkerA --> Sandboxd["sandboxd"];
-    WorkerB --> Sandboxd;
-    Sandboxd --> State["Task state store"];
-    Sandboxd --> RunEvents["Run events"];
-    Queue --> Stats["Runtime stats"];
-    State --> Stats;
-    RunEvents --> Stats;
-    State --> Snapshot["Run snapshot"];
-    RunEvents --> Snapshot;
-    Snapshot --> Stream["SSE stream with replay cursor"];
-```
 
 ## Config Highlights
 
