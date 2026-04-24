@@ -269,3 +269,102 @@ For request-level debugging:
 That local HTTP path is usually faster than jumping straight into an OTLP backend while developing.
 
 For task/run debugging, use `GET /v1/tasks/{task_id}/runs/{run_id}` to retrieve the run record with its `trace_id`, then look up the trace with `GET /v1/traces?request_id=<request_id>`. The queue wait and step durations are recorded as span attributes on the relevant spans.
+
+## Known-Good OTLP Recipes
+
+### Local dev recipe (collector-first)
+
+Use a local OpenTelemetry Collector as the single ingest endpoint and fan out to
+your preferred backend.
+
+1. Point Hecate to collector OTLP/HTTP:
+
+```bash
+GATEWAY_OTEL_TRACES_ENABLED=true
+GATEWAY_OTEL_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
+GATEWAY_OTEL_METRICS_ENABLED=true
+GATEWAY_OTEL_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+GATEWAY_OTEL_LOGS_ENABLED=true
+GATEWAY_OTEL_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+```
+
+2. Run collector with an OTLP receiver and your exporter(s), for example:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+
+processors:
+  batch:
+
+exporters:
+  debug: {}
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlphttp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+```
+
+This keeps Hecate vendor-neutral and lets you change backends without touching runtime settings.
+
+### Production collector topology
+
+- run collector as a sidecar/daemonset near Hecate pods
+- keep Hecate exporting OTLP/HTTP only to local collector
+- do auth, retries, batching, sampling, and fan-out in collector
+- route to one or more backends (Tempo/Jaeger/Datadog/New Relic/etc.)
+- monitor collector queue and retry metrics as part of SLOs
+
+### Secure headers and token guidance
+
+- prefer short-lived ingest credentials
+- set secrets in `GATEWAY_OTEL_*_HEADERS` via secret manager, not plaintext files
+- avoid reusing provider API keys for telemetry ingest
+- rotate ingest tokens and verify by checking `last_activity_at`/error counters in runtime telemetry health
+
+## Troubleshooting Runbooks
+
+### No traces visible in backend
+
+1. Verify `GATEWAY_OTEL_TRACES_ENABLED=true`.
+2. Check `GET /admin/runtime/stats` for telemetry signal error counters/messages.
+3. Confirm collector receiver endpoint and path (`/v1/traces`).
+4. Send a request and confirm `X-Trace-Id` is returned.
+5. Query `GET /v1/traces?request_id=...` locally; if local trace exists but backend does not, the issue is exporter/collector path.
+
+### High-cardinality warnings in backend
+
+1. Confirm `hecate.error.kind` values are in the normalized closed set.
+2. Avoid passing unbounded user input as metric labels.
+3. Verify model/provider labels use normalized names.
+4. Keep ad-hoc fields in log bodies/events, not metric attributes.
+
+### Exporter timeout/backpressure symptoms
+
+1. Inspect runtime telemetry health counters (`error_count`, `last_error`).
+2. Increase collector resources or reduce downstream latency.
+3. Tune batch and timeout env knobs to avoid sustained queue growth.
+4. Validate that metrics/logs/traces endpoints are reachable from runtime network.
+
+## Release Validation Checklist
+
+- traces, metrics, and logs can all be exported through a generic OTLP collector
+- `GET /admin/runtime/stats` returns runtime + telemetry signal health
+- runs UI shows telemetry health panel and SLO cards without errors
+- run timeline links resolve to trace payloads for recent task runs
+- docs recipes and troubleshooting steps were exercised in a smoke environment

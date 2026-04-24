@@ -9,6 +9,7 @@ import type {
   ModelResponse,
   ProviderPresetResponse,
   ProviderStatusResponse,
+  RuntimeStatsResponse,
   RequestLedgerResponse,
   RuntimeHeaders,
   SessionResponse,
@@ -145,6 +146,10 @@ export async function getModels(authToken?: string): Promise<ModelResponse> {
 
 export async function getProviders(authToken?: string): Promise<ProviderStatusResponse> {
   return fetchJSON<ProviderStatusResponse>("/admin/providers", { authToken });
+}
+
+export async function getRuntimeStats(authToken?: string): Promise<RuntimeStatsResponse> {
+  return fetchJSON<RuntimeStatsResponse>("/admin/runtime/stats", { authToken });
 }
 
 export async function getProviderPresets(authToken?: string): Promise<ProviderPresetResponse> {

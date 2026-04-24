@@ -5,6 +5,7 @@ import {
   cancelTaskRun,
   createTask,
   getTrace,
+  getRuntimeStats,
   getTask,
   getTaskApprovals,
   getTaskRunArtifacts,
@@ -26,6 +27,7 @@ import type {
   TaskRunEventRecord,
   TaskRunRecord,
   TaskStepRecord,
+  RuntimeStatsResponse,
 } from "../../types/runtime";
 import { DefinitionList, EmptyState, InlineNotice, MetricTile, SelectField, ShellSection, StatusPill, Surface, TextAreaField, TextField, ToolbarButton } from "../shared/ConsolePrimitives";
 import "./RunsView.css";
@@ -57,6 +59,8 @@ export function RunsView({ authToken, session }: Props) {
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
   const [selectedArtifactID, setSelectedArtifactID] = useState("");
   const [traceSummary, setTraceSummary] = useState<string>("");
+  const [runtimeStats, setRuntimeStats] = useState<RuntimeStatsResponse["data"] | null>(null);
+  const [runtimeStatsError, setRuntimeStatsError] = useState("");
   const [streamState, setStreamState] = useState<StreamState>("idle");
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<"" | "approve" | "reject" | "cancel" | "create" | "create_start" | "start">("");
@@ -78,6 +82,62 @@ export function RunsView({ authToken, session }: Props) {
   const selectedArtifact = useMemo(() => artifacts.find((artifact) => artifact.id === selectedArtifactID) ?? null, [artifacts, selectedArtifactID]);
   const stdoutArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stdout") ?? null, [artifacts]);
   const stderrArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stderr") ?? null, [artifacts]);
+  const [eventTypeFilter, setEventTypeFilter] = useState("all");
+  const [eventResultFilter, setEventResultFilter] = useState("all");
+  const [eventErrorKindFilter, setEventErrorKindFilter] = useState("all");
+  const [eventSearch, setEventSearch] = useState("");
+
+  const telemetrySignals = useMemo(() => Object.entries(runtimeStats?.telemetry?.signals ?? {}), [runtimeStats]);
+  const filteredRunEvents = useMemo(
+    () =>
+      runEvents.filter((event) => {
+        const data = event.data ?? {};
+        const eventType = event.event_type || "";
+        const eventResult = normalizeEventField(data["result"]);
+        const eventErrorKind = normalizeEventField(data["error_kind"]);
+        const searchText = eventSearch.trim().toLowerCase();
+        const searchable = [
+          eventType,
+          String(event.request_id ?? ""),
+          String(event.trace_id ?? ""),
+          String(data["tenant"] ?? ""),
+          String(data["task_id"] ?? ""),
+          String(data["run_id"] ?? ""),
+          eventResult,
+          eventErrorKind,
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        if (eventTypeFilter !== "all" && eventType !== eventTypeFilter) {
+          return false;
+        }
+        if (eventResultFilter !== "all" && eventResult !== eventResultFilter) {
+          return false;
+        }
+        if (eventErrorKindFilter !== "all" && eventErrorKind !== eventErrorKindFilter) {
+          return false;
+        }
+        if (searchText && !searchable.includes(searchText)) {
+          return false;
+        }
+        return true;
+      }),
+    [eventErrorKindFilter, eventResultFilter, eventSearch, eventTypeFilter, runEvents],
+  );
+
+  const eventTypeOptions = useMemo(
+    () => ["all", ...new Set(runEvents.map((event) => event.event_type).filter(Boolean))],
+    [runEvents],
+  );
+  const eventResultOptions = useMemo(
+    () => ["all", ...new Set(runEvents.map((event) => normalizeEventField(event.data?.result)).filter(Boolean))],
+    [runEvents],
+  );
+  const eventErrorKindOptions = useMemo(
+    () => ["all", ...new Set(runEvents.map((event) => normalizeEventField(event.data?.error_kind)).filter(Boolean))],
+    [runEvents],
+  );
 
   const loadRunDetail = useCallback(
     async (taskID: string, runID: string) => {
@@ -160,6 +220,22 @@ export function RunsView({ authToken, session }: Props) {
     [authToken, selectedTaskID, session.isAuthenticated],
   );
 
+  const loadRuntimeStats = useCallback(async () => {
+    if (!session.isAuthenticated) {
+      setRuntimeStats(null);
+      setRuntimeStatsError("");
+      return;
+    }
+    try {
+      const response = await getRuntimeStats(authToken);
+      setRuntimeStats(response.data);
+      setRuntimeStatsError("");
+    } catch (statsError) {
+      setRuntimeStats(null);
+      setRuntimeStatsError(statsError instanceof Error ? statsError.message : "failed to load runtime stats");
+    }
+  }, [authToken, session.isAuthenticated]);
+
   const loadTaskDetail = useCallback(
     async (taskID: string, preferredRunID = "") => {
       if (!taskID || !session.isAuthenticated) {
@@ -200,6 +276,15 @@ export function RunsView({ authToken, session }: Props) {
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    if (!session.isAuthenticated) {
+      return;
+    }
+    void loadRuntimeStats();
+    const interval = window.setInterval(() => void loadRuntimeStats(), 15000);
+    return () => window.clearInterval(interval);
+  }, [loadRuntimeStats, session.isAuthenticated]);
 
   useEffect(() => {
     if (!selectedTaskID || !selectedRunID || !session.isAuthenticated) {
@@ -394,6 +479,14 @@ export function RunsView({ authToken, session }: Props) {
     }
   }
 
+  function handleOpenTrace(requestID?: string) {
+    if (!requestID) {
+      return;
+    }
+    const url = `/v1/traces?request_id=${encodeURIComponent(requestID)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   async function handleCreateTask(startImmediately: boolean) {
     if (!taskPrompt.trim()) {
       setNotice({ tone: "error", message: "Prompt is required." });
@@ -498,6 +591,7 @@ export function RunsView({ authToken, session }: Props) {
               <ToolbarButton onClick={() => void loadTasks(selectedTaskID, selectedRunID)} tone="primary">
                 Refresh runs
               </ToolbarButton>
+              <ToolbarButton onClick={() => void loadRuntimeStats()}>Refresh stats</ToolbarButton>
             </div>
           )}
         >
@@ -512,6 +606,46 @@ export function RunsView({ authToken, session }: Props) {
 
         {error ? <InlineNotice message={error} tone="error" /> : null}
         {notice ? <InlineNotice message={notice.message} tone={notice.tone === "success" ? "success" : "error"} /> : null}
+        {runtimeStatsError ? <InlineNotice message={`Runtime stats: ${runtimeStatsError}`} tone="error" /> : null}
+
+        <ShellSection eyebrow="Observability" title="Telemetry health and SLOs">
+          <div className="two-column-grid">
+            <Surface>
+              <div className="metric-grid metric-grid--wide">
+                <MetricTile label="Queue wait p50" value={formatMetricMs(runtimeStats?.slo?.queue_wait_ms_p50)} />
+                <MetricTile label="Queue wait p95" value={formatMetricMs(runtimeStats?.slo?.queue_wait_ms_p95)} />
+                <MetricTile label="Approval wait p50" value={formatMetricMs(runtimeStats?.slo?.approval_wait_ms_p50)} />
+                <MetricTile label="Approval wait p95" value={formatMetricMs(runtimeStats?.slo?.approval_wait_ms_p95)} />
+                <MetricTile label="Run success rate" value={formatRate(runtimeStats?.slo?.run_success_rate)} />
+                <MetricTile label="Run error rate" value={formatRate(runtimeStats?.slo?.run_error_rate)} />
+              </div>
+            </Surface>
+            <Surface>
+              {telemetrySignals.length > 0 ? (
+                <div className="stack-sm">
+                  {telemetrySignals.map(([name, signal]) => (
+                    <div className="runs-step-card" key={name}>
+                      <div className="action-row action-row--wide">
+                        <strong>{name}</strong>
+                        <StatusPill label={signal.enabled ? "enabled" : "disabled"} tone={signal.enabled ? "healthy" : "warning"} />
+                      </div>
+                      <div className="runs-inline-meta">
+                        <span>activity: {signal.activity_count ?? 0}</span>
+                        <span>errors: {signal.error_count ?? 0}</span>
+                        {signal.last_activity_at ? <span>last activity: {formatDateTime(signal.last_activity_at)}</span> : null}
+                        {signal.last_error_at ? <span>last error: {formatDateTime(signal.last_error_at)}</span> : null}
+                      </div>
+                      {signal.endpoint ? <p className="body-muted">endpoint: {signal.endpoint}</p> : null}
+                      {signal.last_error ? <p className="body-muted">last error: {signal.last_error}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No telemetry signal health yet" detail="Runtime stats endpoint does not expose telemetry signal status in this environment." />
+              )}
+            </Surface>
+          </div>
+        </ShellSection>
 
         <ShellSection eyebrow="Compose" title="Create task">
           <Surface tone="strong">
@@ -570,6 +704,7 @@ export function RunsView({ authToken, session }: Props) {
                       <StatusPill label={selectedRun.status} tone={runStatusTone(selectedRun.status)} />
                       {selectedRun.model ? <StatusPill label={selectedRun.model} tone="neutral" /> : null}
                       {selectedRun.provider ? <StatusPill label={selectedRun.provider} tone="neutral" /> : null}
+                      {selectedRun.trace_id ? <StatusPill label={`trace:${selectedRun.trace_id}`} tone="neutral" /> : null}
                     </div>
                     <div className="action-row">
                       {canCancelRun(selectedRun.status) ? (
@@ -588,6 +723,7 @@ export function RunsView({ authToken, session }: Props) {
                         </>
                       ) : null}
                       <ToolbarButton onClick={() => void handleLookupTrace()}>Fetch trace</ToolbarButton>
+                      <ToolbarButton onClick={() => handleOpenTrace(selectedRun.request_id)}>Open trace JSON</ToolbarButton>
                     </div>
                   </div>
                   <DefinitionList
@@ -746,17 +882,53 @@ export function RunsView({ authToken, session }: Props) {
 
         <ShellSection eyebrow="Events" title="Run event timeline">
           <Surface>
+            <div className="form-grid">
+              <SelectField label="Event type" onChange={setEventTypeFilter} value={eventTypeFilter}>
+                {eventTypeOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Result" onChange={setEventResultFilter} value={eventResultFilter}>
+                {eventResultOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Error kind" onChange={setEventErrorKindFilter} value={eventErrorKindFilter}>
+                {eventErrorKindOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </SelectField>
+              <TextField
+                label="Search (tenant/task/run/result/error)"
+                onChange={setEventSearch}
+                placeholder="tenant id, task id, run id, result..."
+                value={eventSearch}
+              />
+            </div>
             {runEvents.length > 0 ? (
               <div className="stack-sm">
-                {runEvents.map((event) => (
+                {filteredRunEvents.map((event) => (
                   <div className="runs-step-card" key={`${event.sequence}-${event.id}`}>
                     <div className="action-row action-row--wide">
                       <strong>{event.event_type}</strong>
-                      <StatusPill label={`#${event.sequence}`} tone="neutral" />
+                      <div className="action-row">
+                        <StatusPill label={`#${event.sequence}`} tone="neutral" />
+                        {event.trace_id ? <StatusPill label={event.trace_id} tone="neutral" /> : null}
+                      </div>
                     </div>
                     <div className="runs-inline-meta">
                       <span>{event.created_at ? formatDateTime(event.created_at) : "n/a"}</span>
-                      {event.trace_id ? <span>trace: {event.trace_id}</span> : null}
+                      {normalizeEventField(event.data?.result) ? <span>result: {normalizeEventField(event.data?.result)}</span> : null}
+                      {normalizeEventField(event.data?.error_kind) ? <span>error_kind: {normalizeEventField(event.data?.error_kind)}</span> : null}
+                    </div>
+                    <div className="action-row">
+                      <ToolbarButton onClick={() => handleOpenTrace(event.request_id || selectedRun?.request_id)}>Open trace for event</ToolbarButton>
                     </div>
                   </div>
                 ))}
@@ -891,4 +1063,22 @@ function streamStatusTone(state: StreamState): "neutral" | "healthy" | "warning"
 
 function canCancelRun(status?: string): boolean {
   return status === "queued" || status === "running" || status === "awaiting_approval";
+}
+
+function normalizeEventField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function formatMetricMs(value?: number): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)} ms` : "n/a";
+}
+
+function formatRate(value?: number): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  if (value <= 1) {
+    return `${(value * 100).toFixed(1)}%`;
+  }
+  return `${value.toFixed(1)}%`;
 }

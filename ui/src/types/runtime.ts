@@ -272,6 +272,48 @@ export type RequestLedgerResponse = {
   data: NonNullable<BudgetRecord["history"]>;
 };
 
+export type RuntimeStatsResponse = {
+  object: string;
+  data: {
+    checked_at: string;
+    queue_depth: number;
+    queue_capacity: number;
+    queue_backend?: string;
+    worker_count: number;
+    in_flight_jobs: number;
+    queued_runs: number;
+    running_runs: number;
+    awaiting_approval_runs: number;
+    oldest_queued_age_seconds: number;
+    oldest_running_age_seconds: number;
+    store_backend?: string;
+    // Optional extension points.
+    telemetry?: {
+      checked_at?: string;
+      signals?: Record<
+        string,
+        {
+          enabled?: boolean;
+          endpoint?: string;
+          last_activity_at?: string;
+          last_error?: string;
+          last_error_at?: string;
+          activity_count?: number;
+          error_count?: number;
+        }
+      >;
+    };
+    slo?: {
+      queue_wait_ms_p50?: number;
+      queue_wait_ms_p95?: number;
+      approval_wait_ms_p50?: number;
+      approval_wait_ms_p95?: number;
+      run_success_rate?: number;
+      run_error_rate?: number;
+    };
+  };
+};
+
 export type ControlPlaneTenantRecord = {
   id: string;
   name: string;

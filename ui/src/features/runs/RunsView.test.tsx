@@ -12,6 +12,8 @@ const apiMocks = vi.hoisted(() => {
     getTaskApprovals: vi.fn(),
     getTaskRunSteps: vi.fn(),
     getTaskRunArtifacts: vi.fn(),
+    getRuntimeStats: vi.fn(),
+    getTrace: vi.fn(),
     createTask: vi.fn(),
     startTask: vi.fn(),
     resolveTaskApproval: vi.fn(),
@@ -38,6 +40,8 @@ vi.mock("../../lib/api", () => ({
   getTaskApprovals: apiMocks.getTaskApprovals,
   getTaskRunSteps: apiMocks.getTaskRunSteps,
   getTaskRunArtifacts: apiMocks.getTaskRunArtifacts,
+  getRuntimeStats: apiMocks.getRuntimeStats,
+  getTrace: apiMocks.getTrace,
   createTask: apiMocks.createTask,
   startTask: apiMocks.startTask,
   resolveTaskApproval: apiMocks.resolveTaskApproval,
@@ -46,6 +50,24 @@ vi.mock("../../lib/api", () => ({
 }));
 
 describe("RunsView", () => {
+  const runtimeStatsResponse = {
+    object: "runtime_stats",
+    data: {
+      checked_at: "2026-01-01T00:00:00Z",
+      queue_depth: 1,
+      queue_capacity: 128,
+      queue_backend: "memory",
+      worker_count: 1,
+      in_flight_jobs: 0,
+      queued_runs: 1,
+      running_runs: 0,
+      awaiting_approval_runs: 0,
+      oldest_queued_age_seconds: 1,
+      oldest_running_age_seconds: 0,
+      store_backend: "memory",
+    },
+  };
+
   afterEach(() => {
     vi.clearAllMocks();
     apiMocks.reset();
@@ -106,6 +128,7 @@ describe("RunsView", () => {
     });
     apiMocks.getTaskRunSteps.mockResolvedValue({ object: "task_steps", data: [] });
     apiMocks.getTaskRunArtifacts.mockResolvedValue({ object: "task_artifacts", data: [] });
+    apiMocks.getRuntimeStats.mockResolvedValue(runtimeStatsResponse);
 
     render(<RunsView authToken="tenant-secret" session={{ isAuthenticated: true }} />);
 
@@ -239,6 +262,7 @@ describe("RunsView", () => {
     apiMocks.getTaskApprovals.mockResolvedValue({ object: "task_approvals", data: [] });
     apiMocks.getTaskRunSteps.mockResolvedValue({ object: "task_steps", data: [] });
     apiMocks.getTaskRunArtifacts.mockResolvedValue({ object: "task_artifacts", data: [] });
+    apiMocks.getRuntimeStats.mockResolvedValue(runtimeStatsResponse);
 
     render(<RunsView authToken="tenant-secret" session={{ isAuthenticated: true }} />);
 

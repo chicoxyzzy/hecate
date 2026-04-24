@@ -182,6 +182,7 @@ Observability includes:
 - local trace inspection over HTTP
 - OTLP HTTP export for traces, metrics, and logs
 - optional request/response trace body capture (`GATEWAY_TRACE_BODIES=true`)
+- runtime telemetry health and SLO snapshots via `/admin/runtime/stats`
 
 For full telemetry details, see [`docs/telemetry.md`](docs/telemetry.md).
 
@@ -193,6 +194,7 @@ The operator UI includes:
 - managed provider lifecycle flows (enable/disable/delete/rotate)
 - playground and runtime metadata inspection
 - task creation, run starts, approvals, cancellation, and live stdout/stderr
+- telemetry health panel with signal status and run SLO cards
 - trace inspection
 - budget admin flows
 - tenant/API key management and control-plane activity views
@@ -267,6 +269,7 @@ Use `.env.example` as the baseline. For the full env surface, see
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md)
 - [Runtime API Notes](docs/runtime-api.md)
 - [Telemetry And OTLP Notes](docs/telemetry.md)
+- [OTLP Collector Recipes And Runbooks](docs/telemetry.md#known-good-otlp-recipes)
 
 ## Commands
 
