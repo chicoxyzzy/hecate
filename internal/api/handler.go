@@ -63,10 +63,11 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	}
 
 	runner := orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
-		DefaultModel:     cfg.Router.DefaultModel,
-		ApprovalPolicies: cfg.Server.TaskApprovalPolicies,
-		QueueWorkers:     cfg.Server.TaskQueueWorkers,
-		QueueBuffer:      cfg.Server.TaskQueueBuffer,
+		DefaultModel:           cfg.Router.DefaultModel,
+		ApprovalPolicies:       cfg.Server.TaskApprovalPolicies,
+		QueueWorkers:           cfg.Server.TaskQueueWorkers,
+		QueueBuffer:            cfg.Server.TaskQueueBuffer,
+		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
 	})
 	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
 		logger.Warn("task runner reconciliation failed", slog.Any("error", err))

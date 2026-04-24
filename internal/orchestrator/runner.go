@@ -16,10 +16,11 @@ import (
 )
 
 type Config struct {
-	DefaultModel     string
-	ApprovalPolicies []string
-	QueueWorkers     int
-	QueueBuffer      int
+	DefaultModel           string
+	ApprovalPolicies       []string
+	QueueWorkers           int
+	QueueBuffer            int
+	MaxConcurrentPerTenant int
 }
 
 type queuedRun struct {
@@ -582,7 +583,12 @@ func (r *Runner) processQueue() {
 }
 
 func (r *Runner) processQueuedRun(job queuedRun) {
-	defer r.unregisterJob(job.runID)
+	requeued := false
+	defer func() {
+		if !requeued {
+			r.unregisterJob(job.runID)
+		}
+	}()
 	if job.ctx.Err() != nil {
 		return
 	}
@@ -597,6 +603,28 @@ func (r *Runner) processQueuedRun(job queuedRun) {
 	}
 	if run.Status != "queued" {
 		return
+	}
+	allowed, limitErr := r.canStartRunForTenant(context.Background(), task, run.ID)
+	if limitErr != nil {
+		return
+	}
+	if !allowed {
+		_, _ = r.emitRunEvent(context.Background(), task.ID, run.ID, "run.throttled_tenant_concurrency", run.RequestID, run.TraceID, map[string]any{
+			"tenant": task.Tenant,
+			"limit":  r.config.MaxConcurrentPerTenant,
+		})
+		select {
+		case <-job.ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+		select {
+		case r.queue <- job:
+			requeued = true
+			return
+		default:
+			return
+		}
 	}
 
 	requestID := strings.TrimSpace(run.RequestID)
@@ -656,6 +684,40 @@ func (r *Runner) processQueuedRun(job queuedRun) {
 		}
 		_ = r.finalizeFailedRun(ctx, trace, task, run, requestID, finalStatus, lastError)
 	}
+}
+
+func (r *Runner) canStartRunForTenant(ctx context.Context, task types.Task, runID string) (bool, error) {
+	if r.config.MaxConcurrentPerTenant <= 0 {
+		return true, nil
+	}
+	tenant := strings.TrimSpace(task.Tenant)
+	if tenant == "" {
+		return true, nil
+	}
+	runs, err := r.store.ListRunsByFilter(ctx, taskstate.RunFilter{
+		Statuses: []string{"running"},
+		Limit:    4000,
+	})
+	if err != nil {
+		return false, err
+	}
+	count := 0
+	for _, item := range runs {
+		if item.ID == runID {
+			continue
+		}
+		candidateTask, found, getErr := r.store.GetTask(ctx, item.TaskID)
+		if getErr != nil || !found {
+			continue
+		}
+		if strings.TrimSpace(candidateTask.Tenant) == tenant {
+			count++
+			if count >= r.config.MaxConcurrentPerTenant {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 func (r *Runner) enqueueRun(taskID, runID string, idgen func(prefix string) string) error {

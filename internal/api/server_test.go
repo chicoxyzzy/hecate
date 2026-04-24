@@ -962,6 +962,72 @@ func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	tenantClient.mustRequestStatus(http.StatusUnauthorized, http.MethodGet, "/admin/budget", "")
 }
 
+func TestTaskRunPerTenantConcurrencyLimitQueuesSecondRun(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
+		t.Fatalf("UpsertTenant() error = %v", err)
+	}
+	if _, err := cpStore.UpsertAPIKey(context.Background(), controlplane.APIKey{
+		ID:      "team-a-key",
+		Name:    "team-a-key",
+		Key:     "tenant-a-secret",
+		Tenant:  "team-a",
+		Role:    "tenant",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("UpsertAPIKey() error = %v", err)
+	}
+
+	handler := newTestHTTPHandlerWithControlPlane(logger, nil, config.Config{
+		Server: config.ServerConfig{
+			AuthToken:                  "admin-secret",
+			TaskMaxConcurrentPerTenant: 1,
+		},
+	}, cpStore)
+	tasks := newTaskTestClient(t, handler).withBearerToken("tenant-a-secret")
+
+	firstTask := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"first","prompt":"first","execution_kind":"shell","shell_command":"sleep 5","working_directory":".","timeout_ms":10000}`)
+	firstRun := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+firstTask.Data.ID+"/start", "")
+	firstApprovals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+firstTask.Data.ID+"/approvals", "")
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+firstTask.Data.ID+"/approvals/"+firstApprovals.Data[0].ID+"/resolve", `{"decision":"approve"}`)
+	firstRunState := waitForRunStatusWithClient(tasks, firstTask.Data.ID, firstRun.Data.ID, "running", "failed")
+	if firstRunState.Data.Status == "failed" {
+		t.Fatalf("first run failed unexpectedly before concurrency check: %s", firstRunState.Data.LastError)
+	}
+
+	secondTask := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"second","prompt":"second","execution_kind":"shell","shell_command":"printf 'second\n'","working_directory":".","timeout_ms":5000}`)
+	secondRun := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+secondTask.Data.ID+"/start", "")
+	secondApprovals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+secondTask.Data.ID+"/approvals", "")
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+secondTask.Data.ID+"/approvals/"+secondApprovals.Data[0].ID+"/resolve", `{"decision":"approve"}`)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	observedQueued := false
+	for time.Now().Before(deadline) {
+		run := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodGet, "/v1/tasks/"+secondTask.Data.ID+"/runs/"+secondRun.Data.ID, "")
+		if run.Data.Status == "queued" {
+			observedQueued = true
+			break
+		}
+		if run.Data.Status == "running" || run.Data.Status == "completed" {
+			t.Fatalf("second run status = %q, want queued while first tenant run is active", run.Data.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !observedQueued {
+		t.Fatal("did not observe second run in queued status under tenant concurrency limit")
+	}
+
+	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+firstTask.Data.ID+"/runs/"+firstRun.Data.ID+"/cancel", "")
+	waitForRunStatusWithClient(tasks, firstTask.Data.ID, firstRun.Data.ID, "cancelled")
+	waitForRunStatusWithClient(tasks, secondTask.Data.ID, secondRun.Data.ID, "completed")
+}
+
 func TestChatCompletionAPIKeyRejectsTenantImpersonation(t *testing.T) {
 	t.Parallel()
 
@@ -2450,6 +2516,21 @@ func waitForRunStatus(t *testing.T, handler http.Handler, taskID, runID string, 
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for run %s to reach one of %v", runID, statuses)
+	return TaskRunResponse{}
+}
+
+func waitForRunStatusWithClient(client apiTestClient, taskID, runID string, statuses ...string) TaskRunResponse {
+	client.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		recorder := client.mustRequest(http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID, "")
+		run, ok := tryDecodeRecorder[TaskRunResponse](recorder)
+		if ok && containsStatus(run.Data.Status, statuses...) {
+			return run
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	client.t.Fatalf("timed out waiting for run %s to reach one of %v", runID, statuses)
 	return TaskRunResponse{}
 }
 
