@@ -420,25 +420,7 @@ export async function chatCompletionsStream(
     throw new Error(await errorMessage(response, "request failed"));
   }
 
-  const headers: RuntimeHeaders = {
-    requestId: response.headers.get("X-Request-Id") ?? "",
-    traceId: response.headers.get("X-Trace-Id") ?? "",
-    spanId: response.headers.get("X-Span-Id") ?? "",
-    provider: response.headers.get("X-Runtime-Provider") ?? "",
-    providerKind: response.headers.get("X-Runtime-Provider-Kind") ?? "",
-    routeReason: response.headers.get("X-Runtime-Route-Reason") ?? "",
-    requestedModel: response.headers.get("X-Runtime-Requested-Model") ?? "",
-    resolvedModel: response.headers.get("X-Runtime-Model") ?? "",
-    cache: response.headers.get("X-Runtime-Cache") ?? "",
-    cacheType: response.headers.get("X-Runtime-Cache-Type") ?? "",
-    semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
-    semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
-    semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
-    attempts: response.headers.get("X-Runtime-Attempts") ?? "",
-    retries: response.headers.get("X-Runtime-Retries") ?? "",
-    fallbackFrom: response.headers.get("X-Runtime-Fallback-From") ?? "",
-    costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
-  };
+  const headers = readRuntimeHeaders(response);
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -519,25 +501,29 @@ export async function chatCompletions(
   const data = (await response.json()) as ChatResponse;
   return {
     data,
-    headers: {
-      requestId: response.headers.get("X-Request-Id") ?? "",
-      traceId: response.headers.get("X-Trace-Id") ?? "",
-      spanId: response.headers.get("X-Span-Id") ?? "",
-      provider: response.headers.get("X-Runtime-Provider") ?? "",
-      providerKind: response.headers.get("X-Runtime-Provider-Kind") ?? "",
-      routeReason: response.headers.get("X-Runtime-Route-Reason") ?? "",
-      requestedModel: response.headers.get("X-Runtime-Requested-Model") ?? "",
-      resolvedModel: response.headers.get("X-Runtime-Model") ?? "",
-      cache: response.headers.get("X-Runtime-Cache") ?? "",
-      cacheType: response.headers.get("X-Runtime-Cache-Type") ?? "",
-      semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
-      semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
-      semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
-      attempts: response.headers.get("X-Runtime-Attempts") ?? "",
-      retries: response.headers.get("X-Runtime-Retries") ?? "",
-      fallbackFrom: response.headers.get("X-Runtime-Fallback-From") ?? "",
-      costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
-    },
+    headers: readRuntimeHeaders(response),
+  };
+}
+
+function readRuntimeHeaders(response: Response): RuntimeHeaders {
+  return {
+    requestId: response.headers.get("X-Request-Id") ?? "",
+    traceId: response.headers.get("X-Trace-Id") ?? "",
+    spanId: response.headers.get("X-Span-Id") ?? "",
+    provider: response.headers.get("X-Runtime-Provider") ?? "",
+    providerKind: response.headers.get("X-Runtime-Provider-Kind") ?? "",
+    routeReason: response.headers.get("X-Runtime-Route-Reason") ?? "",
+    requestedModel: response.headers.get("X-Runtime-Requested-Model") ?? "",
+    resolvedModel: response.headers.get("X-Runtime-Model") ?? "",
+    cache: response.headers.get("X-Runtime-Cache") ?? "",
+    cacheType: response.headers.get("X-Runtime-Cache-Type") ?? "",
+    semanticStrategy: response.headers.get("X-Runtime-Semantic-Strategy") ?? "",
+    semanticIndex: response.headers.get("X-Runtime-Semantic-Index") ?? "",
+    semanticSimilarity: response.headers.get("X-Runtime-Semantic-Similarity") ?? "",
+    attempts: response.headers.get("X-Runtime-Attempts") ?? "",
+    retries: response.headers.get("X-Runtime-Retries") ?? "",
+    fallbackFrom: response.headers.get("X-Runtime-Fallback-From") ?? "",
+    costUsd: response.headers.get("X-Runtime-Cost-USD") ?? "",
   };
 }
 

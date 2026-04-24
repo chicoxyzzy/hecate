@@ -139,14 +139,26 @@ export function RunsView({ authToken, session }: Props) {
     [runEvents],
   );
 
+  const resetRunDetailState = useCallback(() => {
+    setSteps([]);
+    setArtifacts([]);
+    setRunEvents([]);
+    setLastSequence(0);
+    streamCursorRef.current = 0;
+    setSelectedArtifactID("");
+  }, []);
+
+  const resetTaskScopeState = useCallback(() => {
+    setRuns([]);
+    setSelectedRunID("");
+    setApprovals([]);
+    resetRunDetailState();
+  }, [resetRunDetailState]);
+
   const loadRunDetail = useCallback(
     async (taskID: string, runID: string) => {
       if (!taskID || !runID) {
-        setSteps([]);
-        setArtifacts([]);
-        setRunEvents([]);
-        setLastSequence(0);
-        streamCursorRef.current = 0;
+        resetRunDetailState();
         return;
       }
       const [stepsResponse, artifactsResponse, eventsResponse] = await Promise.all([
@@ -167,7 +179,7 @@ export function RunsView({ authToken, session }: Props) {
         setSelectedArtifactID("");
       }
     },
-    [authToken],
+    [authToken, resetRunDetailState],
   );
 
   const loadTasks = useCallback(
@@ -175,14 +187,7 @@ export function RunsView({ authToken, session }: Props) {
       if (!session.isAuthenticated) {
         setTasks([]);
         setSelectedTaskID("");
-        setRuns([]);
-        setSelectedRunID("");
-        setApprovals([]);
-        setSteps([]);
-        setArtifacts([]);
-        setRunEvents([]);
-        setLastSequence(0);
-        streamCursorRef.current = 0;
+        resetTaskScopeState();
         setLoading(false);
         setStreamState("idle");
         return;
@@ -202,14 +207,7 @@ export function RunsView({ authToken, session }: Props) {
         if (nextTaskID) {
           await loadTaskDetail(nextTaskID, preferredRunID);
         } else {
-          setRuns([]);
-          setSelectedRunID("");
-          setApprovals([]);
-          setSteps([]);
-          setArtifacts([]);
-          setRunEvents([]);
-          setLastSequence(0);
-          streamCursorRef.current = 0;
+          resetTaskScopeState();
         }
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "failed to load runs");
@@ -217,7 +215,7 @@ export function RunsView({ authToken, session }: Props) {
         setLoading(false);
       }
     },
-    [authToken, selectedTaskID, session.isAuthenticated],
+    [authToken, resetTaskScopeState, selectedTaskID, session.isAuthenticated],
   );
 
   const loadRuntimeStats = useCallback(async () => {
@@ -263,14 +261,13 @@ export function RunsView({ authToken, session }: Props) {
       setSelectedRunID(nextRunID);
 
       if (!nextRunID) {
-        setSteps([]);
-        setArtifacts([]);
+        resetRunDetailState();
         return;
       }
 
       await loadRunDetail(taskID, nextRunID);
     },
-    [authToken, loadRunDetail, selectedRunID, session.isAuthenticated],
+    [authToken, loadRunDetail, resetRunDetailState, selectedRunID, session.isAuthenticated],
   );
 
   useEffect(() => {
@@ -363,8 +360,7 @@ export function RunsView({ authToken, session }: Props) {
 
   async function handleSelectTask(taskID: string) {
     setSelectedTaskID(taskID);
-    setSteps([]);
-    setArtifacts([]);
+    resetRunDetailState();
     setNotice(null);
     try {
       await loadTaskDetail(taskID);
