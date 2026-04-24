@@ -284,9 +284,18 @@ Observability And Operations
 
 - [x] Structured logs, traces, metrics, and OTLP export support
 - [x] Background retention and pruning for traces, cache, budget history, and audit events
+- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
+
+Operator UI
+
 - [x] React operator UI
 - [x] Provider setup preset catalog for common cloud and local runtimes
-- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
+- [x] Basic operator UI for creating tasks, starting runs, approvals, cancellation, and live stdout/stderr
+- [ ] Richer coding-oriented operator views for task traces, repo activity, and aggregate run operations
+- [ ] Richer policy lifecycle UI, history, and validation helpers
+- [ ] Better semantic-cache debugging and trace visibility in the UI
+- [ ] Better budget UX and trend visibility in the UI
+- [ ] Provider setup UX that keeps presets separate from runtime routing truth
 
 Coding Runtime Foundation
 
@@ -298,19 +307,13 @@ Coding Runtime Foundation
 - [x] Shell approval gating with approve or reject flow
 - [x] Queueing and cancellation for coding runs
 - [x] Streaming run updates and stdout/stderr artifact logs
-- [x] Basic operator UI for creating tasks, starting runs, approvals, cancellation, and live stdout/stderr
 
 Next Up
 
 - [ ] Resumable execution for coding runs
 - [ ] Policy-driven approvals for broader sensitive actions
-- [ ] Richer coding-oriented operator views for task traces, repo activity, and aggregate run operations
 - [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
 - [ ] Cleaner route reason taxonomy and debug views after routing simplification
-- [ ] Richer policy lifecycle UI, history, and validation helpers
 - [ ] Automated pricebook ingestion and sync from provider pricing sources
-- [ ] Better semantic-cache debugging and trace visibility in the UI
-- [ ] Better budget UX and trend visibility in the UI
-- [ ] Provider setup UX that keeps presets separate from runtime routing truth
 - [ ] More provider discovery paths
 - [ ] Deployment examples for local and production-style environments
