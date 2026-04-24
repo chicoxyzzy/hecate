@@ -19,7 +19,7 @@ import (
 func TestOpenAIProviderChatUpstream(t *testing.T) {
 	t.Parallel()
 
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost {
 			return nil, fmt.Errorf("method = %s, want POST", r.Method)
 		}
@@ -112,7 +112,7 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 func TestOpenAIProviderChatUpstreamError(t *testing.T) {
 	t.Parallel()
 
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		responseBody, err := json.Marshal(openAIErrorEnvelope{
 			Error: openAIErrorDetail{
 				Message: "invalid api key",
@@ -162,7 +162,7 @@ func TestOpenAIProviderChatUpstreamError(t *testing.T) {
 func TestOpenAIProviderChatStreamUsesPortableOpenAICompatiblePayload(t *testing.T) {
 	t.Parallel()
 
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost {
 			return nil, fmt.Errorf("method = %s, want POST", r.Method)
 		}
@@ -221,7 +221,7 @@ func TestOpenAIProviderCapabilitiesDiscovery(t *testing.T) {
 	t.Parallel()
 
 	var calls int
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.Method != http.MethodGet {
 			return nil, fmt.Errorf("method = %s, want GET", r.Method)
@@ -283,7 +283,7 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	t.Parallel()
 
 	var calls int
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		return nil, fmt.Errorf("network unavailable")
 	})
@@ -324,7 +324,7 @@ func TestOpenAIProviderCapabilitiesSkipsDiscoveryWhenCloudProviderUnconfigured(t
 	t.Parallel()
 
 	var calls int
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -352,12 +352,6 @@ func TestOpenAIProviderCapabilitiesSkipsDiscoveryWhenCloudProviderUnconfigured(t
 	if caps.DiscoverySource != "config_unconfigured" {
 		t.Fatalf("discovery source = %q, want config_unconfigured", caps.DiscoverySource)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
 }
 
 func strPtr(s string) *string { return &s }

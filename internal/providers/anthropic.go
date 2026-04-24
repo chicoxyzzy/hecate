@@ -15,7 +15,6 @@ import (
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/requestscope"
-	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -169,44 +168,18 @@ func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, err
 	if p.config.StubMode {
 		return p.staticCapabilities("config"), nil
 	}
-
-	p.mu.Lock()
-	if discoveryUnconfigured(p.Kind(), p.config.APIKey) {
-		cached := p.staticCapabilities("config_unconfigured")
-		p.cachedCaps = cached
-		p.capsExpiry = time.Now().Add(capabilitiesUnconfiguredTTL)
-		p.mu.Unlock()
-		return cached, nil
-	}
-	if !p.capsExpiry.IsZero() && time.Now().Before(p.capsExpiry) {
-		cached := p.cachedCaps
-		p.mu.Unlock()
-		return cached, nil
-	}
-	p.mu.Unlock()
-
-	discovered, err := p.discoverCapabilities(ctx)
-	if err != nil {
-		retryAfter := discoveryFailureTTL(p.Kind(), err)
-		telemetry.Info(p.logger, ctx, "gateway.providers.capabilities.discovery_degraded",
-			slog.String("event.name", "gateway.providers.capabilities.discovery_degraded"),
-			slog.String("gen_ai.provider.name", p.Name()),
-			slog.Duration("hecate.providers.capabilities.retry_after", retryAfter),
-			slog.Any("error", err),
-		)
-		cached := p.staticCapabilities("config_fallback")
-		p.mu.Lock()
-		p.cachedCaps = cached
-		p.capsExpiry = time.Now().Add(retryAfter)
-		p.mu.Unlock()
-		return cached, nil
-	}
-
-	p.mu.Lock()
-	p.cachedCaps = discovered
-	p.capsExpiry = time.Now().Add(capabilitiesSuccessTTL)
-	p.mu.Unlock()
-	return discovered, nil
+	return resolveCapabilities(
+		ctx,
+		p.logger,
+		p.Name(),
+		p.Kind(),
+		p.config.APIKey,
+		&p.mu,
+		&p.cachedCaps,
+		&p.capsExpiry,
+		p.discoverCapabilities,
+		p.staticCapabilities,
+	)
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error) {

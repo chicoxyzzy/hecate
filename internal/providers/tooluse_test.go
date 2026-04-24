@@ -325,8 +325,8 @@ func TestAnthropicProviderBatchesToolResultsIntoUserMessage(t *testing.T) {
 		Messages: []types.Message{
 			{Role: "user", Content: "Weather in London?"},
 			{Role: "assistant", ToolCalls: []types.ToolCall{{
-				ID:   "toolu_01",
-				Type: "function",
+				ID:       "toolu_01",
+				Type:     "function",
 				Function: types.ToolCallFunction{Name: "get_weather", Arguments: `{"location":"London"}`},
 			}}},
 			// Two consecutive tool results should be batched into one user message.
@@ -411,7 +411,7 @@ func newOpenAITestProvider(t *testing.T, transport func(*http.Request) (*http.Re
 		Models:       []string{"gpt-4o-mini"},
 	}
 	p.capsExpiry = time.Now().Add(time.Minute)
-	p.httpClient = &http.Client{Transport: roundTripFunc(transport)}
+	p.httpClient = &http.Client{Transport: testRoundTripperFunc(transport)}
 	return p
 }
 
@@ -434,7 +434,7 @@ func newAnthropicTestProvider(t *testing.T, transport func(*http.Request) (*http
 		Models:       []string{"claude-opus-4-5"},
 	}
 	p.capsExpiry = time.Now().Add(time.Minute)
-	p.httpClient = &http.Client{Transport: roundTripperFunc(transport)}
+	p.httpClient = &http.Client{Transport: testRoundTripperFunc(transport)}
 	return p
 }
 

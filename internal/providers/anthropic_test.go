@@ -34,7 +34,7 @@ func TestAnthropicProviderChatMapsMessagesAPI(t *testing.T) {
 	}
 	provider.capsExpiry = time.Now().Add(time.Minute)
 	provider.httpClient = &http.Client{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		Transport: testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			if r.URL.Path != "/v1/messages" {
 				t.Fatalf("path = %q, want /v1/messages", r.URL.Path)
 			}
@@ -113,7 +113,7 @@ func TestAnthropicProviderCapabilitiesUsesModelsEndpoint(t *testing.T) {
 		Timeout:    5 * time.Second,
 	}, nil)
 	provider.httpClient = &http.Client{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		Transport: testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			if r.URL.Path != "/v1/models" {
 				t.Fatalf("path = %q, want /v1/models", r.URL.Path)
 			}
@@ -159,7 +159,7 @@ func TestAnthropicProviderCapabilitiesSkipsDiscoveryWhenCloudProviderUnconfigure
 		Timeout:    5 * time.Second,
 	}, nil)
 	provider.httpClient = &http.Client{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		Transport: testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			calls++
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -289,7 +289,7 @@ func TestAnthropicChatUpstreamSendsCacheControlBlocks(t *testing.T) {
 	}
 	provider.capsExpiry = time.Now().Add(time.Minute)
 	provider.httpClient = &http.Client{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		Transport: testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			json.NewDecoder(r.Body).Decode(&capturedBody) //nolint:errcheck
 			body, _ := json.Marshal(map[string]any{
 				"id":          "msg_cc",
@@ -349,10 +349,4 @@ func TestAnthropicChatUpstreamSendsCacheControlBlocks(t *testing.T) {
 	if !strings.Contains(string(msgBytes), "ephemeral") {
 		t.Fatalf("messages[0] missing cache_control, got: %s", msgBytes)
 	}
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
 }
