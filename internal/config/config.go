@@ -30,6 +30,27 @@ type ServerConfig struct {
 	ControlPlaneFile      string
 	ControlPlaneKey       string
 	ControlPlaneSecretKey string
+
+	// TraceBodyCapture enables recording (redacted) request and response bodies
+	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
+	TraceBodyCapture bool
+	// TraceBodyMaxBytes caps each captured body at this many bytes (default 4096).
+	TraceBodyMaxBytes int
+
+	// RateLimit controls per-API-key request throttling.
+	RateLimit RateLimitConfig
+}
+
+// RateLimitConfig configures the token-bucket rate limiter applied per API key.
+type RateLimitConfig struct {
+	// Enabled turns on per-key rate limiting.  Off by default.
+	Enabled bool
+	// RequestsPerMinute is the steady-state refill rate and the X-RateLimit-Limit
+	// value (default 60).
+	RequestsPerMinute int64
+	// BurstSize is the maximum number of tokens that can accumulate (default equals
+	// RequestsPerMinute).
+	BurstSize int64
 }
 
 type RouterConfig struct {
@@ -203,6 +224,13 @@ func LoadFromEnv() Config {
 			ControlPlaneFile:      getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:       getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
 			ControlPlaneSecretKey: getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
+			TraceBodyCapture:      getEnvBool("GATEWAY_TRACE_BODIES", false),
+			TraceBodyMaxBytes:     getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),
+			RateLimit: RateLimitConfig{
+				Enabled:           getEnvBool("GATEWAY_RATE_LIMIT_ENABLED", false),
+				RequestsPerMinute: getEnvInt64("GATEWAY_RATE_LIMIT_RPM", 60),
+				BurstSize:         getEnvInt64("GATEWAY_RATE_LIMIT_BURST", 0), // 0 = same as RPM
+			},
 		},
 		Router: RouterConfig{
 			DefaultModel: getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"),

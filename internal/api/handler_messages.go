@@ -29,6 +29,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.checkRateLimit(w, principal.KeyID) {
+		return
+	}
 	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var wireReq AnthropicMessagesRequest
@@ -203,6 +206,26 @@ func writeMessagesError(w http.ResponseWriter, err error) {
 	if gateway.IsClientError(err) {
 		statusCode = http.StatusBadRequest
 	}
+	if gateway.IsBudgetExceededError(err) {
+		WriteJSON(w, http.StatusPaymentRequired, map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "payment_required",
+				"message": err.Error(),
+			},
+		})
+		return
+	}
+	if gateway.IsRateLimitedError(err) {
+		WriteJSON(w, http.StatusTooManyRequests, map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "rate_limit_error",
+				"message": err.Error(),
+			},
+		})
+		return
+	}
 	if gateway.IsDeniedError(err) {
 		statusCode = http.StatusForbidden
 	}
@@ -300,6 +323,8 @@ func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, p
 		Tools:         tools,
 		ToolChoice:    toolChoice,
 		Stream:        req.Stream,
+		Thinking:      req.Thinking,
+		Betas:         req.Betas,
 	}, nil
 }
 
@@ -441,8 +466,19 @@ func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message,
 				ContentBlocks: resultBlocks,
 				ToolCallID:    b.ToolUseID,
 			})
+		case "thinking":
+			contentBlocks = append(contentBlocks, types.ContentBlock{
+				Type:      "thinking",
+				Thinking:  b.Thinking,
+				Signature: b.Signature,
+			})
+		case "redacted_thinking":
+			contentBlocks = append(contentBlocks, types.ContentBlock{
+				Type: "redacted_thinking",
+				Data: b.Data,
+			})
 		default:
-			// Unknown block types (image, document, thinking, ...): carry them
+			// Unknown block types (image, document, ...): carry them
 			// as ContentBlocks for Anthropic pass-through but skip for text/toolCalls.
 			if b.Type != "" {
 				contentBlocks = append(contentBlocks, types.ContentBlock{
@@ -564,6 +600,50 @@ func renderAnthropicMessagesResponse(resp *types.ChatResponse) AnthropicMessages
 		return out
 	}
 	choice := resp.Choices[0]
+
+	// If the message carries structured ContentBlocks (Anthropic pass-through path),
+	// render them directly so thinking/redacted_thinking blocks survive the round-trip.
+	if len(choice.Message.ContentBlocks) > 0 {
+		blocks := make([]AnthropicOutboundContentBlock, 0, len(choice.Message.ContentBlocks))
+		for _, cb := range choice.Message.ContentBlocks {
+			switch cb.Type {
+			case "thinking":
+				blocks = append(blocks, AnthropicOutboundContentBlock{
+					Type:      "thinking",
+					Thinking:  cb.Thinking,
+					Signature: cb.Signature,
+				})
+			case "redacted_thinking":
+				blocks = append(blocks, AnthropicOutboundContentBlock{
+					Type: "redacted_thinking",
+					Data: cb.Data,
+				})
+			case "tool_use":
+				input := cb.Input
+				if len(input) == 0 || !json.Valid(input) {
+					input = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, AnthropicOutboundContentBlock{
+					Type:  "tool_use",
+					ID:    cb.ID,
+					Name:  cb.Name,
+					Input: input,
+				})
+			default:
+				if cb.Text != "" || cb.Type == "text" || cb.Type == "" {
+					blocks = append(blocks, AnthropicOutboundContentBlock{Type: "text", Text: cb.Text})
+				}
+			}
+		}
+		if len(blocks) == 0 {
+			blocks = append(blocks, AnthropicOutboundContentBlock{Type: "text", Text: ""})
+		}
+		out.Content = blocks
+		out.StopReason = openAIFinishToAnthropicStopReason(choice.FinishReason)
+		return out
+	}
+
+	// Standard path: build blocks from flat Content + ToolCalls.
 	blocks := make([]AnthropicOutboundContentBlock, 0, 1+len(choice.Message.ToolCalls))
 	if text := strings.TrimSpace(choice.Message.Content); text != "" {
 		blocks = append(blocks, AnthropicOutboundContentBlock{Type: "text", Text: choice.Message.Content})
@@ -618,6 +698,11 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 				Arguments string `json:"arguments"`
 			} `json:"function"`
 		} `json:"tool_calls"`
+		// Extension fields used when routing through an Anthropic upstream:
+		// translateAnthropicSSE encodes thinking deltas here so they survive
+		// the Anthropic→OpenAI→Anthropic double translation.
+		XThinking          string `json:"x_thinking,omitempty"`
+		XThinkingSignature string `json:"x_thinking_signature,omitempty"`
 	}
 	type openAIChoice struct {
 		Index        int         `json:"index"`
@@ -654,6 +739,9 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 		started    bool
 	}
 	toolBlocks := make(map[int]*toolState)
+	// thinkingBlockIndex is the Anthropic block index for an open thinking block
+	// (-1 = none open yet).
+	thinkingBlockIndex := -1
 
 	promptTokens := 0
 	completionTokens := 0
@@ -804,6 +892,39 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 					}
 				}
 			}
+			// Thinking pass-through (Anthropic→OpenAI→Anthropic double translation).
+			if choice.Delta.XThinking != "" {
+				if thinkingBlockIndex < 0 {
+					// Open the thinking block on first delta.
+					thinkingBlockIndex = nextBlockIndex
+					nextBlockIndex++
+					if err := writeEvent("content_block_start", map[string]any{
+						"type":          "content_block_start",
+						"index":         thinkingBlockIndex,
+						"content_block": map[string]any{"type": "thinking", "thinking": ""},
+					}); err != nil {
+						return err
+					}
+				}
+				if err := writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": thinkingBlockIndex,
+					"delta": map[string]any{"type": "thinking_delta", "thinking": choice.Delta.XThinking},
+				}); err != nil {
+					return err
+				}
+			}
+			if choice.Delta.XThinkingSignature != "" {
+				if thinkingBlockIndex >= 0 {
+					if err := writeEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": thinkingBlockIndex,
+						"delta": map[string]any{"type": "signature_delta", "signature": choice.Delta.XThinkingSignature},
+					}); err != nil {
+						return err
+					}
+				}
+			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				stopReason = openAIFinishToAnthropicStopReason(*choice.FinishReason)
 			}
@@ -825,6 +946,14 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 	}
 
 	// Close blocks.
+	if thinkingBlockIndex >= 0 {
+		if err := writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": thinkingBlockIndex,
+		}); err != nil {
+			return err
+		}
+	}
 	if textOpen {
 		if err := writeEvent("content_block_stop", map[string]any{
 			"type":  "content_block_stop",

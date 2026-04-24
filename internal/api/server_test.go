@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
+	"github.com/hecate/agent-runtime/internal/ratelimit"
 	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
 	"github.com/hecate/agent-runtime/internal/telemetry"
@@ -2620,3 +2622,182 @@ func (p *fakeProvider) CallCount() int {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestRateLimitHeadersSetOnSuccess(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-rl1",
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{
+				{Message: types.Message{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+			},
+			Usage: types.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
+		},
+	}
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Server: config.ServerConfig{
+			RateLimit: config.RateLimitConfig{
+				Enabled:           true,
+				RequestsPerMinute: 10,
+				BurstSize:         10,
+			},
+		},
+	})
+
+	rec := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if h := rec.Header().Get("X-RateLimit-Limit"); h != "10" {
+		t.Errorf("X-RateLimit-Limit = %q, want \"10\"", h)
+	}
+	remaining, err := strconv.Atoi(rec.Header().Get("X-RateLimit-Remaining"))
+	if err != nil {
+		t.Fatalf("X-RateLimit-Remaining not numeric: %v", err)
+	}
+	if remaining < 0 || remaining > 9 {
+		t.Errorf("X-RateLimit-Remaining = %d, want 0-9", remaining)
+	}
+	if rec.Header().Get("X-RateLimit-Reset") == "" {
+		t.Error("X-RateLimit-Reset header missing")
+	}
+}
+
+func TestRateLimitReturns429WhenExhausted(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-rl2",
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{
+				{Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: types.Usage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+		},
+	}
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Server: config.ServerConfig{
+			RateLimit: config.RateLimitConfig{
+				Enabled:           true,
+				RequestsPerMinute: 2,
+				BurstSize:         2,
+			},
+		},
+	})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	// Drain the bucket.
+	for i := 0; i < 2; i++ {
+		rec := performJSONRequest(t, handler, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("call %d: status = %d, want 200", i+1, rec.Code)
+		}
+	}
+	// Third call should be rate-limited.
+	rec := performJSONRequest(t, handler, body)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", rec.Code)
+	}
+}
+
+func TestRateLimitDisabledByDefault(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-rl3",
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{
+				{Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: types.Usage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+		},
+	}
+	// No rate limit config — RateLimit.Enabled defaults to false.
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	for i := 0; i < 5; i++ {
+		rec := performJSONRequest(t, handler, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("call %d: status = %d, want 200 (rate limit should be disabled)", i+1, rec.Code)
+		}
+	}
+}
+
+func TestHandleChatReturns402OnBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{name: "openai", defaultModel: "gpt-4o-mini"}
+
+	// 1 µUSD budget — any real request estimate will exceed it immediately.
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Governor: config.GovernorConfig{
+			MaxTotalBudgetMicros:    1,
+			MaxPromptTokens:         100_000,
+			BudgetWarningThresholds: []int{50, 80, 95},
+			BudgetHistoryLimit:      20,
+		},
+	})
+
+	// max_tokens drives the cost estimate; without it the estimate is ~0 µUSD and
+	// wouldn't exceed the 1 µUSD budget.
+	rec := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Errorf("status = %d, want 402\nbody: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckRateLimitSetsHeaders(t *testing.T) {
+	t.Parallel()
+	h := &Handler{
+		rateLimiter: ratelimit.NewStore(5, 5),
+	}
+	w := httptest.NewRecorder()
+	ok := h.checkRateLimit(w, "test-key")
+	if !ok {
+		t.Fatal("checkRateLimit returned false on first call")
+	}
+	if w.Header().Get("X-RateLimit-Limit") != "5" {
+		t.Errorf("X-RateLimit-Limit = %q, want \"5\"", w.Header().Get("X-RateLimit-Limit"))
+	}
+	rem, err := strconv.Atoi(w.Header().Get("X-RateLimit-Remaining"))
+	if err != nil {
+		t.Fatalf("X-RateLimit-Remaining not numeric: %s", w.Header().Get("X-RateLimit-Remaining"))
+	}
+	if rem != 4 {
+		t.Errorf("X-RateLimit-Remaining = %d, want 4", rem)
+	}
+}
+
+func TestCheckRateLimitReturns429WhenExhausted(t *testing.T) {
+	t.Parallel()
+	h := &Handler{rateLimiter: ratelimit.NewStore(1, 60)}
+	// Consume the single token.
+	w1 := httptest.NewRecorder()
+	h.checkRateLimit(w1, "k")
+	// Second call should be rejected.
+	w2 := httptest.NewRecorder()
+	ok := h.checkRateLimit(w2, "k")
+	if ok {
+		t.Fatal("checkRateLimit should return false when bucket is empty")
+	}
+	if w2.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", w2.Code)
+	}
+}
+
+func TestCheckRateLimitNilLimiterAlwaysAllows(t *testing.T) {
+	t.Parallel()
+	h := &Handler{rateLimiter: nil}
+	w := httptest.NewRecorder()
+	if !h.checkRateLimit(w, "anything") {
+		t.Error("nil rateLimiter should always allow")
+	}
+}

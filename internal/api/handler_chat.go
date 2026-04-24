@@ -21,6 +21,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if !h.checkRateLimit(w, principal.KeyID) {
+		return
+	}
 	ctx := h.contextWithPrincipal(r.Context(), principal)
 
 	var wireReq OpenAIChatCompletionRequest
@@ -50,6 +53,14 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		statusCode := http.StatusInternalServerError
 		if gateway.IsClientError(err) {
 			statusCode = http.StatusBadRequest
+		}
+		if gateway.IsBudgetExceededError(err) {
+			WriteError(w, http.StatusPaymentRequired, "budget_exceeded", err.Error())
+			return
+		}
+		if gateway.IsRateLimitedError(err) {
+			WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
+			return
 		}
 		if gateway.IsDeniedError(err) {
 			statusCode = http.StatusForbidden
@@ -124,6 +135,14 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 		statusCode := http.StatusInternalServerError
 		if gateway.IsClientError(err) {
 			statusCode = http.StatusBadRequest
+		}
+		if gateway.IsBudgetExceededError(err) {
+			WriteError(w, http.StatusPaymentRequired, "budget_exceeded", err.Error())
+			return
+		}
+		if gateway.IsRateLimitedError(err) {
+			WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
+			return
 		}
 		if gateway.IsDeniedError(err) {
 			statusCode = http.StatusForbidden

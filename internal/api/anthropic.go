@@ -8,18 +8,24 @@ import "encoding/json"
 // parsed (as json.RawMessage where structure is varied) so we can error
 // on malformed payloads without silently dropping them.
 type AnthropicMessagesRequest struct {
-	Model         string                     `json:"model"`
-	System        json.RawMessage            `json:"system,omitempty"`
-	Messages      []AnthropicInboundMessage  `json:"messages"`
-	MaxTokens     int                        `json:"max_tokens"`
-	Temperature   float64                    `json:"temperature,omitempty"`
-	TopP          float64                    `json:"top_p,omitempty"`
-	TopK          int                        `json:"top_k,omitempty"`
-	StopSequences []string                   `json:"stop_sequences,omitempty"`
-	Metadata      *AnthropicInboundMetadata  `json:"metadata,omitempty"`
-	Tools         []AnthropicInboundTool     `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage            `json:"tool_choice,omitempty"`
-	Stream        bool                       `json:"stream,omitempty"`
+	Model         string                    `json:"model"`
+	System        json.RawMessage           `json:"system,omitempty"`
+	Messages      []AnthropicInboundMessage `json:"messages"`
+	MaxTokens     int                       `json:"max_tokens"`
+	Temperature   float64                   `json:"temperature,omitempty"`
+	TopP          float64                   `json:"top_p,omitempty"`
+	TopK          int                       `json:"top_k,omitempty"`
+	StopSequences []string                  `json:"stop_sequences,omitempty"`
+	Metadata      *AnthropicInboundMetadata `json:"metadata,omitempty"`
+	Tools         []AnthropicInboundTool    `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage           `json:"tool_choice,omitempty"`
+	Stream        bool                      `json:"stream,omitempty"`
+
+	// Extended thinking — pass {"type":"enabled","budget_tokens":N}.
+	Thinking json.RawMessage `json:"thinking,omitempty"`
+	// Anthropic beta features (e.g. ["interleaved-thinking-2025-02-19"]).
+	// Hecate forwards these as the anthropic-beta request header.
+	Betas []string `json:"betas,omitempty"`
 
 	// Gateway-specific extensions (optional; ignored by Anthropic SDK but
 	// useful when calling Hecate directly).
@@ -62,6 +68,10 @@ type AnthropicInboundContentBlock struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	// prompt caching
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	// extended thinking
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking opaque data
 }
 
 // AnthropicMessagesResponse is the outbound /v1/messages shape.
@@ -82,6 +92,10 @@ type AnthropicOutboundContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// extended thinking
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking
 }
 
 type AnthropicOutboundUsage struct {

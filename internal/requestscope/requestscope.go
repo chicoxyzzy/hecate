@@ -16,6 +16,7 @@ func Build(principal auth.Principal, tenant, provider string) types.RequestScope
 		Principal: types.PrincipalContext{
 			Role:             strings.TrimSpace(principal.Role),
 			Tenant:           strings.TrimSpace(principal.Tenant),
+			KeyID:            strings.TrimSpace(principal.KeyID),
 			AllowedProviders: normalizeList(principal.AllowedProviders),
 			AllowedModels:    normalizeList(principal.AllowedModels),
 		},

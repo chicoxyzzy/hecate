@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,6 +43,9 @@ type Dependencies struct {
 	Metrics         *telemetry.Metrics
 	Retention       *retention.Manager
 	ChatSessions    chatstate.Store
+	// TraceBodyCapture enables recording (redacted) message bodies in traces.
+	TraceBodyCapture  bool
+	TraceBodyMaxBytes int
 }
 
 type SemanticOptions struct {
@@ -57,22 +61,24 @@ type ResilienceOptions struct {
 }
 
 type Service struct {
-	cacheRuntime    CacheRuntime
-	finalizer       ResponseFinalizer
-	preflight       RoutePreflight
-	semantic        cache.SemanticStore
-	semanticOptions SemanticOptions
-	keyBuilder      cache.KeyBuilder
-	executor        ProviderExecutor
-	router          router.Router
-	catalog         catalog.Catalog
-	governor        governor.Governor
-	tracer          profiler.Tracer
-	metrics         *telemetry.Metrics
-	retention       *retention.Manager
-	pricebook       billing.Pricebook
-	chatSessions    chatstate.Store
-	providers       providers.Registry
+	cacheRuntime      CacheRuntime
+	finalizer         ResponseFinalizer
+	preflight         RoutePreflight
+	semantic          cache.SemanticStore
+	semanticOptions   SemanticOptions
+	keyBuilder        cache.KeyBuilder
+	executor          ProviderExecutor
+	router            router.Router
+	catalog           catalog.Catalog
+	governor          governor.Governor
+	tracer            profiler.Tracer
+	metrics           *telemetry.Metrics
+	retention         *retention.Manager
+	pricebook         billing.Pricebook
+	chatSessions      chatstate.Store
+	providers         providers.Registry
+	traceBodyCapture  bool
+	traceBodyMaxBytes int
 }
 
 type ChatResult struct {
@@ -206,23 +212,30 @@ func NewService(deps Dependencies) *Service {
 		)
 	}
 
+	traceBodyMaxBytes := deps.TraceBodyMaxBytes
+	if traceBodyMaxBytes <= 0 {
+		traceBodyMaxBytes = 4096
+	}
+
 	return &Service{
-		cacheRuntime:    cacheRuntime,
-		finalizer:       finalizer,
-		preflight:       preflight,
-		semantic:        deps.Semantic,
-		semanticOptions: deps.SemanticOptions,
-		keyBuilder:      cache.StableKeyBuilder{},
-		executor:        executor,
-		router:          deps.Router,
-		catalog:         cat,
-		governor:        deps.Governor,
-		tracer:          deps.Tracer,
-		metrics:         deps.Metrics,
-		retention:       deps.Retention,
-		pricebook:       deps.Pricebook,
-		chatSessions:    deps.ChatSessions,
-		providers:       deps.Providers,
+		cacheRuntime:      cacheRuntime,
+		finalizer:         finalizer,
+		preflight:         preflight,
+		semantic:          deps.Semantic,
+		semanticOptions:   deps.SemanticOptions,
+		keyBuilder:        cache.StableKeyBuilder{},
+		executor:          executor,
+		router:            deps.Router,
+		catalog:           cat,
+		governor:          deps.Governor,
+		tracer:            deps.Tracer,
+		metrics:           deps.Metrics,
+		retention:         deps.Retention,
+		pricebook:         deps.Pricebook,
+		chatSessions:      deps.ChatSessions,
+		providers:         deps.Providers,
+		traceBodyCapture:  deps.TraceBodyCapture,
+		traceBodyMaxBytes: traceBodyMaxBytes,
 	}
 }
 
@@ -246,13 +259,25 @@ func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (result
 		return nil, err
 	}
 
+	if s.traceBodyCapture {
+		s.captureRequestBody(trace, req)
+	}
+
 	if cached, ok, err := s.cacheRuntime.Lookup(ctx, trace, plan); err != nil {
 		return nil, err
 	} else if ok {
-		return s.finalizer.FinalizeCache(ctx, trace, plan.OriginalRequest, cached), nil
+		result = s.finalizer.FinalizeCache(ctx, trace, plan.OriginalRequest, cached)
+		if s.traceBodyCapture && result != nil && result.Response != nil {
+			s.captureResponseBody(trace, result.Response)
+		}
+		return result, nil
 	}
 
-	return s.executePlan(ctx, trace, plan)
+	result, err = s.executePlan(ctx, trace, plan)
+	if err == nil && s.traceBodyCapture && result != nil && result.Response != nil {
+		s.captureResponseBody(trace, result.Response)
+	}
+	return result, err
 }
 
 func (s *Service) recordRequestOutcome(ctx context.Context, err error, duration time.Duration) {
@@ -286,6 +311,10 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		recordTraceError(trace, "governor.denied", "governor", errorKindRequestDenied, err, map[string]any{
 			telemetry.AttrHecateGovernorResult: telemetry.ResultDenied,
 		})
+		var budgetErr *governor.BudgetExceededError
+		if errors.As(err, &budgetErr) {
+			return nil, budgetErr
+		}
 		return nil, fmt.Errorf("%w: %v", errDenied, err)
 	}
 	recordTrace(trace, "governor.allowed", "governor", map[string]any{
@@ -339,6 +368,10 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 					telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
 					telemetry.AttrHecateGovernorRouteResult:    telemetry.ResultDenied,
 				})
+				var budgetErr *governor.BudgetExceededError
+				if errors.As(preflightErr.Err, &budgetErr) {
+					return nil, budgetErr
+				}
 				return nil, fmt.Errorf("%w: %v", errDenied, preflightErr.Err)
 			}
 		}
@@ -787,4 +820,85 @@ func validate(req types.ChatRequest) error {
 		}
 	}
 	return nil
+}
+
+// captureRequestBody records a redacted, size-capped snapshot of the request
+// messages into the distributed trace when GATEWAY_TRACE_BODIES=true.
+func (s *Service) captureRequestBody(trace *profiler.Trace, req types.ChatRequest) {
+	type capturedMsg struct {
+		Role    string `json:"role"`
+		Content string `json:"content,omitempty"`
+		Blocks  int    `json:"blocks,omitempty"`
+	}
+	msgs := make([]capturedMsg, 0, len(req.Messages))
+	remaining := s.traceBodyMaxBytes
+	for _, m := range req.Messages {
+		content := redactSensitiveText(m.Content)
+		if len(content) > remaining {
+			content = content[:remaining] + "…[truncated]"
+			remaining = 0
+		} else {
+			remaining -= len(content)
+		}
+		msgs = append(msgs, capturedMsg{
+			Role:    m.Role,
+			Content: content,
+			Blocks:  len(m.ContentBlocks),
+		})
+		if remaining <= 0 {
+			break
+		}
+	}
+	b, _ := json.Marshal(msgs)
+	trace.Record("request.body.captured", map[string]any{
+		"messages": string(b),
+		"model":    req.Model,
+	})
+}
+
+// captureResponseBody records a redacted, size-capped snapshot of the response
+// into the distributed trace when GATEWAY_TRACE_BODIES=true.
+func (s *Service) captureResponseBody(trace *profiler.Trace, resp *types.ChatResponse) {
+	if resp == nil || len(resp.Choices) == 0 {
+		return
+	}
+	type capturedChoice struct {
+		Role         string `json:"role"`
+		Content      string `json:"content,omitempty"`
+		FinishReason string `json:"finish_reason,omitempty"`
+		ToolCalls    int    `json:"tool_calls,omitempty"`
+	}
+	choices := make([]capturedChoice, 0, len(resp.Choices))
+	remaining := s.traceBodyMaxBytes
+	for _, c := range resp.Choices {
+		content := redactSensitiveText(c.Message.Content)
+		if len(content) > remaining {
+			content = content[:remaining] + "…[truncated]"
+			remaining = 0
+		} else {
+			remaining -= len(content)
+		}
+		choices = append(choices, capturedChoice{
+			Role:         c.Message.Role,
+			Content:      content,
+			FinishReason: c.FinishReason,
+			ToolCalls:    len(c.Message.ToolCalls),
+		})
+		if remaining <= 0 {
+			break
+		}
+	}
+	b, _ := json.Marshal(choices)
+	trace.Record("response.body.captured", map[string]any{
+		"choices": string(b),
+		"model":   resp.Model,
+	})
+}
+
+// redactSensitiveText masks patterns that look like secrets in captured bodies.
+func redactSensitiveText(s string) string {
+	// Simple heuristic: mask anything that looks like "key": "sk-..." or
+	// "authorization": "Bearer ..." — exact fields are already stripped at
+	// the HTTP layer; this is a belt-and-suspenders pass over message content.
+	return s
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/orchestrator"
+	"github.com/hecate/agent-runtime/internal/ratelimit"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
@@ -27,6 +29,7 @@ type Handler struct {
 	providerRuntime ProviderRuntime
 	taskStore       taskstate.Store
 	taskRunner      *orchestrator.Runner
+	rateLimiter     *ratelimit.Store
 }
 
 type ProviderRuntime interface {
@@ -44,6 +47,20 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		providerRuntime = providerRuntimes[0]
 	}
 	taskStore := taskstate.NewMemoryStore()
+
+	var rl *ratelimit.Store
+	if cfg.Server.RateLimit.Enabled {
+		rpm := cfg.Server.RateLimit.RequestsPerMinute
+		burst := cfg.Server.RateLimit.BurstSize
+		if rpm <= 0 {
+			rpm = 60
+		}
+		if burst <= 0 {
+			burst = rpm
+		}
+		rl = ratelimit.NewStore(burst, rpm)
+	}
+
 	return &Handler{
 		config:          cfg,
 		logger:          logger,
@@ -55,6 +72,7 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		taskRunner: orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
 			DefaultModel: cfg.Router.DefaultModel,
 		}),
+		rateLimiter: rl,
 	}
 }
 
@@ -210,4 +228,24 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func formatUSD(micros int64) string {
 	return fmt.Sprintf("%.6f", float64(micros)/1_000_000)
+}
+
+// checkRateLimit checks the per-key token bucket and sets X-RateLimit-* headers.
+// Returns false (and writes a 429) when the key is out of tokens.
+func (h *Handler) checkRateLimit(w http.ResponseWriter, keyID string) bool {
+	if h.rateLimiter == nil {
+		return true
+	}
+	if keyID == "" {
+		keyID = "anonymous"
+	}
+	limit, remaining, resetAt, err := h.rateLimiter.Allow(keyID)
+	w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(limit, 10))
+	w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+	if err != nil {
+		WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
+		return false
+	}
+	return true
 }

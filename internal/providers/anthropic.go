@@ -43,6 +43,8 @@ type anthropicMessagesRequest struct {
 	Tools         []anthropicTool            `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage            `json:"tool_choice,omitempty"`
 	Stream        bool                       `json:"stream,omitempty"`
+	// Extended thinking: {"type":"enabled","budget_tokens":N}
+	Thinking json.RawMessage `json:"thinking,omitempty"`
 }
 
 type anthropicMessagesMetadata struct {
@@ -54,7 +56,7 @@ type anthropicMessage struct {
 	Content []anthropicContentBlock `json:"content"`
 }
 
-// anthropicContentBlock covers all block variants (text, tool_use, tool_result).
+// anthropicContentBlock covers all block variants (text, tool_use, tool_result, thinking).
 type anthropicContentBlock struct {
 	Type string `json:"type"`
 	// text
@@ -69,6 +71,10 @@ type anthropicContentBlock struct {
 	ResultContent string `json:"content,omitempty"`
 	// prompt caching
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	// extended thinking
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking opaque data
 }
 
 type anthropicTool struct {
@@ -317,6 +323,9 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	if userID := requestscope.Normalize(req.Scope).User; userID != "" {
 		wireReq.Metadata = &anthropicMessagesMetadata{UserID: userID}
 	}
+	if len(req.Thinking) > 0 {
+		wireReq.Thinking = req.Thinking
+	}
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -345,6 +354,9 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	p.applyHeaders(httpReq)
+	if len(req.Betas) > 0 {
+		httpReq.Header.Set("anthropic-beta", strings.Join(req.Betas, ","))
+	}
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -540,6 +552,17 @@ func contentBlocksToAnthropicBlocks(cbs []types.ContentBlock) []anthropicContent
 				Input:        input,
 				CacheControl: cb.CacheControl,
 			})
+		case "thinking":
+			out = append(out, anthropicContentBlock{
+				Type:      "thinking",
+				Thinking:  cb.Thinking,
+				Signature: cb.Signature,
+			})
+		case "redacted_thinking":
+			out = append(out, anthropicContentBlock{
+				Type: "redacted_thinking",
+				Data: cb.Data,
+			})
 		// tool_result is handled via the "tool" role path, not content blocks
 		default:
 			// pass unknown block types through verbatim so they reach the upstream
@@ -574,6 +597,21 @@ func anthropicResponseToMessage(blocks []anthropicContentBlock) types.Message {
 			if t := strings.TrimSpace(b.Text); t != "" {
 				textParts = append(textParts, t)
 			}
+			msg.ContentBlocks = append(msg.ContentBlocks, types.ContentBlock{
+				Type: "text",
+				Text: b.Text,
+			})
+		case "thinking":
+			msg.ContentBlocks = append(msg.ContentBlocks, types.ContentBlock{
+				Type:      "thinking",
+				Thinking:  b.Thinking,
+				Signature: b.Signature,
+			})
+		case "redacted_thinking":
+			msg.ContentBlocks = append(msg.ContentBlocks, types.ContentBlock{
+				Type: "redacted_thinking",
+				Data: b.Data,
+			})
 		case "tool_use":
 			args := string(b.Input)
 			if args == "" {
@@ -586,6 +624,12 @@ func anthropicResponseToMessage(blocks []anthropicContentBlock) types.Message {
 					Name:      b.Name,
 					Arguments: args,
 				},
+			})
+			msg.ContentBlocks = append(msg.ContentBlocks, types.ContentBlock{
+				Type:  "tool_use",
+				ID:    b.ID,
+				Name:  b.Name,
+				Input: b.Input,
 			})
 		}
 	}
@@ -650,6 +694,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 	if userID := requestscope.Normalize(req.Scope).User; userID != "" {
 		wireReq.Metadata = &anthropicMessagesMetadata{UserID: userID}
 	}
+	if len(req.Thinking) > 0 {
+		wireReq.Thinking = req.Thinking
+	}
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -678,6 +725,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	p.applyHeaders(httpReq)
+	if len(req.Betas) > 0 {
+		httpReq.Header.Set("anthropic-beta", strings.Join(req.Betas, ","))
+	}
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -721,6 +771,8 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 	type deltaPayload struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
 	}
@@ -729,6 +781,8 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 		completionID string
 		// track open tool_use blocks by index
 		toolBlocks = make(map[int]struct{ id, name string })
+		// track open thinking blocks by index (value = true once opened)
+		thinkingBlocks = make(map[int]bool)
 	)
 
 	writeChunk := func(data any) error {
@@ -790,6 +844,11 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 			}
 
 		case "content_block_start":
+			if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+				thinkingBlocks[ev.Index] = true
+				// No OpenAI equivalent for thinking_start — the thinking content
+				// is forwarded as x_thinking extension deltas below.
+			}
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 				toolBlocks[ev.Index] = struct{ id, name string }{ev.ContentBlock.ID, ev.ContentBlock.Name}
 				if err := writeChunk(map[string]any{
@@ -823,6 +882,38 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 				continue
 			}
 			switch delta.Type {
+			case "thinking_delta":
+				if thinkingBlocks[ev.Index] {
+					if err := writeChunk(map[string]any{
+						"id":      completionID,
+						"object":  "chat.completion.chunk",
+						"created": 0,
+						"model":   model,
+						"choices": []map[string]any{{
+							"index":         0,
+							"delta":         map[string]any{"x_thinking": delta.Thinking},
+							"finish_reason": nil,
+						}},
+					}); err != nil {
+						return err
+					}
+				}
+			case "signature_delta":
+				if thinkingBlocks[ev.Index] {
+					if err := writeChunk(map[string]any{
+						"id":      completionID,
+						"object":  "chat.completion.chunk",
+						"created": 0,
+						"model":   model,
+						"choices": []map[string]any{{
+							"index":         0,
+							"delta":         map[string]any{"x_thinking_signature": delta.Signature},
+							"finish_reason": nil,
+						}},
+					}); err != nil {
+						return err
+					}
+				}
 			case "text_delta":
 				if err := writeChunk(map[string]any{
 					"id":      completionID,

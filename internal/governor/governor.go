@@ -29,6 +29,7 @@ type BudgetFilter struct {
 	Scope    string
 	Provider string
 	Tenant   string
+	KeyID    string // API key ID for "key" scope
 }
 
 type StaticGovernor struct {
@@ -125,7 +126,7 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 			return nil
 		}
 		if estimatedCostMicros > balance {
-			return fmt.Errorf("estimated request cost %d would exceed account balance %d", estimatedCostMicros, balance)
+			return &BudgetExceededError{BalanceMicrosUSD: balance}
 		}
 	}
 
@@ -351,10 +352,12 @@ func (g *StaticGovernor) Rewrite(req types.ChatRequest) types.ChatRequest {
 }
 
 func (g *StaticGovernor) budgetKeyForRequest(req types.ChatRequest, decision types.RouteDecision) string {
+	scope := requestscope.Normalize(req.Scope)
 	return g.resolveBudgetFilter(BudgetFilter{
 		Scope:    g.config.BudgetScope,
 		Provider: decision.Provider,
-		Tenant:   requestscope.EffectiveTenant(requestscope.Normalize(req.Scope), g.config.BudgetTenantFallback),
+		Tenant:   requestscope.EffectiveTenant(scope, g.config.BudgetTenantFallback),
+		KeyID:    scope.Principal.KeyID,
 	}).Key
 }
 
@@ -395,6 +398,18 @@ func (g *StaticGovernor) resolveBudgetFilter(filter BudgetFilter) BudgetFilter {
 		filter.Key = baseKey + ":tenant:" + tenant
 	case "tenant_provider":
 		filter.Key = baseKey + ":tenant:" + tenant + ":provider:" + provider
+	case "key":
+		keyID := filter.KeyID
+		if keyID == "" {
+			keyID = "anonymous"
+		}
+		filter.Key = baseKey + ":key:" + keyID
+	case "key_provider":
+		keyID := filter.KeyID
+		if keyID == "" {
+			keyID = "anonymous"
+		}
+		filter.Key = baseKey + ":key:" + keyID + ":provider:" + provider
 	default:
 		scope = "global"
 		filter.Key = baseKey

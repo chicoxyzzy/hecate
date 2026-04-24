@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/auth"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -328,3 +329,142 @@ func (p *recordingProvider) Chat(ctx context.Context, req types.ChatRequest) (*t
 	return p.fakeProvider.Chat(ctx, req)
 }
 
+func TestNormalizeAnthropicRequestPassesThinking(t *testing.T) {
+	t.Parallel()
+	thinking := json.RawMessage(`{"type":"enabled","budget_tokens":5000}`)
+	betas := []string{"interleaved-thinking-2025-02-19"}
+	req := AnthropicMessagesRequest{
+		Model:     "claude-opus-4-5",
+		MaxTokens: 1024,
+		Messages:  []AnthropicInboundMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+		Thinking:  thinking,
+		Betas:     betas,
+	}
+	internal, err := normalizeAnthropicRequest(req, "req-1", auth.Principal{Role: "user"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(internal.Thinking) != string(thinking) {
+		t.Errorf("Thinking = %s, want %s", internal.Thinking, thinking)
+	}
+	if len(internal.Betas) != 1 || internal.Betas[0] != betas[0] {
+		t.Errorf("Betas = %v, want %v", internal.Betas, betas)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature 5: thinking/redacted_thinking blocks survive inbound conversion
+// ---------------------------------------------------------------------------
+
+func TestConvertAnthropicInboundMessageThinkingBlocks(t *testing.T) {
+	t.Parallel()
+	content := `[
+		{"type":"thinking","thinking":"let me think","signature":"sig123"},
+		{"type":"redacted_thinking","data":"opaque"},
+		{"type":"text","text":"answer"}
+	]`
+	msg := AnthropicInboundMessage{
+		Role:    "assistant",
+		Content: json.RawMessage(content),
+	}
+	msgs, err := convertAnthropicInboundMessage(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	blocks := msgs[0].ContentBlocks
+	if len(blocks) != 3 {
+		t.Fatalf("got %d content blocks, want 3: %+v", len(blocks), blocks)
+	}
+	if blocks[0].Type != "thinking" || blocks[0].Thinking != "let me think" || blocks[0].Signature != "sig123" {
+		t.Errorf("block[0] = %+v, want thinking block", blocks[0])
+	}
+	if blocks[1].Type != "redacted_thinking" || blocks[1].Data != "opaque" {
+		t.Errorf("block[1] = %+v, want redacted_thinking block", blocks[1])
+	}
+	if blocks[2].Type != "text" || blocks[2].Text != "answer" {
+		t.Errorf("block[2] = %+v, want text block", blocks[2])
+	}
+}
+
+func TestRenderAnthropicMessagesResponseThinkingBlocks(t *testing.T) {
+	t.Parallel()
+	resp := &types.ChatResponse{
+		ID:    "msg-think-1",
+		Model: "claude-opus-4-5",
+		Choices: []types.ChatChoice{
+			{
+				Message: types.Message{
+					Role: "assistant",
+					ContentBlocks: []types.ContentBlock{
+						{Type: "thinking", Thinking: "my reasoning", Signature: "sig-abc"},
+						{Type: "redacted_thinking", Data: "opaque-blob"},
+						{Type: "text", Text: "The answer is 42."},
+					},
+				},
+				FinishReason: "end_turn",
+			},
+		},
+	}
+
+	out := renderAnthropicMessagesResponse(resp)
+	if len(out.Content) != 3 {
+		t.Fatalf("got %d content blocks, want 3: %+v", len(out.Content), out.Content)
+	}
+	if out.Content[0].Type != "thinking" || out.Content[0].Thinking != "my reasoning" || out.Content[0].Signature != "sig-abc" {
+		t.Errorf("block[0] = %+v, want thinking block", out.Content[0])
+	}
+	if out.Content[1].Type != "redacted_thinking" || out.Content[1].Data != "opaque-blob" {
+		t.Errorf("block[1] = %+v, want redacted_thinking block", out.Content[1])
+	}
+	if out.Content[2].Type != "text" || out.Content[2].Text != "The answer is 42." {
+		t.Errorf("block[2] = %+v, want text block", out.Content[2])
+	}
+}
+
+func TestTranslateOpenAIToAnthropicSSEWithThinking(t *testing.T) {
+	t.Parallel()
+	// Simulate OpenAI SSE chunks that carry x_thinking extension fields
+	// (as emitted by translateAnthropicSSE when routing via Anthropic provider).
+	chunks := []string{
+		`data: {"id":"c1","model":"claude-opus-4-5","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"c1","model":"claude-opus-4-5","choices":[{"index":0,"delta":{"x_thinking":"reasoning here"},"finish_reason":null}]}`,
+		`data: {"id":"c1","model":"claude-opus-4-5","choices":[{"index":0,"delta":{"x_thinking_signature":"sig-xyz"},"finish_reason":null}]}`,
+		`data: {"id":"c1","model":"claude-opus-4-5","choices":[{"index":0,"delta":{"content":"final answer"},"finish_reason":null}]}`,
+		`data: {"id":"c1","model":"claude-opus-4-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	}
+	input := strings.Join(chunks, "\n") + "\n"
+
+	var buf bytes.Buffer
+	err := translateOpenAIToAnthropicSSE(context.Background(), "claude-opus-4-5", "claude-opus-4-5",
+		strings.NewReader(input), &buf)
+	if err != nil {
+		t.Fatalf("translateOpenAIToAnthropicSSE error: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should contain a thinking content_block_start
+	if !strings.Contains(output, `"thinking"`) {
+		t.Errorf("output missing thinking block:\n%s", output)
+	}
+	// Should contain thinking_delta event
+	if !strings.Contains(output, "thinking_delta") {
+		t.Errorf("output missing thinking_delta:\n%s", output)
+	}
+	// Should contain signature_delta event
+	if !strings.Contains(output, "signature_delta") {
+		t.Errorf("output missing signature_delta:\n%s", output)
+	}
+	// Should contain the text content
+	if !strings.Contains(output, "final answer") {
+		t.Errorf("output missing text content:\n%s", output)
+	}
+	// Should end with message_stop
+	if !strings.Contains(output, "message_stop") {
+		t.Errorf("output missing message_stop:\n%s", output)
+	}
+}

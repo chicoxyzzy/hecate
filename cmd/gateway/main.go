@@ -291,7 +291,9 @@ func buildGatewayDependencies(
 		Tracer:        tracer,
 		Metrics:       metrics,
 		Retention:     retentionManager,
-		ChatSessions:  chatSessionStore,
+		ChatSessions:      chatSessionStore,
+		TraceBodyCapture:  cfg.Server.TraceBodyCapture,
+		TraceBodyMaxBytes: cfg.Server.TraceBodyMaxBytes,
 	}
 }
 
