@@ -24,6 +24,7 @@ type Config struct {
 	QueueWorkers           int
 	QueueBuffer            int
 	QueueLeaseSeconds      int
+	EnableAgentExecutor    bool
 	MaxConcurrentPerTenant int
 }
 
@@ -35,6 +36,7 @@ type Runner struct {
 	shell      Executor
 	file       Executor
 	git        Executor
+	agent      Executor
 	workspaces *WorkspaceManager
 	config     Config
 	queue      RunQueue
@@ -104,6 +106,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		jobs:       make(map[string]context.CancelFunc),
 		policies:   make(map[string]struct{}),
 	}
+	runner.agent = NewAgentLoopExecutor(runner.shell, runner.file, runner.git)
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
 		if policy == "" {
@@ -282,6 +285,9 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	}
 	if r.workspaces == nil {
 		return nil, fmt.Errorf("workspace manager is not configured")
+	}
+	if strings.TrimSpace(task.ExecutionKind) == "agent_loop" && !r.config.EnableAgentExecutor {
+		return nil, fmt.Errorf("agent_loop execution kind is disabled")
 	}
 
 	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
@@ -1278,6 +1284,9 @@ func findOldestRunStart(runs []types.TaskRun) time.Time {
 }
 
 func (r *Runner) executorForTask(task types.Task) Executor {
+	if task.ExecutionKind == "agent_loop" && r.agent != nil {
+		return r.agent
+	}
 	if task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != "" && r.shell != nil {
 		return r.shell
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	applyExecutionProfileDefaults(&req)
 
 	title := strings.TrimSpace(req.Title)
 	prompt := strings.TrimSpace(req.Prompt)
@@ -103,6 +105,38 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Object: "task",
 		Data:   buildTaskItem(ctx, h.taskStore, created),
 	})
+}
+
+func applyExecutionProfileDefaults(req *CreateTaskRequest) {
+	if req == nil {
+		return
+	}
+	profile := strings.TrimSpace(req.ExecutionProfile)
+	if profile != "repo_local" {
+		return
+	}
+	if strings.TrimSpace(req.ExecutionKind) == "" {
+		req.ExecutionKind = "agent_loop"
+	}
+	if strings.TrimSpace(req.WorkspaceMode) == "" {
+		req.WorkspaceMode = "persistent"
+	}
+	if strings.TrimSpace(req.WorkingDirectory) == "" {
+		req.WorkingDirectory = "."
+	}
+	if strings.TrimSpace(req.SandboxAllowedRoot) == "" {
+		workingDir := strings.TrimSpace(req.WorkingDirectory)
+		repo := strings.TrimSpace(req.Repo)
+		switch {
+		case filepath.IsAbs(workingDir):
+			req.SandboxAllowedRoot = workingDir
+		case filepath.IsAbs(repo):
+			req.SandboxAllowedRoot = repo
+		}
+	}
+	if req.TimeoutMS <= 0 {
+		req.TimeoutMS = 120000
+	}
 }
 
 func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {

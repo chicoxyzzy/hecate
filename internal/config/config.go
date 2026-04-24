@@ -36,6 +36,7 @@ type ServerConfig struct {
 	TaskQueueWorkers           int
 	TaskQueueBuffer            int
 	TaskQueueLeaseSeconds      int
+	TaskEnableAgentExecutor    bool
 	TaskMaxConcurrentPerTenant int
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
@@ -237,6 +238,7 @@ func LoadFromEnv() Config {
 			TaskQueueWorkers:           getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
 			TaskQueueBuffer:            getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
 			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
+			TaskEnableAgentExecutor:    getEnvBool("GATEWAY_TASK_ENABLE_AGENT_EXECUTOR", false),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),

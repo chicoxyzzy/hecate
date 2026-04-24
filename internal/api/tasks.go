@@ -3,6 +3,7 @@ package api
 type CreateTaskRequest struct {
 	Title              string `json:"title"`
 	Prompt             string `json:"prompt"`
+	ExecutionProfile   string `json:"execution_profile"`
 	Repo               string `json:"repo"`
 	BaseBranch         string `json:"base_branch"`
 	WorkspaceMode      string `json:"workspace_mode"`

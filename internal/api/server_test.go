@@ -2524,6 +2524,73 @@ func TestTaskRunResumeBuildsCheckpointStepContext(t *testing.T) {
 	}
 }
 
+func TestTaskCreateRepoLocalProfileAppliesDefaults(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Repo local profile","prompt":"Profile defaults","execution_profile":"repo_local"}`)
+	if created.Data.ExecutionKind != "agent_loop" {
+		t.Fatalf("execution_kind = %q, want agent_loop", created.Data.ExecutionKind)
+	}
+	if created.Data.WorkspaceMode != "persistent" {
+		t.Fatalf("workspace_mode = %q, want persistent", created.Data.WorkspaceMode)
+	}
+	if created.Data.TimeoutMS != 120000 {
+		t.Fatalf("timeout_ms = %d, want 120000", created.Data.TimeoutMS)
+	}
+}
+
+func TestTaskStartAgentLoopDisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Agent loop disabled","prompt":"Disabled","execution_kind":"agent_loop","file_operation":"write","file_path":"disabled.txt","file_content":"hello"}`)
+	rec := tasks.mustRequestStatus(http.StatusInternalServerError, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if !strings.Contains(rec.Body.String(), "agent_loop execution kind is disabled") {
+		t.Fatalf("error body = %s", rec.Body.String())
+	}
+}
+
+func TestTaskStartAgentLoopExecutesPlanningAndFileStep(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{
+		Server: config.ServerConfig{
+			TaskEnableAgentExecutor: true,
+		},
+	})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Agent loop file","prompt":"Execute file step","execution_profile":"repo_local","file_operation":"write","file_path":"agent-loop.txt","file_content":"hello agent loop"}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
+	if len(steps.Data) < 2 {
+		t.Fatalf("steps = %d, want >= 2", len(steps.Data))
+	}
+	if steps.Data[0].Kind != "model" {
+		t.Fatalf("first step kind = %q, want model", steps.Data[0].Kind)
+	}
+	foundFileStep := false
+	for _, step := range steps.Data {
+		if step.Kind == "file" {
+			foundFileStep = true
+			break
+		}
+	}
+	if !foundFileStep {
+		t.Fatal("missing file step in agent_loop execution")
+	}
+}
+
 func TestTaskRunArtifactFetchByID(t *testing.T) {
 	t.Parallel()
 
