@@ -41,25 +41,24 @@ Storage backends used across the system include `file`, `memory`, `Redis`, and `
 
 ## Architecture
 
-```text
-gateway client
-  -> auth
-  -> governor
-  -> router
-  -> route preflight
-  -> exact cache
-  -> semantic cache
-  -> provider
-  -> usage normalization
-  -> cost calculation
-  -> telemetry and response
+```mermaid
+flowchart LR
+    GC["Gateway client"] --> AUTH["auth"];
+    AUTH --> GOV["governor"];
+    GOV --> ROUTER["router"];
+    ROUTER --> PREFLIGHT["route preflight"];
+    PREFLIGHT --> EXACT["exact cache"];
+    EXACT --> SEM["semantic cache"];
+    SEM --> PROVIDER["provider"];
+    PROVIDER --> USAGE["usage normalization"];
+    USAGE --> COST["cost calculation"];
+    COST --> TELEMETRY["telemetry and response"];
 
-task client
-  -> task api
-  -> orchestrator
-  -> lease queue (memory or postgres)
-  -> sandboxd
-  -> artifacts and run stream
+    TC["Task client"] --> TASKAPI["task api"];
+    TASKAPI --> ORCH["orchestrator"];
+    ORCH --> LEASEQ["lease queue (memory or postgres)"];
+    LEASEQ --> SANDBOXD["sandboxd"];
+    SANDBOXD --> ARTIFACTS["artifacts and run stream"];
 ```
 
 ## Quick Start
