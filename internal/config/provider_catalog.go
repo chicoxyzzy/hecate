@@ -23,18 +23,6 @@ type BuiltInProvider struct {
 
 var builtInProviders = []BuiltInProvider{
 	{
-		ID:           "openai",
-		Name:         "OpenAI",
-		Kind:         "cloud",
-		Protocol:     "openai",
-		BaseURL:      "https://api.openai.com",
-		APIKeyEnv:    "PROVIDER_OPENAI_API_KEY",
-		DefaultModel: "gpt-5.4-mini",
-		DocsURL:      "https://developers.openai.com/api/docs/models",
-		Description:  "Default cloud preset using the OpenAI-compatible Chat Completions API. Hecate discovers available models from /v1/models.",
-		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
-	},
-	{
 		ID:           "anthropic",
 		Name:         "Anthropic",
 		Kind:         "cloud",
@@ -60,18 +48,6 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
-		ID:           "groq",
-		Name:         "Groq",
-		Kind:         "cloud",
-		Protocol:     "openai",
-		BaseURL:      "https://api.groq.com/openai/v1",
-		APIKeyEnv:    "PROVIDER_GROQ_API_KEY",
-		DefaultModel: "llama-3.3-70b-versatile",
-		DocsURL:      "https://console.groq.com/docs/models",
-		Description:  "OpenAI-compatible preset for Groq's low-latency inference API. Hecate discovers available models from /v1/models.",
-		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
-	},
-	{
 		ID:           "gemini",
 		Name:         "Gemini",
 		Kind:         "cloud",
@@ -84,15 +60,15 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
-		ID:           "grok",
-		Name:         "Grok (xAI)",
+		ID:           "groq",
+		Name:         "Groq",
 		Kind:         "cloud",
 		Protocol:     "openai",
-		BaseURL:      "https://api.x.ai/v1",
-		APIKeyEnv:    "PROVIDER_GROK_API_KEY",
-		DefaultModel: "grok-3-mini",
-		DocsURL:      "https://docs.x.ai/docs/models",
-		Description:  "OpenAI-compatible preset for xAI Grok models. Hecate discovers available models from /v1/models.",
+		BaseURL:      "https://api.groq.com/openai/v1",
+		APIKeyEnv:    "PROVIDER_GROQ_API_KEY",
+		DefaultModel: "llama-3.3-70b-versatile",
+		DocsURL:      "https://console.groq.com/docs/models",
+		Description:  "OpenAI-compatible preset for Groq's low-latency inference API. Hecate discovers available models from /v1/models.",
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
@@ -108,13 +84,37 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
-		ID:           "ollama",
-		Name:         "Ollama",
+		ID:           "openai",
+		Name:         "OpenAI",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.openai.com",
+		APIKeyEnv:    "PROVIDER_OPENAI_API_KEY",
+		DefaultModel: "gpt-5.4-mini",
+		DocsURL:      "https://developers.openai.com/api/docs/models",
+		Description:  "Default cloud preset using the OpenAI-compatible Chat Completions API. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
+		ID:           "xai",
+		Name:         "xAI",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.x.ai/v1",
+		APIKeyEnv:    "PROVIDER_XAI_API_KEY",
+		DefaultModel: "grok-3-mini",
+		DocsURL:      "https://docs.x.ai/docs/models",
+		Description:  "OpenAI-compatible preset for xAI Grok models. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
+		ID:           "llamacpp",
+		Name:         "llama.cpp server",
 		Kind:         "local",
 		Protocol:     "openai",
-		BaseURL:      "http://127.0.0.1:11434/v1",
-		DocsURL:      "https://github.com/ollama/ollama/blob/main/docs/openai.md",
-		Description:  "Local preset for Ollama's OpenAI-compatible endpoint. Hecate discovers models from /v1/models and uses the first available model when no model is pinned.",
+		BaseURL:      "http://127.0.0.1:8080/v1",
+		DocsURL:      "https://github.com/ggerganov/llama.cpp/tree/master/examples/server",
+		Description:  "Local preset for llama.cpp-compatible OpenAI endpoints. Hecate discovers models from /v1/models and uses the first available model when no model is pinned.",
 		StubResponse: "Stubbed local provider response.",
 	},
 	{
@@ -138,13 +138,13 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed local provider response.",
 	},
 	{
-		ID:           "llamacpp",
-		Name:         "llama.cpp server",
+		ID:           "ollama",
+		Name:         "Ollama",
 		Kind:         "local",
 		Protocol:     "openai",
-		BaseURL:      "http://127.0.0.1:8080/v1",
-		DocsURL:      "https://github.com/ggerganov/llama.cpp/tree/master/examples/server",
-		Description:  "Local preset for llama.cpp-compatible OpenAI endpoints. Hecate discovers models from /v1/models and uses the first available model when no model is pinned.",
+		BaseURL:      "http://127.0.0.1:11434/v1",
+		DocsURL:      "https://github.com/ollama/ollama/blob/main/docs/openai.md",
+		Description:  "Local preset for Ollama's OpenAI-compatible endpoint. Hecate discovers models from /v1/models and uses the first available model when no model is pinned.",
 		StubResponse: "Stubbed local provider response.",
 	},
 }
@@ -160,6 +160,7 @@ func BuiltInProviders() []BuiltInProvider {
 
 func BuiltInProviderByID(name string) (BuiltInProvider, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
+	name = builtInProviderAlias(name)
 	normalized := builtInProviderLookupKey(name)
 	for _, item := range builtInProviders {
 		if item.ID == name || strings.ToLower(item.Name) == name || builtInProviderLookupKey(item.ID) == normalized || builtInProviderLookupKey(item.Name) == normalized {
@@ -174,6 +175,15 @@ var builtInProviderLookupSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
 func builtInProviderLookupKey(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	return builtInProviderLookupSanitizer.ReplaceAllString(value, "")
+}
+
+func builtInProviderAlias(name string) string {
+	switch builtInProviderLookupKey(name) {
+	case "grok", "grokxai":
+		return "xai"
+	default:
+		return name
+	}
 }
 
 func (p BuiltInProvider) RuntimeConfig(globalDefaultModel string) OpenAICompatibleProviderConfig {

@@ -132,10 +132,10 @@ Built-in cloud presets:
 - `anthropic`
 - `deepseek`
 - `gemini`
-- `grok`
 - `groq`
 - `mistral`
 - `openai`
+- `xai`
 
 Built-in local presets:
 
@@ -146,10 +146,10 @@ Built-in local presets:
 
 Default local base URLs:
 
-- `ollama`: `http://127.0.0.1:11434/v1`
+- `llamacpp`: `http://127.0.0.1:8080/v1`
 - `lmstudio`: `http://127.0.0.1:1234/v1`
 - `localai`: `http://127.0.0.1:8080/v1`
-- `llamacpp`: `http://127.0.0.1:8080/v1`
+- `ollama`: `http://127.0.0.1:11434/v1`
 
 ## Auth, Policy, And Spend
 

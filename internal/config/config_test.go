@@ -220,18 +220,21 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("deepseek default model = %q, want deepseek-chat", got)
 	}
 
-	grok, ok := BuiltInProviderByID("grok")
+	xai, ok := BuiltInProviderByID("xai")
 	if !ok {
-		t.Fatal("BuiltInProviderByID(grok) = not found")
+		t.Fatal("BuiltInProviderByID(xai) = not found")
 	}
-	if grok.Protocol != "openai" {
-		t.Fatalf("grok protocol = %q, want openai", grok.Protocol)
+	if xai.Protocol != "openai" {
+		t.Fatalf("xai protocol = %q, want openai", xai.Protocol)
 	}
-	if grok.BaseURL != "https://api.x.ai/v1" {
-		t.Fatalf("grok base url = %q, want https://api.x.ai/v1", grok.BaseURL)
+	if xai.BaseURL != "https://api.x.ai/v1" {
+		t.Fatalf("xai base url = %q, want https://api.x.ai/v1", xai.BaseURL)
 	}
-	if got := grok.RuntimeConfig("ignored").DefaultModel; got != "grok-3-mini" {
-		t.Fatalf("grok default model = %q, want grok-3-mini", got)
+	if got := xai.RuntimeConfig("ignored").DefaultModel; got != "grok-3-mini" {
+		t.Fatalf("xai default model = %q, want grok-3-mini", got)
+	}
+	if alias, ok := BuiltInProviderByID("grok"); !ok || alias.ID != "xai" {
+		t.Fatalf("BuiltInProviderByID(grok) = %#v, %v; want alias id xai", alias, ok)
 	}
 
 	mistral, ok := BuiltInProviderByID("mistral")
@@ -279,6 +282,19 @@ func TestLoadProvidersFromEnvIncludesCustomProviderFromCoreEnvKeys(t *testing.T)
 	}
 	if custom.APIKey != "custom-secret" {
 		t.Fatalf("custom api key = %q, want custom-secret", custom.APIKey)
+	}
+}
+
+func TestLoadProvidersFromEnvSupportsLegacyGrokEnvAlias(t *testing.T) {
+	t.Setenv("PROVIDER_GROK_API_KEY", "legacy-grok-secret")
+
+	cfg := LoadFromEnv()
+	xai, ok := testProviderByName(cfg.Providers.OpenAICompatible, "xai")
+	if !ok {
+		t.Fatal("xai provider missing")
+	}
+	if xai.APIKey != "legacy-grok-secret" {
+		t.Fatalf("xai api key = %q, want legacy-grok-secret", xai.APIKey)
 	}
 }
 

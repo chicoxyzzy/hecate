@@ -869,14 +869,14 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	}
 
 	foundAnthropic := false
-	foundGrok := false
+	foundXAI := false
 	foundOllama := false
 	for _, item := range response.Data {
 		if item.ID == "anthropic" && item.Protocol == "anthropic" && item.EnvSnippet != "" {
 			foundAnthropic = true
 		}
-		if item.ID == "grok" && item.Protocol == "openai" && strings.Contains(item.EnvSnippet, "PROVIDER_GROK_API_KEY") {
-			foundGrok = true
+		if item.ID == "xai" && item.Protocol == "openai" && strings.Contains(item.EnvSnippet, "PROVIDER_XAI_API_KEY") {
+			foundXAI = true
 		}
 		if item.ID == "ollama" && item.Kind == "local" && item.EnvSnippet != "" {
 			foundOllama = true
@@ -885,8 +885,8 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	if !foundAnthropic {
 		t.Fatalf("missing anthropic preset: %#v", response.Data)
 	}
-	if !foundGrok {
-		t.Fatalf("missing grok preset: %#v", response.Data)
+	if !foundXAI {
+		t.Fatalf("missing xai preset: %#v", response.Data)
 	}
 	if !foundOllama {
 		t.Fatalf("missing ollama preset: %#v", response.Data)

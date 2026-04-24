@@ -639,36 +639,51 @@ func providerNameFromEnvKey(key string) (string, bool) {
 			if name == "" {
 				return "", false
 			}
-			return name, true
+			return canonicalProviderName(name), true
 		}
 	}
 	return "", false
 }
 
 func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
-	name = strings.TrimSpace(name)
+	name = canonicalProviderName(strings.TrimSpace(name))
 	if name == "" {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 
 	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"))
-	prefix := providerEnvPrefix(name)
-
-	cfg.Name = getEnv(prefix+"NAME", cfg.Name)
-	cfg.Kind = getEnv(prefix+"KIND", cfg.Kind)
-	cfg.Protocol = getEnv(prefix+"PROTOCOL", cfg.Protocol)
-	cfg.BaseURL = getEnv(prefix+"BASE_URL", cfg.BaseURL)
-	cfg.APIKey = getEnv(prefix+"API_KEY", cfg.APIKey)
-	cfg.APIVersion = getEnv(prefix+"API_VERSION", cfg.APIVersion)
-	cfg.Timeout = getEnvDuration(prefix+"TIMEOUT", cfg.Timeout)
-	cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
-	cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
-	cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)
+	prefixes := []string{providerEnvPrefix(name)}
+	// Keep backward compatibility for legacy Grok env names.
+	if name == "xai" {
+		prefixes = append(prefixes, providerEnvPrefix("grok"))
+	}
+	for _, prefix := range prefixes {
+		cfg.Name = getEnv(prefix+"NAME", cfg.Name)
+		cfg.Kind = getEnv(prefix+"KIND", cfg.Kind)
+		cfg.Protocol = getEnv(prefix+"PROTOCOL", cfg.Protocol)
+		cfg.BaseURL = getEnv(prefix+"BASE_URL", cfg.BaseURL)
+		cfg.APIKey = getEnv(prefix+"API_KEY", cfg.APIKey)
+		cfg.APIVersion = getEnv(prefix+"API_VERSION", cfg.APIVersion)
+		cfg.Timeout = getEnvDuration(prefix+"TIMEOUT", cfg.Timeout)
+		cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
+		cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
+		cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)
+	}
 
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 	return cfg, true
+}
+
+func canonicalProviderName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "grok":
+		return "xai"
+	default:
+		return name
+	}
 }
 
 func providerDefaults(name, globalDefaultModel string) OpenAICompatibleProviderConfig {
