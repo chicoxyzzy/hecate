@@ -2110,6 +2110,126 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	}
 }
 
+func TestTaskRunStreamResumeWithAfterSequence(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createResp := postJSONToURL(t, server.URL+"/v1/tasks", `{"title":"Resume stream","prompt":"Create resumable stream task."}`)
+	var created TaskResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	createResp.Body.Close()
+
+	started := mustRequestJSON[TaskRunResponse](newAPITestClient(t, handler), http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+
+	events := mustRequestJSON[TaskRunEventsResponse](newAPITestClient(t, handler), http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events", "")
+	if len(events.Data) == 0 {
+		t.Fatal("events = 0, want at least one")
+	}
+	afterSequence := events.Data[len(events.Data)-1].Sequence
+
+	streamReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v1/tasks/%s/runs/%s/stream?after_sequence=%d", server.URL, created.Data.ID, started.Data.ID, afterSequence), nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	streamCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	streamReq = streamReq.WithContext(streamCtx)
+
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("stream request error = %v", err)
+	}
+	defer streamResp.Body.Close()
+
+	var sawDone bool
+	for event := range readSSEEvents(t, streamResp.Body) {
+		if event.Event != "snapshot" && event.Event != "done" {
+			continue
+		}
+		var payload TaskRunStreamEventResponse
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if payload.Data.Sequence <= int(afterSequence) {
+			t.Fatalf("sequence = %d, want > %d", payload.Data.Sequence, afterSequence)
+		}
+		if event.Event == "done" {
+			sawDone = true
+			if !payload.Data.Terminal {
+				t.Fatal("done payload terminal = false, want true")
+			}
+			break
+		}
+	}
+	if !sawDone {
+		t.Fatal("did not observe done event after stream resume")
+	}
+}
+
+func TestTaskRunStreamResumeWithLastEventID(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createResp := postJSONToURL(t, server.URL+"/v1/tasks", `{"title":"Resume stream header","prompt":"Use Last-Event-ID."}`)
+	var created TaskResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	createResp.Body.Close()
+
+	started := mustRequestJSON[TaskRunResponse](newAPITestClient(t, handler), http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+
+	events := mustRequestJSON[TaskRunEventsResponse](newAPITestClient(t, handler), http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events", "")
+	if len(events.Data) == 0 {
+		t.Fatal("events = 0, want at least one")
+	}
+	last := events.Data[len(events.Data)-1].Sequence
+
+	streamReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v1/tasks/%s/runs/%s/stream", server.URL, created.Data.ID, started.Data.ID), nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	streamReq.Header.Set("Last-Event-ID", strconv.FormatInt(last, 10))
+	streamCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	streamReq = streamReq.WithContext(streamCtx)
+
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("stream request error = %v", err)
+	}
+	defer streamResp.Body.Close()
+
+	for event := range readSSEEvents(t, streamResp.Body) {
+		if event.Event != "snapshot" && event.Event != "done" {
+			continue
+		}
+		var payload TaskRunStreamEventResponse
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if payload.Data.Sequence <= int(last) {
+			t.Fatalf("sequence = %d, want > %d", payload.Data.Sequence, last)
+		}
+		if event.Event == "done" {
+			return
+		}
+	}
+	t.Fatal("did not observe done event for Last-Event-ID resume")
+}
+
 func TestTaskRunEventsAppendAndList(t *testing.T) {
 	t.Parallel()
 
@@ -2359,6 +2479,7 @@ func containsStatus(status string, statuses ...string) bool {
 }
 
 type sseEvent struct {
+	ID    string
 	Event string
 	Data  string
 }
@@ -2382,6 +2503,10 @@ func readSSEEvents(t *testing.T, body io.Reader) <-chan sseEvent {
 			}
 			if strings.HasPrefix(line, "event: ") {
 				current.Event = strings.TrimPrefix(line, "event: ")
+				continue
+			}
+			if strings.HasPrefix(line, "id: ") {
+				current.ID = strings.TrimPrefix(line, "id: ")
 				continue
 			}
 			if strings.HasPrefix(line, "data: ") {
