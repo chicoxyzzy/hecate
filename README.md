@@ -156,6 +156,7 @@ Auth supports:
 
 - admin bearer token
 - persisted API keys from the control plane
+- optional single-user admin mode (`GATEWAY_SINGLE_USER_ADMIN_MODE=true`) to grant admin rights to control-plane API keys without an admin token
 
 Control plane supports:
 
@@ -256,6 +257,7 @@ Runtime and queue knobs commonly adjusted for coding workflows:
 - `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
 - `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
 - `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>`
+- `GATEWAY_SINGLE_USER_ADMIN_MODE=true|false`
 
 Use `.env.example` as the baseline. For the full env surface, see
 `internal/config/config.go`.

@@ -26,6 +26,7 @@ type Config struct {
 type ServerConfig struct {
 	Address                    string
 	AuthToken                  string
+	SingleUserAdminMode        bool
 	ControlPlaneBackend        string
 	ControlPlaneFile           string
 	ControlPlaneKey            string
@@ -228,6 +229,7 @@ func LoadFromEnv() Config {
 		Server: ServerConfig{
 			Address:                    getEnv("GATEWAY_ADDRESS", ":8080"),
 			AuthToken:                  getEnv("GATEWAY_AUTH_TOKEN", ""),
+			SingleUserAdminMode:        getEnvBool("GATEWAY_SINGLE_USER_ADMIN_MODE", false),
 			ControlPlaneBackend:        getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "none"),
 			ControlPlaneFile:           getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:            getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),

@@ -25,6 +25,7 @@ Token sources:
 
 - `GATEWAY_AUTH_TOKEN` (admin token)
 - control-plane API keys (recommended for non-admin client access)
+- with `GATEWAY_SINGLE_USER_ADMIN_MODE=true`, control-plane API keys are elevated to admin (single-user local mode)
 
 If both headers are present, Hecate uses `Authorization` first.
 

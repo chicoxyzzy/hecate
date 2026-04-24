@@ -24,16 +24,18 @@ func (p Principal) IsAdmin() bool {
 }
 
 type Authenticator struct {
-	adminToken string
-	store      controlplane.Store
-	enabled    bool
+	adminToken          string
+	singleUserAdminMode bool
+	store               controlplane.Store
+	enabled             bool
 }
 
 func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authenticator {
 	return &Authenticator{
-		adminToken: cfg.AuthToken,
-		store:      store,
-		enabled:    cfg.AuthToken != "" || store != nil,
+		adminToken:          cfg.AuthToken,
+		singleUserAdminMode: cfg.SingleUserAdminMode,
+		store:               store,
+		enabled:             cfg.AuthToken != "" || store != nil,
 	}
 }
 
@@ -52,11 +54,11 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 	}
 
 	if a.adminToken != "" && token == a.adminToken {
-		return Principal{
+		return a.normalizePrincipal(Principal{
 			Name:   "admin",
 			Role:   "admin",
 			Source: "admin_token",
-		}, true
+		}), true
 	}
 
 	if a.store != nil {
@@ -69,7 +71,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 				if key.Tenant != "" && !tenantEnabled(state.Tenants, key.Tenant) {
 					return Principal{}, false
 				}
-				return Principal{
+				principal := Principal{
 					Name:             key.Name,
 					Role:             key.Role,
 					Tenant:           key.Tenant,
@@ -77,7 +79,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 					KeyID:            key.ID,
 					AllowedProviders: mergedAllowlist(key.AllowedProviders, tenantAllowProviders(state.Tenants, key.Tenant)),
 					AllowedModels:    mergedAllowlist(key.AllowedModels, tenantAllowModels(state.Tenants, key.Tenant)),
-				}, true
+				}
+				return a.normalizePrincipal(principal), true
 			}
 		}
 	}
@@ -145,6 +148,20 @@ func requestToken(r *http.Request) string {
 		return token
 	}
 	return strings.TrimSpace(r.Header.Get("x-api-key"))
+}
+
+func (a *Authenticator) normalizePrincipal(principal Principal) Principal {
+	if !a.singleUserAdminMode {
+		return principal
+	}
+	if principal.IsAdmin() {
+		return principal
+	}
+	if principal.Source == "control_plane_api_key" {
+		principal.Role = "admin"
+		principal.Source = "single_user_admin_mode"
+	}
+	return principal
 }
 
 func bearerToken(header string) string {
