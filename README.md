@@ -46,27 +46,35 @@ Gateway client flow:
 
 ```mermaid
 flowchart TD
-    GC["Gateway client"] --> AUTH["auth"];
-    AUTH --> GOV["governor"];
-    GOV --> ROUTER["router"];
-    ROUTER --> PREFLIGHT["route preflight"];
-    PREFLIGHT --> EXACT["exact cache"];
-    EXACT --> SEM["semantic cache"];
-    SEM --> PROVIDER["provider"];
-    PROVIDER --> USAGE["usage normalization"];
-    USAGE --> COST["cost calculation"];
-    COST --> TELEMETRY["telemetry and response"];
+    GatewayClient["Gateway client"] --> Auth["Auth"];
+    Auth --> Governor["Governor and policy"];
+    Governor --> Router["Router"];
+    Router --> Preflight["Route preflight"];
+    Preflight --> ExactCache["Exact cache"];
+    Preflight --> SemanticCache["Semantic cache"];
+    ExactCache --> Provider["Provider call"];
+    SemanticCache --> Provider;
+    Provider --> Usage["Usage normalization"];
+    Usage --> Cost["Cost calculation"];
+    Cost --> Telemetry["Telemetry headers and logs"];
+    Telemetry --> ClientResponse["Client response"];
 ```
 
 Task client flow:
 
 ```mermaid
 flowchart TD
-    TC["Task client"] --> TASKAPI["task api"];
-    TASKAPI --> ORCH["orchestrator"];
-    ORCH --> LEASEQ["lease queue (memory or postgres)"];
-    LEASEQ --> SANDBOXD["sandboxd"];
-    SANDBOXD --> ARTIFACTS["artifacts and run stream"];
+    TaskClient["Task client"] --> TaskApi["Task API"];
+    TaskApi --> Orchestrator["Orchestrator runner"];
+    Orchestrator --> LeaseQueue["Lease queue (memory or postgres)"];
+    LeaseQueue --> WorkerA["Worker A claim"];
+    LeaseQueue --> WorkerB["Worker B claim"];
+    WorkerA --> Sandboxd["sandboxd"];
+    WorkerB --> Sandboxd;
+    Sandboxd --> TaskState["Task state"];
+    Sandboxd --> Events["Run events"];
+    TaskState --> Stream["SSE stream and replay"];
+    Events --> Stream;
 ```
 
 ## Quick Start
@@ -234,18 +242,24 @@ For copy-paste setup and auth/header examples, see [`docs/client-integration.md`
 ## Durable Queue Execution Flow
 
 ```mermaid
-flowchart LR
-    C["Task client or UI"] --> API["/v1/tasks"];
-    API --> ORCH["orchestrator runner"];
-    ORCH --> Q["run queue"];
-    Q -->|claim lease| W1["worker A"];
-    Q -->|claim lease| W2["worker B"];
-    W1 -->|heartbeat and extend lease| Q;
-    W2 -->|ack or nack| Q;
-    W1 --> SB["sandboxd"];
-    W2 --> SB;
-    SB --> ES["task state and run events"];
-    ES --> SSE["SSE stream with replay cursor"];
+flowchart TD
+    Client["Task client or UI"] --> TasksApi["/v1/tasks"];
+    TasksApi --> Runner["Orchestrator runner"];
+    Runner --> Queue["Run queue"];
+    Queue -->|"Claim lease"| WorkerA["Worker A"];
+    Queue -->|"Claim lease"| WorkerB["Worker B"];
+    WorkerA -->|"Heartbeat and extend lease"| Queue;
+    WorkerB -->|"Ack or nack"| Queue;
+    WorkerA --> Sandboxd["sandboxd"];
+    WorkerB --> Sandboxd;
+    Sandboxd --> State["Task state store"];
+    Sandboxd --> RunEvents["Run events"];
+    Queue --> Stats["Runtime stats"];
+    State --> Stats;
+    RunEvents --> Stats;
+    State --> Snapshot["Run snapshot"];
+    RunEvents --> Snapshot;
+    Snapshot --> Stream["SSE stream with replay cursor"];
 ```
 
 ## Config Highlights
