@@ -21,6 +21,14 @@ Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchest
 - `POST /v1/tasks/{id}/runs/{run_id}/resume`
 - `POST /v1/tasks/{id}/runs/{run_id}/cancel`
 
+Resume semantics:
+
+- resume is allowed when the source run is terminal (`failed` or `cancelled`)
+- resume creates a new run attempt (new `run_id`) rather than mutating the original run
+- the new run reuses the prior run workspace when available, so file state carries forward
+- optional payload: `{"reason":"..."}` to annotate the resume request
+- resumed executions include checkpoint context (source run id, last completed step, last event sequence) in step input so executors/tools can continue from the prior boundary
+
 ## Execution detail endpoints
 
 - `GET /v1/tasks/{id}/runs`

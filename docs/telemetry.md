@@ -161,7 +161,7 @@ Important span names include:
 
 These spans back both local trace inspection and OTLP trace export.
 
-Coding-runtime spans and events are also emitted during orchestration, including run queueing, lease-claimed run starts, approval decisions, step/artifact upserts, and terminal run outcomes.
+Coding-runtime spans and events are also emitted during orchestration, including run queueing, lease-claimed run starts, approval decisions, step/artifact upserts, resume events (`run.resume_requested`, `run.resumed`), and terminal run outcomes.
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
 

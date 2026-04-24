@@ -272,10 +272,12 @@ Delivered:
 - operator UI for day-to-day runtime operations
 - coding runtime foundation with sandboxd, approvals, run events, stream resume
 - durable leased queue backend for distributed workers
+- continuation-style run resume with workspace reuse
+- checkpoint context propagation for resumed runs across executor boundaries
 
 Next focus areas:
 
-- resumable execution semantics for long-lived coding runs
+- richer checkpoint controls for partial replay and selective step continuation
 - broader policy-driven approval classes
 - richer coding-focused UI views and aggregate run operations
 - improved route-reason taxonomy and debug ergonomics

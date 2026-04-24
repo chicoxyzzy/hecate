@@ -997,11 +997,15 @@ func (h *Handler) HandleResumeTaskRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var req ResumeTaskRunRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 	if run.Status != "failed" && run.Status != "cancelled" {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run is not resumable")
 		return
 	}
-	result, err := h.taskRunner.StartTask(ctx, task, newOpaqueTaskResourceID)
+	result, err := h.taskRunner.ResumeTask(ctx, task, run, strings.TrimSpace(req.Reason), newOpaqueTaskResourceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
 		return

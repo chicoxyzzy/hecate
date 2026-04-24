@@ -54,6 +54,11 @@ type StartTaskResult struct {
 	SpanID    string
 }
 
+type startTaskOptions struct {
+	ResumeFromRun *types.TaskRun
+	ResumeReason  string
+}
+
 type RuntimeStats struct {
 	CheckedAt               time.Time
 	QueueDepth              int
@@ -246,6 +251,20 @@ func (r *Runner) ReconcilePendingRuns(ctx context.Context) error {
 }
 
 func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(prefix string) string) (*StartTaskResult, error) {
+	return r.startTaskWithOptions(ctx, task, idgen, startTaskOptions{})
+}
+
+func (r *Runner) ResumeTask(ctx context.Context, task types.Task, run types.TaskRun, reason string, idgen func(prefix string) string) (*StartTaskResult, error) {
+	if !types.IsTerminalTaskRunStatus(run.Status) {
+		return nil, fmt.Errorf("task run %q is not resumable", run.ID)
+	}
+	return r.startTaskWithOptions(ctx, task, idgen, startTaskOptions{
+		ResumeFromRun: &run,
+		ResumeReason:  strings.TrimSpace(reason),
+	})
+}
+
+func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idgen func(prefix string) string, options startTaskOptions) (*StartTaskResult, error) {
 	if r.store == nil {
 		return nil, fmt.Errorf("task store is not configured")
 	}
@@ -309,18 +328,27 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 	if r.approvalRequiredForTask(task) {
 		run.Status = "awaiting_approval"
 	}
-	run.WorkspacePath, err = r.workspaces.Provision(ctx, task, run)
-	if err != nil {
-		trace.Record("orchestrator.run.failed", map[string]any{
-			telemetry.AttrHecatePhase:     "orchestration",
-			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "workspace_provision_failed",
-			telemetry.AttrErrorType:       "workspace_provision_failed",
-			telemetry.AttrErrorMessage:    err.Error(),
-			"hecate.task.id":              task.ID,
-			"hecate.run.id":               run.ID,
-		})
-		return nil, err
+	if options.ResumeFromRun != nil {
+		prior := *options.ResumeFromRun
+		if strings.TrimSpace(prior.WorkspacePath) != "" {
+			run.WorkspacePath = prior.WorkspacePath
+			run.WorkspaceID = firstNonEmpty(prior.WorkspaceID, run.WorkspaceID)
+		}
+	}
+	if strings.TrimSpace(run.WorkspacePath) == "" {
+		run.WorkspacePath, err = r.workspaces.Provision(ctx, task, run)
+		if err != nil {
+			trace.Record("orchestrator.run.failed", map[string]any{
+				telemetry.AttrHecatePhase:     "orchestration",
+				telemetry.AttrHecateResult:    telemetry.ResultError,
+				telemetry.AttrHecateErrorKind: "workspace_provision_failed",
+				telemetry.AttrErrorType:       "workspace_provision_failed",
+				telemetry.AttrErrorMessage:    err.Error(),
+				"hecate.task.id":              task.ID,
+				"hecate.run.id":               run.ID,
+			})
+			return nil, err
+		}
 	}
 	run, err = r.store.CreateRun(ctx, run)
 	if err != nil {
@@ -335,7 +363,22 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		})
 		return nil, err
 	}
-	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.created", requestID, trace.TraceID, nil)
+	createEvent := map[string]any{}
+	if options.ResumeFromRun != nil {
+		createEvent["resumed_from_run_id"] = options.ResumeFromRun.ID
+		createEvent["resume_reason"] = options.ResumeReason
+	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.created", requestID, trace.TraceID, createEvent)
+	if options.ResumeFromRun != nil {
+		_, _ = r.emitRunEvent(ctx, task.ID, options.ResumeFromRun.ID, "run.resume_requested", requestID, trace.TraceID, map[string]any{
+			"new_run_id": run.ID,
+			"reason":     options.ResumeReason,
+		})
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.resumed", requestID, trace.TraceID, map[string]any{
+			"resumed_from_run_id": options.ResumeFromRun.ID,
+			"reason":              options.ResumeReason,
+		})
+	}
 
 	trace.Record("orchestrator.run.started", map[string]any{
 		telemetry.AttrHecatePhase:       "orchestration",
@@ -678,8 +721,6 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return
 	}
-	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.running", requestID, trace.TraceID, nil)
-
 	task.Status = "running"
 	task.LatestRunID = run.ID
 	if task.StartedAt.IsZero() {
@@ -705,7 +746,21 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 		telemetry.AttrGenAIRequestModel: run.Model,
 	})
 
-	if _, err := r.executeRun(ctx, trace, task, run, requestID); err != nil {
+	resumeCheckpoint, checkpointErr := r.resumeCheckpointForRun(ctx, task.ID, run.ID)
+	if checkpointErr != nil {
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.resume_checkpoint_failed", requestID, trace.TraceID, map[string]any{
+			"error": checkpointErr.Error(),
+		})
+	}
+	runEvent := map[string]any{}
+	if resumeCheckpoint != nil {
+		runEvent["resume_from_run_id"] = resumeCheckpoint.SourceRunID
+		runEvent["resume_from_step_id"] = resumeCheckpoint.LastCompletedStepID
+		runEvent["resume_from_event_sequence"] = resumeCheckpoint.LastEventSequence
+	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.running", requestID, trace.TraceID, runEvent)
+
+	if _, err := r.executeRun(ctx, trace, task, run, requestID, resumeCheckpoint); err != nil {
 		finalStatus := "failed"
 		lastError := err.Error()
 		if jobCtx.Err() != nil {
@@ -770,18 +825,19 @@ func (r *Runner) unregisterJob(runID string) {
 	delete(r.jobs, runID)
 }
 
-func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string) (*StartTaskResult, error) {
+func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, resumeCheckpoint *ResumeCheckpoint) (*StartTaskResult, error) {
 	executor := r.executorForTask(task)
 	execution, err := executor.Execute(ctx, ExecutionSpec{
-		Task:           taskForRun(task, run),
-		Run:            run,
-		RequestID:      requestID,
-		TraceID:        trace.TraceID,
-		RootSpanID:     trace.RootSpanID(),
-		StartedAt:      time.Now().UTC(),
-		NewID:          defaultResourceID,
-		UpsertStep:     func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
-		UpsertArtifact: func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
+		Task:             taskForRun(task, run),
+		Run:              run,
+		RequestID:        requestID,
+		TraceID:          trace.TraceID,
+		RootSpanID:       trace.RootSpanID(),
+		StartedAt:        time.Now().UTC(),
+		ResumeCheckpoint: resumeCheckpoint,
+		NewID:            defaultResourceID,
+		UpsertStep:       func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
+		UpsertArtifact:   func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
 	})
 	if err != nil {
 		trace.Record("orchestrator.run.failed", map[string]any{
@@ -958,6 +1014,79 @@ func taskForRun(task types.Task, run types.TaskRun) types.Task {
 		executionTask.SandboxAllowedRoot = run.WorkspacePath
 	}
 	return executionTask
+}
+
+func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID string) (*ResumeCheckpoint, error) {
+	if r.store == nil {
+		return nil, nil
+	}
+	events, err := r.store.ListRunEvents(ctx, taskID, runID, 0, 500)
+	if err != nil {
+		return nil, err
+	}
+	sourceRunID := ""
+	reason := ""
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		value, ok := event.Data["resumed_from_run_id"]
+		if !ok {
+			continue
+		}
+		candidate, _ := value.(string)
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		sourceRunID = candidate
+		if rawReason, ok := event.Data["reason"]; ok {
+			reason, _ = rawReason.(string)
+		} else if rawReason, ok := event.Data["resume_reason"]; ok {
+			reason, _ = rawReason.(string)
+		}
+		break
+	}
+	if sourceRunID == "" {
+		return nil, nil
+	}
+	steps, err := r.store.ListSteps(ctx, sourceRunID)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := r.store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: taskID, RunID: sourceRunID})
+	if err != nil {
+		return nil, err
+	}
+	sourceEvents, err := r.store.ListRunEvents(ctx, taskID, sourceRunID, 0, 5000)
+	if err != nil {
+		return nil, err
+	}
+	checkpoint := &ResumeCheckpoint{
+		SourceRunID:   sourceRunID,
+		Reason:        strings.TrimSpace(reason),
+		LastStepIndex: 0,
+		ArtifactCount: len(artifacts),
+	}
+	var lastSequence int64
+	maxCompletedIndex := 0
+	for _, event := range sourceEvents {
+		if event.Sequence > lastSequence {
+			lastSequence = event.Sequence
+		}
+	}
+	checkpoint.LastEventSequence = lastSequence
+	for _, step := range steps {
+		if step.Index > checkpoint.LastStepIndex {
+			checkpoint.LastStepIndex = step.Index
+		}
+		if step.Status == "completed" {
+			checkpoint.CompletedStepCount++
+			if checkpoint.LastCompletedStepID == "" || step.Index >= maxCompletedIndex {
+				maxCompletedIndex = step.Index
+				checkpoint.LastCompletedStepID = step.ID
+			}
+		}
+	}
+	return checkpoint, nil
 }
 
 func (r *Runner) approvalRequiredForTask(task types.Task) bool {

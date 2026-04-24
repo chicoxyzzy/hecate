@@ -36,6 +36,10 @@ type RetryTaskRunRequest struct {
 	Reason string `json:"reason"`
 }
 
+type ResumeTaskRunRequest struct {
+	Reason string `json:"reason"`
+}
+
 type AppendTaskRunEventRequest struct {
 	EventType string         `json:"event_type"`
 	StepID    string         `json:"step_id"`

@@ -17,15 +17,26 @@ type Executor interface {
 }
 
 type ExecutionSpec struct {
-	Task           types.Task
-	Run            types.TaskRun
-	RequestID      string
-	TraceID        string
-	RootSpanID     string
-	StartedAt      time.Time
-	NewID          func(prefix string) string
-	UpsertStep     func(step types.TaskStep) error
-	UpsertArtifact func(artifact types.TaskArtifact) error
+	Task             types.Task
+	Run              types.TaskRun
+	RequestID        string
+	TraceID          string
+	RootSpanID       string
+	StartedAt        time.Time
+	ResumeCheckpoint *ResumeCheckpoint
+	NewID            func(prefix string) string
+	UpsertStep       func(step types.TaskStep) error
+	UpsertArtifact   func(artifact types.TaskArtifact) error
+}
+
+type ResumeCheckpoint struct {
+	SourceRunID         string
+	Reason              string
+	LastEventSequence   int64
+	LastCompletedStepID string
+	LastStepIndex       int
+	CompletedStepCount  int
+	ArtifactCount       int
 }
 
 type ExecutionResult struct {
@@ -429,11 +440,24 @@ func fileOperationInput(task types.Task, operation string) map[string]any {
 }
 
 func newExecutionStep(spec ExecutionSpec, kind, title, toolName string, input map[string]any) types.TaskStep {
+	stepIndex := 1
+	if spec.ResumeCheckpoint != nil && spec.ResumeCheckpoint.LastStepIndex > 0 {
+		stepIndex = spec.ResumeCheckpoint.LastStepIndex + 1
+	}
+	if spec.ResumeCheckpoint != nil {
+		if input == nil {
+			input = map[string]any{}
+		}
+		input["resume_from_run_id"] = spec.ResumeCheckpoint.SourceRunID
+		input["resume_from_step_id"] = spec.ResumeCheckpoint.LastCompletedStepID
+		input["resume_from_event_sequence"] = spec.ResumeCheckpoint.LastEventSequence
+		input["resume_reason"] = spec.ResumeCheckpoint.Reason
+	}
 	return types.TaskStep{
 		ID:        spec.NewID("step"),
 		TaskID:    spec.Task.ID,
 		RunID:     spec.Run.ID,
-		Index:     1,
+		Index:     stepIndex,
 		Kind:      kind,
 		Title:     title,
 		Status:    "running",

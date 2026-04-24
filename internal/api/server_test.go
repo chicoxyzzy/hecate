@@ -2413,12 +2413,56 @@ func TestTaskRunResumeFromCancelledRun(t *testing.T) {
 	tasks.mustRequest(http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"reject","note":"force cancellation for resume test"}`)
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "cancelled")
 
-	resumed := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume", `{}`)
+	resumed := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume", `{"reason":"continue after cancellation"}`)
 	if resumed.Data.ID == started.Data.ID {
 		t.Fatal("resume returned original run id, want new run id")
 	}
 	if resumed.Data.Status != "awaiting_approval" && resumed.Data.Status != "queued" {
 		t.Fatalf("resume status = %q, want awaiting_approval or queued", resumed.Data.Status)
+	}
+	if started.Data.WorkspacePath != "" && resumed.Data.WorkspacePath != started.Data.WorkspacePath {
+		t.Fatalf("resumed workspace path = %q, want %q", resumed.Data.WorkspacePath, started.Data.WorkspacePath)
+	}
+	events := mustTaskRequestJSON[TaskRunEventsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+resumed.Data.ID+"/events", "")
+	foundResumedEvent := false
+	for _, event := range events.Data {
+		if event.EventType != "run.resumed" {
+			continue
+		}
+		foundResumedEvent = true
+		if got, _ := event.Data["resumed_from_run_id"].(string); got != started.Data.ID {
+			t.Fatalf("run.resumed resumed_from_run_id = %q, want %q", got, started.Data.ID)
+		}
+	}
+	if !foundResumedEvent {
+		t.Fatal("missing run.resumed event for resumed run")
+	}
+}
+
+func TestTaskRunResumeBuildsCheckpointStepContext(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Resume checkpoint","prompt":"Resume failed file run.","execution_kind":"file","file_operation":"write","file_path":"checkpoint.txt","file_content":"hello","working_directory":".","sandbox_read_only":true}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "failed")
+
+	resumed := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume", `{"reason":"continue from latest checkpoint"}`)
+	waitForRunStatus(t, handler, created.Data.ID, resumed.Data.ID, "failed")
+
+	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+resumed.Data.ID+"/steps", "")
+	if len(steps.Data) == 0 {
+		t.Fatal("resumed run steps = 0, want at least one step")
+	}
+	step := steps.Data[0]
+	if step.Index <= 1 {
+		t.Fatalf("resumed step index = %d, want > 1", step.Index)
+	}
+	if got, _ := step.Input["resume_from_run_id"].(string); got != started.Data.ID {
+		t.Fatalf("resume_from_run_id = %q, want %q", got, started.Data.ID)
 	}
 }
 
