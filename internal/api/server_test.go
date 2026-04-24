@@ -925,6 +925,84 @@ func TestRuntimeStatsReturnsQueueAndRunCounters(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsPayloadShape(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	client := newAPITestClient(t, handler)
+
+	recorder := client.mustRequest(http.MethodGet, "/admin/runtime/stats", "")
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if object, _ := payload["object"].(string); object != "runtime_stats" {
+		t.Fatalf("object = %v, want runtime_stats", payload["object"])
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want object", payload["data"])
+	}
+
+	requiredKeys := []string{
+		"checked_at",
+		"queue_depth",
+		"queue_capacity",
+		"worker_count",
+		"in_flight_jobs",
+		"queued_runs",
+		"running_runs",
+		"awaiting_approval_runs",
+		"oldest_queued_age_seconds",
+		"oldest_running_age_seconds",
+	}
+	for _, key := range requiredKeys {
+		if _, exists := data[key]; !exists {
+			t.Fatalf("runtime_stats.data missing required key %q", key)
+		}
+	}
+	if _, ok := data["checked_at"].(string); !ok {
+		t.Fatalf("checked_at type = %T, want string", data["checked_at"])
+	}
+	numericKeys := []string{
+		"queue_depth",
+		"queue_capacity",
+		"worker_count",
+		"in_flight_jobs",
+		"queued_runs",
+		"running_runs",
+		"awaiting_approval_runs",
+		"oldest_queued_age_seconds",
+		"oldest_running_age_seconds",
+	}
+	for _, key := range numericKeys {
+		if _, ok := data[key].(float64); !ok {
+			t.Fatalf("%s type = %T, want number", key, data[key])
+		}
+	}
+
+	// Optional extension fields from telemetry phases should be objects when present.
+	if telemetryShape, exists := data["telemetry"]; exists {
+		telemetryMap, ok := telemetryShape.(map[string]any)
+		if !ok {
+			t.Fatalf("telemetry type = %T, want object", telemetryShape)
+		}
+		if signals, hasSignals := telemetryMap["signals"]; hasSignals {
+			if _, ok := signals.(map[string]any); !ok {
+				t.Fatalf("telemetry.signals type = %T, want object", signals)
+			}
+		}
+	}
+	if sloShape, exists := data["slo"]; exists {
+		if _, ok := sloShape.(map[string]any); !ok {
+			t.Fatalf("slo type = %T, want object", sloShape)
+		}
+	}
+}
+
 func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	t.Parallel()
 
