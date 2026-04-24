@@ -17,7 +17,6 @@ Hecate also includes an early coding-runtime layer with task, run, step, artifac
 - [Using Hecate For Coding](#using-hecate-for-coding)
 - [Docs](#docs)
 - [Commands](#commands)
-- [Repository Layout](#repository-layout)
 - [Checklist](#checklist)
 
 What Hecate already does well:
