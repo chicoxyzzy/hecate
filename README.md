@@ -12,6 +12,7 @@ Hecate is an open-source AI gateway and agent runtime for teams that want one co
 - [Observability](#observability)
 - [Operator UI](#operator-ui)
 - [Using Hecate For Coding](#using-hecate-for-coding)
+- [Using Hecate With Codex And Claude Code](#using-hecate-with-codex-and-claude-code)
 - [Durable Queue Execution Flow](#durable-queue-execution-flow)
 - [Config Highlights](#config-highlights)
 - [Docs](#docs)
@@ -215,6 +216,18 @@ Current coding-runtime foundation:
 - persisted run events and SSE stream resume (`after_sequence`, `Last-Event-ID`)
 - durable distributed queue semantics via Postgres lease claims
 
+## Using Hecate With Codex And Claude Code
+
+Hecate supports both OpenAI-compatible clients and Anthropic Messages clients, so you can point Codex and Claude Code at one gateway.
+
+Use:
+
+- OpenAI-compatible path: `POST /v1/chat/completions`
+- Anthropic path: `POST /v1/messages`
+- Discovery: `GET /v1/models`
+
+For copy-paste setup and auth/header examples, see [`docs/client-integration.md`](docs/client-integration.md).
+
 ## Durable Queue Execution Flow
 
 ```mermaid
@@ -249,6 +262,7 @@ Use `.env.example` as the baseline. For the full env surface, see
 
 ## Docs
 
+- [Client Integration (Codex And Claude Code)](docs/client-integration.md)
 - [Runtime API Notes](docs/runtime-api.md)
 - [Telemetry And OTLP Notes](docs/telemetry.md)
 

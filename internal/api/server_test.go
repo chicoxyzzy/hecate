@@ -1191,6 +1191,64 @@ func TestSessionEndpointReturnsAnonymousTenantAndAdminStates(t *testing.T) {
 	}
 }
 
+func TestClientEndpointsAcceptXAPIKeyAuth(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerWithConfig(logger, &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-x-api-key",
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{
+				{Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: types.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
+		},
+	}, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	})
+	client := newAPITestClient(t, handler).withAPIKey("admin-secret")
+
+	models := mustRequestJSON[OpenAIModelsResponse](client, http.MethodGet, "/v1/models", "")
+	if len(models.Data) == 0 {
+		t.Fatal("models = 0, want at least one model")
+	}
+	chat := mustRequestJSON[OpenAIChatCompletionResponse](client, http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`)
+	if len(chat.Choices) == 0 {
+		t.Fatal("chat choices = 0, want at least one")
+	}
+	msg := mustRequestJSON[AnthropicMessagesResponse](client, http.MethodPost, "/v1/messages", `{"model":"gpt-4o-mini","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)
+	if len(msg.Content) == 0 {
+		t.Fatal("anthropic content = 0, want at least one block")
+	}
+}
+
+func TestClientEndpointAuthPrecedencePrefersAuthorization(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerWithConfig(logger, &fakeProvider{
+		name: "openai",
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-precedence",
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{
+				{Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: types.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
+		},
+	}, config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-secret",
+		},
+	})
+	client := newAPITestClient(t, handler).withAPIKey("admin-secret").withBearerToken("wrong-secret")
+	client.mustRequestStatus(http.StatusUnauthorized, http.MethodGet, "/v1/models", "")
+}
+
 func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	t.Parallel()
 
@@ -2508,6 +2566,18 @@ func (c apiTestClient) withBearerToken(token string) apiTestClient {
 		c.headers = make(map[string]string, 1)
 	}
 	c.headers["Authorization"] = "Bearer " + token
+	return c
+}
+
+func (c apiTestClient) withAPIKey(token string) apiTestClient {
+	c.t.Helper()
+	if strings.TrimSpace(token) == "" {
+		return c
+	}
+	if c.headers == nil {
+		c.headers = make(map[string]string, 1)
+	}
+	c.headers["x-api-key"] = token
 	return c
 }
 

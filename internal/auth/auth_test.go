@@ -96,6 +96,22 @@ func TestAuthenticateAdminToken(t *testing.T) {
 	}
 }
 
+func TestAuthenticateAdminTokenFromAPIKeyHeader(t *testing.T) {
+	t.Parallel()
+
+	authn := NewAuthenticator(config.ServerConfig{AuthToken: "root-secret"}, nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("x-api-key", "root-secret")
+
+	principal, ok := authn.Authenticate(req)
+	if !ok {
+		t.Fatal("Authenticate() ok = false, want true")
+	}
+	if !principal.IsAdmin() {
+		t.Fatalf("principal role = %q, want admin", principal.Role)
+	}
+}
+
 func TestAuthenticateControlPlaneAPIKeyMergesTenantRestrictions(t *testing.T) {
 	t.Parallel()
 
@@ -160,5 +176,38 @@ func TestAuthenticateRejectsDisabledTenantKey(t *testing.T) {
 
 	if _, ok := authn.Authenticate(req); ok {
 		t.Fatal("Authenticate() ok = true, want false for disabled tenant")
+	}
+}
+
+func TestAuthenticateTokenPrecedencePrefersAuthorization(t *testing.T) {
+	t.Parallel()
+
+	authn := NewAuthenticator(config.ServerConfig{AuthToken: "auth-token"}, nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer auth-token")
+	req.Header.Set("x-api-key", "different-token")
+
+	principal, ok := authn.Authenticate(req)
+	if !ok {
+		t.Fatal("Authenticate() ok = false, want true")
+	}
+	if principal.Source != "admin_token" {
+		t.Fatalf("source = %q, want admin_token", principal.Source)
+	}
+}
+
+func TestIntrospectRecognizesAPIKeyHeader(t *testing.T) {
+	t.Parallel()
+
+	authn := NewAuthenticator(config.ServerConfig{AuthToken: "root-secret"}, nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("x-api-key", "root-secret")
+
+	introspection := authn.Introspect(req)
+	if !introspection.Authenticated {
+		t.Fatal("Introspect().Authenticated = false, want true")
+	}
+	if !introspection.Principal.IsAdmin() {
+		t.Fatalf("principal role = %q, want admin", introspection.Principal.Role)
 	}
 }

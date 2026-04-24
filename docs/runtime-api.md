@@ -2,6 +2,8 @@
 
 Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchestrated agents.
 
+For LLM client endpoints such as `/v1/chat/completions`, `/v1/messages`, and `/v1/models`, see [`docs/client-integration.md`](client-integration.md).
+
 ## Core resources
 
 - `task`

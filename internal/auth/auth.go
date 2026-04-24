@@ -46,7 +46,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 		return Principal{Role: "anonymous"}, true
 	}
 
-	token := bearerToken(r.Header.Get("Authorization"))
+	token := requestToken(r)
 	if token == "" {
 		return Principal{}, false
 	}
@@ -101,7 +101,7 @@ func (a *Authenticator) Introspect(r *http.Request) Introspection {
 		}
 	}
 
-	token := bearerToken(r.Header.Get("Authorization"))
+	token := requestToken(r)
 	if token == "" {
 		return Introspection{
 			Authenticated: false,
@@ -128,6 +128,23 @@ func (a *Authenticator) Introspect(r *http.Request) Introspection {
 		Authenticated: true,
 		Principal:     principal,
 	}
+}
+
+// requestToken extracts the client auth token.
+//
+// Precedence:
+// 1. Authorization: Bearer <token>
+// 2. x-api-key: <token>
+//
+// This keeps behavior deterministic when both are present.
+func requestToken(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if token := bearerToken(r.Header.Get("Authorization")); token != "" {
+		return token
+	}
+	return strings.TrimSpace(r.Header.Get("x-api-key"))
 }
 
 func bearerToken(header string) string {
