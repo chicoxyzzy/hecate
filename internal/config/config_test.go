@@ -198,6 +198,20 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("anthropic default model = %q, want claude-sonnet-4-6", got)
 	}
 
+	grok, ok := BuiltInProviderByID("grok")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(grok) = not found")
+	}
+	if grok.Protocol != "openai" {
+		t.Fatalf("grok protocol = %q, want openai", grok.Protocol)
+	}
+	if grok.BaseURL != "https://api.x.ai/v1" {
+		t.Fatalf("grok base url = %q, want https://api.x.ai/v1", grok.BaseURL)
+	}
+	if got := grok.RuntimeConfig("ignored").DefaultModel; got != "grok-3-mini" {
+		t.Fatalf("grok default model = %q, want grok-3-mini", got)
+	}
+
 	for _, id := range []string{"ollama", "LM Studio", "localai", "llamacpp"} {
 		local, ok := BuiltInProviderByID(id)
 		if !ok {

@@ -71,6 +71,18 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
+		ID:           "grok",
+		Name:         "Grok (xAI)",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.x.ai/v1",
+		APIKeyEnv:    "PROVIDER_GROK_API_KEY",
+		DefaultModel: "grok-3-mini",
+		DocsURL:      "https://docs.x.ai/docs/models",
+		Description:  "OpenAI-compatible preset for xAI Grok models. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
 		ID:           "ollama",
 		Name:         "Ollama",
 		Kind:         "local",

@@ -142,6 +142,7 @@ Built-in cloud presets:
 - `anthropic`
 - `groq`
 - `gemini`
+- `grok`
 
 Built-in local presets:
 
