@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,7 +282,9 @@ func TestOpenAIProviderCapabilitiesDiscovery(t *testing.T) {
 func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	t.Parallel()
 
+	var calls int
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
 		return nil, fmt.Errorf("network unavailable")
 	})
 
@@ -306,6 +309,48 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	}
 	if caps.DiscoverySource != "config_fallback" {
 		t.Fatalf("discovery source = %q, want config_fallback", caps.DiscoverySource)
+	}
+
+	_, err = provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() cached fallback error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("discovery call count = %d, want 1 due to fallback cache", calls)
+	}
+}
+
+func TestOpenAIProviderCapabilitiesSkipsDiscoveryWhenCloudProviderUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-4o-mini"}]}`)),
+		}, nil
+	})
+
+	provider := NewOpenAICompatibleProvider(config.OpenAICompatibleProviderConfig{
+		Name:         "openai",
+		Kind:         "cloud",
+		BaseURL:      "https://api.openai.com/v1",
+		Timeout:      time.Second,
+		DefaultModel: "gpt-4o-mini",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	provider.httpClient.Transport = transport
+
+	caps, err := provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("discovery call count = %d, want 0 for unconfigured cloud provider", calls)
+	}
+	if caps.DiscoverySource != "config_unconfigured" {
+		t.Fatalf("discovery source = %q, want config_unconfigured", caps.DiscoverySource)
 	}
 }
 

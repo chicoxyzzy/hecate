@@ -146,6 +146,41 @@ func TestAnthropicProviderCapabilitiesUsesModelsEndpoint(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderCapabilitiesSkipsDiscoveryWhenCloudProviderUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	provider := NewAnthropicProvider(config.OpenAICompatibleProviderConfig{
+		Name:       "anthropic",
+		Kind:       "cloud",
+		Protocol:   "anthropic",
+		BaseURL:    "https://api.anthropic.com",
+		APIVersion: "2023-06-01",
+		Timeout:    5 * time.Second,
+	}, nil)
+	provider.httpClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-sonnet-4-20250514"}]}`)),
+			}, nil
+		}),
+	}
+
+	caps, err := provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("discovery call count = %d, want 0 for unconfigured cloud provider", calls)
+	}
+	if caps.DiscoverySource != "config_unconfigured" {
+		t.Fatalf("discovery source = %q, want config_unconfigured", caps.DiscoverySource)
+	}
+}
+
 // TestAnthropicMessagesFromTypesPreservesCacheControl verifies that ContentBlocks with
 // cache_control survive the conversion to the Anthropic wire format.
 func TestAnthropicMessagesFromTypesPreservesCacheControl(t *testing.T) {

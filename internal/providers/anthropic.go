@@ -171,6 +171,13 @@ func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, err
 	}
 
 	p.mu.Lock()
+	if discoveryUnconfigured(p.Kind(), p.config.APIKey) {
+		cached := p.staticCapabilities("config_unconfigured")
+		p.cachedCaps = cached
+		p.capsExpiry = time.Now().Add(capabilitiesUnconfiguredTTL)
+		p.mu.Unlock()
+		return cached, nil
+	}
 	if !p.capsExpiry.IsZero() && time.Now().Before(p.capsExpiry) {
 		cached := p.cachedCaps
 		p.mu.Unlock()
@@ -180,17 +187,24 @@ func (p *AnthropicProvider) Capabilities(ctx context.Context) (Capabilities, err
 
 	discovered, err := p.discoverCapabilities(ctx)
 	if err != nil {
-		telemetry.Warn(p.logger, ctx, "gateway.providers.capabilities.discovery_failed",
-			slog.String("event.name", "gateway.providers.capabilities.discovery_failed"),
+		retryAfter := discoveryFailureTTL(p.Kind(), err)
+		telemetry.Info(p.logger, ctx, "gateway.providers.capabilities.discovery_degraded",
+			slog.String("event.name", "gateway.providers.capabilities.discovery_degraded"),
 			slog.String("gen_ai.provider.name", p.Name()),
+			slog.Duration("hecate.providers.capabilities.retry_after", retryAfter),
 			slog.Any("error", err),
 		)
-		return p.staticCapabilities("config_fallback"), nil
+		cached := p.staticCapabilities("config_fallback")
+		p.mu.Lock()
+		p.cachedCaps = cached
+		p.capsExpiry = time.Now().Add(retryAfter)
+		p.mu.Unlock()
+		return cached, nil
 	}
 
 	p.mu.Lock()
 	p.cachedCaps = discovered
-	p.capsExpiry = time.Now().Add(time.Minute)
+	p.capsExpiry = time.Now().Add(capabilitiesSuccessTTL)
 	p.mu.Unlock()
 	return discovered, nil
 }
