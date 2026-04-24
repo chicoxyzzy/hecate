@@ -886,6 +886,45 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsReturnsQueueAndRunCounters(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	client := newAPITestClient(t, handler)
+	tasks := newTaskTestClient(t, handler)
+
+	createdStub := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Stats stub","prompt":"Complete one stub task."}`)
+	startedStub := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+createdStub.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, createdStub.Data.ID, startedStub.Data.ID, "completed")
+
+	createdShell := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Stats shell","prompt":"Await approval.","execution_kind":"shell","shell_command":"printf 'ok\n'","working_directory":"."}`)
+	startedShell := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+createdShell.Data.ID+"/start", "")
+	if startedShell.Data.Status != "awaiting_approval" {
+		t.Fatalf("shell run status = %q, want awaiting_approval", startedShell.Data.Status)
+	}
+
+	response := mustRequestJSON[RuntimeStatsResponse](client, http.MethodGet, "/admin/runtime/stats", "")
+	if response.Object != "runtime_stats" {
+		t.Fatalf("object = %q, want runtime_stats", response.Object)
+	}
+	if response.Data.CheckedAt == "" {
+		t.Fatal("checked_at = empty, want timestamp")
+	}
+	if response.Data.QueueCapacity <= 0 {
+		t.Fatalf("queue_capacity = %d, want > 0", response.Data.QueueCapacity)
+	}
+	if response.Data.WorkerCount <= 0 {
+		t.Fatalf("worker_count = %d, want > 0", response.Data.WorkerCount)
+	}
+	if response.Data.AwaitingApprovalRuns < 1 {
+		t.Fatalf("awaiting_approval_runs = %d, want >= 1", response.Data.AwaitingApprovalRuns)
+	}
+	if response.Data.StoreBackend != "memory" {
+		t.Fatalf("store_backend = %q, want memory", response.Data.StoreBackend)
+	}
+}
+
 func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	t.Parallel()
 

@@ -281,6 +281,25 @@ type RequestLedgerResponse struct {
 	Data   []BudgetHistoryRecord `json:"data"`
 }
 
+type RuntimeStatsResponse struct {
+	Object string                   `json:"object"`
+	Data   RuntimeStatsResponseItem `json:"data"`
+}
+
+type RuntimeStatsResponseItem struct {
+	CheckedAt               string `json:"checked_at"`
+	QueueDepth              int    `json:"queue_depth"`
+	QueueCapacity           int    `json:"queue_capacity"`
+	WorkerCount             int    `json:"worker_count"`
+	InFlightJobs            int    `json:"in_flight_jobs"`
+	QueuedRuns              int    `json:"queued_runs"`
+	RunningRuns             int    `json:"running_runs"`
+	AwaitingApprovalRuns    int    `json:"awaiting_approval_runs"`
+	OldestQueuedAgeSeconds  int64  `json:"oldest_queued_age_seconds"`
+	OldestRunningAgeSeconds int64  `json:"oldest_running_age_seconds"`
+	StoreBackend            string `json:"store_backend,omitempty"`
+}
+
 type AccountSummaryResponseItem struct {
 	Account   BudgetStatusResponseItem     `json:"account"`
 	Estimates []AccountModelEstimateRecord `json:"estimates"`

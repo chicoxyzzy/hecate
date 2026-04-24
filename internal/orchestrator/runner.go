@@ -54,6 +54,20 @@ type StartTaskResult struct {
 	SpanID    string
 }
 
+type RuntimeStats struct {
+	CheckedAt               time.Time
+	QueueDepth              int
+	QueueCapacity           int
+	WorkerCount             int
+	InFlightJobs            int
+	QueuedRuns              int
+	RunningRuns             int
+	AwaitingApprovalRuns    int
+	OldestQueuedAgeSeconds  int64
+	OldestRunningAgeSeconds int64
+	StoreBackend            string
+}
+
 func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Tracer, cfg Config) *Runner {
 	if tracer == nil {
 		tracer = profiler.NewInMemoryTracer(nil)
@@ -123,6 +137,50 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 		return
 	}
 	r.git = exec
+}
+
+func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
+	stats := RuntimeStats{
+		CheckedAt:     time.Now().UTC(),
+		QueueDepth:    len(r.queue),
+		QueueCapacity: cap(r.queue),
+		WorkerCount:   maxInt(r.config.QueueWorkers, 1),
+	}
+	r.jobMu.Lock()
+	stats.InFlightJobs = len(r.jobs)
+	r.jobMu.Unlock()
+	if r.store == nil {
+		return stats, nil
+	}
+	stats.StoreBackend = r.store.Backend()
+	now := time.Now().UTC()
+
+	queuedRuns, err := r.store.ListRunsByFilter(ctx, taskstate.RunFilter{Statuses: []string{"queued"}, Limit: 2000})
+	if err != nil {
+		return RuntimeStats{}, err
+	}
+	stats.QueuedRuns = len(queuedRuns)
+	oldestQueued := findOldestRunStart(queuedRuns)
+	if !oldestQueued.IsZero() {
+		stats.OldestQueuedAgeSeconds = int64(now.Sub(oldestQueued).Seconds())
+	}
+
+	runningRuns, err := r.store.ListRunsByFilter(ctx, taskstate.RunFilter{Statuses: []string{"running"}, Limit: 2000})
+	if err != nil {
+		return RuntimeStats{}, err
+	}
+	stats.RunningRuns = len(runningRuns)
+	oldestRunning := findOldestRunStart(runningRuns)
+	if !oldestRunning.IsZero() {
+		stats.OldestRunningAgeSeconds = int64(now.Sub(oldestRunning).Seconds())
+	}
+
+	awaitingApprovals, err := r.store.ListRunsByFilter(ctx, taskstate.RunFilter{Statuses: []string{"awaiting_approval"}, Limit: 2000})
+	if err != nil {
+		return RuntimeStats{}, err
+	}
+	stats.AwaitingApprovalRuns = len(awaitingApprovals)
+	return stats, nil
 }
 
 func (r *Runner) ReconcilePendingRuns(ctx context.Context) error {
@@ -934,6 +992,26 @@ func spanIDByName(trace *profiler.Trace, name string) string {
 		}
 	}
 	return ""
+}
+
+func maxInt(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func findOldestRunStart(runs []types.TaskRun) time.Time {
+	var oldest time.Time
+	for _, run := range runs {
+		if run.StartedAt.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || run.StartedAt.Before(oldest) {
+			oldest = run.StartedAt
+		}
+	}
+	return oldest
 }
 
 func (r *Runner) executorForTask(task types.Task) Executor {

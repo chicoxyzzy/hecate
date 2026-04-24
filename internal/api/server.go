@@ -61,6 +61,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /admin/control-plane/pricebook", handler.HandleControlPlaneUpsertPricebookEntry)
 	mux.HandleFunc("POST /admin/control-plane/pricebook/delete", handler.HandleControlPlaneDeletePricebookEntry)
 	mux.HandleFunc("GET /admin/providers", handler.HandleProviderStatus)
+	mux.HandleFunc("GET /admin/runtime/stats", handler.HandleRuntimeStats)
 	mux.HandleFunc("GET /v1/models", handler.HandleModels)
 	mux.HandleFunc("POST /v1/chat/completions", handler.HandleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", handler.HandleMessages)

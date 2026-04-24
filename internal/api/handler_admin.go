@@ -56,6 +56,45 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskRunner == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task runner is not configured")
+		return
+	}
+
+	stats, err := h.taskRunner.RuntimeStats(ctx)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.runtime.stats.failed",
+			slog.String("event.name", "gateway.runtime.stats.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, RuntimeStatsResponse{
+		Object: "runtime_stats",
+		Data: RuntimeStatsResponseItem{
+			CheckedAt:               stats.CheckedAt.UTC().Format(time.RFC3339Nano),
+			QueueDepth:              stats.QueueDepth,
+			QueueCapacity:           stats.QueueCapacity,
+			WorkerCount:             stats.WorkerCount,
+			InFlightJobs:            stats.InFlightJobs,
+			QueuedRuns:              stats.QueuedRuns,
+			RunningRuns:             stats.RunningRuns,
+			AwaitingApprovalRuns:    stats.AwaitingApprovalRuns,
+			OldestQueuedAgeSeconds:  stats.OldestQueuedAgeSeconds,
+			OldestRunningAgeSeconds: stats.OldestRunningAgeSeconds,
+			StoreBackend:            stats.StoreBackend,
+		},
+	})
+}
+
 func (h *Handler) HandleRetentionRuns(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {
