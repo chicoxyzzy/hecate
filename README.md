@@ -242,17 +242,17 @@ The first native coding-runtime slice is also in place:
 
 ```mermaid
 flowchart LR
-    C[Task client or UI] --> API[/v1/tasks]
-    API --> ORCH[orchestrator runner]
-    ORCH --> Q[(run queue)]
-    Q -->|claim lease| W1[worker A]
-    Q -->|claim lease| W2[worker B]
-    W1 -->|heartbeat/extend lease| Q
-    W2 -->|ack or nack| Q
-    W1 --> SB[sandboxd]
-    W2 --> SB
-    SB --> ES[(task state + run events)]
-    ES --> SSE[SSE stream with replay cursor]
+    C["Task client or UI"] --> API["/v1/tasks"];
+    API --> ORCH["orchestrator runner"];
+    ORCH --> Q["run queue"];
+    Q -->|claim lease| W1["worker A"];
+    Q -->|claim lease| W2["worker B"];
+    W1 -->|heartbeat and extend lease| Q;
+    W2 -->|ack or nack| Q;
+    W1 --> SB["sandboxd"];
+    W2 --> SB;
+    SB --> ES["task state and run events"];
+    ES --> SSE["SSE stream with replay cursor"];
 ```
 
 The main missing pieces are resumable execution, broader approval classes, stronger workspace isolation, richer tool APIs, and more coding-oriented operator views.
