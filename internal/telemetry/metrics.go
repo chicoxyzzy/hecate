@@ -157,6 +157,248 @@ func (m *Metrics) RecordRequestOutcome(ctx context.Context, result string, durat
 	m.requestDuration.Record(ctx, duration.Milliseconds(), attrs)
 }
 
+// ---------------------------------------------------------------------------
+// OrchestratorMetrics
+// ---------------------------------------------------------------------------
+
+// RunMetricsRecord carries the labels and measurements for one completed run.
+type RunMetricsRecord struct {
+	TaskID        string
+	RunID         string
+	Status        string // completed | failed | cancelled
+	ExecutionKind string
+	Model         string
+	DurationMS    int64
+}
+
+// StepMetricsRecord carries the labels and measurements for one completed step.
+type StepMetricsRecord struct {
+	TaskID     string
+	RunID      string
+	StepKind   string
+	Result     string // success | error
+	DurationMS int64
+}
+
+// ApprovalMetricsRecord carries the labels and measurements for one resolved
+// approval gate.
+type ApprovalMetricsRecord struct {
+	TaskID       string
+	RunID        string
+	ApprovalKind string
+	Decision     string // approved | rejected
+	WaitMS       int64
+}
+
+// QueueWaitRecord carries the labels and measurements for the time a run spent
+// sitting in the queue before being claimed by a worker.
+type QueueWaitRecord struct {
+	TaskID       string
+	RunID        string
+	QueueBackend string
+	WaitMS       int64
+}
+
+// OrchestratorMetrics records SLO-critical signals for the orchestrator
+// subsystem: run/step throughput and latency, approval gate wait, queue wait,
+// and lease-extend failure counts.
+type OrchestratorMetrics struct {
+	runsTotal              otmetric.Int64Counter
+	runDuration            otmetric.Int64Histogram
+	queueWaitDuration      otmetric.Int64Histogram
+	stepsTotal             otmetric.Int64Counter
+	stepDuration           otmetric.Int64Histogram
+	approvalsTotal         otmetric.Int64Counter
+	approvalWaitDuration   otmetric.Int64Histogram
+	leaseExtendFailures    otmetric.Int64Counter
+}
+
+// NewOrchestratorMetrics registers all orchestrator instruments against
+// the global MeterProvider.
+func NewOrchestratorMetrics() *OrchestratorMetrics {
+	m, err := NewOrchestratorMetricsWithMeterProvider(otel.GetMeterProvider())
+	if err != nil {
+		return &OrchestratorMetrics{}
+	}
+	return m
+}
+
+// NewOrchestratorMetricsWithMeterProvider registers instruments against the
+// supplied provider. Used in tests where a ManualReader is injected.
+func NewOrchestratorMetricsWithMeterProvider(provider otmetric.MeterProvider) (*OrchestratorMetrics, error) {
+	if provider == nil {
+		provider = otel.GetMeterProvider()
+	}
+	meter := provider.Meter("github.com/hecate/agent-runtime/internal/telemetry")
+
+	runsTotal, err := meter.Int64Counter(
+		MetricOrchestratorRunsTotal,
+		otmetric.WithDescription("Total orchestrator runs grouped by status."),
+		otmetric.WithUnit("{run}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	runDuration, err := meter.Int64Histogram(
+		MetricOrchestratorRunDuration,
+		otmetric.WithDescription("Orchestrator run wall-clock duration."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	queueWaitDuration, err := meter.Int64Histogram(
+		MetricOrchestratorQueueWaitDuration,
+		otmetric.WithDescription("Time a run spent waiting in the queue before being claimed."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	stepsTotal, err := meter.Int64Counter(
+		MetricOrchestratorStepsTotal,
+		otmetric.WithDescription("Total orchestrator steps grouped by kind and result."),
+		otmetric.WithUnit("{step}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	stepDuration, err := meter.Int64Histogram(
+		MetricOrchestratorStepDuration,
+		otmetric.WithDescription("Orchestrator step wall-clock duration."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	approvalsTotal, err := meter.Int64Counter(
+		MetricOrchestratorApprovalsTotal,
+		otmetric.WithDescription("Total approval gates resolved, grouped by kind and decision."),
+		otmetric.WithUnit("{approval}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	approvalWaitDuration, err := meter.Int64Histogram(
+		MetricOrchestratorApprovalWaitDuration,
+		otmetric.WithDescription("Time a run spent waiting for an approval gate to be resolved."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	leaseExtendFailures, err := meter.Int64Counter(
+		MetricOrchestratorLeaseExtendFailures,
+		otmetric.WithDescription("Total queue lease extension failures."),
+		otmetric.WithUnit("{failure}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &OrchestratorMetrics{
+		runsTotal:            runsTotal,
+		runDuration:          runDuration,
+		queueWaitDuration:    queueWaitDuration,
+		stepsTotal:           stepsTotal,
+		stepDuration:         stepDuration,
+		approvalsTotal:       approvalsTotal,
+		approvalWaitDuration: approvalWaitDuration,
+		leaseExtendFailures:  leaseExtendFailures,
+	}, nil
+}
+
+// RecordRun records a completed run counter increment and duration sample.
+func (m *OrchestratorMetrics) RecordRun(ctx context.Context, rec RunMetricsRecord) {
+	if m == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 4)
+	if rec.Status != "" {
+		attrs = append(attrs, attribute.String(AttrHecateRunStatus, rec.Status))
+	}
+	if rec.ExecutionKind != "" {
+		attrs = append(attrs, attribute.String(AttrHecateExecutionKind, rec.ExecutionKind))
+	}
+	if rec.Model != "" {
+		attrs = append(attrs, attribute.String(AttrGenAIRequestModel, rec.Model))
+	}
+	opt := otmetric.WithAttributes(attrs...)
+	m.runsTotal.Add(ctx, 1, opt)
+	if rec.DurationMS > 0 {
+		m.runDuration.Record(ctx, rec.DurationMS, opt)
+	}
+}
+
+// RecordStep records a completed step counter increment and duration sample.
+func (m *OrchestratorMetrics) RecordStep(ctx context.Context, rec StepMetricsRecord) {
+	if m == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 2)
+	if rec.StepKind != "" {
+		attrs = append(attrs, attribute.String(AttrHecateStepKind, rec.StepKind))
+	}
+	if rec.Result != "" {
+		attrs = append(attrs, attribute.String(AttrHecateResult, rec.Result))
+	}
+	opt := otmetric.WithAttributes(attrs...)
+	m.stepsTotal.Add(ctx, 1, opt)
+	if rec.DurationMS > 0 {
+		m.stepDuration.Record(ctx, rec.DurationMS, opt)
+	}
+}
+
+// RecordApproval records a resolved approval gate counter increment and wait
+// duration sample.
+func (m *OrchestratorMetrics) RecordApproval(ctx context.Context, rec ApprovalMetricsRecord) {
+	if m == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 2)
+	if rec.ApprovalKind != "" {
+		attrs = append(attrs, attribute.String(AttrHecateApprovalKind, rec.ApprovalKind))
+	}
+	if rec.Decision != "" {
+		attrs = append(attrs, attribute.String(AttrHecateApprovalDecision, rec.Decision))
+	}
+	opt := otmetric.WithAttributes(attrs...)
+	m.approvalsTotal.Add(ctx, 1, opt)
+	if rec.WaitMS > 0 {
+		m.approvalWaitDuration.Record(ctx, rec.WaitMS, opt)
+	}
+}
+
+// RecordQueueWait records the time a run spent waiting in the queue before
+// being claimed.
+func (m *OrchestratorMetrics) RecordQueueWait(ctx context.Context, rec QueueWaitRecord) {
+	if m == nil || rec.WaitMS <= 0 {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 1)
+	if rec.QueueBackend != "" {
+		attrs = append(attrs, attribute.String(AttrHecateQueueBackend, rec.QueueBackend))
+	}
+	m.queueWaitDuration.Record(ctx, rec.WaitMS, otmetric.WithAttributes(attrs...))
+}
+
+// RecordLeaseExtendFailed increments the lease-extend failure counter.
+func (m *OrchestratorMetrics) RecordLeaseExtendFailed(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.leaseExtendFailures.Add(ctx, 1)
+}
+
+// ---------------------------------------------------------------------------
+
 func (m *Metrics) RecordChat(ctx context.Context, record ChatMetricsRecord) {
 	if m == nil {
 		return

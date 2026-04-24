@@ -72,6 +72,16 @@ const (
 	EventResponseBodyCaptured = "response.body.captured"
 )
 
+// Queue lifecycle — recorded in the runner when jobs move through the queue.
+const (
+	EventQueueEnqueued       = "queue.enqueued"
+	EventQueueClaimed        = "queue.claimed"
+	EventQueueAcked          = "queue.acked"
+	EventQueueNacked         = "queue.nacked"
+	EventQueueLeaseExtended  = "queue.lease_extended"
+	EventQueueLeaseExtendFailed = "queue.lease_extend_failed"
+)
+
 // Orchestrator
 const (
 	EventOrchestratorTaskStarted       = "orchestrator.task.started"
@@ -121,6 +131,7 @@ const (
 	SpanOrchestratorStep     = "orchestrator.step"
 	SpanOrchestratorArtifact = "orchestrator.artifact"
 	SpanOrchestratorApproval = "orchestrator.approval"
+	SpanOrchestratorQueue    = "orchestrator.queue"
 )
 
 // ---------------------------------------------------------------------------
@@ -139,6 +150,16 @@ const (
 	MetricTotalTokensTotal       = "gen_ai.client.tokens.total"
 	MetricRetriesTotal           = "hecate.gateway.retries"
 	MetricFailoversTotal         = "hecate.gateway.failovers"
+
+	// Orchestrator metrics
+	MetricOrchestratorRunsTotal          = "hecate.orchestrator.runs"
+	MetricOrchestratorRunDuration        = "hecate.orchestrator.run.duration"
+	MetricOrchestratorQueueWaitDuration  = "hecate.orchestrator.queue.wait_duration"
+	MetricOrchestratorStepsTotal         = "hecate.orchestrator.steps"
+	MetricOrchestratorStepDuration       = "hecate.orchestrator.step.duration"
+	MetricOrchestratorApprovalsTotal     = "hecate.orchestrator.approvals"
+	MetricOrchestratorApprovalWaitDuration = "hecate.orchestrator.approval.wait_duration"
+	MetricOrchestratorLeaseExtendFailures = "hecate.orchestrator.queue.lease_extend_failures"
 )
 
 // ---------------------------------------------------------------------------

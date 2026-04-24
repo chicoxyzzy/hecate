@@ -45,6 +45,7 @@ type Runner struct {
 	jobMu      sync.Mutex
 	jobs       map[string]context.CancelFunc
 	policies   map[string]struct{}
+	metrics    *telemetry.OrchestratorMetrics
 }
 
 type StartTaskResult struct {
@@ -153,6 +154,15 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 		return
 	}
 	r.git = exec
+}
+
+// SetMetrics wires in an OrchestratorMetrics instance. Safe to call after
+// NewRunner; a nil argument is silently ignored.
+func (r *Runner) SetMetrics(m *telemetry.OrchestratorMetrics) {
+	if m == nil {
+		return
+	}
+	r.metrics = m
 }
 
 func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
@@ -428,6 +438,11 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 		return nil, err
 	} else {
 		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.queued", requestID, trace.TraceID, nil)
+		trace.Record(telemetry.EventQueueEnqueued, map[string]any{
+			telemetry.AttrHecateTaskID:     task.ID,
+			telemetry.AttrHecateRunID:      run.ID,
+			telemetry.AttrHecateQueueBackend: r.queue.Backend(),
+		})
 	}
 
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
@@ -470,14 +485,33 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 
 	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
 	now := time.Now().UTC()
-	trace.Record("orchestrator.approval.resolved", map[string]any{
-		telemetry.AttrHecatePhase:  "approval",
-		telemetry.AttrHecateResult: telemetry.ResultSuccess,
-		"hecate.task.id":           task.ID,
-		"hecate.run.id":            run.ID,
-		"hecate.approval.id":       approval.ID,
-		"hecate.approval.kind":     approval.Kind,
-		"hecate.approval.status":   approval.Status,
+	approvalWaitMS := int64(0)
+	if !approval.CreatedAt.IsZero() {
+		resolvedAt := approval.ResolvedAt
+		if resolvedAt.IsZero() {
+			resolvedAt = time.Now().UTC()
+		}
+		approvalWaitMS = resolvedAt.Sub(approval.CreatedAt).Milliseconds()
+	}
+	approvalAttrs := map[string]any{
+		telemetry.AttrHecatePhase:          "approval",
+		telemetry.AttrHecateResult:         telemetry.ResultSuccess,
+		telemetry.AttrHecateTaskID:         task.ID,
+		telemetry.AttrHecateRunID:          run.ID,
+		telemetry.AttrHecateApprovalID:     approval.ID,
+		telemetry.AttrHecateApprovalKind:   approval.Kind,
+		telemetry.AttrHecateApprovalStatus: approval.Status,
+	}
+	if approvalWaitMS > 0 {
+		approvalAttrs[telemetry.AttrHecateApprovalWaitMS] = approvalWaitMS
+	}
+	trace.Record(telemetry.EventOrchestratorApprovalResolved, approvalAttrs)
+	r.metrics.RecordApproval(ctx, telemetry.ApprovalMetricsRecord{
+		TaskID:       task.ID,
+		RunID:        run.ID,
+		ApprovalKind: approval.Kind,
+		Decision:     "approved",
+		WaitMS:       approvalWaitMS,
 	})
 
 	run.Status = "queued"
@@ -545,14 +579,33 @@ func (r *Runner) RejectTaskAfterApproval(ctx context.Context, task types.Task, a
 	defer trace.Finalize()
 
 	ctx = telemetry.WithTraceIDs(ctx, trace.TraceID, trace.RootSpanID())
-	trace.Record("orchestrator.approval.resolved", map[string]any{
-		telemetry.AttrHecatePhase:  "approval",
-		telemetry.AttrHecateResult: telemetry.ResultSuccess,
-		"hecate.task.id":           task.ID,
-		"hecate.run.id":            run.ID,
-		"hecate.approval.id":       approval.ID,
-		"hecate.approval.kind":     approval.Kind,
-		"hecate.approval.status":   approval.Status,
+	rejectWaitMS := int64(0)
+	if !approval.CreatedAt.IsZero() {
+		resolvedAt := approval.ResolvedAt
+		if resolvedAt.IsZero() {
+			resolvedAt = time.Now().UTC()
+		}
+		rejectWaitMS = resolvedAt.Sub(approval.CreatedAt).Milliseconds()
+	}
+	rejectApprovalAttrs := map[string]any{
+		telemetry.AttrHecatePhase:          "approval",
+		telemetry.AttrHecateResult:         telemetry.ResultSuccess,
+		telemetry.AttrHecateTaskID:         task.ID,
+		telemetry.AttrHecateRunID:          run.ID,
+		telemetry.AttrHecateApprovalID:     approval.ID,
+		telemetry.AttrHecateApprovalKind:   approval.Kind,
+		telemetry.AttrHecateApprovalStatus: approval.Status,
+	}
+	if rejectWaitMS > 0 {
+		rejectApprovalAttrs[telemetry.AttrHecateApprovalWaitMS] = rejectWaitMS
+	}
+	trace.Record(telemetry.EventOrchestratorApprovalResolved, rejectApprovalAttrs)
+	r.metrics.RecordApproval(ctx, telemetry.ApprovalMetricsRecord{
+		TaskID:       task.ID,
+		RunID:        run.ID,
+		ApprovalKind: approval.Kind,
+		Decision:     "rejected",
+		WaitMS:       rejectWaitMS,
 	})
 
 	run, err = r.cancelRunWithMessage(ctx, task, run, "approval rejected", requestID, trace.TraceID)
@@ -721,6 +774,30 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 
 	ctx := telemetry.WithTraceIDs(jobCtx, trace.TraceID, trace.RootSpanID())
 	now := time.Now().UTC()
+
+	// Compute queue wait before overwriting run.StartedAt.
+	var queueWaitMS int64
+	if !run.StartedAt.IsZero() {
+		queueWaitMS = now.Sub(run.StartedAt).Milliseconds()
+	}
+	queueBackend := ""
+	if r.queue != nil {
+		queueBackend = r.queue.Backend()
+	}
+	trace.Record(telemetry.EventQueueClaimed, map[string]any{
+		telemetry.AttrHecateTaskID:       task.ID,
+		telemetry.AttrHecateRunID:        run.ID,
+		telemetry.AttrHecateQueueBackend: queueBackend,
+		telemetry.AttrHecateQueueWaitMS:  queueWaitMS,
+		telemetry.AttrHecateWorkerID:     r.workerID,
+	})
+	r.metrics.RecordQueueWait(ctx, telemetry.QueueWaitRecord{
+		TaskID:       task.ID,
+		RunID:        run.ID,
+		QueueBackend: queueBackend,
+		WaitMS:       queueWaitMS,
+	})
+
 	run.Status = "running"
 	run.RequestID = requestID
 	run.TraceID = trace.TraceID
@@ -781,6 +858,11 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 		}
 		_ = r.finalizeFailedRun(ctx, trace, task, run, requestID, finalStatus, lastError)
 	}
+	trace.Record(telemetry.EventQueueAcked, map[string]any{
+		telemetry.AttrHecateTaskID:       task.ID,
+		telemetry.AttrHecateRunID:        run.ID,
+		telemetry.AttrHecateQueueBackend: queueBackend,
+	})
 	_ = r.queue.Ack(context.Background(), claim.ClaimID)
 }
 
@@ -870,15 +952,30 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		if step.Status == "failed" || step.Status == "cancelled" || step.Result == telemetry.ResultError {
 			eventName = "orchestrator.step.failed"
 		}
-		trace.Record(eventName, map[string]any{
-			telemetry.AttrHecatePhase:  firstNonEmpty(step.Phase, "execution"),
-			telemetry.AttrHecateResult: firstNonEmpty(step.Result, telemetry.ResultSuccess),
-			"hecate.task.id":           task.ID,
-			"hecate.run.id":            run.ID,
-			"hecate.step.id":           step.ID,
-			"hecate.step.kind":         step.Kind,
-			"hecate.step.index":        step.Index,
-			"hecate.step.tool_name":    step.ToolName,
+		var stepDurationMS int64
+		if !step.StartedAt.IsZero() && !step.FinishedAt.IsZero() {
+			stepDurationMS = step.FinishedAt.Sub(step.StartedAt).Milliseconds()
+		}
+		stepAttrs := map[string]any{
+			telemetry.AttrHecatePhase:        firstNonEmpty(step.Phase, "execution"),
+			telemetry.AttrHecateResult:       firstNonEmpty(step.Result, telemetry.ResultSuccess),
+			telemetry.AttrHecateTaskID:       task.ID,
+			telemetry.AttrHecateRunID:        run.ID,
+			telemetry.AttrHecateStepID:       step.ID,
+			telemetry.AttrHecateStepKind:     step.Kind,
+			telemetry.AttrHecateStepIndex:    step.Index,
+			telemetry.AttrHecateStepToolName: step.ToolName,
+		}
+		if stepDurationMS > 0 {
+			stepAttrs[telemetry.AttrHecateStepDurationMS] = stepDurationMS
+		}
+		trace.Record(eventName, stepAttrs)
+		r.metrics.RecordStep(ctx, telemetry.StepMetricsRecord{
+			TaskID:     task.ID,
+			RunID:      run.ID,
+			StepKind:   step.Kind,
+			Result:     firstNonEmpty(step.Result, telemetry.ResultSuccess),
+			DurationMS: stepDurationMS,
 		})
 		step.SpanID = spanIDByName(trace, "orchestrator.step")
 		step.ParentSpanID = trace.RootSpanID()
@@ -911,19 +1008,35 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	if execution.Status == "failed" || execution.Status == "cancelled" {
 		resultKind = telemetry.ResultError
 	}
-	trace.Record("orchestrator.run.finished", map[string]any{
+	finishedAt := time.Now().UTC()
+	var runDurationMS int64
+	if !run.StartedAt.IsZero() {
+		runDurationMS = finishedAt.Sub(run.StartedAt).Milliseconds()
+	}
+	runFinishedAttrs := map[string]any{
 		telemetry.AttrHecatePhase:  "orchestration",
 		telemetry.AttrHecateResult: resultKind,
-		"hecate.task.id":           task.ID,
-		"hecate.run.id":            run.ID,
+		telemetry.AttrHecateTaskID: task.ID,
+		telemetry.AttrHecateRunID:  run.ID,
+	}
+	if runDurationMS > 0 {
+		runFinishedAttrs[telemetry.AttrHecateRunDurationMS] = runDurationMS
+	}
+	trace.Record(telemetry.EventOrchestratorRunFinished, runFinishedAttrs)
+	trace.Record(telemetry.EventOrchestratorTaskFinished, map[string]any{
+		telemetry.AttrHecatePhase:  "orchestration",
+		telemetry.AttrHecateResult: resultKind,
+		telemetry.AttrHecateTaskID: task.ID,
 	})
-	trace.Record("orchestrator.task.finished", map[string]any{
-		telemetry.AttrHecatePhase:  "orchestration",
-		telemetry.AttrHecateResult: resultKind,
-		"hecate.task.id":           task.ID,
+	r.metrics.RecordRun(ctx, telemetry.RunMetricsRecord{
+		TaskID:        task.ID,
+		RunID:         run.ID,
+		Status:        firstNonEmpty(execution.Status, "completed"),
+		ExecutionKind: task.ExecutionKind,
+		Model:         run.Model,
+		DurationMS:    runDurationMS,
 	})
 
-	finishedAt := time.Now().UTC()
 	run.Status = firstNonEmpty(execution.Status, "completed")
 	run.StepCount = len(persistedSteps)
 	run.ArtifactCount = len(persistedArtifacts)
@@ -962,6 +1075,10 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 
 func (r *Runner) finalizeFailedRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID, status, message string) error {
 	now := time.Now().UTC()
+	var failedRunDurationMS int64
+	if !run.StartedAt.IsZero() {
+		failedRunDurationMS = now.Sub(run.StartedAt).Milliseconds()
+	}
 	run.Status = status
 	run.LastError = message
 	run.FinishedAt = now
@@ -970,6 +1087,14 @@ func (r *Runner) finalizeFailedRun(ctx context.Context, trace *profiler.Trace, t
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return err
 	}
+	r.metrics.RecordRun(ctx, telemetry.RunMetricsRecord{
+		TaskID:        task.ID,
+		RunID:         run.ID,
+		Status:        status,
+		ExecutionKind: task.ExecutionKind,
+		Model:         run.Model,
+		DurationMS:    failedRunDurationMS,
+	})
 	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run."+status, requestID, trace.TraceID, map[string]any{"error": message})
 	task.Status = status
 	task.LatestRunID = run.ID
@@ -1220,7 +1345,9 @@ func (r *Runner) heartbeatClaim(claimID string, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			_ = r.queue.ExtendLease(context.Background(), claimID, r.queueLease)
+			if err := r.queue.ExtendLease(context.Background(), claimID, r.queueLease); err != nil {
+				r.metrics.RecordLeaseExtendFailed(context.Background())
+			}
 		}
 	}
 }

@@ -65,7 +65,40 @@ const (
 	AttrHecateFailoverToModel         = "hecate.failover.to_model"
 	AttrHecateFailoverActive          = "hecate.failover.active"
 	AttrHecateFailoverReason          = "hecate.failover.reason"
-	ResultSuccess                     = "success"
-	ResultDenied                      = "denied"
-	ResultError                       = "error"
+	ResultSuccess = "success"
+	ResultDenied  = "denied"
+	ResultError   = "error"
+
+	// Orchestrator — task and run identity
+	AttrHecateTaskID       = "hecate.task.id"
+	AttrHecateRunID        = "hecate.run.id"
+	AttrHecateRunNumber    = "hecate.run.number"
+	AttrHecateRunStatus    = "hecate.run.status"
+	AttrHecateRunDurationMS = "hecate.run.duration_ms"
+	AttrHecateExecutionKind = "hecate.execution.kind"
+
+	// Orchestrator — step
+	AttrHecateStepID         = "hecate.step.id"
+	AttrHecateStepKind       = "hecate.step.kind"
+	AttrHecateStepIndex      = "hecate.step.index"
+	AttrHecateStepToolName   = "hecate.step.tool_name"
+	AttrHecateStepDurationMS = "hecate.step.duration_ms"
+
+	// Orchestrator — artifact
+	AttrHecateArtifactID        = "hecate.artifact.id"
+	AttrHecateArtifactKind      = "hecate.artifact.kind"
+	AttrHecateArtifactSizeBytes = "hecate.artifact.size_bytes"
+
+	// Orchestrator — approval
+	AttrHecateApprovalID      = "hecate.approval.id"
+	AttrHecateApprovalKind    = "hecate.approval.kind"
+	AttrHecateApprovalStatus  = "hecate.approval.status"
+	AttrHecateApprovalDecision = "hecate.approval.decision"
+	AttrHecateApprovalWaitMS  = "hecate.approval.wait_ms"
+
+	// Queue lifecycle
+	AttrHecateQueueBackend = "hecate.queue.backend"
+	AttrHecateQueueClaimID = "hecate.queue.claim_id"
+	AttrHecateQueueWaitMS  = "hecate.queue.wait_ms"
+	AttrHecateWorkerID     = "hecate.worker.id"
 )

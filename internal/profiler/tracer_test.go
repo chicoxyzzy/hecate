@@ -83,6 +83,13 @@ func TestSpanMappingForEventGroups(t *testing.T) {
 		{telemetry.EventOrchestratorArtifactCreated, telemetry.SpanOrchestratorArtifact},
 		{telemetry.EventOrchestratorApprovalRequested, telemetry.SpanOrchestratorApproval},
 		{telemetry.EventOrchestratorApprovalResolved, telemetry.SpanOrchestratorApproval},
+		// Queue lifecycle
+		{telemetry.EventQueueEnqueued, telemetry.SpanOrchestratorQueue},
+		{telemetry.EventQueueClaimed, telemetry.SpanOrchestratorQueue},
+		{telemetry.EventQueueAcked, telemetry.SpanOrchestratorQueue},
+		{telemetry.EventQueueNacked, telemetry.SpanOrchestratorQueue},
+		{telemetry.EventQueueLeaseExtended, telemetry.SpanOrchestratorQueue},
+		{telemetry.EventQueueLeaseExtendFailed, telemetry.SpanOrchestratorQueue},
 	}
 
 	for _, tc := range cases {

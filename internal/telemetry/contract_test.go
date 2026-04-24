@@ -173,9 +173,15 @@ func TestMetricNameConstantsMatchInstruments(t *testing.T) {
 
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
 	m, err := NewMetricsWithMeterProvider(provider)
 	if err != nil {
 		t.Fatalf("NewMetricsWithMeterProvider() error = %v", err)
+	}
+
+	om, err := NewOrchestratorMetricsWithMeterProvider(provider)
+	if err != nil {
+		t.Fatalf("NewOrchestratorMetricsWithMeterProvider() error = %v", err)
 	}
 
 	// Trigger every instrument so it appears in the collected output.
@@ -195,6 +201,12 @@ func TestMetricNameConstantsMatchInstruments(t *testing.T) {
 		FallbackFromProvider: "prev-provider",
 	})
 
+	om.RecordRun(ctx, RunMetricsRecord{Status: "completed", ExecutionKind: "shell", Model: "gpt-4o", DurationMS: 500})
+	om.RecordStep(ctx, StepMetricsRecord{StepKind: "shell", Result: ResultSuccess, DurationMS: 100})
+	om.RecordApproval(ctx, ApprovalMetricsRecord{ApprovalKind: "shell_command", Decision: "approved", WaitMS: 2000})
+	om.RecordQueueWait(ctx, QueueWaitRecord{QueueBackend: "memory", WaitMS: 50})
+	om.RecordLeaseExtendFailed(ctx)
+
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &rm); err != nil {
 		t.Fatalf("Collect() error = %v", err)
@@ -208,6 +220,7 @@ func TestMetricNameConstantsMatchInstruments(t *testing.T) {
 	}
 
 	contractNames := []string{
+		// Gateway
 		MetricGatewayRequests,
 		MetricGatewayRequestDuration,
 		MetricChatRequestsTotal,
@@ -217,6 +230,15 @@ func TestMetricNameConstantsMatchInstruments(t *testing.T) {
 		MetricTotalTokensTotal,
 		MetricRetriesTotal,
 		MetricFailoversTotal,
+		// Orchestrator
+		MetricOrchestratorRunsTotal,
+		MetricOrchestratorRunDuration,
+		MetricOrchestratorQueueWaitDuration,
+		MetricOrchestratorStepsTotal,
+		MetricOrchestratorStepDuration,
+		MetricOrchestratorApprovalsTotal,
+		MetricOrchestratorApprovalWaitDuration,
+		MetricOrchestratorLeaseExtendFailures,
 	}
 	for _, name := range contractNames {
 		if !recorded[name] {
