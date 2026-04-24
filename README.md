@@ -1,50 +1,48 @@
 # Hecate
 
-Hecate is an open-source AI gateway and emerging agent runtime for teams that want one control plane across cloud and local models.
-
-Today, the most mature part of the project is the gateway and operator layer: OpenAI-compatible chat completions, Anthropic-native `/v1/messages`, provider routing, policy and budget enforcement, tracing, and a UI for inspecting runtime behavior.
-
-Hecate also includes a coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; persisted run events; and live stdout/stderr streaming with reconnect cursors. Queue execution now supports both in-memory workers and a Postgres-backed leased queue for durable multi-worker processing.
+Hecate is an open-source AI gateway and agent runtime for teams that want one control plane across cloud and local models, with operator-grade policy, spend, and observability.
 
 ## Table Of Contents
 
+- [What Hecate Is Today](#what-hecate-is-today)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
-- [Providers](#providers)
-- [Auth And Control Plane](#auth-and-control-plane)
+- [Provider Model](#provider-model)
+- [Auth, Policy, And Spend](#auth-policy-and-spend)
 - [Observability](#observability)
-- [UI](#ui)
+- [Operator UI](#operator-ui)
 - [Using Hecate For Coding](#using-hecate-for-coding)
+- [Durable Queue Execution Flow](#durable-queue-execution-flow)
+- [Config Highlights](#config-highlights)
 - [Docs](#docs)
 - [Commands](#commands)
-- [Checklist](#checklist)
+- [Status And Roadmap](#status-and-roadmap)
 
-What Hecate already does well:
+## What Hecate Is Today
 
-- OpenAI-compatible chat completions plus Anthropic-native `/v1/messages`
-- Anthropic and OpenAI-compatible provider support behind one runtime layer
-- tool-call and tool-use compatibility across OpenAI and Anthropic request/response shapes
-- Anthropic extended thinking pass-through (thinking/redacted_thinking blocks, streaming)
-- cloud and local model routing with retries, failover, health tracking, and discovery
+Hecate currently has two strong layers:
+
+- a mature gateway/control-plane path for multi-provider model traffic
+- a production-leaning coding runtime foundation for task/run execution
+
+What already works well:
+
+- OpenAI-compatible chat completions and Anthropic-native `/v1/messages`
+- OpenAI tool-call and Anthropic tool-use compatibility behind one runtime boundary
+- cloud and local provider routing with retries, failover, and health tracking
 - exact and semantic cache paths
-- tenant-aware auth, policy enforcement, budgets, and control-plane persistence
-- budget exhaustion as HTTP 402 and per-API-key rate limiting with token-bucket enforcement and standard rate-limit headers
-- structured logs, trace inspection, and OTLP export for traces, metrics, and logs
-- opt-in request/response body capture in traces (`GATEWAY_TRACE_BODIES=true`)
-- operator UI for models, providers, playground, runs, access, budgets, and control plane
-- basic coding-runtime execution with approvals, sandboxing, workspaces, and live run streaming
+- tenant-aware auth, policies, budgets, and persisted control-plane state
+- budget exhaustion (`402`) and per-API-key token-bucket rate limiting
+- structured logs, trace inspection, OTLP export, and optional trace body capture
+- task/run orchestration with approvals, sandboxed execution, persisted run events, and stream resume cursors
+- durable leased queue backend for distributed workers via Postgres
 
-Storage backends used across the system include:
-
-- file
-- memory
-- Redis
-- Postgres
+Storage backends used across the system include `file`, `memory`, `Redis`, and `Postgres`.
 
 ## Architecture
 
 ```text
-client
+gateway client
   -> auth
   -> governor
   -> router
@@ -66,7 +64,7 @@ task client
 
 ## Quick Start
 
-1. Create a local env file:
+1. Copy env defaults:
 
 ```bash
 cp .env.example .env
@@ -75,30 +73,22 @@ cp .env.example .env
 2. Configure at least one provider in `.env`.
 
 `GATEWAY_PROVIDERS` is optional. Hecate can infer enabled providers from core
-bootstrap envs such as `PROVIDER_<NAME>_API_KEY` or `PROVIDER_<NAME>_BASE_URL`.
-Set `GATEWAY_PROVIDERS` when you want to enable built-in presets using their
-default settings.
+provider envs like `PROVIDER_<NAME>_API_KEY` and `PROVIDER_<NAME>_BASE_URL`.
 
-Example with one cloud provider and one local provider:
+Example cloud + local:
 
 ```bash
 GATEWAY_PROVIDERS=openai,ollama
 GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
-
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
 
-If you want cloud-only startup, a smaller config is enough:
+Example cloud-only:
 
 ```bash
 GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
-
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
-
-By default, Hecate considers all available providers. Explicit provider requests
-still pin the route; otherwise healthy providers are considered in alphabetical
-order.
 
 3. Run the gateway:
 
@@ -118,127 +108,108 @@ Default addresses:
 - gateway: `http://127.0.0.1:8080`
 - UI: `http://127.0.0.1:5173`
 
-## Providers
+## Provider Model
 
-The provider layer is vendor-neutral at the runtime boundary. Hecate supports OpenAI-compatible upstreams and Anthropic's native Messages API as first-class provider paths.
+Hecate uses a vendor-neutral provider layer at the runtime boundary. It treats
+OpenAI-compatible upstreams and Anthropic Messages API as first-class paths.
 
-Bootstrap env configuration uses optional `GATEWAY_PROVIDERS` together with
-`PROVIDER_<NAME>_*` overrides such as `PROVIDER_OPENAI_API_KEY` or
-`PROVIDER_OLLAMA_BASE_URL`. When `GATEWAY_PROVIDERS` is omitted, Hecate derives
-enabled providers from the core provider envs it finds.
-
-The documented core provider knobs are:
+Core provider env knobs:
 
 - `PROVIDER_<NAME>_API_KEY`
 - `PROVIDER_<NAME>_BASE_URL`
 - `PROVIDER_<NAME>_DEFAULT_MODEL`
 
-Advanced overrides like `PROTOCOL`, `API_VERSION`, and `TIMEOUT` are available when needed.
+Advanced overrides such as protocol, API version, and timeout are also
+available when needed.
 
-Built-in cloud provider presets:
+Built-in cloud presets:
 
-- `openai` - OpenAI-compatible provider path
-- `anthropic` - Anthropic native Messages API provider path
-- `groq` - OpenAI-compatible provider path
-- `gemini` - OpenAI-compatible provider path
+- `openai`
+- `anthropic`
+- `groq`
+- `gemini`
 
-Built-in local provider presets:
+Built-in local presets:
 
-- `ollama` - Ollama OpenAI-compatible endpoint
-- `lmstudio` - LM Studio OpenAI-compatible server
-- `localai` - LocalAI OpenAI-compatible API
-- `llamacpp` - llama.cpp-style OpenAI-compatible servers
+- `ollama`
+- `lmstudio`
+- `localai`
+- `llamacpp`
 
-Local presets have default OpenAI-compatible base URLs:
+Default local base URLs:
 
 - `ollama`: `http://127.0.0.1:11434/v1`
 - `lmstudio`: `http://127.0.0.1:1234/v1`
 - `localai`: `http://127.0.0.1:8080/v1`
 - `llamacpp`: `http://127.0.0.1:8080/v1`
 
-LocalAI and llama.cpp share the same default URL because both commonly run an
-OpenAI-compatible server on port `8080`. Hecate cannot reliably infer which
-runtime is behind a generic OpenAI-compatible URL, so the provider identity is
-the configured provider name. Enable only the matching preset, or override
-`PROVIDER_<NAME>_BASE_URL` so each configured provider points to a unique
-endpoint.
-
-## Auth And Control Plane
+## Auth, Policy, And Spend
 
 Auth supports:
 
 - admin bearer token
-- persisted API keys managed through the control plane
+- persisted API keys from the control plane
 
-The control plane supports:
+Control plane supports:
 
-- tenant management
-- API key management
-- persisted provider management
-- built-in provider default hydration by provider name
-- encrypted provider credential storage
-- enable/disable and rotation flows
+- tenant and API key management
+- persisted provider management with encrypted secrets
+- provider enable/disable and rotation flows
+- policy and pricebook CRUD
 - audit history
-- file, Redis, and Postgres backends
+
+Spend/governor supports:
+
+- budget accounting and enforcement
+- warning thresholds, top-ups, resets, and history
+- request denial as `402` on budget exhaustion
+- per-key rate limiting with `X-RateLimit-*` headers
 
 ## Observability
 
-Observability currently includes:
+Observability includes:
 
-- request IDs
-- trace IDs and span IDs in response headers
-- standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers when rate limiting is enabled
+- request IDs, trace IDs, and span IDs in response headers
 - structured logs
-- in-memory trace snapshots over HTTP
-- OTLP HTTP export for traces
-- OTLP HTTP export for metrics
-- OTLP HTTP export for logs
-- opt-in request/response body capture in traces (set `GATEWAY_TRACE_BODIES=true`; max size tunable via `GATEWAY_TRACE_BODY_MAX_BYTES`, default 4096)
+- local trace inspection over HTTP
+- OTLP HTTP export for traces, metrics, and logs
+- optional request/response trace body capture (`GATEWAY_TRACE_BODIES=true`)
 
-For a practical telemetry guide, see [`docs/telemetry.md`](docs/telemetry.md).
+For full telemetry details, see [`docs/telemetry.md`](docs/telemetry.md).
 
-## UI
+## Operator UI
 
 The operator UI includes:
 
-- provider and model visibility
-- preset-driven provider setup
-- managed provider enable/disable/delete and secret rotation
-- playground
-- live task and run monitoring with approvals, cancellation, and streamed stdout/stderr
-- task creation and task start controls in the runs workspace
-- runtime metadata inspection
+- provider/model visibility and setup presets
+- managed provider lifecycle flows (enable/disable/delete/rotate)
+- playground and runtime metadata inspection
+- task creation, run starts, approvals, cancellation, and live stdout/stderr
 - trace inspection
 - budget admin flows
-- tenant and API key management
-- control-plane activity view
+- tenant/API key management and control-plane activity views
 
-The app shell lives in `ui/src/app`, shared console primitives and workbench building blocks live in `ui/src/features/shared`, and feature-owned styles now sit beside the feature views that use them.
+The app shell lives in `ui/src/app`, shared console primitives live in
+`ui/src/features/shared`, and feature-owned styles live beside feature views.
 
 ## Using Hecate For Coding
 
-Hecate is already useful behind a coding assistant even if the client still owns planning and tool orchestration. Today you can use it for:
+Hecate is already useful behind coding assistants even when orchestration logic
+still lives in the client.
 
-- routing and failover across cloud and local models
-- tenant-aware auth, policies, and budgets
-- request tracing, route debugging, and structured logs
-- central cost accounting and provider visibility
-- exact and semantic cache paths
-- OpenAI tool-calls and Anthropic tool-use through one gateway boundary
+Current coding-runtime foundation:
 
-The first native coding-runtime slice is also in place:
-
-- task, run, step, artifact, and approval APIs
+- task/run/step/artifact/approval APIs
 - shell, file, and git executors
-- an out-of-process `cmd/sandboxd` worker
+- out-of-process `cmd/sandboxd`
 - per-run workspace provisioning
-- basic sandbox policy controls for roots, read-only mode, timeouts, and network denial
-- policy-driven approval gating (`shell_exec`, `git_exec`, `file_write`, `network_egress`)
-- run queueing, cancellation, retry/resume APIs, and SSE streaming with `after_sequence` replay
-- durable distributed queue semantics with claim/ack/nack lease flow when `GATEWAY_TASK_QUEUE_BACKEND=postgres`
-- UI support for task creation, live runs, approvals, cancellation, and streamed stdout/stderr
+- sandbox policy controls (roots, read-only mode, timeout, network denial)
+- policy-driven approvals (`shell_exec`, `git_exec`, `file_write`, `network_egress`)
+- queueing, cancellation, retry/resume APIs
+- persisted run events and SSE stream resume (`after_sequence`, `Last-Event-ID`)
+- durable distributed queue semantics via Postgres lease claims
 
-### Durable Queue Execution Flow
+## Durable Queue Execution Flow
 
 ```mermaid
 flowchart LR
@@ -255,12 +226,25 @@ flowchart LR
     ES --> SSE["SSE stream with replay cursor"];
 ```
 
-The main missing pieces are resumable execution, broader approval classes, stronger workspace isolation, richer tool APIs, and more coding-oriented operator views.
+## Config Highlights
+
+Runtime and queue knobs commonly adjusted for coding workflows:
+
+- `GATEWAY_TASKS_BACKEND=memory|postgres`
+- `GATEWAY_TASK_QUEUE_BACKEND=memory|postgres`
+- `GATEWAY_TASK_QUEUE_WORKERS=<int>`
+- `GATEWAY_TASK_QUEUE_BUFFER=<int>`
+- `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
+- `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
+- `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>`
+
+Use `.env.example` as the baseline. For the full env surface, see
+`internal/config/config.go`.
 
 ## Docs
 
-- [Telemetry And OTLP Notes](docs/telemetry.md)
 - [Runtime API Notes](docs/runtime-api.md)
+- [Telemetry And OTLP Notes](docs/telemetry.md)
 
 ## Commands
 
@@ -272,70 +256,22 @@ make ui-dev
 make ui-build
 ```
 
-`.env.example` is the baseline configuration reference. For the full set of supported environment variables, check `internal/config/config.go`.
+## Status And Roadmap
 
-## Checklist
+Delivered:
 
-Gateway And Model Runtime
+- gateway runtime with OpenAI + Anthropic API compatibility
+- control plane with persisted policy, pricebook, and provider management
+- spend governance and key-level rate limiting
+- operator UI for day-to-day runtime operations
+- coding runtime foundation with sandboxd, approvals, run events, stream resume
+- durable leased queue backend for distributed workers
 
-- [x] OpenAI-compatible chat completions endpoint
-- [x] Anthropic-native `/v1/messages` endpoint
-- [x] Anthropic native Messages API provider path
-- [x] Tool-call and tool-use compatibility across OpenAI and Anthropic request shapes
-- [x] Unified model catalog across configured providers
-- [x] Cloud and local provider support behind a vendor-neutral provider layer
-- [x] Deterministic routing across configured healthy providers
-- [x] Retry, failover, and provider health tracking
-- [x] Anthropic extended thinking pass-through (thinking/redacted_thinking, streaming delta events)
-- [x] Exact cache
-- [x] Semantic cache
+Next focus areas:
 
-Control Plane, Policy, And Spend
-
-- [x] Tenant-aware auth and persisted control-plane state
-- [x] Persisted provider config with encrypted secret storage and runtime reload
-- [x] Persisted policy and pricebook control-plane CRUD
-- [x] Static and persisted pricebook-backed cost estimation
-- [x] Budget enforcement with top-ups, resets, warning thresholds, history, and 402 on exhaustion
-- [x] Per-API-key rate limiting with configurable burst and RPM (`GATEWAY_RATE_LIMIT_*`)
-
-Observability And Operations
-
-- [x] Structured logs, traces, metrics, and OTLP export support
-- [x] Background retention and pruning for traces, cache, budget history, and audit events
-- [x] Useful as the gateway and control plane behind coding assistants that execute tools themselves
-
-Operator UI
-
-- [x] React operator UI
-- [x] Provider setup preset catalog for common cloud and local runtimes
-- [x] Basic operator UI for creating tasks, starting runs, approvals, cancellation, and live stdout/stderr
-- [ ] Richer coding-oriented operator views for task traces, repo activity, and aggregate run operations
-- [ ] Richer policy lifecycle UI, history, and validation helpers
-- [ ] Better semantic-cache debugging and trace visibility in the UI
-- [ ] Better budget UX and trend visibility in the UI
-- [ ] Provider setup UX that keeps presets separate from runtime routing truth
-
-Coding Runtime Foundation
-
-- [x] Basic task, run, step, artifact, and approval lifecycle for coding runs
-- [x] Basic shell, file, and git execution paths
-- [x] Out-of-process sandbox runtime work in `cmd/sandboxd`
-- [x] Workspace isolation and per-run workspace provisioning
-- [x] Basic sandbox policy enforcement for allowed roots, read-only mode, timeouts, and network denial
-- [x] Shell approval gating with approve or reject flow
-- [x] Queueing and cancellation for coding runs
-- [x] Durable leased queue backend for distributed workers (`GATEWAY_TASK_QUEUE_BACKEND=postgres`)
-- [x] Streaming run updates and stdout/stderr artifact logs
-- [x] Persisted run events with resumable stream cursors (`after_sequence` / `Last-Event-ID`)
-- [x] Retry/resume runtime APIs and external run-event append API
-
-Next Up
-
-- [ ] Resumable execution for coding runs
-- [ ] Policy-driven approvals for broader sensitive actions
-- [ ] Richer circuit-breaker behavior beyond cooldown-based health recovery
-- [ ] Cleaner route reason taxonomy and debug views after routing simplification
-- [ ] Automated pricebook ingestion and sync from provider pricing sources
-- [ ] More provider discovery paths
-- [ ] Deployment examples for local and production-style environments
+- resumable execution semantics for long-lived coding runs
+- broader policy-driven approval classes
+- richer coding-focused UI views and aggregate run operations
+- improved route-reason taxonomy and debug ergonomics
+- automated provider pricebook ingestion and sync
+- deployment examples for local and production environments
