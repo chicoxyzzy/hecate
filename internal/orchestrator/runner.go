@@ -312,24 +312,17 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	now := time.Now().UTC()
 
 	trace.Record(telemetry.EventOrchestratorTaskStarted, map[string]any{
-		telemetry.AttrHecatePhase:        "orchestration",
-		telemetry.AttrHecateResult:       telemetry.ResultSuccess,
-		telemetry.AttrHecateTaskID:       task.ID,
-		telemetry.AttrHecateTaskStatus:   task.Status,
-		telemetry.AttrHecateTaskRepo:     task.Repo,
+		telemetry.AttrHecatePhase:          "orchestration",
+		telemetry.AttrHecateResult:         telemetry.ResultSuccess,
+		telemetry.AttrHecateTaskID:         task.ID,
+		telemetry.AttrHecateTaskStatus:     task.Status,
+		telemetry.AttrHecateTaskRepo:       task.Repo,
 		telemetry.AttrHecateTaskBaseBranch: task.BaseBranch,
 	})
 
 	runs, err := r.store.ListRuns(ctx, task.ID)
 	if err != nil {
-		trace.Record(telemetry.EventOrchestratorRunFailed, map[string]any{
-			telemetry.AttrHecatePhase:     "orchestration",
-			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "run_list_failed",
-			telemetry.AttrErrorType:       "run_list_failed",
-			telemetry.AttrErrorMessage:    err.Error(),
-			telemetry.AttrHecateTaskID:    task.ID,
-		})
+		recordOrchestratorRunFailed(trace, task.ID, "", "run_list_failed", err)
 		return nil, err
 	}
 
@@ -360,29 +353,13 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	if strings.TrimSpace(run.WorkspacePath) == "" {
 		run.WorkspacePath, err = r.workspaces.Provision(ctx, task, run)
 		if err != nil {
-			trace.Record(telemetry.EventOrchestratorRunFailed, map[string]any{
-				telemetry.AttrHecatePhase:     "orchestration",
-				telemetry.AttrHecateResult:    telemetry.ResultError,
-				telemetry.AttrHecateErrorKind: "workspace_provision_failed",
-				telemetry.AttrErrorType:       "workspace_provision_failed",
-				telemetry.AttrErrorMessage:    err.Error(),
-				telemetry.AttrHecateTaskID:    task.ID,
-				telemetry.AttrHecateRunID:     run.ID,
-			})
+			recordOrchestratorRunFailed(trace, task.ID, run.ID, "workspace_provision_failed", err)
 			return nil, err
 		}
 	}
 	run, err = r.store.CreateRun(ctx, run)
 	if err != nil {
-		trace.Record(telemetry.EventOrchestratorRunFailed, map[string]any{
-			telemetry.AttrHecatePhase:     "orchestration",
-			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "run_create_failed",
-			telemetry.AttrErrorType:       "run_create_failed",
-			telemetry.AttrErrorMessage:    err.Error(),
-			telemetry.AttrHecateTaskID:    task.ID,
-			telemetry.AttrHecateRunID:     run.ID,
-		})
+		recordOrchestratorRunFailed(trace, task.ID, run.ID, "run_create_failed", err)
 		return nil, err
 	}
 	createEvent := map[string]any{}
@@ -402,15 +379,7 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 		})
 	}
 
-	trace.Record(telemetry.EventOrchestratorRunStarted, map[string]any{
-		telemetry.AttrHecatePhase:       "orchestration",
-		telemetry.AttrHecateResult:      telemetry.ResultSuccess,
-		telemetry.AttrHecateTaskID:      task.ID,
-		telemetry.AttrHecateRunID:       run.ID,
-		telemetry.AttrHecateRunNumber:   run.Number,
-		telemetry.AttrHecateRunStatus:   run.Status,
-		telemetry.AttrGenAIRequestModel: run.Model,
-	})
+	recordOrchestratorRunStarted(trace, task.ID, run)
 
 	task.LatestRunID = run.ID
 	task.Status = run.Status
@@ -439,8 +408,8 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	} else {
 		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.queued", requestID, trace.TraceID, nil)
 		trace.Record(telemetry.EventQueueEnqueued, map[string]any{
-			telemetry.AttrHecateTaskID:     task.ID,
-			telemetry.AttrHecateRunID:      run.ID,
+			telemetry.AttrHecateTaskID:       task.ID,
+			telemetry.AttrHecateRunID:        run.ID,
 			telemetry.AttrHecateQueueBackend: r.queue.Backend(),
 		})
 	}
@@ -825,15 +794,7 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 		return
 	}
 
-	trace.Record(telemetry.EventOrchestratorRunStarted, map[string]any{
-		telemetry.AttrHecatePhase:       "orchestration",
-		telemetry.AttrHecateResult:      telemetry.ResultSuccess,
-		telemetry.AttrHecateTaskID:      task.ID,
-		telemetry.AttrHecateRunID:       run.ID,
-		telemetry.AttrHecateRunNumber:   run.Number,
-		telemetry.AttrHecateRunStatus:   run.Status,
-		telemetry.AttrGenAIRequestModel: run.Model,
-	})
+	recordOrchestratorRunStarted(trace, task.ID, run)
 
 	resumeCheckpoint, checkpointErr := r.resumeCheckpointForRun(ctx, task.ID, run.ID)
 	if checkpointErr != nil {
@@ -934,15 +895,7 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		UpsertArtifact:   func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
 	})
 	if err != nil {
-		trace.Record(telemetry.EventOrchestratorRunFailed, map[string]any{
-			telemetry.AttrHecatePhase:     "orchestration",
-			telemetry.AttrHecateResult:    telemetry.ResultError,
-			telemetry.AttrHecateErrorKind: "executor_failed",
-			telemetry.AttrErrorType:       "executor_failed",
-			telemetry.AttrErrorMessage:    err.Error(),
-			telemetry.AttrHecateTaskID:    task.ID,
-			telemetry.AttrHecateRunID:     run.ID,
-		})
+		recordOrchestratorRunFailed(trace, task.ID, run.ID, "executor_failed", err)
 		return nil, err
 	}
 
@@ -988,13 +941,13 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	persistedArtifacts := make([]types.TaskArtifact, 0, len(execution.Artifacts))
 	for _, artifact := range execution.Artifacts {
 		trace.Record(telemetry.EventOrchestratorArtifactCreated, map[string]any{
-			telemetry.AttrHecatePhase:           "artifact",
-			telemetry.AttrHecateResult:          telemetry.ResultSuccess,
-			telemetry.AttrHecateTaskID:          task.ID,
-			telemetry.AttrHecateRunID:           run.ID,
-			telemetry.AttrHecateStepID:          artifact.StepID,
-			telemetry.AttrHecateArtifactID:      artifact.ID,
-			telemetry.AttrHecateArtifactKind:    artifact.Kind,
+			telemetry.AttrHecatePhase:             "artifact",
+			telemetry.AttrHecateResult:            telemetry.ResultSuccess,
+			telemetry.AttrHecateTaskID:            task.ID,
+			telemetry.AttrHecateRunID:             run.ID,
+			telemetry.AttrHecateStepID:            artifact.StepID,
+			telemetry.AttrHecateArtifactID:        artifact.ID,
+			telemetry.AttrHecateArtifactKind:      artifact.Kind,
 			telemetry.AttrHecateArtifactSizeBytes: artifact.SizeBytes,
 		})
 		artifact.SpanID = spanIDByName(trace, "orchestrator.artifact")
@@ -1282,14 +1235,14 @@ func (r *Runner) createApprovalForTask(ctx context.Context, trace *profiler.Trac
 	approval, err := r.store.CreateApproval(ctx, approval)
 	if err != nil {
 		trace.Record(telemetry.EventOrchestratorApprovalFailed, map[string]any{
-			telemetry.AttrHecatePhase:        "approval",
-			telemetry.AttrHecateResult:       telemetry.ResultError,
-			telemetry.AttrHecateErrorKind:    "approval_create_failed",
-			telemetry.AttrErrorType:          "approval_create_failed",
-			telemetry.AttrErrorMessage:       err.Error(),
-			telemetry.AttrHecateTaskID:       task.ID,
-			telemetry.AttrHecateRunID:        run.ID,
-			telemetry.AttrHecateApprovalID:   approval.ID,
+			telemetry.AttrHecatePhase:      "approval",
+			telemetry.AttrHecateResult:     telemetry.ResultError,
+			telemetry.AttrHecateErrorKind:  "approval_create_failed",
+			telemetry.AttrErrorType:        "approval_create_failed",
+			telemetry.AttrErrorMessage:     err.Error(),
+			telemetry.AttrHecateTaskID:     task.ID,
+			telemetry.AttrHecateRunID:      run.ID,
+			telemetry.AttrHecateApprovalID: approval.ID,
 		})
 		return types.TaskApproval{}, err
 	}
@@ -1376,6 +1329,39 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func recordOrchestratorRunStarted(trace *profiler.Trace, taskID string, run types.TaskRun) {
+	if trace == nil {
+		return
+	}
+	trace.Record(telemetry.EventOrchestratorRunStarted, map[string]any{
+		telemetry.AttrHecatePhase:       "orchestration",
+		telemetry.AttrHecateResult:      telemetry.ResultSuccess,
+		telemetry.AttrHecateTaskID:      taskID,
+		telemetry.AttrHecateRunID:       run.ID,
+		telemetry.AttrHecateRunNumber:   run.Number,
+		telemetry.AttrHecateRunStatus:   run.Status,
+		telemetry.AttrGenAIRequestModel: run.Model,
+	})
+}
+
+func recordOrchestratorRunFailed(trace *profiler.Trace, taskID, runID, errorKind string, err error) {
+	if trace == nil || err == nil {
+		return
+	}
+	attrs := map[string]any{
+		telemetry.AttrHecatePhase:     "orchestration",
+		telemetry.AttrHecateResult:    telemetry.ResultError,
+		telemetry.AttrHecateErrorKind: errorKind,
+		telemetry.AttrErrorType:       errorKind,
+		telemetry.AttrErrorMessage:    err.Error(),
+		telemetry.AttrHecateTaskID:    taskID,
+	}
+	if strings.TrimSpace(runID) != "" {
+		attrs[telemetry.AttrHecateRunID] = runID
+	}
+	trace.Record(telemetry.EventOrchestratorRunFailed, attrs)
 }
 
 func spanIDByName(trace *profiler.Trace, name string) string {

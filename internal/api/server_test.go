@@ -905,18 +905,7 @@ func TestRuntimeStatsReturnsQueueAndRunCounters(t *testing.T) {
 	}
 
 	response := mustRequestJSON[RuntimeStatsResponse](client, http.MethodGet, "/admin/runtime/stats", "")
-	if response.Object != "runtime_stats" {
-		t.Fatalf("object = %q, want runtime_stats", response.Object)
-	}
-	if response.Data.CheckedAt == "" {
-		t.Fatal("checked_at = empty, want timestamp")
-	}
-	if response.Data.QueueCapacity <= 0 {
-		t.Fatalf("queue_capacity = %d, want > 0", response.Data.QueueCapacity)
-	}
-	if response.Data.WorkerCount <= 0 {
-		t.Fatalf("worker_count = %d, want > 0", response.Data.WorkerCount)
-	}
+	assertRuntimeStatsCore(t, response)
 	if response.Data.AwaitingApprovalRuns < 1 {
 		t.Fatalf("awaiting_approval_runs = %d, want >= 1", response.Data.AwaitingApprovalRuns)
 	}
@@ -1000,6 +989,22 @@ func TestRuntimeStatsPayloadShape(t *testing.T) {
 		if _, ok := sloShape.(map[string]any); !ok {
 			t.Fatalf("slo type = %T, want object", sloShape)
 		}
+	}
+}
+
+func assertRuntimeStatsCore(t *testing.T, response RuntimeStatsResponse) {
+	t.Helper()
+	if response.Object != "runtime_stats" {
+		t.Fatalf("object = %q, want runtime_stats", response.Object)
+	}
+	if response.Data.CheckedAt == "" {
+		t.Fatal("checked_at = empty, want timestamp")
+	}
+	if response.Data.QueueCapacity <= 0 {
+		t.Fatalf("queue_capacity = %d, want > 0", response.Data.QueueCapacity)
+	}
+	if response.Data.WorkerCount <= 0 {
+		t.Fatalf("worker_count = %d, want > 0", response.Data.WorkerCount)
 	}
 }
 
