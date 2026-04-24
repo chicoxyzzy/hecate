@@ -9,17 +9,20 @@ import (
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
+// errorKind* aliases map gateway-local names to the authoritative exported
+// constants in the telemetry package. All recording sites in this package use
+// these aliases so that refactoring the constants requires one change here.
 const (
-	errorKindInvalidRequest       = "invalid_request"
-	errorKindRequestDenied        = "request_denied"
-	errorKindRouterFailed         = "router_failed"
-	errorKindBudgetEstimateFailed = "budget_estimate_failed"
-	errorKindRouteDenied          = "route_denied"
-	errorKindProviderCallFailed   = "provider_call_failed"
-	errorKindRetryBackoffFailed   = "retry_backoff_failed"
-	errorKindProviderHealth       = "provider_health_degraded"
-	errorKindSemanticCacheStore   = "semantic_cache_store_failed"
-	errorKindUsageRecordFailed    = "usage_record_failed"
+	errorKindInvalidRequest       = telemetry.ErrorKindInvalidRequest
+	errorKindRequestDenied        = telemetry.ErrorKindRequestDenied
+	errorKindRouterFailed         = telemetry.ErrorKindRouterFailed
+	errorKindBudgetEstimateFailed = telemetry.ErrorKindBudgetEstimate
+	errorKindRouteDenied          = telemetry.ErrorKindRouteDenied
+	errorKindProviderCallFailed   = telemetry.ErrorKindProviderCallFailed
+	errorKindRetryBackoffFailed   = telemetry.ErrorKindRetryBackoff
+	errorKindProviderHealth       = telemetry.ErrorKindProviderHealth
+	errorKindSemanticCacheStore   = telemetry.ErrorKindSemanticCache
+	errorKindUsageRecordFailed    = telemetry.ErrorKindUsageRecord
 )
 
 func tracePhaseAttrs(phase string, attrs map[string]any) map[string]any {
