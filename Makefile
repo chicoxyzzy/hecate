@@ -20,12 +20,12 @@ dev:
 	GOCACHE="$(GOCACHE_DIR)" go run ./cmd/gateway
 
 ui-install:
-	cd ui && pnpm install
+	cd ui && bun install
 
 ui-dev:
 	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
-	cd ui && pnpm dev
+	cd ui && bun run dev
 
 ui-build:
 	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
-	cd ui && pnpm build
+	cd ui && bun run build

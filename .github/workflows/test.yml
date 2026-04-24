@@ -33,7 +33,7 @@ jobs:
               - 'ui/**/*.ts'
               - 'ui/**/*.tsx'
               - 'ui/package.json'
-              - 'ui/pnpm-lock.yaml'
+              - 'ui/bun.lock'
               - 'ui/tsconfig.json'
               - 'ui/tsconfig.*.json'
               - 'ui/vite.config.*'
@@ -67,18 +67,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          package_json_file: ui/package.json
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
+          bun-version: '1.3.13'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Run tests
-        run: pnpm test
+        run: bun run test
