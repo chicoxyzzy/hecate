@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -127,6 +128,9 @@ var builtInProviders = []BuiltInProvider{
 func BuiltInProviders() []BuiltInProvider {
 	out := make([]BuiltInProvider, len(builtInProviders))
 	copy(out, builtInProviders)
+	slices.SortFunc(out, func(a, b BuiltInProvider) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 	return out
 }
 

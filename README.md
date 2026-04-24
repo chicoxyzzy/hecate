@@ -138,18 +138,18 @@ available when needed.
 
 Built-in cloud presets:
 
-- `openai`
 - `anthropic`
-- `groq`
 - `gemini`
 - `grok`
+- `groq`
+- `openai`
 
 Built-in local presets:
 
-- `ollama`
+- `llamacpp`
 - `lmstudio`
 - `localai`
-- `llamacpp`
+- `ollama`
 
 Default local base URLs:
 
