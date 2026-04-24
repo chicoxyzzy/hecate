@@ -235,6 +235,86 @@ func TestTranslateOpenAIToAnthropicSSE(t *testing.T) {
 	}
 }
 
+func TestMessagesCacheControlPreservedInContentBlocks(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	var captured types.ChatRequest
+	provider := &recordingProvider{
+		fakeProvider: fakeProvider{
+			name: "openai",
+			response: &types.ChatResponse{
+				ID:    "chatcmpl-cc",
+				Model: "gpt-4o-mini",
+				Choices: []types.ChatChoice{{
+					Index:        0,
+					Message:      types.Message{Role: "assistant", Content: "4"},
+					FinishReason: "stop",
+				}},
+				Usage: types.Usage{PromptTokens: 8, CompletionTokens: 1, TotalTokens: 9},
+			},
+		},
+		captured: &captured,
+	}
+
+	handler := newTestHTTPHandler(logger, provider)
+
+	body := `{
+		"model":      "gpt-4o-mini",
+		"max_tokens": 64,
+		"system": [
+			{"type": "text", "text": "You are a calculator.", "cache_control": {"type": "ephemeral"}}
+		],
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "What is 2+2?", "cache_control": {"type": "ephemeral"}}
+			]}
+		]
+	}`
+
+	recorder := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// System message must carry ContentBlocks with cache_control.
+	if len(captured.Messages) == 0 {
+		t.Fatal("no messages captured")
+	}
+	sysMsg := captured.Messages[0]
+	if sysMsg.Role != "system" {
+		t.Fatalf("messages[0].role = %q, want system", sysMsg.Role)
+	}
+	if len(sysMsg.ContentBlocks) == 0 {
+		t.Fatal("system message has no ContentBlocks")
+	}
+	if len(sysMsg.ContentBlocks[0].CacheControl) == 0 {
+		t.Fatal("system ContentBlocks[0] missing CacheControl")
+	}
+
+	// User message must carry ContentBlocks with cache_control.
+	var userMsg *types.Message
+	for i := range captured.Messages {
+		if captured.Messages[i].Role == "user" {
+			userMsg = &captured.Messages[i]
+			break
+		}
+	}
+	if userMsg == nil {
+		t.Fatal("no user message captured")
+	}
+	if len(userMsg.ContentBlocks) == 0 {
+		t.Fatal("user message has no ContentBlocks")
+	}
+	if len(userMsg.ContentBlocks[0].CacheControl) == 0 {
+		t.Fatal("user ContentBlocks[0] missing CacheControl")
+	}
+	// Content string must also be populated (used by OpenAI provider).
+	if !strings.Contains(userMsg.Content, "2+2") {
+		t.Fatalf("user.Content = %q, want text of the block", userMsg.Content)
+	}
+}
+
 // recordingProvider wraps fakeProvider and captures the last request.
 type recordingProvider struct {
 	fakeProvider

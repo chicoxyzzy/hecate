@@ -146,6 +146,176 @@ func TestAnthropicProviderCapabilitiesUsesModelsEndpoint(t *testing.T) {
 	}
 }
 
+// TestAnthropicMessagesFromTypesPreservesCacheControl verifies that ContentBlocks with
+// cache_control survive the conversion to the Anthropic wire format.
+func TestAnthropicMessagesFromTypesPreservesCacheControl(t *testing.T) {
+	t.Parallel()
+
+	cc := json.RawMessage(`{"type":"ephemeral"}`)
+	messages := []types.Message{
+		{
+			Role:    "system",
+			Content: "You are helpful. Be concise.",
+			ContentBlocks: []types.ContentBlock{
+				{Type: "text", Text: "You are helpful.", CacheControl: cc},
+				{Type: "text", Text: "Be concise."},
+			},
+		},
+		{
+			Role:    "user",
+			Content: "What is 2+2?",
+			ContentBlocks: []types.ContentBlock{
+				{Type: "text", Text: "What is 2+2?", CacheControl: cc},
+			},
+		},
+	}
+
+	systemRaw, wire := anthropicMessagesFromTypes(messages)
+
+	// System should be a JSON array (has cache_control).
+	var sysBlocks []map[string]any
+	if err := json.Unmarshal(systemRaw, &sysBlocks); err != nil {
+		t.Fatalf("system is not a JSON array: %v, raw=%s", err, systemRaw)
+	}
+	if len(sysBlocks) != 2 {
+		t.Fatalf("system blocks count = %d, want 2", len(sysBlocks))
+	}
+	// First block has cache_control.
+	if sysBlocks[0]["cache_control"] == nil {
+		t.Fatalf("system[0] missing cache_control")
+	}
+	// Second block has no cache_control.
+	if sysBlocks[1]["cache_control"] != nil {
+		t.Fatalf("system[1] unexpected cache_control")
+	}
+
+	// Messages should have one user message with cache_control on the text block.
+	if len(wire) != 1 {
+		t.Fatalf("wire messages count = %d, want 1", len(wire))
+	}
+	if wire[0].Role != "user" {
+		t.Fatalf("wire[0].role = %q, want user", wire[0].Role)
+	}
+	if len(wire[0].Content) != 1 {
+		t.Fatalf("wire[0] content blocks = %d, want 1", len(wire[0].Content))
+	}
+	if wire[0].Content[0].Type != "text" {
+		t.Fatalf("wire[0].content[0].type = %q, want text", wire[0].Content[0].Type)
+	}
+	if len(wire[0].Content[0].CacheControl) == 0 {
+		t.Fatal("wire[0].content[0] missing cache_control")
+	}
+}
+
+func TestAnthropicMessagesFromTypesSingleBlockNoArrayWrap(t *testing.T) {
+	t.Parallel()
+
+	// System with a single text block and no cache_control → plain string, not array.
+	messages := []types.Message{
+		{
+			Role:          "system",
+			Content:       "You are helpful.",
+			ContentBlocks: []types.ContentBlock{{Type: "text", Text: "You are helpful."}},
+		},
+		{Role: "user", Content: "Hi", ContentBlocks: []types.ContentBlock{{Type: "text", Text: "Hi"}}},
+	}
+	systemRaw, _ := anthropicMessagesFromTypes(messages)
+
+	var s string
+	if err := json.Unmarshal(systemRaw, &s); err != nil {
+		t.Fatalf("system should be a plain JSON string, got: %s", systemRaw)
+	}
+	if s != "You are helpful." {
+		t.Fatalf("system = %q, want plain text", s)
+	}
+}
+
+func TestAnthropicChatUpstreamSendsCacheControlBlocks(t *testing.T) {
+	t.Parallel()
+
+	cc := json.RawMessage(`{"type":"ephemeral"}`)
+	var capturedBody map[string]any
+
+	provider := NewAnthropicProvider(config.OpenAICompatibleProviderConfig{
+		Name:         "anthropic",
+		Kind:         "cloud",
+		Protocol:     "anthropic",
+		BaseURL:      "https://api.anthropic.test",
+		APIKey:       "secret",
+		APIVersion:   "2023-06-01",
+		Timeout:      5 * time.Second,
+		DefaultModel: "claude-opus-4-5",
+	}, nil)
+	provider.cachedCaps = Capabilities{
+		Name:         "anthropic",
+		Kind:         KindCloud,
+		DefaultModel: "claude-opus-4-5",
+		Models:       []string{"claude-opus-4-5"},
+	}
+	provider.capsExpiry = time.Now().Add(time.Minute)
+	provider.httpClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			json.NewDecoder(r.Body).Decode(&capturedBody) //nolint:errcheck
+			body, _ := json.Marshal(map[string]any{
+				"id":          "msg_cc",
+				"model":       "claude-opus-4-5",
+				"role":        "assistant",
+				"stop_reason": "end_turn",
+				"content":     []map[string]any{{"type": "text", "text": "4"}},
+				"usage":       map[string]any{"input_tokens": 20, "output_tokens": 1},
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(string(body))),
+			}, nil
+		}),
+	}
+
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:     "claude-opus-4-5",
+		MaxTokens: 32,
+		Messages: []types.Message{
+			{
+				Role:    "system",
+				Content: "Big system prompt.",
+				ContentBlocks: []types.ContentBlock{
+					{Type: "text", Text: "Big system prompt.", CacheControl: cc},
+				},
+			},
+			{
+				Role:    "user",
+				Content: "What is 2+2?",
+				ContentBlocks: []types.ContentBlock{
+					{Type: "text", Text: "What is 2+2?", CacheControl: cc},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	// Verify the captured upstream body has cache_control in system and messages.
+	systemRaw, ok := capturedBody["system"]
+	if !ok {
+		t.Fatal("upstream body missing system field")
+	}
+	sysBytes, _ := json.Marshal(systemRaw)
+	if !strings.Contains(string(sysBytes), "ephemeral") {
+		t.Fatalf("system missing cache_control, got: %s", sysBytes)
+	}
+
+	msgs, _ := capturedBody["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("upstream body missing messages")
+	}
+	msgBytes, _ := json.Marshal(msgs[0])
+	if !strings.Contains(string(msgBytes), "ephemeral") {
+		t.Fatalf("messages[0] missing cache_control, got: %s", msgBytes)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {

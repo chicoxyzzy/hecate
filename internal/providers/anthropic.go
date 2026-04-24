@@ -32,7 +32,7 @@ type AnthropicProvider struct {
 
 type anthropicMessagesRequest struct {
 	Model         string                     `json:"model"`
-	System        string                     `json:"system,omitempty"`
+	System        json.RawMessage            `json:"system,omitempty"` // string or [{type,text,cache_control}]
 	Messages      []anthropicMessage         `json:"messages"`
 	MaxTokens     int                        `json:"max_tokens"`
 	Temperature   float64                    `json:"temperature,omitempty"`
@@ -67,12 +67,15 @@ type anthropicContentBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	// Content reused as tool_result content string (omitted for other types)
 	ResultContent string `json:"content,omitempty"`
+	// prompt caching
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 type anthropicMessagesResponse struct {
@@ -292,13 +295,13 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 		return nil, err
 	}
 
-	system, messages := anthropicMessagesFromTypes(req.Messages)
+	systemRaw, messages := anthropicMessagesFromTypes(req.Messages)
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("anthropic messages request requires at least one non-system message")
 	}
 	wireReq := anthropicMessagesRequest{
 		Model:         req.Model,
-		System:        system,
+		System:        systemRaw,
 		Messages:      messages,
 		MaxTokens:     req.MaxTokens,
 		TopP:          req.TopP,
@@ -322,9 +325,10 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 				schema = json.RawMessage(`{}`)
 			}
 			wireReq.Tools = append(wireReq.Tools, anthropicTool{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				InputSchema: schema,
+				Name:         t.Function.Name,
+				Description:  t.Function.Description,
+				InputSchema:  schema,
+				CacheControl: t.CacheControl,
 			})
 		}
 		wireReq.ToolChoice = anthropicToolChoice(req.ToolChoice)
@@ -395,8 +399,11 @@ func (p *AnthropicProvider) apiVersion() string {
 	return defaultAnthropicVersion
 }
 
-func anthropicMessagesFromTypes(messages []types.Message) (string, []anthropicMessage) {
-	systemParts := make([]string, 0, 1)
+// anthropicMessagesFromTypes converts internal messages to Anthropic wire format.
+// Returns (system, messages) where system is a json.RawMessage (either a JSON string or
+// a JSON array of text blocks, preserving cache_control) and messages is the conversation.
+func anthropicMessagesFromTypes(messages []types.Message) (json.RawMessage, []anthropicMessage) {
+	var systemRaw json.RawMessage
 	wire := make([]anthropicMessage, 0, len(messages))
 
 	for i := 0; i < len(messages); i++ {
@@ -405,12 +412,15 @@ func anthropicMessagesFromTypes(messages []types.Message) (string, []anthropicMe
 
 		switch role {
 		case "system":
-			if text := strings.TrimSpace(msg.Content); text != "" {
-				systemParts = append(systemParts, text)
-			}
+			systemRaw = buildAnthropicSystemRaw(msg)
 
 		case "assistant":
-			if len(msg.ToolCalls) > 0 {
+			if len(msg.ContentBlocks) > 0 {
+				wire = append(wire, anthropicMessage{
+					Role:    "assistant",
+					Content: contentBlocksToAnthropicBlocks(msg.ContentBlocks),
+				})
+			} else if len(msg.ToolCalls) > 0 {
 				blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
 				if msg.Content != "" {
 					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
@@ -437,30 +447,122 @@ func anthropicMessagesFromTypes(messages []types.Message) (string, []anthropicMe
 
 		case "tool":
 			// Batch consecutive tool-result messages into a single user message.
-			blocks := []anthropicContentBlock{{
-				Type:          "tool_result",
-				ToolUseID:     msg.ToolCallID,
-				ResultContent: msg.Content,
-			}}
+			blocks := []anthropicContentBlock{toolResultBlock(msg)}
 			for i+1 < len(messages) && strings.TrimSpace(messages[i+1].Role) == "tool" {
 				i++
-				next := messages[i]
-				blocks = append(blocks, anthropicContentBlock{
-					Type:          "tool_result",
-					ToolUseID:     next.ToolCallID,
-					ResultContent: next.Content,
-				})
+				blocks = append(blocks, toolResultBlock(messages[i]))
 			}
 			wire = append(wire, anthropicMessage{Role: "user", Content: blocks})
 
 		case "user":
-			wire = append(wire, anthropicMessage{
-				Role:    "user",
-				Content: []anthropicContentBlock{{Type: "text", Text: msg.Content}},
+			if len(msg.ContentBlocks) > 0 {
+				wire = append(wire, anthropicMessage{
+					Role:    "user",
+					Content: contentBlocksToAnthropicBlocks(msg.ContentBlocks),
+				})
+			} else {
+				wire = append(wire, anthropicMessage{
+					Role:    "user",
+					Content: []anthropicContentBlock{{Type: "text", Text: msg.Content}},
+				})
+			}
+		}
+	}
+	return systemRaw, wire
+}
+
+// buildAnthropicSystemRaw marshals the system message into the Anthropic wire form:
+// - a plain JSON string when there is a single un-cached text block
+// - a JSON array of text blocks (with optional cache_control) otherwise
+func buildAnthropicSystemRaw(msg types.Message) json.RawMessage {
+	if len(msg.ContentBlocks) == 0 {
+		if text := strings.TrimSpace(msg.Content); text != "" {
+			b, _ := json.Marshal(text)
+			return b
+		}
+		return nil
+	}
+	// Check whether any block has cache_control — if not and there is only one
+	// text block, send a plain string (avoids unnecessary array wrapping).
+	hasCacheControl := false
+	for _, cb := range msg.ContentBlocks {
+		if len(cb.CacheControl) > 0 {
+			hasCacheControl = true
+			break
+		}
+	}
+	if !hasCacheControl && len(msg.ContentBlocks) == 1 && msg.ContentBlocks[0].Type == "text" {
+		b, _ := json.Marshal(msg.ContentBlocks[0].Text)
+		return b
+	}
+	type sysBlock struct {
+		Type         string          `json:"type"`
+		Text         string          `json:"text"`
+		CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	}
+	blocks := make([]sysBlock, 0, len(msg.ContentBlocks))
+	for _, cb := range msg.ContentBlocks {
+		if cb.Type == "" || cb.Type == "text" {
+			blocks = append(blocks, sysBlock{
+				Type:         "text",
+				Text:         cb.Text,
+				CacheControl: cb.CacheControl,
 			})
 		}
 	}
-	return strings.Join(systemParts, "\n\n"), wire
+	if len(blocks) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(blocks)
+	return b
+}
+
+// contentBlocksToAnthropicBlocks converts types.ContentBlock slice to the provider wire type.
+func contentBlocksToAnthropicBlocks(cbs []types.ContentBlock) []anthropicContentBlock {
+	out := make([]anthropicContentBlock, 0, len(cbs))
+	for _, cb := range cbs {
+		switch cb.Type {
+		case "text", "":
+			out = append(out, anthropicContentBlock{
+				Type:         "text",
+				Text:         cb.Text,
+				CacheControl: cb.CacheControl,
+			})
+		case "tool_use":
+			input := cb.Input
+			if !json.Valid(input) || len(input) == 0 {
+				input = json.RawMessage(`{}`)
+			}
+			out = append(out, anthropicContentBlock{
+				Type:         "tool_use",
+				ID:           cb.ID,
+				Name:         cb.Name,
+				Input:        input,
+				CacheControl: cb.CacheControl,
+			})
+		// tool_result is handled via the "tool" role path, not content blocks
+		default:
+			// pass unknown block types through verbatim so they reach the upstream
+			out = append(out, anthropicContentBlock{
+				Type:         cb.Type,
+				CacheControl: cb.CacheControl,
+			})
+		}
+	}
+	return out
+}
+
+// toolResultBlock converts a tool-role message into a tool_result content block.
+func toolResultBlock(msg types.Message) anthropicContentBlock {
+	// If the message carries ContentBlocks for the result content, inline them
+	// as a structured content array on the tool_result (Anthropic supports this).
+	// For simplicity we just use the flattened Content string here; the SDK
+	// typically sends plain text results.
+	return anthropicContentBlock{
+		Type:          "tool_result",
+		ToolUseID:     msg.ToolCallID,
+		ResultContent: msg.Content,
+	}
 }
 
 func anthropicResponseToMessage(blocks []anthropicContentBlock) types.Message {
@@ -525,13 +627,13 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 		return err
 	}
 
-	system, messages := anthropicMessagesFromTypes(req.Messages)
+	systemRaw, messages := anthropicMessagesFromTypes(req.Messages)
 	if len(messages) == 0 {
 		return fmt.Errorf("anthropic messages request requires at least one non-system message")
 	}
 	wireReq := anthropicMessagesRequest{
 		Model:         req.Model,
-		System:        system,
+		System:        systemRaw,
 		Messages:      messages,
 		MaxTokens:     req.MaxTokens,
 		TopP:          req.TopP,
@@ -556,9 +658,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 				schema = json.RawMessage(`{}`)
 			}
 			wireReq.Tools = append(wireReq.Tools, anthropicTool{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				InputSchema: schema,
+				Name:         t.Function.Name,
+				Description:  t.Function.Description,
+				InputSchema:  schema,
+				CacheControl: t.CacheControl,
 			})
 		}
 		wireReq.ToolChoice = anthropicToolChoice(req.ToolChoice)

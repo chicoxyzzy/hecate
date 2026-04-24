@@ -225,10 +225,15 @@ func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, p
 
 	messages := make([]types.Message, 0, len(req.Messages)+1)
 
-	if system, err := decodeAnthropicSystem(req.System); err != nil {
+	if sysBlocks, err := decodeAnthropicSystemBlocks(req.System); err != nil {
 		return types.ChatRequest{}, err
-	} else if system != "" {
-		messages = append(messages, types.Message{Role: "system", Content: system})
+	} else if len(sysBlocks) > 0 {
+		text := contentBlocksText(sysBlocks)
+		messages = append(messages, types.Message{
+			Role:          "system",
+			Content:       text,
+			ContentBlocks: sysBlocks,
+		})
 	}
 
 	for i, m := range req.Messages {
@@ -252,6 +257,7 @@ func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, p
 				Description: t.Description,
 				Parameters:  schema,
 			},
+			CacheControl: t.CacheControl,
 		})
 	}
 
@@ -284,43 +290,65 @@ func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, p
 	}, nil
 }
 
-// decodeAnthropicSystem accepts either a plain string or an array of text blocks.
-func decodeAnthropicSystem(raw json.RawMessage) (string, error) {
+// decodeAnthropicSystemBlocks accepts either a plain string or an array of content blocks
+// and returns them as []types.ContentBlock, preserving cache_control annotations.
+func decodeAnthropicSystemBlocks(raw json.RawMessage) ([]types.ContentBlock, error) {
 	if len(raw) == 0 {
-		return "", nil
+		return nil, nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil
+		if strings.TrimSpace(s) == "" {
+			return nil, nil
+		}
+		return []types.ContentBlock{{Type: "text", Text: s}}, nil
 	}
 	var blocks []AnthropicInboundContentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return "", fmt.Errorf("field \"system\" must be a string or an array of content blocks")
+		return nil, fmt.Errorf("field \"system\" must be a string or an array of content blocks")
 	}
-	parts := make([]string, 0, len(blocks))
+	out := make([]types.ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
 		if b.Type == "" || b.Type == "text" {
-			if text := strings.TrimSpace(b.Text); text != "" {
-				parts = append(parts, text)
-			}
+			out = append(out, types.ContentBlock{
+				Type:         "text",
+				Text:         b.Text,
+				CacheControl: b.CacheControl,
+			})
 		}
 	}
-	return strings.Join(parts, "\n\n"), nil
+	return out, nil
+}
+
+// contentBlocksText concatenates text blocks into a single string.
+func contentBlocksText(blocks []types.ContentBlock) string {
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if (b.Type == "" || b.Type == "text") && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // convertAnthropicInboundMessage converts one Anthropic message into one or more
-// internal messages (tool_result blocks become individual "tool" role messages
-// so the OpenAI provider can emit them as tool messages).
+// internal messages. ContentBlocks is always populated from block arrays so that
+// cache_control annotations survive the gateway roundtrip to Anthropic upstreams.
+// OpenAI-bound providers use Message.Content / Message.ToolCalls and ignore ContentBlocks.
 func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message, error) {
 	role := strings.TrimSpace(m.Role)
 	if role != "user" && role != "assistant" {
 		return nil, fmt.Errorf("role %q is not supported", role)
 	}
 
-	// Content may be a string.
+	// Content is a plain string — wrap it in a single ContentBlock for consistency.
 	var asString string
 	if err := json.Unmarshal(m.Content, &asString); err == nil {
-		return []types.Message{{Role: role, Content: asString}}, nil
+		return []types.Message{{
+			Role:          role,
+			Content:       asString,
+			ContentBlocks: []types.ContentBlock{{Type: "text", Text: asString}},
+		}}, nil
 	}
 
 	var blocks []AnthropicInboundContentBlock
@@ -329,61 +357,95 @@ func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message,
 	}
 
 	out := make([]types.Message, 0, 1)
+	// accumulators for the current user/assistant message segment
+	var contentBlocks []types.ContentBlock // for Anthropic pass-through
 	var textParts []string
 	var toolCalls []types.ToolCall
+
+	flush := func() {
+		if len(contentBlocks) == 0 && len(toolCalls) == 0 {
+			return
+		}
+		msg := types.Message{
+			Role:          role,
+			Content:       strings.Join(textParts, "\n"),
+			ContentBlocks: contentBlocks,
+		}
+		if len(toolCalls) > 0 {
+			msg.ToolCalls = toolCalls
+		}
+		out = append(out, msg)
+		contentBlocks = nil
+		textParts = nil
+		toolCalls = nil
+	}
 
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
+			cb := types.ContentBlock{
+				Type:         "text",
+				Text:         b.Text,
+				CacheControl: b.CacheControl,
+			}
+			contentBlocks = append(contentBlocks, cb)
 			if t := b.Text; t != "" {
 				textParts = append(textParts, t)
 			}
 		case "tool_use":
 			args := string(b.Input)
-			if args == "" {
+			if !json.Valid(json.RawMessage(args)) || args == "" {
 				args = "{}"
 			}
+			cb := types.ContentBlock{
+				Type:         "tool_use",
+				ID:           b.ID,
+				Name:         b.Name,
+				Input:        json.RawMessage(args),
+				CacheControl: b.CacheControl,
+			}
+			contentBlocks = append(contentBlocks, cb)
 			toolCalls = append(toolCalls, types.ToolCall{
 				ID:   b.ID,
 				Type: "function",
 				Function: types.ToolCallFunction{Name: b.Name, Arguments: args},
 			})
 		case "tool_result":
-			// Emit accumulated text/tool_use first.
-			if len(textParts) > 0 || len(toolCalls) > 0 {
-				out = append(out, buildAssistantOrUserMessage(role, textParts, toolCalls))
-				textParts = nil
-				toolCalls = nil
-			}
+			// Emit the accumulated user/assistant segment before the tool-result message.
+			flush()
 			resultText, err := decodeToolResultContent(b.Content)
 			if err != nil {
 				return nil, err
 			}
+			resultBlocks, err := decodeToolResultBlocks(b.Content)
+			if err != nil {
+				// non-fatal: fall back to text only
+				resultBlocks = []types.ContentBlock{{Type: "text", Text: resultText}}
+			}
 			out = append(out, types.Message{
-				Role:       "tool",
-				Content:    resultText,
-				ToolCallID: b.ToolUseID,
+				Role:          "tool",
+				Content:       resultText,
+				ContentBlocks: resultBlocks,
+				ToolCallID:    b.ToolUseID,
 			})
 		default:
-			// Unknown block types (image, document, thinking, ...): ignore for now.
+			// Unknown block types (image, document, thinking, ...): carry them
+			// as ContentBlocks for Anthropic pass-through but skip for text/toolCalls.
+			if b.Type != "" {
+				contentBlocks = append(contentBlocks, types.ContentBlock{
+					Type:         b.Type,
+					CacheControl: b.CacheControl,
+				})
+			}
 		}
 	}
 
-	if len(textParts) > 0 || len(toolCalls) > 0 || len(out) == 0 {
-		out = append(out, buildAssistantOrUserMessage(role, textParts, toolCalls))
+	flush()
+	if len(out) == 0 {
+		// Edge case: empty block array.
+		out = append(out, types.Message{Role: role})
 	}
 	return out, nil
-}
-
-func buildAssistantOrUserMessage(role string, textParts []string, toolCalls []types.ToolCall) types.Message {
-	msg := types.Message{
-		Role:    role,
-		Content: strings.Join(textParts, "\n"),
-	}
-	if len(toolCalls) > 0 {
-		msg.ToolCalls = toolCalls
-	}
-	return msg
 }
 
 func decodeToolResultContent(raw json.RawMessage) (string, error) {
@@ -407,6 +469,34 @@ func decodeToolResultContent(raw json.RawMessage) (string, error) {
 		}
 	}
 	return strings.Join(parts, "\n"), nil
+}
+
+func decodeToolResultBlocks(raw json.RawMessage) ([]types.ContentBlock, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil, nil
+		}
+		return []types.ContentBlock{{Type: "text", Text: s}}, nil
+	}
+	var blocks []AnthropicInboundContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("tool_result content must be a string or an array of content blocks")
+	}
+	out := make([]types.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == "" || b.Type == "text" {
+			out = append(out, types.ContentBlock{
+				Type:         "text",
+				Text:         b.Text,
+				CacheControl: b.CacheControl,
+			})
+		}
+	}
+	return out, nil
 }
 
 // anthropicInboundToolChoice converts Anthropic tool_choice ({"type":"auto"|"any"|"tool","name":...})

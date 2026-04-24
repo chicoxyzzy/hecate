@@ -39,8 +39,9 @@ type PrincipalContext struct {
 }
 
 type Tool struct {
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
+	Type         string          `json:"type"`
+	Function     ToolFunction    `json:"function"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"` // Anthropic prompt caching
 }
 
 type ToolFunction struct {
@@ -48,6 +49,18 @@ type ToolFunction struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+}
+
+// ContentBlock represents a single content block within a message, preserving
+// provider-specific metadata such as cache_control for Anthropic prompt caching.
+type ContentBlock struct {
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	ID           string          `json:"id,omitempty"`           // tool_use
+	Name         string          `json:"name,omitempty"`         // tool_use
+	Input        json.RawMessage `json:"input,omitempty"`        // tool_use
+	ToolUseID    string          `json:"tool_use_id,omitempty"`  // tool_result
+	CacheControl json.RawMessage `json:"cache_control,omitempty"` // Anthropic prompt caching
 }
 
 type ToolCall struct {
@@ -62,11 +75,12 @@ type ToolCallFunction struct {
 }
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Name       string     `json:"name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role          string         `json:"role"`
+	Content       string         `json:"content"`
+	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"` // set when rich block content is needed (e.g. cache_control)
+	Name          string         `json:"name,omitempty"`
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
+	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
 }
 
 type ChatResponse struct {

@@ -33,9 +33,10 @@ type AnthropicInboundMetadata struct {
 }
 
 type AnthropicInboundTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 // AnthropicInboundMessage accepts content as either a plain string or an
@@ -59,6 +60,8 @@ type AnthropicInboundContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// prompt caching
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 // AnthropicMessagesResponse is the outbound /v1/messages shape.
