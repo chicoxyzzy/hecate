@@ -1,6 +1,6 @@
 # Hecate
 
-Hecate is an open-source AI gateway and agent runtime for teams that want one control plane across cloud and local models, with operator-grade policy, spend, and observability.
+Hecate is an open-source AI gateway and coding-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and first-class OpenTelemetry.
 
 ## Table Of Contents
 
@@ -17,26 +17,19 @@ Hecate is an open-source AI gateway and agent runtime for teams that want one co
 - [Config Highlights](#config-highlights)
 - [Docs](#docs)
 - [Commands](#commands)
-- [Status And Roadmap](#status-and-roadmap)
+- [Roadmap](#roadmap)
 
 ## What Hecate Is Today
 
-Hecate currently has two strong layers:
+Hecate today is a practical runtime you can use in two ways:
 
-- a mature gateway/control-plane path for multi-provider model traffic
-- a production-leaning coding runtime foundation for task/run execution
+- as a gateway for OpenAI-compatible and Anthropic-style traffic with routing,
+  auth, policy, budgets, and observability
+- as a task runtime for queued coding work with approvals, sandboxed execution,
+  persisted run state/events, and resumable runs
 
-What already works well:
-
-- OpenAI-compatible chat completions and Anthropic-native `/v1/messages`
-- OpenAI tool-call and Anthropic tool-use compatibility behind one runtime boundary
-- cloud and local provider routing with retries, failover, and health tracking
-- exact and semantic cache paths
-- tenant-aware auth, policies, budgets, and persisted control-plane state
-- budget exhaustion (`402`) and per-API-key token-bucket rate limiting
-- structured logs, trace inspection, OTLP export, and optional trace body capture
-- task/run orchestration with approvals, sandboxed execution, persisted run events, and stream resume cursors
-- durable leased queue backend for distributed workers via Postgres
+That means one deployment can serve both model access and agent-style execution
+loops, while keeping operators in control of cost, safety, and traceability.
 
 Storage backends used across the system include `file`, `memory`, `Redis`, and `Postgres`.
 
@@ -192,6 +185,7 @@ Spend/governor supports:
 Observability includes:
 
 - request IDs, trace IDs, and span IDs in response headers
+- first-class OpenTelemetry traces, metrics, and logs
 - structured logs
 - local trace inspection over HTTP
 - OTLP HTTP export for traces, metrics, and logs
@@ -278,27 +272,21 @@ make ui-dev
 make ui-build
 ```
 
-## Status And Roadmap
+## Roadmap
 
-Delivered:
+Roadmap is organized into near-term runtime priorities and platform hardening.
 
-- gateway runtime with OpenAI + Anthropic API compatibility
-- control plane with persisted policy, pricebook, and provider management
-- spend governance and key-level rate limiting
-- operator UI for day-to-day runtime operations
-- coding runtime foundation with sandboxd, approvals, run events, stream resume
-- durable leased queue backend for distributed workers
-- continuation-style run resume with workspace reuse
-- checkpoint context propagation for resumed runs across executor boundaries
+Near term:
 
-Next focus areas:
+1. checkpoint controls for partial replay and selective continuation
+2. broader policy-driven approval classes with safer defaults
+3. deeper coding UI workflows for bulk operations and richer artifact/diff views
 
-- richer checkpoint controls for partial replay and selective step continuation
-- broader policy-driven approval classes
-- richer coding-focused UI views and aggregate run operations
-- improved route-reason taxonomy and debug ergonomics
-- automated provider pricebook ingestion and sync
-- deployment examples for local and production environments
+Platform:
+
+1. clearer route diagnostics and failure explanations
+2. automated provider pricebook ingestion and sync
+3. deployment reference stacks for local and production environments
 
 ## License
 
