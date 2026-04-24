@@ -7,8 +7,39 @@ on:
     branches: [master]
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      typescript: ${{ steps.filter.outputs.typescript }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/test.yml'
+            typescript:
+              - 'ui/**/*.ts'
+              - 'ui/**/*.tsx'
+              - 'ui/package.json'
+              - 'ui/pnpm-lock.yaml'
+              - 'ui/tsconfig.json'
+              - 'ui/tsconfig.*.json'
+              - 'ui/vite.config.*'
+              - 'ui/vitest.config.*'
+              - '.github/workflows/test.yml'
+
   go:
     name: Go tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +54,8 @@ jobs:
 
   typescript:
     name: TypeScript tests
+    needs: changes
+    if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
