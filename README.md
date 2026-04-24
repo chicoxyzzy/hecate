@@ -41,8 +41,10 @@ Storage backends used across the system include `file`, `memory`, `Redis`, and `
 
 ## Architecture
 
+Gateway client flow:
+
 ```mermaid
-flowchart LR
+flowchart TD
     GC["Gateway client"] --> AUTH["auth"];
     AUTH --> GOV["governor"];
     GOV --> ROUTER["router"];
@@ -53,7 +55,12 @@ flowchart LR
     PROVIDER --> USAGE["usage normalization"];
     USAGE --> COST["cost calculation"];
     COST --> TELEMETRY["telemetry and response"];
+```
 
+Task client flow:
+
+```mermaid
+flowchart TD
     TC["Task client"] --> TASKAPI["task api"];
     TASKAPI --> ORCH["orchestrator"];
     ORCH --> LEASEQ["lease queue (memory or postgres)"];
