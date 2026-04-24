@@ -748,8 +748,8 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 	scanner := bufio.NewScanner(src)
 	var eventType string
 	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		line := scanner.Text()
 		if strings.HasPrefix(line, "event: ") {
@@ -902,6 +902,12 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 		}
 	}
 
+	// Prefer the context error when the scanner stopped due to an I/O error
+	// caused by context cancellation (Go HTTP transport closes the response
+	// body when the request context is done).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}

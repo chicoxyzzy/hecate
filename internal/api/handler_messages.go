@@ -117,11 +117,24 @@ func (h *Handler) handleMessagesStream(w http.ResponseWriter, r *http.Request, c
 	pr, pw := io.Pipe()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handle.Execute(pw)
-		_ = pw.Close()
+		err := handle.Execute(pw)
+		// Close the write end before signalling: this causes
+		// translateOpenAIToAnthropicSSE to see EOF (or the upstream error)
+		// and return naturally without waiting for more data.
+		if err != nil {
+			_ = pw.CloseWithError(err)
+		} else {
+			_ = pw.Close()
+		}
+		errCh <- err
 	}()
 
 	translateErr := translateOpenAIToAnthropicSSE(streamCtx, req.Model, handle.Metadata.Model, pr, flushWriter{w: w, flusher: flusher})
+	// Close the read end so the upstream goroutine is unblocked if it is still
+	// blocked writing to pw.  This happens when the client disconnected and
+	// translateOpenAIToAnthropicSSE exited early due to a write error or a
+	// cancelled context.
+	_ = pr.CloseWithError(streamCtx.Err())
 	runErr := <-errCh
 	if runErr != nil {
 		telemetry.Error(h.logger, streamCtx, "gen_ai.gateway.stream.failed",
@@ -703,8 +716,8 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -795,6 +808,12 @@ func translateOpenAIToAnthropicSSE(ctx context.Context, requestedModel, resolved
 				stopReason = openAIFinishToAnthropicStopReason(*choice.FinishReason)
 			}
 		}
+	}
+	// Prefer the context error when the scanner stopped due to an I/O error
+	// caused by context cancellation (the pipe read end was closed, or the
+	// upstream HTTP body was aborted).
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := scanner.Err(); err != nil {
 		return err

@@ -618,8 +618,10 @@ func contains(items []string, target string) bool {
 func proxySSE(ctx context.Context, src io.Reader, dst io.Writer) error {
 	scanner := bufio.NewScanner(src)
 	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		// Check context cancellation before each write so we stop producing
+		// output as soon as the client disconnects or the deadline expires.
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		line := scanner.Text()
 		if _, err := fmt.Fprintf(dst, "%s\n", line); err != nil {
@@ -639,6 +641,12 @@ func proxySSE(ctx context.Context, src io.Reader, dst io.Writer) error {
 			}
 			return nil
 		}
+	}
+	// Prefer the context error when the scanner stopped due to an I/O error
+	// caused by context cancellation (Go HTTP transport closes the response
+	// body when the request context is done).
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return scanner.Err()
 }
