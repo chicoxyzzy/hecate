@@ -225,27 +225,33 @@ func (r *Runner) ReconcilePendingRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
 	for _, run := range runs {
 		task, found, err := r.store.GetTask(ctx, run.TaskID)
 		if err != nil || !found {
 			continue
 		}
-		run.Status = "cancelled"
-		run.LastError = "run interrupted by runtime restart"
-		run.FinishedAt = now
-		run.OtelStatusCode = "error"
-		run.OtelStatusMessage = run.LastError
-		if _, err := r.store.UpdateRun(ctx, run); err != nil {
+		priorStatus := run.Status
+		now := time.Now().UTC()
+		run.Status = "queued"
+		run.LastError = ""
+		run.FinishedAt = time.Time{}
+		run.OtelStatusCode = ""
+		run.OtelStatusMessage = ""
+		if _, updateErr := r.store.UpdateRun(ctx, run); updateErr != nil {
 			continue
 		}
-		task.Status = "cancelled"
+		task.Status = "queued"
 		task.LatestRunID = run.ID
-		task.LastError = run.LastError
+		task.LastError = ""
 		task.UpdatedAt = now
-		task.FinishedAt = now
+		task.FinishedAt = time.Time{}
 		_, _ = r.store.UpdateTask(ctx, task)
-		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.reconciled_restart", "", "", nil)
+		_ = r.enqueueRun(task.ID, run.ID)
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.reconciled_restart_requeued", "", "", map[string]any{
+			"prior_status":      priorStatus,
+			"recovered_status":  "queued",
+			"recovery_strategy": "requeue",
+		})
 	}
 	return nil
 }
