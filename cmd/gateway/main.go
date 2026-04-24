@@ -170,7 +170,7 @@ func main() {
 	defer retentionCancel()
 	go retentionManager.RunLoop(retentionCtx)
 
-	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, providerRuntime)
+	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, postgresClient, providerRuntime)
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
 		Handler:           api.NewServer(logger, handler),
@@ -282,15 +282,15 @@ func buildGatewayDependencies(
 			RetryBackoff:    cfg.Provider.RetryBackoff,
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
-		Router:        routerEngine,
-		Catalog:       providerCatalog,
-		Governor:      governorEngine,
-		Providers:     providerRegistry,
-		HealthTracker: healthTracker,
-		Pricebook:     pricebook,
-		Tracer:        tracer,
-		Metrics:       metrics,
-		Retention:     retentionManager,
+		Router:            routerEngine,
+		Catalog:           providerCatalog,
+		Governor:          governorEngine,
+		Providers:         providerRegistry,
+		HealthTracker:     healthTracker,
+		Pricebook:         pricebook,
+		Tracer:            tracer,
+		Metrics:           metrics,
+		Retention:         retentionManager,
 		ChatSessions:      chatSessionStore,
 		TraceBodyCapture:  cfg.Server.TraceBodyCapture,
 		TraceBodyMaxBytes: cfg.Server.TraceBodyMaxBytes,
@@ -532,7 +532,8 @@ func postgresRequired(cfg config.Config) bool {
 		cfg.Cache.Semantic.Backend == "postgres" ||
 		cfg.Governor.BudgetBackend == "postgres" ||
 		cfg.Server.ControlPlaneBackend == "postgres" ||
-		cfg.Chat.SessionsBackend == "postgres"
+		cfg.Chat.SessionsBackend == "postgres" ||
+		cfg.Server.TasksBackend == "postgres"
 }
 
 func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {

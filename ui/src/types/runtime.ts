@@ -584,6 +584,7 @@ export type TaskApprovalsResponse = {
 export type TaskRunStreamEventData = {
   sequence: number;
   terminal?: boolean;
+  event_type?: string;
   run: TaskRunRecord;
   steps?: TaskStepRecord[];
   artifacts?: TaskArtifactRecord[];
@@ -592,6 +593,23 @@ export type TaskRunStreamEventData = {
 export type TaskRunStreamEventResponse = {
   object: string;
   data: TaskRunStreamEventData;
+};
+
+export type TaskRunEventRecord = {
+  id: string;
+  task_id: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  data?: Record<string, unknown>;
+  created_at?: string;
+  request_id?: string;
+  trace_id?: string;
+};
+
+export type TaskRunEventsResponse = {
+  object: string;
+  data: TaskRunEventRecord[];
 };
 
 export type RuntimeHeaders = {

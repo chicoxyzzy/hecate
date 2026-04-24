@@ -4,7 +4,7 @@ Hecate is an open-source AI gateway and emerging agent runtime for teams that wa
 
 Today, the most mature part of the project is the gateway and operator layer: OpenAI-compatible chat completions, Anthropic-native `/v1/messages`, provider routing, policy and budget enforcement, tracing, and a UI for inspecting runtime behavior.
 
-Hecate also includes an early coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; and live stdout/stderr streaming. It is not yet a full resumable coding runtime, but the execution boundary is now in place.
+Hecate also includes a coding-runtime layer with task, run, step, artifact, and approval APIs; sandboxed shell, file, and git execution; per-run workspaces; cancellation; persisted run events; and live stdout/stderr streaming with reconnect cursors. It is still evolving toward full platform-scale orchestration, but the durable execution boundary is now in place.
 
 ## Table Of Contents
 
@@ -232,8 +232,8 @@ The first native coding-runtime slice is also in place:
 - an out-of-process `cmd/sandboxd` worker
 - per-run workspace provisioning
 - basic sandbox policy controls for roots, read-only mode, timeouts, and network denial
-- approval gating for shell execution
-- run queueing, cancellation, and SSE streaming
+- policy-driven approval gating (`shell_exec`, `git_exec`, `file_write`, `network_egress`)
+- run queueing, cancellation, retry/resume APIs, and SSE streaming with `after_sequence` replay
 - UI support for task creation, live runs, approvals, cancellation, and streamed stdout/stderr
 
 The main missing pieces are resumable execution, broader approval classes, stronger workspace isolation, richer tool APIs, and more coding-oriented operator views.
@@ -241,6 +241,7 @@ The main missing pieces are resumable execution, broader approval classes, stron
 ## Docs
 
 - [Telemetry And OTLP Notes](docs/telemetry.md)
+- [Runtime API Notes](docs/runtime-api.md)
 
 ## Commands
 
@@ -306,6 +307,8 @@ Coding Runtime Foundation
 - [x] Shell approval gating with approve or reject flow
 - [x] Queueing and cancellation for coding runs
 - [x] Streaming run updates and stdout/stderr artifact logs
+- [x] Persisted run events with resumable stream cursors (`after_sequence` / `Last-Event-ID`)
+- [x] Retry/resume runtime APIs and external run-event append API
 
 Next Up
 

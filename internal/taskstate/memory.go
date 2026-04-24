@@ -17,6 +17,8 @@ type MemoryStore struct {
 	steps     map[string]types.TaskStep
 	approvals map[string]types.TaskApproval
 	artifacts map[string]types.TaskArtifact
+	events    map[string][]types.TaskRunEvent
+	nextSeq   int64
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -26,6 +28,8 @@ func NewMemoryStore() *MemoryStore {
 		steps:     make(map[string]types.TaskStep),
 		approvals: make(map[string]types.TaskApproval),
 		artifacts: make(map[string]types.TaskArtifact),
+		events:    make(map[string][]types.TaskRunEvent),
+		nextSeq:   1,
 	}
 }
 
@@ -135,6 +139,34 @@ func (s *MemoryStore) ListRuns(_ context.Context, taskID string) ([]types.TaskRu
 		return items[i].Number > items[j].Number
 	})
 	return items, nil
+}
+
+func (s *MemoryStore) ListRunsByFilter(ctx context.Context, filter RunFilter) ([]types.TaskRun, error) {
+	runs, err := s.ListRuns(ctx, filter.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if len(filter.Statuses) == 0 {
+		if filter.Limit > 0 && len(runs) > filter.Limit {
+			return runs[:filter.Limit], nil
+		}
+		return runs, nil
+	}
+	allowed := make(map[string]struct{}, len(filter.Statuses))
+	for _, status := range filter.Statuses {
+		allowed[status] = struct{}{}
+	}
+	filtered := make([]types.TaskRun, 0, len(runs))
+	for _, run := range runs {
+		if _, ok := allowed[run.Status]; !ok {
+			continue
+		}
+		filtered = append(filtered, run)
+	}
+	if filter.Limit > 0 && len(filtered) > filter.Limit {
+		filtered = filtered[:filter.Limit]
+	}
+	return filtered, nil
 }
 
 func (s *MemoryStore) UpdateRun(_ context.Context, run types.TaskRun) (types.TaskRun, error) {
@@ -298,4 +330,47 @@ func (s *MemoryStore) UpdateArtifact(_ context.Context, artifact types.TaskArtif
 	}
 	s.artifacts[artifact.ID] = artifact
 	return artifact, nil
+}
+
+func (s *MemoryStore) AppendRunEvent(_ context.Context, event types.TaskRunEvent) (types.TaskRunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.RunID == "" {
+		return types.TaskRunEvent{}, fmt.Errorf("run id is required")
+	}
+	if event.Sequence <= 0 {
+		event.Sequence = s.nextSeq
+		s.nextSeq++
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	s.events[event.RunID] = append(s.events[event.RunID], event)
+	return event, nil
+}
+
+func (s *MemoryStore) ListRunEvents(_ context.Context, taskID, runID string, afterSequence int64, limit int) ([]types.TaskRunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := s.events[runID]
+	if len(items) == 0 {
+		return nil, nil
+	}
+	result := make([]types.TaskRunEvent, 0, len(items))
+	for _, event := range items {
+		if taskID != "" && event.TaskID != taskID {
+			continue
+		}
+		if event.Sequence <= afterSequence {
+			continue
+		}
+		result = append(result, event)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Sequence < result[j].Sequence
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }

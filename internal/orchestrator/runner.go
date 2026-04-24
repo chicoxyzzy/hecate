@@ -16,7 +16,10 @@ import (
 )
 
 type Config struct {
-	DefaultModel string
+	DefaultModel     string
+	ApprovalPolicies []string
+	QueueWorkers     int
+	QueueBuffer      int
 }
 
 type queuedRun struct {
@@ -39,6 +42,7 @@ type Runner struct {
 	queue      chan queuedRun
 	jobMu      sync.Mutex
 	jobs       map[string]context.CancelFunc
+	policies   map[string]struct{}
 }
 
 type StartTaskResult struct {
@@ -55,6 +59,10 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		tracer = profiler.NewInMemoryTracer(nil)
 	}
 	worker := sandbox.NewWorkerExecutor()
+	queueBuffer := cfg.QueueBuffer
+	if queueBuffer <= 0 {
+		queueBuffer = 128
+	}
 	runner := &Runner{
 		logger:     logger,
 		store:      store,
@@ -65,10 +73,27 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		git:        NewGitExecutor(worker),
 		workspaces: NewWorkspaceManager(""),
 		config:     cfg,
-		queue:      make(chan queuedRun, 128),
+		queue:      make(chan queuedRun, queueBuffer),
 		jobs:       make(map[string]context.CancelFunc),
+		policies:   make(map[string]struct{}),
 	}
-	go runner.processQueue()
+	for _, policy := range cfg.ApprovalPolicies {
+		policy = strings.TrimSpace(policy)
+		if policy == "" {
+			continue
+		}
+		runner.policies[policy] = struct{}{}
+	}
+	if len(runner.policies) == 0 {
+		runner.policies["shell_exec"] = struct{}{}
+	}
+	workers := cfg.QueueWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	for worker := 0; worker < workers; worker++ {
+		go runner.processQueue()
+	}
 	return runner
 }
 
@@ -98,6 +123,42 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 		return
 	}
 	r.git = exec
+}
+
+func (r *Runner) ReconcilePendingRuns(ctx context.Context) error {
+	if r.store == nil {
+		return nil
+	}
+	runs, err := r.store.ListRunsByFilter(ctx, taskstate.RunFilter{
+		Statuses: []string{"queued", "running"},
+		Limit:    500,
+	})
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, run := range runs {
+		task, found, err := r.store.GetTask(ctx, run.TaskID)
+		if err != nil || !found {
+			continue
+		}
+		run.Status = "cancelled"
+		run.LastError = "run interrupted by runtime restart"
+		run.FinishedAt = now
+		run.OtelStatusCode = "error"
+		run.OtelStatusMessage = run.LastError
+		if _, err := r.store.UpdateRun(ctx, run); err != nil {
+			continue
+		}
+		task.Status = "cancelled"
+		task.LatestRunID = run.ID
+		task.LastError = run.LastError
+		task.UpdatedAt = now
+		task.FinishedAt = now
+		_, _ = r.store.UpdateTask(ctx, task)
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.reconciled_restart", "", "", nil)
+	}
+	return nil
 }
 
 func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(prefix string) string) (*StartTaskResult, error) {
@@ -190,6 +251,7 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		})
 		return nil, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.created", requestID, trace.TraceID, nil)
 
 	trace.Record("orchestrator.run.started", map[string]any{
 		telemetry.AttrHecatePhase:       "orchestration",
@@ -221,9 +283,12 @@ func (r *Runner) StartTask(ctx context.Context, task types.Task, idgen func(pref
 		if err != nil {
 			return nil, err
 		}
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.awaiting_approval", requestID, trace.TraceID, nil)
 		task.Status = "awaiting_approval"
 	} else if err := r.enqueueRun(task.ID, run.ID, idgen); err != nil {
 		return nil, err
+	} else {
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.queued", requestID, trace.TraceID, nil)
 	}
 
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
@@ -285,6 +350,8 @@ func (r *Runner) ResumeTaskAfterApproval(ctx context.Context, task types.Task, a
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.finished", requestID, trace.TraceID, map[string]any{"status": run.Status})
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.queued", requestID, trace.TraceID, map[string]any{"resume": true})
 
 	task.Status = "queued"
 	task.LatestRunID = run.ID
@@ -407,6 +474,7 @@ func (r *Runner) cancelRunWithMessage(ctx context.Context, task types.Task, run 
 	if err != nil {
 		return types.TaskRun{}, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.cancelled", requestID, traceID, map[string]any{"reason": message})
 
 	steps, _ := r.store.ListSteps(ctx, run.ID)
 	for _, step := range steps {
@@ -445,6 +513,7 @@ func (r *Runner) cancelRunWithMessage(ctx context.Context, task types.Task, run 
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
 		return types.TaskRun{}, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "task.updated", requestID, traceID, nil)
 	return run, nil
 }
 
@@ -493,6 +562,7 @@ func (r *Runner) processQueuedRun(job queuedRun) {
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.running", requestID, trace.TraceID, nil)
 
 	task.Status = "running"
 	task.LatestRunID = run.ID
@@ -683,6 +753,7 @@ func (r *Runner) finalizeFailedRun(ctx context.Context, trace *profiler.Trace, t
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run."+status, requestID, trace.TraceID, map[string]any{"error": message})
 	task.Status = status
 	task.LatestRunID = run.ID
 	task.LastError = message
@@ -701,9 +772,15 @@ func (r *Runner) upsertStep(ctx context.Context, step types.TaskStep) error {
 		step.SpanID = firstNonEmpty(step.SpanID, existing.SpanID)
 		step.ParentSpanID = firstNonEmpty(step.ParentSpanID, existing.ParentSpanID)
 		_, err = r.store.UpdateStep(ctx, step)
+		if err == nil {
+			_, _ = r.emitRunEvent(ctx, step.TaskID, step.RunID, "step.updated", step.RequestID, step.TraceID, map[string]any{"step_id": step.ID})
+		}
 		return err
 	}
 	_, err := r.store.AppendStep(ctx, step)
+	if err == nil {
+		_, _ = r.emitRunEvent(ctx, step.TaskID, step.RunID, "step.created", step.RequestID, step.TraceID, map[string]any{"step_id": step.ID})
+	}
 	return err
 }
 
@@ -713,9 +790,15 @@ func (r *Runner) upsertArtifact(ctx context.Context, artifact types.TaskArtifact
 	} else if found {
 		artifact.SpanID = firstNonEmpty(artifact.SpanID, existing.SpanID)
 		_, err = r.store.UpdateArtifact(ctx, artifact)
+		if err == nil {
+			_, _ = r.emitRunEvent(ctx, artifact.TaskID, artifact.RunID, "artifact.updated", artifact.RequestID, artifact.TraceID, map[string]any{"artifact_id": artifact.ID})
+		}
 		return err
 	}
 	_, err := r.store.CreateArtifact(ctx, artifact)
+	if err == nil {
+		_, _ = r.emitRunEvent(ctx, artifact.TaskID, artifact.RunID, "artifact.created", artifact.RequestID, artifact.TraceID, map[string]any{"artifact_id": artifact.ID})
+	}
 	return err
 }
 
@@ -729,17 +812,43 @@ func taskForRun(task types.Task, run types.TaskRun) types.Task {
 }
 
 func (r *Runner) approvalRequiredForTask(task types.Task) bool {
-	return task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != ""
+	_, reason := r.approvalSpecForTask(task)
+	return reason != ""
+}
+
+func (r *Runner) approvalSpecForTask(task types.Task) (kind string, reason string) {
+	if task.ExecutionKind == "shell" && strings.TrimSpace(task.ShellCommand) != "" {
+		if _, ok := r.policies["shell_exec"]; ok {
+			return "shell_command", "Shell execution requires approval before execution."
+		}
+	}
+	if task.ExecutionKind == "git" && strings.TrimSpace(task.GitCommand) != "" {
+		if _, ok := r.policies["git_exec"]; ok {
+			return "git_exec", "Git execution requires approval before execution."
+		}
+	}
+	if task.ExecutionKind == "file" && strings.TrimSpace(task.FilePath) != "" {
+		if _, ok := r.policies["file_write"]; ok {
+			return "file_write", "File writes require approval before execution."
+		}
+	}
+	if task.SandboxNetwork {
+		if _, ok := r.policies["network_egress"]; ok {
+			return "network_egress", "Network-enabled tasks require approval before execution."
+		}
+	}
+	return "", ""
 }
 
 func (r *Runner) createApprovalForTask(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, createdAt time.Time, idgen func(prefix string) string) (types.TaskApproval, error) {
+	kind, reason := r.approvalSpecForTask(task)
 	approval := types.TaskApproval{
 		ID:          idgen("approval"),
 		TaskID:      task.ID,
 		RunID:       run.ID,
-		Kind:        "shell_command",
+		Kind:        kind,
 		Status:      "pending",
-		Reason:      "Shell commands require approval before execution.",
+		Reason:      reason,
 		RequestedBy: task.User,
 		CreatedAt:   createdAt,
 		RequestID:   requestID,
@@ -769,7 +878,41 @@ func (r *Runner) createApprovalForTask(ctx context.Context, trace *profiler.Trac
 		})
 		return types.TaskApproval{}, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "approval.requested", requestID, trace.TraceID, map[string]any{
+		"approval_id": approval.ID,
+		"kind":        approval.Kind,
+		"status":      approval.Status,
+	})
 	return approval, nil
+}
+
+func (r *Runner) emitRunEvent(ctx context.Context, taskID, runID, eventType, requestID, traceID string, extra map[string]any) (types.TaskRunEvent, error) {
+	if r.store == nil || runID == "" {
+		return types.TaskRunEvent{}, nil
+	}
+	run, _, err := r.store.GetRun(ctx, taskID, runID)
+	if err != nil {
+		return types.TaskRunEvent{}, err
+	}
+	steps, _ := r.store.ListSteps(ctx, runID)
+	artifacts, _ := r.store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: taskID, RunID: runID})
+	data := map[string]any{
+		"run":       run,
+		"steps":     steps,
+		"artifacts": artifacts,
+	}
+	for key, value := range extra {
+		data[key] = value
+	}
+	return r.store.AppendRunEvent(ctx, types.TaskRunEvent{
+		TaskID:    taskID,
+		RunID:     runID,
+		EventType: eventType,
+		Data:      data,
+		RequestID: requestID,
+		TraceID:   traceID,
+		CreatedAt: time.Now().UTC(),
+	})
 }
 
 func firstNonEmpty(values ...string) string {

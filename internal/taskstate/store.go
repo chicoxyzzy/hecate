@@ -20,6 +20,12 @@ type ArtifactFilter struct {
 	Limit  int
 }
 
+type RunFilter struct {
+	TaskID   string
+	Statuses []string
+	Limit    int
+}
+
 type Store interface {
 	Backend() string
 	CreateTask(ctx context.Context, task types.Task) (types.Task, error)
@@ -30,6 +36,7 @@ type Store interface {
 	CreateRun(ctx context.Context, run types.TaskRun) (types.TaskRun, error)
 	GetRun(ctx context.Context, taskID, runID string) (types.TaskRun, bool, error)
 	ListRuns(ctx context.Context, taskID string) ([]types.TaskRun, error)
+	ListRunsByFilter(ctx context.Context, filter RunFilter) ([]types.TaskRun, error)
 	UpdateRun(ctx context.Context, run types.TaskRun) (types.TaskRun, error)
 
 	AppendStep(ctx context.Context, step types.TaskStep) (types.TaskStep, error)
@@ -46,4 +53,7 @@ type Store interface {
 	GetArtifact(ctx context.Context, taskID, artifactID string) (types.TaskArtifact, bool, error)
 	ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]types.TaskArtifact, error)
 	UpdateArtifact(ctx context.Context, artifact types.TaskArtifact) (types.TaskArtifact, error)
+
+	AppendRunEvent(ctx context.Context, event types.TaskRunEvent) (types.TaskRunEvent, error)
+	ListRunEvents(ctx context.Context, taskID, runID string, afterSequence int64, limit int) ([]types.TaskRunEvent, error)
 }

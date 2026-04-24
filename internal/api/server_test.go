@@ -749,7 +749,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[OpenAIModelsResponse](client, http.MethodGet, "/v1/models", "")
 	if response.Object != "list" {
@@ -823,7 +823,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[ProviderStatusResponse](client, http.MethodGet, "/admin/providers", "")
 	if response.Object != "provider_status" {
@@ -855,7 +855,7 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[ProviderPresetResponse](client, http.MethodGet, "/v1/provider-presets", "")
 	if response.Object != "provider_presets" {
@@ -1002,7 +1002,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore, nil))
 	tenantClient := newAPITestClient(t, handler).withBearerToken("tenant-secret")
 	response := mustRequestJSON[OpenAIModelsResponse](tenantClient, http.MethodGet, "/v1/models", "")
 	if len(response.Data) != 1 {
@@ -2071,7 +2071,7 @@ func TestTaskRunStreamSSE(t *testing.T) {
 
 	var sawAwaitingApproval bool
 	var sawPartialStdout bool
-	var sawCompleted bool
+	var sawTerminal bool
 	for event := range readSSEEvents(t, streamResp.Body) {
 		if event.Event != "snapshot" && event.Event != "done" {
 			continue
@@ -2088,8 +2088,8 @@ func TestTaskRunStreamSSE(t *testing.T) {
 				sawPartialStdout = true
 			}
 		}
-		if payload.Data.Run.Status == "completed" {
-			sawCompleted = true
+		if payload.Data.Terminal || types.IsTerminalTaskRunStatus(payload.Data.Run.Status) {
+			sawTerminal = true
 		}
 		if event.Event == "done" {
 			break
@@ -2102,8 +2102,8 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	if !sawPartialStdout {
 		t.Fatal("did not observe partial stdout in stream snapshot")
 	}
-	if !sawCompleted {
-		t.Fatal("did not observe completed stream snapshot")
+	if !sawTerminal {
+		t.Fatal("did not observe terminal stream snapshot")
 	}
 	if err := <-resolveErrCh; err != nil {
 		t.Fatalf("approval resolve error = %v", err)
@@ -2374,7 +2374,7 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 	})
 
 	cfg.Governor = governorCfg
-	handler := NewHandler(cfg, logger, service, cpStore)
+	handler := NewHandler(cfg, logger, service, cpStore, nil)
 	return NewServer(logger, handler)
 }
 
@@ -2456,7 +2456,7 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 		ChatSessions: chatstate.NewMemoryStore(),
 	})
 
-	handler := NewHandler(cfg, logger, service, cpStore)
+	handler := NewHandler(cfg, logger, service, cpStore, nil)
 	return NewServer(logger, handler)
 }
 

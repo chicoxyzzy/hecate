@@ -380,6 +380,20 @@ func (h *Handler) HandleResolveTaskApproval(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
 		return
 	}
+	_, _ = h.taskStore.AppendRunEvent(ctx, types.TaskRunEvent{
+		TaskID:    task.ID,
+		RunID:     approval.RunID,
+		EventType: "approval." + approval.Status,
+		Data: map[string]any{
+			"approval_id": approval.ID,
+			"kind":        approval.Kind,
+			"status":      approval.Status,
+			"note":        approval.ResolutionNote,
+		},
+		RequestID: RequestIDFromContext(ctx),
+		TraceID:   telemetry.TraceIDsFromContext(ctx).TraceID,
+		CreatedAt: time.Now().UTC(),
+	})
 
 	switch decision {
 	case "approved":
@@ -514,9 +528,68 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
+	afterSequence := parseAfterSequence(r)
 	lastStateJSON := ""
-	sequence := 0
 	for {
+		events, err := h.taskStore.ListRunEvents(ctx, task.ID, runID, afterSequence, 200)
+		if err != nil {
+			fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		for _, event := range events {
+			state, ok, err := h.decodeTaskRunEventData(event)
+			if err != nil {
+				fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+				flusher.Flush()
+				return
+			}
+			if !ok {
+				state, err = h.buildTaskRunStreamState(ctx, task.ID, runID)
+				if err != nil {
+					fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+					flusher.Flush()
+					return
+				}
+			}
+			state.Sequence = int(event.Sequence)
+			state.EventType = event.EventType
+			state.Terminal = types.IsTerminalTaskRunStatus(state.Run.Status)
+
+			payload, err := json.Marshal(TaskRunStreamEventResponse{
+				Object: "task_run_stream_event",
+				Data:   state,
+			})
+			if err != nil {
+				fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+				flusher.Flush()
+				return
+			}
+
+			fmt.Fprintf(w, "id: %d\nevent: snapshot\ndata: %s\n\n", event.Sequence, payload)
+			if state.Terminal {
+				finalState, err := h.buildTaskRunStreamState(ctx, task.ID, runID)
+				if err == nil {
+					finalState.Sequence = int(event.Sequence)
+					finalState.EventType = state.EventType
+					finalState.Terminal = true
+					if finalPayload, marshalErr := json.Marshal(TaskRunStreamEventResponse{Object: "task_run_stream_event", Data: finalState}); marshalErr == nil {
+						payload = finalPayload
+						fmt.Fprintf(w, "id: %d\nevent: snapshot\ndata: %s\n\n", event.Sequence, payload)
+					}
+				}
+				fmt.Fprintf(w, "id: %d\nevent: done\ndata: %s\n\n", event.Sequence, payload)
+			}
+			flusher.Flush()
+			afterSequence = event.Sequence
+			if stateJSON, marshalErr := json.Marshal(state); marshalErr == nil {
+				lastStateJSON = string(stateJSON)
+			}
+			if state.Terminal {
+				return
+			}
+		}
+
 		state, err := h.buildTaskRunStreamState(ctx, task.ID, runID)
 		if err != nil {
 			fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
@@ -530,31 +603,36 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if string(stateJSON) != lastStateJSON {
-			sequence++
-			payload, err := json.Marshal(TaskRunStreamEventResponse{
-				Object: "task_run_stream_event",
-				Data: TaskRunStreamEventData{
-					Sequence:  sequence,
-					Terminal:  types.IsTerminalTaskRunStatus(state.Run.Status),
-					Run:       state.Run,
-					Steps:     state.Steps,
-					Artifacts: state.Artifacts,
-				},
+			var snapshot map[string]any
+			_ = json.Unmarshal(stateJSON, &snapshot)
+			event, appendErr := h.taskStore.AppendRunEvent(ctx, types.TaskRunEvent{
+				TaskID:    task.ID,
+				RunID:     runID,
+				EventType: "snapshot",
+				Data:      map[string]any{"snapshot": snapshot},
+				RequestID: state.Run.RequestID,
+				TraceID:   state.Run.TraceID,
+				CreatedAt: time.Now().UTC(),
 			})
-			if err != nil {
-				fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
+			if appendErr == nil {
+				afterSequence = event.Sequence
+				state.Sequence = int(event.Sequence)
+			}
+			state.EventType = "snapshot"
+			state.Terminal = types.IsTerminalTaskRunStatus(state.Run.Status)
+			payload, marshalErr := json.Marshal(TaskRunStreamEventResponse{Object: "task_run_stream_event", Data: state})
+			if marshalErr != nil {
+				fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", marshalErr.Error())
 				flusher.Flush()
 				return
 			}
-
-			eventName := "snapshot"
-			if types.IsTerminalTaskRunStatus(state.Run.Status) {
-				eventName = "done"
+			fmt.Fprintf(w, "id: %d\nevent: snapshot\ndata: %s\n\n", state.Sequence, payload)
+			if state.Terminal {
+				fmt.Fprintf(w, "id: %d\nevent: done\ndata: %s\n\n", state.Sequence, payload)
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, payload)
 			flusher.Flush()
 			lastStateJSON = string(stateJSON)
-			if types.IsTerminalTaskRunStatus(state.Run.Status) {
+			if state.Terminal {
 				return
 			}
 		}
@@ -756,6 +834,194 @@ func (h *Handler) HandleTaskRunArtifacts(w http.ResponseWriter, r *http.Request)
 		Object: "task_artifacts",
 		Data:   items,
 	})
+}
+
+func (h *Handler) HandleTaskRunArtifact(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	_, ok = h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	artifactID := strings.TrimSpace(r.PathValue("artifact_id"))
+	if artifactID == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "artifact id is required")
+		return
+	}
+	artifact, found, err := h.taskStore.GetArtifact(ctx, task.ID, artifactID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task artifact not found")
+		return
+	}
+	WriteJSON(w, http.StatusOK, TaskArtifactResponse{
+		Object: "task_artifact",
+		Data:   renderTaskArtifact(artifact),
+	})
+}
+
+func (h *Handler) HandleTaskRunEvents(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	afterSequence := parseAfterSequence(r)
+	events, err := h.taskStore.ListRunEvents(ctx, task.ID, run.ID, afterSequence, 500)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	items := make([]TaskRunEventItem, 0, len(events))
+	for _, event := range events {
+		items = append(items, renderTaskRunEvent(event))
+	}
+	WriteJSON(w, http.StatusOK, TaskRunEventsResponse{
+		Object: "task_run_events",
+		Data:   items,
+	})
+}
+
+func (h *Handler) HandleAppendTaskRunEvent(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	var req AppendTaskRunEventRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	eventType := strings.TrimSpace(req.EventType)
+	if eventType == "" {
+		eventType = "external.event"
+	}
+	extra := map[string]any{}
+	for key, value := range req.Data {
+		extra[key] = value
+	}
+	if req.StepID != "" {
+		extra["step_id"] = req.StepID
+	}
+	if req.Status != "" {
+		extra["status"] = req.Status
+	}
+	if req.Note != "" {
+		extra["note"] = req.Note
+	}
+	state, err := h.buildTaskRunStreamState(ctx, task.ID, run.ID)
+	if err == nil {
+		stateJSON, _ := json.Marshal(state)
+		var snapshot map[string]any
+		_ = json.Unmarshal(stateJSON, &snapshot)
+		extra["snapshot"] = snapshot
+	}
+	event, err := h.taskStore.AppendRunEvent(ctx, types.TaskRunEvent{
+		TaskID:    task.ID,
+		RunID:     run.ID,
+		EventType: eventType,
+		Data:      extra,
+		RequestID: RequestIDFromContext(ctx),
+		TraceID:   telemetry.TraceIDsFromContext(ctx).TraceID,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "task_run_event",
+		"data":   renderTaskRunEvent(event),
+	})
+}
+
+func (h *Handler) HandleRetryTaskRun(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	_, ok = h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	result, err := h.taskRunner.StartTask(ctx, task, newOpaqueTaskResourceID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, TaskRunResponse{Object: "task_run", Data: renderTaskRun(result.Run)})
+}
+
+func (h *Handler) HandleResumeTaskRun(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	if run.Status != "failed" && run.Status != "cancelled" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run is not resumable")
+		return
+	}
+	result, err := h.taskRunner.StartTask(ctx, task, newOpaqueTaskResourceID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, TaskRunResponse{Object: "task_run", Data: renderTaskRun(result.Run)})
+}
+
+func parseAfterSequence(r *http.Request) int64 {
+	raw := strings.TrimSpace(r.URL.Query().Get("after_sequence"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	}
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
 }
 
 func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID string) (TaskRunStreamEventData, error) {
@@ -993,6 +1259,73 @@ func renderTaskArtifact(artifact types.TaskArtifact) TaskArtifactItem {
 		item.CreatedAt = artifact.CreatedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return item
+}
+
+func renderTaskRunEvent(event types.TaskRunEvent) TaskRunEventItem {
+	item := TaskRunEventItem{
+		ID:        event.ID,
+		TaskID:    event.TaskID,
+		RunID:     event.RunID,
+		Sequence:  event.Sequence,
+		EventType: event.EventType,
+		Data:      event.Data,
+		RequestID: event.RequestID,
+		TraceID:   event.TraceID,
+	}
+	if !event.CreatedAt.IsZero() {
+		item.CreatedAt = event.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return item
+}
+
+func (h *Handler) decodeTaskRunEventData(event types.TaskRunEvent) (TaskRunStreamEventData, bool, error) {
+	if event.Data == nil {
+		return TaskRunStreamEventData{}, false, nil
+	}
+	snapshot, ok := event.Data["snapshot"]
+	if ok {
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			return TaskRunStreamEventData{}, false, err
+		}
+		var decoded TaskRunStreamEventData
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return TaskRunStreamEventData{}, false, err
+		}
+		return decoded, true, nil
+	}
+	raw, err := json.Marshal(event.Data)
+	if err != nil {
+		return TaskRunStreamEventData{}, false, err
+	}
+	var typed struct {
+		Run       types.TaskRun        `json:"run"`
+		Steps     []types.TaskStep     `json:"steps"`
+		Artifacts []types.TaskArtifact `json:"artifacts"`
+	}
+	if err := json.Unmarshal(raw, &typed); err == nil && typed.Run.ID != "" {
+		stepItems := make([]TaskStepItem, 0, len(typed.Steps))
+		for _, step := range typed.Steps {
+			stepItems = append(stepItems, renderTaskStep(step))
+		}
+		artifactItems := make([]TaskArtifactItem, 0, len(typed.Artifacts))
+		for _, artifact := range typed.Artifacts {
+			artifactItems = append(artifactItems, renderTaskArtifact(artifact))
+		}
+		return TaskRunStreamEventData{
+			Run:       renderTaskRun(typed.Run),
+			Steps:     stepItems,
+			Artifacts: artifactItems,
+		}, true, nil
+	}
+	var decoded TaskRunStreamEventData
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return TaskRunStreamEventData{}, false, nil
+	}
+	if decoded.Run.ID == "" {
+		return TaskRunStreamEventData{}, false, nil
+	}
+	return decoded, true, nil
 }
 
 func (h *Handler) loadAuthorizedTask(ctx context.Context, w http.ResponseWriter, r *http.Request, principal auth.Principal) (types.Task, bool) {

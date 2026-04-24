@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  appendTaskRunEvent,
   cancelTaskRun,
   createTask,
+  getTrace,
   getTask,
   getTaskApprovals,
   getTaskRunArtifacts,
+  getTaskRunEvents,
   getTaskRuns,
   getTaskRunSteps,
   getTasks,
+  resumeTaskRun,
+  retryTaskRun,
   resolveTaskApproval,
   startTask,
   streamTaskRun,
@@ -18,6 +23,7 @@ import type {
   TaskApprovalRecord,
   TaskArtifactRecord,
   TaskRecord,
+  TaskRunEventRecord,
   TaskRunRecord,
   TaskStepRecord,
 } from "../../types/runtime";
@@ -45,6 +51,12 @@ export function RunsView({ authToken, session }: Props) {
   const [approvals, setApprovals] = useState<TaskApprovalRecord[]>([]);
   const [steps, setSteps] = useState<TaskStepRecord[]>([]);
   const [artifacts, setArtifacts] = useState<TaskArtifactRecord[]>([]);
+  const [runEvents, setRunEvents] = useState<TaskRunEventRecord[]>([]);
+  const [lastSequence, setLastSequence] = useState(0);
+  const streamCursorRef = useRef(0);
+  const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
+  const [selectedArtifactID, setSelectedArtifactID] = useState("");
+  const [traceSummary, setTraceSummary] = useState<string>("");
   const [streamState, setStreamState] = useState<StreamState>("idle");
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [busyAction, setBusyAction] = useState<"" | "approve" | "reject" | "cancel" | "create" | "create_start" | "start">("");
@@ -63,6 +75,7 @@ export function RunsView({ authToken, session }: Props) {
     () => approvals.filter((approval) => approval.status === "pending" && (!selectedRunID || approval.run_id === selectedRunID)),
     [approvals, selectedRunID],
   );
+  const selectedArtifact = useMemo(() => artifacts.find((artifact) => artifact.id === selectedArtifactID) ?? null, [artifacts, selectedArtifactID]);
   const stdoutArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stdout") ?? null, [artifacts]);
   const stderrArtifact = useMemo(() => artifacts.find((artifact) => artifact.kind === "stderr") ?? null, [artifacts]);
 
@@ -71,14 +84,28 @@ export function RunsView({ authToken, session }: Props) {
       if (!taskID || !runID) {
         setSteps([]);
         setArtifacts([]);
+        setRunEvents([]);
+        setLastSequence(0);
+        streamCursorRef.current = 0;
         return;
       }
-      const [stepsResponse, artifactsResponse] = await Promise.all([
+      const [stepsResponse, artifactsResponse, eventsResponse] = await Promise.all([
         getTaskRunSteps(taskID, runID, authToken),
         getTaskRunArtifacts(taskID, runID, authToken),
+        getTaskRunEvents(taskID, runID, 0, authToken),
       ]);
       setSteps(stepsResponse.data ?? []);
-      setArtifacts(artifactsResponse.data ?? []);
+      const nextArtifacts = artifactsResponse.data ?? [];
+      setArtifacts(nextArtifacts);
+      setRunEvents(eventsResponse.data ?? []);
+      const nextSequence = eventsResponse.data?.at(-1)?.sequence ?? 0;
+      setLastSequence(nextSequence);
+      streamCursorRef.current = nextSequence;
+      if (nextArtifacts.length > 0) {
+        setSelectedArtifactID((current) => (current && nextArtifacts.some((artifact) => artifact.id === current) ? current : nextArtifacts[0].id));
+      } else {
+        setSelectedArtifactID("");
+      }
     },
     [authToken],
   );
@@ -93,6 +120,9 @@ export function RunsView({ authToken, session }: Props) {
         setApprovals([]);
         setSteps([]);
         setArtifacts([]);
+        setRunEvents([]);
+        setLastSequence(0);
+        streamCursorRef.current = 0;
         setLoading(false);
         setStreamState("idle");
         return;
@@ -117,6 +147,9 @@ export function RunsView({ authToken, session }: Props) {
           setApprovals([]);
           setSteps([]);
           setArtifacts([]);
+          setRunEvents([]);
+          setLastSequence(0);
+          streamCursorRef.current = 0;
         }
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "failed to load runs");
@@ -183,6 +216,26 @@ export function RunsView({ authToken, session }: Props) {
       authToken,
       ({ payload }) => {
         setStreamState("live");
+        setLastSequence(payload.data.sequence ?? 0);
+        streamCursorRef.current = payload.data.sequence ?? streamCursorRef.current;
+        setRunEvents((current) => {
+          const entry: TaskRunEventRecord = {
+            id: String(payload.data.sequence ?? Date.now()),
+            task_id: selectedTaskID,
+            run_id: selectedRunID,
+            sequence: payload.data.sequence ?? 0,
+            event_type: payload.data.event_type || "snapshot",
+            created_at: new Date().toISOString(),
+            data: {
+              run_status: payload.data.run.status,
+              step_count: payload.data.steps?.length ?? 0,
+              artifact_count: payload.data.artifacts?.length ?? 0,
+            },
+          };
+          const merged = [...current.filter((event) => event.sequence !== entry.sequence), entry];
+          merged.sort((a, b) => b.sequence - a.sequence);
+          return merged.slice(0, 200);
+        });
         setRuns((current) => updateRunList(current, payload.data.run));
         setSteps(payload.data.steps ?? []);
         setArtifacts(payload.data.artifacts ?? []);
@@ -203,6 +256,7 @@ export function RunsView({ authToken, session }: Props) {
           ),
         );
       },
+      streamCursorRef.current,
       controller.signal,
     )
       .then(() => {
@@ -246,16 +300,28 @@ export function RunsView({ authToken, session }: Props) {
     }
   }
 
-  async function handleResolveApproval(decision: "approve" | "reject") {
-    const approval = pendingApprovals[0];
+  async function handleResolveApproval(approval: TaskApprovalRecord, decision: "approve" | "reject") {
     if (!selectedTaskID || !approval) {
       return;
     }
     setBusyAction(decision === "approve" ? "approve" : "reject");
     setNotice(null);
     try {
-      await resolveTaskApproval(selectedTaskID, approval.id, { decision }, authToken);
+      const note = (approvalNotes[approval.id] || "").trim();
+      await resolveTaskApproval(selectedTaskID, approval.id, { decision, note: note || undefined }, authToken);
       setNotice({ tone: "success", message: decision === "approve" ? "Approval granted." : "Approval rejected." });
+      if (note) {
+        await appendTaskRunEvent(
+          selectedTaskID,
+          approval.run_id,
+          {
+            event_type: "approval.note",
+            note,
+            data: { approval_id: approval.id, decision },
+          },
+          authToken,
+        );
+      }
       await loadTaskDetail(selectedTaskID, approval.run_id);
     } catch (approvalError) {
       setNotice({ tone: "error", message: approvalError instanceof Error ? approvalError.message : "failed to resolve approval" });
@@ -278,6 +344,53 @@ export function RunsView({ authToken, session }: Props) {
       setNotice({ tone: "error", message: cancelError instanceof Error ? cancelError.message : "failed to cancel run" });
     } finally {
       setBusyAction("");
+    }
+  }
+
+  async function handleRetryRun() {
+    if (!selectedTaskID || !selectedRunID) {
+      return;
+    }
+    setBusyAction("start");
+    setNotice(null);
+    try {
+      const response = await retryTaskRun(selectedTaskID, selectedRunID, authToken);
+      setNotice({ tone: "success", message: "Run retried with a new attempt." });
+      await loadTasks(selectedTaskID, response.data.id);
+    } catch (retryError) {
+      setNotice({ tone: "error", message: retryError instanceof Error ? retryError.message : "failed to retry run" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleResumeRun() {
+    if (!selectedTaskID || !selectedRunID) {
+      return;
+    }
+    setBusyAction("start");
+    setNotice(null);
+    try {
+      const response = await resumeTaskRun(selectedTaskID, selectedRunID, authToken);
+      setNotice({ tone: "success", message: "Run resumed with a new attempt." });
+      await loadTasks(selectedTaskID, response.data.id);
+    } catch (resumeError) {
+      setNotice({ tone: "error", message: resumeError instanceof Error ? resumeError.message : "failed to resume run" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleLookupTrace() {
+    if (!selectedRun?.request_id) {
+      return;
+    }
+    try {
+      const trace = await getTrace(selectedRun.request_id, authToken);
+      const spanCount = trace.data.spans?.length ?? 0;
+      setTraceSummary(`Trace ${trace.data.trace_id || "n/a"} with ${spanCount} spans loaded for request ${selectedRun.request_id}.`);
+    } catch (traceError) {
+      setTraceSummary(traceError instanceof Error ? traceError.message : "failed to fetch trace");
     }
   }
 
@@ -393,6 +506,7 @@ export function RunsView({ authToken, session }: Props) {
             <MetricTile label="Runs" value={`${runs.length}`} tone={runs.length > 0 ? "healthy" : "warning"} />
             <MetricTile label="Pending approvals" value={`${pendingApprovals.length}`} tone={pendingApprovals.length > 0 ? "warning" : "healthy"} />
             <MetricTile label="Selected run" value={selectedRun ? `#${selectedRun.number}` : "None"} detail={selectedRun?.status || "Select a run"} />
+            <MetricTile label="Last event seq" value={`${lastSequence}`} tone={lastSequence > 0 ? "neutral" : "warning"} />
           </div>
         </ShellSection>
 
@@ -457,11 +571,24 @@ export function RunsView({ authToken, session }: Props) {
                       {selectedRun.model ? <StatusPill label={selectedRun.model} tone="neutral" /> : null}
                       {selectedRun.provider ? <StatusPill label={selectedRun.provider} tone="neutral" /> : null}
                     </div>
-                    {canCancelRun(selectedRun.status) ? (
-                      <ToolbarButton disabled={busyAction === "cancel"} onClick={() => void handleCancelRun()} tone="danger">
-                        {busyAction === "cancel" ? "Cancelling..." : "Cancel run"}
-                      </ToolbarButton>
-                    ) : null}
+                    <div className="action-row">
+                      {canCancelRun(selectedRun.status) ? (
+                        <ToolbarButton disabled={busyAction === "cancel"} onClick={() => void handleCancelRun()} tone="danger">
+                          {busyAction === "cancel" ? "Cancelling..." : "Cancel run"}
+                        </ToolbarButton>
+                      ) : null}
+                      {(selectedRun.status === "failed" || selectedRun.status === "cancelled") ? (
+                        <>
+                          <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleRetryRun()}>
+                            Retry
+                          </ToolbarButton>
+                          <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleResumeRun()}>
+                            Resume
+                          </ToolbarButton>
+                        </>
+                      ) : null}
+                      <ToolbarButton onClick={() => void handleLookupTrace()}>Fetch trace</ToolbarButton>
+                    </div>
                   </div>
                   <DefinitionList
                     items={[
@@ -473,6 +600,7 @@ export function RunsView({ authToken, session }: Props) {
                       { label: "Last error", value: selectedRun.last_error || "None" },
                     ]}
                   />
+                  {traceSummary ? <InlineNotice message={traceSummary} tone="success" /> : null}
                 </div>
               ) : (
                 <EmptyState title="No run selected" detail="Choose a task and run to inspect live updates and logs." />
@@ -495,10 +623,18 @@ export function RunsView({ authToken, session }: Props) {
                         <StatusPill label={approval.status} tone="warning" />
                       </div>
                       <div className="action-row">
-                        <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleResolveApproval("approve")} tone="primary">
+                        <TextField
+                          label="Resolution note"
+                          onChange={(value) => setApprovalNotes((current) => ({ ...current, [approval.id]: value }))}
+                          placeholder="Optional note for audit trail"
+                          value={approvalNotes[approval.id] || ""}
+                        />
+                      </div>
+                      <div className="action-row">
+                        <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleResolveApproval(approval, "approve")} tone="primary">
                           {busyAction === "approve" ? "Approving..." : "Approve"}
                         </ToolbarButton>
-                        <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleResolveApproval("reject")} tone="danger">
+                        <ToolbarButton disabled={busyAction !== ""} onClick={() => void handleResolveApproval(approval, "reject")} tone="danger">
                           {busyAction === "reject" ? "Rejecting..." : "Reject"}
                         </ToolbarButton>
                       </div>
@@ -531,6 +667,55 @@ export function RunsView({ authToken, session }: Props) {
           </div>
         </ShellSection>
 
+        <ShellSection eyebrow="Artifacts" title="Run artifacts">
+          <div className="two-column-grid">
+            <Surface>
+              {artifacts.length > 0 ? (
+                <div className="stack-sm">
+                  {artifacts.map((artifact) => (
+                    <button
+                      className={artifact.id === selectedArtifactID ? "runs-list-item runs-list-item--active" : "runs-list-item"}
+                      key={artifact.id}
+                      onClick={() => setSelectedArtifactID(artifact.id)}
+                      type="button"
+                    >
+                      <div className="action-row action-row--wide">
+                        <strong>{artifact.name || artifact.kind}</strong>
+                        <StatusPill label={artifact.status || "ready"} tone={runStatusTone(artifact.status)} />
+                      </div>
+                      <div className="runs-inline-meta">
+                        <span>{artifact.kind}</span>
+                        <span>{artifact.mime_type || "text/plain"}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No artifacts yet" detail="Artifacts appear here as the run emits files and logs." />
+              )}
+            </Surface>
+            <Surface>
+              {selectedArtifact ? (
+                <div className="stack-sm">
+                  <DefinitionList
+                    items={[
+                      { label: "Kind", value: selectedArtifact.kind },
+                      { label: "Name", value: selectedArtifact.name || "n/a" },
+                      { label: "MIME", value: selectedArtifact.mime_type || "n/a" },
+                      { label: "Path", value: selectedArtifact.path || selectedArtifact.object_ref || "n/a" },
+                      { label: "SHA256", value: selectedArtifact.sha256 || "n/a" },
+                      { label: "Size", value: selectedArtifact.size_bytes ? `${selectedArtifact.size_bytes} bytes` : "n/a" },
+                    ]}
+                  />
+                  <pre className="runs-log-output">{selectedArtifact.content_text || "No inline content."}</pre>
+                </div>
+              ) : (
+                <EmptyState title="Select an artifact" detail="Choose an artifact to inspect metadata and inline content." />
+              )}
+            </Surface>
+          </div>
+        </ShellSection>
+
         <ShellSection eyebrow="Steps" title="Execution timeline">
           <Surface>
             {steps.length > 0 ? (
@@ -555,6 +740,29 @@ export function RunsView({ authToken, session }: Props) {
               </div>
             ) : (
               <EmptyState title="No steps yet" detail="Step records will appear here once the selected run begins executing." />
+            )}
+          </Surface>
+        </ShellSection>
+
+        <ShellSection eyebrow="Events" title="Run event timeline">
+          <Surface>
+            {runEvents.length > 0 ? (
+              <div className="stack-sm">
+                {runEvents.map((event) => (
+                  <div className="runs-step-card" key={`${event.sequence}-${event.id}`}>
+                    <div className="action-row action-row--wide">
+                      <strong>{event.event_type}</strong>
+                      <StatusPill label={`#${event.sequence}`} tone="neutral" />
+                    </div>
+                    <div className="runs-inline-meta">
+                      <span>{event.created_at ? formatDateTime(event.created_at) : "n/a"}</span>
+                      {event.trace_id ? <span>trace: {event.trace_id}</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No events yet" detail="Run events populate as state changes are persisted." />
             )}
           </Surface>
         </ShellSection>

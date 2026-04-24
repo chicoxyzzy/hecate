@@ -16,6 +16,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/ratelimit"
+	"github.com/hecate/agent-runtime/internal/storage"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
@@ -41,12 +42,12 @@ type ProviderRuntime interface {
 	Delete(ctx context.Context, id string) error
 }
 
-func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store, providerRuntimes ...ProviderRuntime) *Handler {
+func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store, postgresClient *storage.PostgresClient, providerRuntimes ...ProviderRuntime) *Handler {
 	var providerRuntime ProviderRuntime
 	if len(providerRuntimes) > 0 {
 		providerRuntime = providerRuntimes[0]
 	}
-	taskStore := taskstate.NewMemoryStore()
+	taskStore := buildTaskStore(cfg, logger, postgresClient)
 
 	var rl *ratelimit.Store
 	if cfg.Server.RateLimit.Enabled {
@@ -61,6 +62,16 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		rl = ratelimit.NewStore(burst, rpm)
 	}
 
+	runner := orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
+		DefaultModel:     cfg.Router.DefaultModel,
+		ApprovalPolicies: cfg.Server.TaskApprovalPolicies,
+		QueueWorkers:     cfg.Server.TaskQueueWorkers,
+		QueueBuffer:      cfg.Server.TaskQueueBuffer,
+	})
+	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
+		logger.Warn("task runner reconciliation failed", slog.Any("error", err))
+	}
+
 	return &Handler{
 		config:          cfg,
 		logger:          logger,
@@ -69,10 +80,22 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		controlPlane:    cpStore,
 		providerRuntime: providerRuntime,
 		taskStore:       taskStore,
-		taskRunner: orchestrator.NewRunner(logger, taskStore, service.Tracer(), orchestrator.Config{
-			DefaultModel: cfg.Router.DefaultModel,
-		}),
-		rateLimiter: rl,
+		taskRunner:      runner,
+		rateLimiter:     rl,
+	}
+}
+
+func buildTaskStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) taskstate.Store {
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.TasksBackend)) {
+	case "postgres":
+		store, err := taskstate.NewPostgresStore(context.Background(), postgresClient)
+		if err != nil {
+			logger.Error("task store init failed", slog.Any("error", err))
+			return taskstate.NewMemoryStore()
+		}
+		return store
+	default:
+		return taskstate.NewMemoryStore()
 	}
 }
 

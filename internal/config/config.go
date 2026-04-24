@@ -30,6 +30,10 @@ type ServerConfig struct {
 	ControlPlaneFile      string
 	ControlPlaneKey       string
 	ControlPlaneSecretKey string
+	TasksBackend          string
+	TaskApprovalPolicies  []string
+	TaskQueueWorkers      int
+	TaskQueueBuffer       int
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
 	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
@@ -224,6 +228,10 @@ func LoadFromEnv() Config {
 			ControlPlaneFile:      getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:       getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
 			ControlPlaneSecretKey: getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
+			TasksBackend:          getEnv("GATEWAY_TASKS_BACKEND", "memory"),
+			TaskApprovalPolicies:  splitCSV(getEnv("GATEWAY_TASK_APPROVAL_POLICIES", "shell_exec")),
+			TaskQueueWorkers:      getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
+			TaskQueueBuffer:       getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
 			TraceBodyCapture:      getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:     getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),
 			RateLimit: RateLimitConfig{

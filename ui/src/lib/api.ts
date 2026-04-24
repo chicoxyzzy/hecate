@@ -16,6 +16,7 @@ import type {
   TaskArtifactsResponse,
   TaskResponse,
   TaskRunResponse,
+  TaskRunEventsResponse,
   TaskRunStreamEventResponse,
   TaskRunsResponse,
   TaskStepsResponse,
@@ -120,6 +121,14 @@ export type CreateTaskPayload = {
 export type ResolveTaskApprovalPayload = {
   decision: "approve" | "reject";
   note?: string;
+};
+
+export type AppendTaskRunEventPayload = {
+  event_type: string;
+  step_id?: string;
+  status?: string;
+  note?: string;
+  data?: Record<string, unknown>;
 };
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -278,6 +287,13 @@ export async function getTaskRunArtifacts(taskID: string, runID: string, authTok
   return fetchJSON<TaskArtifactsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/artifacts`, { authToken });
 }
 
+export async function getTaskRunEvents(taskID: string, runID: string, afterSequence = 0, authToken?: string): Promise<TaskRunEventsResponse> {
+  return fetchJSON<TaskRunEventsResponse>(
+    `/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/events?after_sequence=${encodeURIComponent(String(afterSequence))}`,
+    { authToken },
+  );
+}
+
 export async function resolveTaskApproval(taskID: string, approvalID: string, payload: ResolveTaskApprovalPayload, authToken?: string): Promise<void> {
   await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}/approvals/${encodeURIComponent(approvalID)}/resolve`, {
     authToken,
@@ -293,15 +309,40 @@ export async function cancelTaskRun(taskID: string, runID: string, authToken?: s
   });
 }
 
+export async function retryTaskRun(taskID: string, runID: string, authToken?: string): Promise<TaskRunResponse> {
+  return fetchJSON<TaskRunResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/retry`, {
+    authToken,
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function resumeTaskRun(taskID: string, runID: string, authToken?: string): Promise<TaskRunResponse> {
+  return fetchJSON<TaskRunResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/resume`, {
+    authToken,
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function appendTaskRunEvent(taskID: string, runID: string, payload: AppendTaskRunEventPayload, authToken?: string): Promise<void> {
+  await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/events`, {
+    authToken,
+    method: "POST",
+    body: payload,
+  });
+}
+
 export async function streamTaskRun(
   taskID: string,
   runID: string,
   authToken: string | undefined,
   onEvent: (event: { event: string; payload: TaskRunStreamEventResponse }) => void,
+  afterSequence = 0,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetchWithNetworkError(
-    `/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/stream`,
+    `/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/stream?after_sequence=${encodeURIComponent(String(afterSequence))}`,
     { ...buildRequestOptions({ authToken }), signal },
   );
   if (!response.ok) {

@@ -32,6 +32,18 @@ type ResolveTaskApprovalRequest struct {
 	Note     string `json:"note"`
 }
 
+type RetryTaskRunRequest struct {
+	Reason string `json:"reason"`
+}
+
+type AppendTaskRunEventRequest struct {
+	EventType string         `json:"event_type"`
+	StepID    string         `json:"step_id"`
+	Status    string         `json:"status"`
+	Note      string         `json:"note"`
+	Data      map[string]any `json:"data"`
+}
+
 type TaskResponse struct {
 	Object string   `json:"object"`
 	Data   TaskItem `json:"data"`
@@ -85,6 +97,11 @@ type TaskArtifactResponse struct {
 type TaskArtifactsResponse struct {
 	Object string             `json:"object"`
 	Data   []TaskArtifactItem `json:"data"`
+}
+
+type TaskRunEventsResponse struct {
+	Object string             `json:"object"`
+	Data   []TaskRunEventItem `json:"data"`
 }
 
 type TaskItem struct {
@@ -157,6 +174,19 @@ type TaskRunStreamEventData struct {
 	Run       TaskRunItem        `json:"run"`
 	Steps     []TaskStepItem     `json:"steps,omitempty"`
 	Artifacts []TaskArtifactItem `json:"artifacts,omitempty"`
+	EventType string             `json:"event_type,omitempty"`
+}
+
+type TaskRunEventItem struct {
+	ID        string         `json:"id"`
+	TaskID    string         `json:"task_id"`
+	RunID     string         `json:"run_id"`
+	Sequence  int64          `json:"sequence"`
+	EventType string         `json:"event_type"`
+	Data      map[string]any `json:"data,omitempty"`
+	CreatedAt string         `json:"created_at,omitempty"`
+	RequestID string         `json:"request_id,omitempty"`
+	TraceID   string         `json:"trace_id,omitempty"`
 }
 
 type TaskStepItem struct {

@@ -129,6 +129,18 @@ type TaskArtifact struct {
 	SpanID      string
 }
 
+type TaskRunEvent struct {
+	ID        string
+	TaskID    string
+	RunID     string
+	Sequence  int64
+	EventType string
+	Data      map[string]any
+	CreatedAt time.Time
+	RequestID string
+	TraceID   string
+}
+
 func IsTerminalTaskRunStatus(status string) bool {
 	switch status {
 	case "completed", "failed", "cancelled":
