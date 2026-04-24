@@ -243,3 +243,21 @@ func TestAuthenticateSingleUserAdminModeElevatesControlPlaneKey(t *testing.T) {
 		t.Fatalf("source = %q, want single_user_admin_mode", principal.Source)
 	}
 }
+
+func TestAuthenticateSingleUserAdminModeAllowsNoToken(t *testing.T) {
+	t.Parallel()
+
+	authn := NewAuthenticator(config.ServerConfig{SingleUserAdminMode: true}, nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+
+	principal, ok := authn.Authenticate(req)
+	if !ok {
+		t.Fatal("Authenticate() ok = false, want true")
+	}
+	if !principal.IsAdmin() {
+		t.Fatalf("role = %q, want admin", principal.Role)
+	}
+	if principal.Source != "single_user_admin_mode" {
+		t.Fatalf("source = %q, want single_user_admin_mode", principal.Source)
+	}
+}

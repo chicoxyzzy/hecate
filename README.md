@@ -156,7 +156,7 @@ Auth supports:
 
 - admin bearer token
 - persisted API keys from the control plane
-- optional single-user admin mode (`GATEWAY_SINGLE_USER_ADMIN_MODE=true`) to grant admin rights to control-plane API keys without an admin token
+- optional single-user admin mode (`GATEWAY_SINGLE_USER_ADMIN_MODE=true`) that treats requests as admin for tokenless local development
 
 Control plane supports:
 

@@ -44,7 +44,13 @@ func (a *Authenticator) Enabled() bool {
 }
 
 func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
-	if a == nil || !a.enabled {
+	if a == nil {
+		return Principal{Role: "anonymous"}, true
+	}
+	if a.singleUserAdminMode {
+		return singleUserAdminPrincipal(), true
+	}
+	if !a.enabled {
 		return Principal{Role: "anonymous"}, true
 	}
 
@@ -94,7 +100,22 @@ type Introspection struct {
 }
 
 func (a *Authenticator) Introspect(r *http.Request) Introspection {
-	if a == nil || !a.enabled {
+	if a == nil {
+		return Introspection{
+			Authenticated: false,
+			Principal: Principal{
+				Role:   "anonymous",
+				Source: "auth_disabled",
+			},
+		}
+	}
+	if a.singleUserAdminMode {
+		return Introspection{
+			Authenticated: true,
+			Principal:     singleUserAdminPrincipal(),
+		}
+	}
+	if !a.enabled {
 		return Introspection{
 			Authenticated: false,
 			Principal: Principal{
@@ -148,6 +169,14 @@ func requestToken(r *http.Request) string {
 		return token
 	}
 	return strings.TrimSpace(r.Header.Get("x-api-key"))
+}
+
+func singleUserAdminPrincipal() Principal {
+	return Principal{
+		Name:   "single-user",
+		Role:   "admin",
+		Source: "single_user_admin_mode",
+	}
 }
 
 func (a *Authenticator) normalizePrincipal(principal Principal) Principal {

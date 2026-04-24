@@ -1004,6 +1004,41 @@ func TestBudgetEndpointsAllowTenantKeyInSingleUserAdminMode(t *testing.T) {
 	}
 }
 
+func TestSingleUserAdminModeAllowsAdminEndpointsWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{
+			SingleUserAdminMode: true,
+		},
+		Governor: config.GovernorConfig{
+			MaxPromptTokens:      64_000,
+			MaxTotalBudgetMicros: 10_000_000,
+			BudgetBackend:        "memory",
+			BudgetKey:            "global",
+			BudgetScope:          "global",
+		},
+	}, governor.NewMemoryBudgetStore(), nil)
+
+	client := newAPITestClient(t, handler)
+	session := mustRequestJSON[SessionResponse](client, http.MethodGet, "/v1/whoami", "")
+	if !session.Data.Authenticated {
+		t.Fatal("session.authenticated = false, want true")
+	}
+	if session.Data.Role != "admin" {
+		t.Fatalf("session role = %q, want admin", session.Data.Role)
+	}
+	if session.Data.Source != "single_user_admin_mode" {
+		t.Fatalf("session source = %q, want single_user_admin_mode", session.Data.Source)
+	}
+
+	budget := mustRequestJSON[BudgetStatusResponse](client, http.MethodGet, "/admin/budget", "")
+	if budget.Object != "budget_status" {
+		t.Fatalf("object = %q, want budget_status", budget.Object)
+	}
+}
+
 func TestTaskRunPerTenantConcurrencyLimitQueuesSecondRun(t *testing.T) {
 	t.Parallel()
 
