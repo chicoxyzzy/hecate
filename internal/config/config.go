@@ -558,14 +558,14 @@ func defaultPricebookConfig() PricebookConfig {
 			// Seeded from Google Gemini API pricing docs as of 2026-04-23.
 			// Source: https://ai.google.dev/gemini-api/docs/pricing
 			{
-				Provider:                             "gemini",
+				Provider:                             "google",
 				Model:                                "gemini-2.5-flash",
 				InputMicrosUSDPerMillionTokens:       300_000,
 				OutputMicrosUSDPerMillionTokens:      2_500_000,
 				CachedInputMicrosUSDPerMillionTokens: 30_000,
 			},
 			{
-				Provider:                             "gemini",
+				Provider:                             "google",
 				Model:                                "gemini-2.5-flash-lite",
 				InputMicrosUSDPerMillionTokens:       100_000,
 				OutputMicrosUSDPerMillionTokens:      400_000,
@@ -639,24 +639,20 @@ func providerNameFromEnvKey(key string) (string, bool) {
 			if name == "" {
 				return "", false
 			}
-			return canonicalProviderName(name), true
+			return name, true
 		}
 	}
 	return "", false
 }
 
 func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
-	name = canonicalProviderName(strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 
 	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"))
 	prefixes := []string{providerEnvPrefix(name)}
-	// Keep backward compatibility for legacy Grok env names.
-	if name == "xai" {
-		prefixes = append(prefixes, providerEnvPrefix("grok"))
-	}
 	for _, prefix := range prefixes {
 		cfg.Name = getEnv(prefix+"NAME", cfg.Name)
 		cfg.Kind = getEnv(prefix+"KIND", cfg.Kind)
@@ -674,16 +670,6 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 		return OpenAICompatibleProviderConfig{}, false
 	}
 	return cfg, true
-}
-
-func canonicalProviderName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	switch name {
-	case "grok":
-		return "xai"
-	default:
-		return name
-	}
 }
 
 func providerDefaults(name, globalDefaultModel string) OpenAICompatibleProviderConfig {

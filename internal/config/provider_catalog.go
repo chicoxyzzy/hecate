@@ -48,12 +48,12 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
-		ID:           "gemini",
-		Name:         "Gemini",
+		ID:           "google",
+		Name:         "Google",
 		Kind:         "cloud",
 		Protocol:     "openai",
 		BaseURL:      "https://generativelanguage.googleapis.com/v1beta/openai",
-		APIKeyEnv:    "PROVIDER_GEMINI_API_KEY",
+		APIKeyEnv:    "PROVIDER_GOOGLE_API_KEY",
 		DefaultModel: "gemini-2.5-flash",
 		DocsURL:      "https://ai.google.dev/gemini-api/docs/openai",
 		Description:  "OpenAI-compatible preset for Gemini through Google's compatibility layer. Hecate discovers available models from /v1/models.",
@@ -72,44 +72,8 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 	{
-		ID:           "mistral",
-		Name:         "Mistral",
-		Kind:         "cloud",
-		Protocol:     "openai",
-		BaseURL:      "https://api.mistral.ai/v1",
-		APIKeyEnv:    "PROVIDER_MISTRAL_API_KEY",
-		DefaultModel: "mistral-small-latest",
-		DocsURL:      "https://docs.mistral.ai/getting-started/models/models_overview/",
-		Description:  "OpenAI-compatible preset for Mistral hosted models. Hecate discovers available models from /v1/models.",
-		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
-	},
-	{
-		ID:           "openai",
-		Name:         "OpenAI",
-		Kind:         "cloud",
-		Protocol:     "openai",
-		BaseURL:      "https://api.openai.com",
-		APIKeyEnv:    "PROVIDER_OPENAI_API_KEY",
-		DefaultModel: "gpt-5.4-mini",
-		DocsURL:      "https://developers.openai.com/api/docs/models",
-		Description:  "Default cloud preset using the OpenAI-compatible Chat Completions API. Hecate discovers available models from /v1/models.",
-		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
-	},
-	{
-		ID:           "xai",
-		Name:         "xAI",
-		Kind:         "cloud",
-		Protocol:     "openai",
-		BaseURL:      "https://api.x.ai/v1",
-		APIKeyEnv:    "PROVIDER_XAI_API_KEY",
-		DefaultModel: "grok-3-mini",
-		DocsURL:      "https://docs.x.ai/docs/models",
-		Description:  "OpenAI-compatible preset for xAI Grok models. Hecate discovers available models from /v1/models.",
-		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
-	},
-	{
 		ID:           "llamacpp",
-		Name:         "llama.cpp server",
+		Name:         "llama.cpp",
 		Kind:         "local",
 		Protocol:     "openai",
 		BaseURL:      "http://127.0.0.1:8080/v1",
@@ -138,6 +102,18 @@ var builtInProviders = []BuiltInProvider{
 		StubResponse: "Stubbed local provider response.",
 	},
 	{
+		ID:           "mistral",
+		Name:         "Mistral",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.mistral.ai/v1",
+		APIKeyEnv:    "PROVIDER_MISTRAL_API_KEY",
+		DefaultModel: "mistral-small-latest",
+		DocsURL:      "https://docs.mistral.ai/getting-started/models/models_overview/",
+		Description:  "OpenAI-compatible preset for Mistral hosted models. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
 		ID:           "ollama",
 		Name:         "Ollama",
 		Kind:         "local",
@@ -146,6 +122,42 @@ var builtInProviders = []BuiltInProvider{
 		DocsURL:      "https://github.com/ollama/ollama/blob/main/docs/openai.md",
 		Description:  "Local preset for Ollama's OpenAI-compatible endpoint. Hecate discovers models from /v1/models and uses the first available model when no model is pinned.",
 		StubResponse: "Stubbed local provider response.",
+	},
+	{
+		ID:           "openai",
+		Name:         "OpenAI",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.openai.com",
+		APIKeyEnv:    "PROVIDER_OPENAI_API_KEY",
+		DefaultModel: "gpt-5.4-mini",
+		DocsURL:      "https://developers.openai.com/api/docs/models",
+		Description:  "Default cloud preset using the OpenAI-compatible Chat Completions API. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
+		ID:           "together",
+		Name:         "Together AI",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.together.xyz/v1",
+		APIKeyEnv:    "PROVIDER_TOGETHER_API_KEY",
+		DefaultModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+		DocsURL:      "https://docs.together.ai/docs/inference-models",
+		Description:  "OpenAI-compatible preset for Together AI hosted models. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
+	},
+	{
+		ID:           "xai",
+		Name:         "xAI",
+		Kind:         "cloud",
+		Protocol:     "openai",
+		BaseURL:      "https://api.x.ai/v1",
+		APIKeyEnv:    "PROVIDER_XAI_API_KEY",
+		DefaultModel: "grok-3-mini",
+		DocsURL:      "https://docs.x.ai/docs/models",
+		Description:  "OpenAI-compatible preset for xAI Grok models. Hecate discovers available models from /v1/models.",
+		StubResponse: "Stubbed response from the AI Agent Runtime MVP.",
 	},
 }
 
@@ -160,7 +172,6 @@ func BuiltInProviders() []BuiltInProvider {
 
 func BuiltInProviderByID(name string) (BuiltInProvider, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
-	name = builtInProviderAlias(name)
 	normalized := builtInProviderLookupKey(name)
 	for _, item := range builtInProviders {
 		if item.ID == name || strings.ToLower(item.Name) == name || builtInProviderLookupKey(item.ID) == normalized || builtInProviderLookupKey(item.Name) == normalized {
@@ -175,15 +186,6 @@ var builtInProviderLookupSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
 func builtInProviderLookupKey(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	return builtInProviderLookupSanitizer.ReplaceAllString(value, "")
-}
-
-func builtInProviderAlias(name string) string {
-	switch builtInProviderLookupKey(name) {
-	case "grok", "grokxai":
-		return "xai"
-	default:
-		return name
-	}
 }
 
 func (p BuiltInProvider) RuntimeConfig(globalDefaultModel string) OpenAICompatibleProviderConfig {

@@ -85,7 +85,7 @@ func TestDefaultPricebookIncludesCurrentProviderDefaults(t *testing.T) {
 		{provider: "openai", model: "gpt-5.4"},
 		{provider: "anthropic", model: "claude-sonnet-4-6"},
 		{provider: "groq", model: "llama-3.3-70b-versatile"},
-		{provider: "gemini", model: "gemini-2.5-flash"},
+		{provider: "google", model: "gemini-2.5-flash"},
 	} {
 		tt := tt
 		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
@@ -220,6 +220,20 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("deepseek default model = %q, want deepseek-chat", got)
 	}
 
+	google, ok := BuiltInProviderByID("google")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(google) = not found")
+	}
+	if google.Protocol != "openai" {
+		t.Fatalf("google protocol = %q, want openai", google.Protocol)
+	}
+	if google.BaseURL != "https://generativelanguage.googleapis.com/v1beta/openai" {
+		t.Fatalf("google base url = %q, want https://generativelanguage.googleapis.com/v1beta/openai", google.BaseURL)
+	}
+	if got := google.RuntimeConfig("ignored").DefaultModel; got != "gemini-2.5-flash" {
+		t.Fatalf("google default model = %q, want gemini-2.5-flash", got)
+	}
+
 	xai, ok := BuiltInProviderByID("xai")
 	if !ok {
 		t.Fatal("BuiltInProviderByID(xai) = not found")
@@ -232,9 +246,6 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	}
 	if got := xai.RuntimeConfig("ignored").DefaultModel; got != "grok-3-mini" {
 		t.Fatalf("xai default model = %q, want grok-3-mini", got)
-	}
-	if alias, ok := BuiltInProviderByID("grok"); !ok || alias.ID != "xai" {
-		t.Fatalf("BuiltInProviderByID(grok) = %#v, %v; want alias id xai", alias, ok)
 	}
 
 	mistral, ok := BuiltInProviderByID("mistral")
@@ -249,6 +260,20 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 	}
 	if got := mistral.RuntimeConfig("ignored").DefaultModel; got != "mistral-small-latest" {
 		t.Fatalf("mistral default model = %q, want mistral-small-latest", got)
+	}
+
+	together, ok := BuiltInProviderByID("together")
+	if !ok {
+		t.Fatal("BuiltInProviderByID(together) = not found")
+	}
+	if together.Protocol != "openai" {
+		t.Fatalf("together protocol = %q, want openai", together.Protocol)
+	}
+	if together.BaseURL != "https://api.together.xyz/v1" {
+		t.Fatalf("together base url = %q, want https://api.together.xyz/v1", together.BaseURL)
+	}
+	if got := together.RuntimeConfig("ignored").DefaultModel; got != "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" {
+		t.Fatalf("together default model = %q, want meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", got)
 	}
 
 	for _, id := range []string{"ollama", "LM Studio", "localai", "llamacpp"} {
@@ -285,16 +310,16 @@ func TestLoadProvidersFromEnvIncludesCustomProviderFromCoreEnvKeys(t *testing.T)
 	}
 }
 
-func TestLoadProvidersFromEnvSupportsLegacyGrokEnvAlias(t *testing.T) {
-	t.Setenv("PROVIDER_GROK_API_KEY", "legacy-grok-secret")
+func TestLoadProvidersFromEnvSupportsXAIProviderEnv(t *testing.T) {
+	t.Setenv("PROVIDER_XAI_API_KEY", "xai-secret")
 
 	cfg := LoadFromEnv()
 	xai, ok := testProviderByName(cfg.Providers.OpenAICompatible, "xai")
 	if !ok {
 		t.Fatal("xai provider missing")
 	}
-	if xai.APIKey != "legacy-grok-secret" {
-		t.Fatalf("xai api key = %q, want legacy-grok-secret", xai.APIKey)
+	if xai.APIKey != "xai-secret" {
+		t.Fatalf("xai api key = %q, want xai-secret", xai.APIKey)
 	}
 }
 

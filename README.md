@@ -131,10 +131,11 @@ Built-in cloud presets:
 
 - `anthropic`
 - `deepseek`
-- `gemini`
+- `google`
 - `groq`
 - `mistral`
 - `openai`
+- `together`
 - `xai`
 
 Built-in local presets:
