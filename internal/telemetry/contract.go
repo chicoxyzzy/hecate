@@ -132,6 +132,8 @@ const (
 	SpanOrchestratorArtifact = "orchestrator.artifact"
 	SpanOrchestratorApproval = "orchestrator.approval"
 	SpanOrchestratorQueue    = "orchestrator.queue"
+
+	SpanRetentionRun = "retention.run"
 )
 
 // ---------------------------------------------------------------------------

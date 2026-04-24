@@ -126,6 +126,34 @@ Common Hecate-specific attributes include:
 - `hecate.retry.retry_count`
 - `hecate.failover.from_provider`
 
+Orchestrator-specific attributes include:
+
+- `hecate.task.id`
+- `hecate.task.status`
+- `hecate.task.repo`
+- `hecate.task.base_branch`
+- `hecate.run.id`
+- `hecate.run.number`
+- `hecate.run.status`
+- `hecate.run.duration_ms`
+- `hecate.execution.kind`
+- `hecate.step.id`
+- `hecate.step.kind`
+- `hecate.step.index`
+- `hecate.step.tool_name`
+- `hecate.step.duration_ms`
+- `hecate.artifact.id`
+- `hecate.artifact.kind`
+- `hecate.artifact.size_bytes`
+- `hecate.approval.id`
+- `hecate.approval.kind`
+- `hecate.approval.status`
+- `hecate.approval.decision`
+- `hecate.approval.wait_ms`
+- `hecate.queue.backend`
+- `hecate.queue.wait_ms`
+- `hecate.worker.id`
+
 Normalized results are:
 
 - `success`
@@ -134,34 +162,23 @@ Normalized results are:
 
 ## Traces
 
-Gateway traces are centered around a small set of runtime stages:
+### Gateway Spans
 
-- request parsing and validation
-- governor and policy decisions
-- routing
-- exact cache lookup
-- semantic cache lookup and writeback
-- provider execution, retry, and failover
-- usage normalization
-- cost calculation
-- response return
+Gateway traces are centered around a small set of runtime stages. Each stage maps to a child span under the root `gateway.request` span:
 
-Important span names include:
-
-- `gateway.request`
-- `gateway.request.parse`
-- `gateway.governor`
-- `gateway.router`
-- `gateway.cache.exact`
-- `gateway.cache.semantic`
-- `gateway.provider`
-- `gateway.usage`
-- `gateway.cost`
-- `gateway.response`
-
-These spans back both local trace inspection and OTLP trace export.
-
-Coding-runtime spans and events are also emitted during orchestration, including run queueing, lease-claimed run starts, approval decisions, step/artifact upserts, resume events (`run.resume_requested`, `run.resumed`), and terminal run outcomes.
+| Span name | Phase |
+|---|---|
+| `gateway.request` | Root span, present on every request |
+| `gateway.request.parse` | Request parsing and validation |
+| `gateway.governor` | Governor and policy decisions |
+| `gateway.router` | Route selection |
+| `gateway.cache.exact` | Exact cache lookup |
+| `gateway.cache.semantic` | Semantic cache lookup and writeback |
+| `gateway.provider` | Provider execution, retry, and failover |
+| `gateway.usage` | Usage normalization |
+| `gateway.cost` | Cost calculation |
+| `gateway.response` | Response return |
+| `gateway.runtime` | Catch-all for unclassified events |
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
 
@@ -170,21 +187,64 @@ When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped
 
 These events contain truncated message or choice snapshots and are intended for local debugging and carefully controlled observability setups, not blanket production payload capture.
 
+### Orchestrator Spans
+
+Coding-runtime operations emit their own spans, grouped by lifecycle stage:
+
+| Span name | Events |
+|---|---|
+| `orchestrator.task` | `orchestrator.task.started`, `orchestrator.task.finished` |
+| `orchestrator.run` | `orchestrator.run.started`, `orchestrator.run.finished`, `orchestrator.run.failed` |
+| `orchestrator.step` | `orchestrator.step.completed`, `orchestrator.step.failed` |
+| `orchestrator.artifact` | `orchestrator.artifact.created`, `orchestrator.artifact.failed` |
+| `orchestrator.approval` | `orchestrator.approval.requested`, `orchestrator.approval.resolved`, `orchestrator.approval.failed` |
+| `orchestrator.queue` | `queue.enqueued`, `queue.claimed`, `queue.acked`, `queue.nacked`, `queue.lease_extended`, `queue.lease_extend_failed` |
+
+Steps carry `hecate.step.duration_ms`. Runs carry `hecate.run.duration_ms`. Queue claim events carry `hecate.queue.wait_ms` — the time the run spent in the queue between enqueue and claim.
+
+### Retention Spans
+
+Retention manager runs emit events under the `retention.run` span:
+
+| Event | When |
+|---|---|
+| `retention.run.started` | A retention pass begins |
+| `retention.subsystem.finished` | One subsystem pruned successfully |
+| `retention.subsystem.failed` | One subsystem pruning failed |
+| `retention.run.finished` | All subsystems processed |
+| `retention.history.persisted` | Run record written to history store |
+| `retention.history.failed` | History write failed |
+
 ## Metrics
 
-The current metric set is intentionally small and request-focused. Exported instruments include:
+### Gateway Metrics
 
-- `hecate.gateway.requests`
-- `hecate.gateway.request.duration`
-- `gen_ai.gateway.chat.requests`
-- `gen_ai.gateway.cost`
-- `gen_ai.client.tokens.input`
-- `gen_ai.client.tokens.output`
-- `gen_ai.client.tokens.total`
-- `hecate.gateway.retries`
-- `hecate.gateway.failovers`
+| Instrument | Type | Unit | Description |
+|---|---|---|---|
+| `hecate.gateway.requests` | Counter | `{request}` | Total gateway requests grouped by result |
+| `hecate.gateway.request.duration` | Histogram | `ms` | Gateway request duration |
+| `gen_ai.gateway.chat.requests` | Counter | `{request}` | Chat completion responses finalized |
+| `gen_ai.gateway.cost` | Counter | `1` | Accumulated estimated cost in micros USD |
+| `gen_ai.client.tokens.input` | Counter | `{token}` | Accumulated prompt tokens |
+| `gen_ai.client.tokens.output` | Counter | `{token}` | Accumulated completion tokens |
+| `gen_ai.client.tokens.total` | Counter | `{token}` | Accumulated total tokens |
+| `hecate.gateway.retries` | Counter | `{retry}` | Provider retry attempts beyond the first |
+| `hecate.gateway.failovers` | Counter | `{failover}` | Provider failover events |
 
-Metric attributes reuse the same vocabulary as traces and logs, especially provider, model, cache, failover, and result fields.
+### Orchestrator Metrics
+
+| Instrument | Type | Unit | Description |
+|---|---|---|---|
+| `hecate.orchestrator.runs` | Counter | `{run}` | Total runs grouped by status and execution kind |
+| `hecate.orchestrator.run.duration` | Histogram | `ms` | Run wall-clock duration |
+| `hecate.orchestrator.queue.wait_duration` | Histogram | `ms` | Time a run spent in the queue before being claimed |
+| `hecate.orchestrator.steps` | Counter | `{step}` | Total steps grouped by kind and result |
+| `hecate.orchestrator.step.duration` | Histogram | `ms` | Step wall-clock duration |
+| `hecate.orchestrator.approvals` | Counter | `{approval}` | Approval gates resolved, grouped by kind and decision |
+| `hecate.orchestrator.approval.wait_duration` | Histogram | `ms` | Time a run spent waiting for an approval gate |
+| `hecate.orchestrator.queue.lease_extend_failures` | Counter | `{failure}` | Queue lease extension failures |
+
+Metric attributes reuse the same vocabulary as traces — provider, model, cache, failover, result, step kind, approval decision, queue backend, and run status fields.
 
 ## Error And Limit Signals
 
@@ -194,6 +254,8 @@ Two operational response classes are worth calling out:
 - rate limiting is returned as HTTP `429` with a `rate_limit_error` error shape
 
 When rate limiting is enabled, the token-bucket limiter also exposes reset and remaining-budget information through the `X-RateLimit-*` headers above.
+
+The `hecate.error.kind` attribute on error events is clamped to a closed set of known values. Any value outside this set is normalized to `other` to prevent high-cardinality label explosions in metric exporters and trace backends.
 
 ## Local Debugging Workflow
 
@@ -205,3 +267,5 @@ For request-level debugging:
 4. Inspect route candidates, failovers, cache decisions, provider latency, final route reason, and span attributes.
 
 That local HTTP path is usually faster than jumping straight into an OTLP backend while developing.
+
+For task/run debugging, use `GET /v1/tasks/{task_id}/runs/{run_id}` to retrieve the run record with its `trace_id`, then look up the trace with `GET /v1/traces?request_id=<request_id>`. The queue wait and step durations are recorded as span attributes on the relevant spans.

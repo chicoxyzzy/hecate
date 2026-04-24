@@ -90,6 +90,13 @@ func TestSpanMappingForEventGroups(t *testing.T) {
 		{telemetry.EventQueueNacked, telemetry.SpanOrchestratorQueue},
 		{telemetry.EventQueueLeaseExtended, telemetry.SpanOrchestratorQueue},
 		{telemetry.EventQueueLeaseExtendFailed, telemetry.SpanOrchestratorQueue},
+		// Retention
+		{telemetry.EventRetentionRunStarted, telemetry.SpanRetentionRun},
+		{telemetry.EventRetentionRunFinished, telemetry.SpanRetentionRun},
+		{telemetry.EventRetentionSubsystemFailed, telemetry.SpanRetentionRun},
+		{telemetry.EventRetentionSubsystemFinished, telemetry.SpanRetentionRun},
+		{telemetry.EventRetentionHistoryFailed, telemetry.SpanRetentionRun},
+		{telemetry.EventRetentionHistoryPersisted, telemetry.SpanRetentionRun},
 	}
 
 	for _, tc := range cases {

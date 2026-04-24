@@ -291,6 +291,8 @@ func spanSpecForEvent(name string) spanSpec {
 		return spanSpec{name: "orchestrator.approval", kind: "internal"}
 	case hasPrefix(name, "queue."):
 		return spanSpec{name: "orchestrator.queue", kind: "internal"}
+	case hasPrefix(name, "retention."):
+		return spanSpec{name: "retention.run", kind: "internal"}
 	case hasPrefix(name, "governor."):
 		return spanSpec{name: "gateway.governor", kind: "internal"}
 	case hasPrefix(name, "cache."):

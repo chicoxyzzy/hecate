@@ -75,6 +75,7 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	if queue := buildTaskQueue(cfg, logger, postgresClient); queue != nil {
 		runner.SetQueue(queue)
 	}
+	runner.SetMetrics(telemetry.NewOrchestratorMetrics())
 	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
 		logger.Warn("task runner reconciliation failed", slog.Any("error", err))
 	}

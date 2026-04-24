@@ -9,6 +9,7 @@ import (
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/profiler"
+	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
 const (
@@ -134,8 +135,8 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 	traceRequestID := fmt.Sprintf("retention:%s:%d", trigger, startedAt.UnixNano())
 	trace := m.tracer.Start(traceRequestID)
 	defer trace.Finalize()
-	trace.Record("retention.run.started", map[string]any{
-		"retention.trigger": trigger,
+	trace.Record(telemetry.EventRetentionRunStarted, map[string]any{
+		telemetry.AttrRetentionTrigger: trigger,
 	})
 
 	results := make([]SubsystemResult, 0, len(m.subsystems))
@@ -154,14 +155,14 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 		result.Deleted = deleted
 		if err != nil {
 			result.Error = err.Error()
-			trace.Record("retention.subsystem.failed", map[string]any{
-				"retention.subsystem": sub.name,
-				"error.message":       err.Error(),
+			trace.Record(telemetry.EventRetentionSubsystemFailed, map[string]any{
+				telemetry.AttrRetentionSubsystem: sub.name,
+				telemetry.AttrErrorMessage:       err.Error(),
 			})
 		} else {
-			trace.Record("retention.subsystem.finished", map[string]any{
-				"retention.subsystem": sub.name,
-				"retention.deleted":   deleted,
+			trace.Record(telemetry.EventRetentionSubsystemFinished, map[string]any{
+				telemetry.AttrRetentionSubsystem: sub.name,
+				telemetry.AttrRetentionDeleted:   deleted,
 			})
 			m.logger.Info("retention subsystem finished",
 				slog.String("subsystem", sub.name),
@@ -175,9 +176,9 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 	}
 
 	finishedAt := time.Now().UTC()
-	trace.Record("retention.run.finished", map[string]any{
-		"retention.trigger": trigger,
-		"retention.results": len(results),
+	trace.Record(telemetry.EventRetentionRunFinished, map[string]any{
+		telemetry.AttrRetentionTrigger: trigger,
+		telemetry.AttrRetentionResults: len(results),
 	})
 
 	run := RunResult{
@@ -196,13 +197,13 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) RunResult {
 			Results:    cloneSubsystemResults(run.Results),
 		}
 		if err := m.history.AppendRun(ctx, record); err != nil {
-			trace.Record("retention.history.failed", map[string]any{
-				"error.message": err.Error(),
+			trace.Record(telemetry.EventRetentionHistoryFailed, map[string]any{
+				telemetry.AttrErrorMessage: err.Error(),
 			})
 			m.logger.Warn("retention history append failed", slog.Any("error", err))
 		} else {
-			trace.Record("retention.history.persisted", map[string]any{
-				"retention.trigger": run.Trigger,
+			trace.Record(telemetry.EventRetentionHistoryPersisted, map[string]any{
+				telemetry.AttrRetentionTrigger: run.Trigger,
 			})
 		}
 	}

@@ -101,4 +101,18 @@ const (
 	AttrHecateQueueClaimID = "hecate.queue.claim_id"
 	AttrHecateQueueWaitMS  = "hecate.queue.wait_ms"
 	AttrHecateWorkerID     = "hecate.worker.id"
+
+	// Task identity (non-run fields emitted on orchestrator.task.* events)
+	AttrHecateTaskStatus     = "hecate.task.status"
+	AttrHecateTaskRepo       = "hecate.task.repo"
+	AttrHecateTaskBaseBranch = "hecate.task.base_branch"
+
+	// Shell execution
+	AttrHecateShellCommand = "hecate.shell.command"
+
+	// Retention
+	AttrRetentionTrigger    = "retention.trigger"
+	AttrRetentionSubsystem  = "retention.subsystem"
+	AttrRetentionDeleted    = "retention.deleted"
+	AttrRetentionResults    = "retention.results"
 )
