@@ -28,6 +28,57 @@ Token sources:
 
 If both headers are present, Hecate uses `Authorization` first.
 
+## Two operating modes
+
+Hecate can be used in two different ways with Codex/Claude-style clients.
+
+### Which mode should I choose?
+
+| If you want... | Choose |
+| --- | --- |
+| Keep Codex/Claude tool orchestration as-is and only centralize model access/policy | Mode 1 (Gateway mode) |
+| Move execution control into Hecate with queueing, approvals, and runtime events | Mode 2 (Runtime mode) |
+| Use Hecate sandbox isolation for shell/file/git execution | Mode 2 (Runtime mode) |
+| Minimal migration from existing OpenAI/Anthropic client usage | Mode 1 (Gateway mode) |
+
+### Mode 1: Gateway mode (LLM proxy)
+
+Use this when your client already orchestrates tools and execution.
+
+- Endpoints: `/v1/chat/completions`, `/v1/messages`, `/v1/models`
+- Orchestration happens in the client (Codex/Claude Code)
+- Sandboxing happens in the client runtime
+- Hecate handles routing, policy, budgets, rate limits, and telemetry
+
+```mermaid
+flowchart TD
+    clientRuntime["Codex or Claude Code"] --> hecateGateway["Hecate gateway APIs"];
+    hecateGateway --> authPolicy["Auth, policy, budget, rate limit"];
+    authPolicy --> routingLayer["Router and provider selection"];
+    routingLayer --> upstreamModels["Cloud or local model providers"];
+```
+
+### Mode 2: Runtime mode (Hecate executes work)
+
+Use this when you want Hecate to run task execution itself.
+
+- Endpoints: `/v1/tasks/...`
+- Orchestration happens in Hecate runner/queue
+- Sandboxing happens in Hecate (`cmd/sandboxd`)
+- Client becomes control-plane caller (create/start/approve/resume/cancel)
+
+```mermaid
+flowchart TD
+    clientControl["Codex or Claude client"] --> taskApi["Hecate task APIs"];
+    taskApi --> runner["Orchestrator runner"];
+    runner --> queue["Leased run queue"];
+    queue --> workers["Workers"];
+    workers --> sandboxd["sandboxd execution boundary"];
+    sandboxd --> taskState["Runs, steps, artifacts, events"];
+```
+
+For runtime-mode endpoint details, see [`docs/runtime-api.md`](runtime-api.md).
+
 ## Codex setup
 
 Most Codex/OpenAI-compatible tools can be configured with OpenAI-style env vars.
