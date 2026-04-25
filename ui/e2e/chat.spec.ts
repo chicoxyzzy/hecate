@@ -91,3 +91,35 @@ test("system prompt editor opens and closes", async ({ page }) => {
   await systemBtn.click();
   await expect(page.getByText("SYSTEM PROMPT")).not.toBeVisible();
 });
+
+test("Enter-switch toggle is visible in the input toolbar and clickable", async ({ page }) => {
+  // The label is one of "↵ to send" or "⌘+↵ to send" / "Ctrl+↵ to send" depending on OS.
+  const toggle = page.locator("button").filter({ hasText: /↵ to send/ });
+  await expect(toggle).toBeVisible();
+  const before = await toggle.textContent();
+  await toggle.click();
+  // After click, label should change.
+  await expect(toggle).not.toHaveText(before ?? "");
+});
+
+test("Enter-switch preference persists across reload via localStorage", async ({ page }) => {
+  const toggle = page.locator("button").filter({ hasText: /↵ to send/ });
+  const initial = await toggle.textContent();
+  await toggle.click();
+  const after = await toggle.textContent();
+  expect(after).not.toBe(initial);
+
+  await page.reload();
+  await page.waitForSelector(".hecate-activitybar");
+  const reloaded = page.locator("button").filter({ hasText: /↵ to send/ });
+  await expect(reloaded).toHaveText(after ?? "");
+});
+
+test("workspace selection persists across reload", async ({ page }) => {
+  await page.keyboard.press("4"); // Providers
+  await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute("aria-label", /Providers/);
+
+  await page.reload();
+  await page.waitForSelector(".hecate-activitybar");
+  await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute("aria-label", /Providers/);
+});
