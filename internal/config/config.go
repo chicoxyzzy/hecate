@@ -222,6 +222,9 @@ type OpenAICompatibleProviderConfig struct {
 	StubResponse string        `json:"stub_response"`
 	DefaultModel string        `json:"default_model"`
 	Enabled      bool          `json:"enabled"`
+	// KnownModels is the curated catalog from the built-in preset. It populates the
+	// static capabilities when no API key is set and live discovery is skipped.
+	KnownModels []string `json:"known_models,omitempty"`
 }
 
 func LoadFromEnv() Config {

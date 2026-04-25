@@ -218,6 +218,9 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 			Timeout:      30 * time.Second,
 			Enabled:      true,
 		}
+		if builtIn, ok := config.BuiltInProviderByID(item.ID); ok {
+			cfg.KnownModels = append([]string(nil), builtIn.Models...)
+		}
 		if _, ok := byName[cfg.Name]; !ok {
 			order = append(order, cfg.Name)
 		}

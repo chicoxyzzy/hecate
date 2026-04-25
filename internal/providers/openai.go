@@ -246,7 +246,9 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, req types.ChatReque
 }
 
 func (p *OpenAICompatibleProvider) staticCapabilities(source string) Capabilities {
-	models := make([]string, 0, 1)
+	// Prefer the curated KnownModels list (populated from the built-in preset)
+	// so users see the full catalog even when no API key is configured.
+	models := append([]string(nil), p.config.KnownModels...)
 	if p.config.DefaultModel != "" && !contains(models, p.config.DefaultModel) {
 		models = append(models, p.config.DefaultModel)
 	}

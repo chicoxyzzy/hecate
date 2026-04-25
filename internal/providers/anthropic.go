@@ -221,7 +221,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req types.ChatRequest) (*t
 }
 
 func (p *AnthropicProvider) staticCapabilities(source string) Capabilities {
-	models := make([]string, 0, 1)
+	models := append([]string(nil), p.config.KnownModels...)
 	if p.config.DefaultModel != "" && !contains(models, p.config.DefaultModel) {
 		models = append(models, p.config.DefaultModel)
 	}
