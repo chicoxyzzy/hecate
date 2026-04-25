@@ -4,5 +4,6 @@
 .gopath/
 node_modules/
 ui/node_modules/
+e2e/local-ollama-*.log
 ui/dist/
 ui/*.tsbuildinfo
