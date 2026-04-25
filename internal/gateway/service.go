@@ -248,7 +248,7 @@ func (s *Service) Tracer() profiler.Tracer {
 
 func (s *Service) HandleChat(ctx context.Context, req types.ChatRequest) (result *ChatResult, err error) {
 	startedAt := time.Now()
-	defer s.recordRequestOutcome(ctx, err, time.Since(startedAt))
+	defer func() { s.recordRequestOutcome(ctx, err, time.Since(startedAt)) }()
 
 	trace := s.tracer.Start(req.RequestID)
 	defer trace.Finalize()
