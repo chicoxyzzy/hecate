@@ -11,9 +11,9 @@ import (
 )
 
 type RegistryCatalog struct {
-	registry         providers.Registry
-	healthTracker    providers.HealthTracker
-	selfListenAddr   string
+	registry       providers.Registry
+	healthTracker  providers.HealthTracker
+	selfListenAddr string
 }
 
 type baseURLer interface {

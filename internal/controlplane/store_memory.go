@@ -272,4 +272,3 @@ func (s *MemoryStore) PruneAuditEvents(_ context.Context, maxAge time.Duration, 
 	defer s.mu.Unlock()
 	return pruneAuditEvents(&s.data, maxAge, maxCount), nil
 }
-

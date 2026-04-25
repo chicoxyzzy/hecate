@@ -582,4 +582,3 @@ type ControlPlaneAPIKeyLifecycleRequest struct {
 	Enabled bool   `json:"enabled"`
 	Key     string `json:"key"`
 }
-
