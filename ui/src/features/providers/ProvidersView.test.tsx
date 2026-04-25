@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProvidersView } from "./ProvidersView";
 import { createRuntimeConsoleActions, createRuntimeConsoleFixture } from "../../test/runtime-console-fixture";
-import type { ConfiguredProviderRecord, ProviderPresetRecord, ProviderStatus } from "../../types/runtime";
+import type { ConfiguredProviderRecord, ProviderPresetRecord, ProviderRecord } from "../../types/runtime";
 
 const presets: ProviderPresetRecord[] = [
   { id: "anthropic", name: "Anthropic", kind: "cloud", protocol: "openai", base_url: "https://api.anthropic.com/v1", description: "" },
@@ -25,7 +26,7 @@ function makeConfigured(id: string, overrides: Partial<ConfiguredProviderRecord>
   };
 }
 
-function makeStatus(name: string, overrides: Partial<ProviderStatus> = {}): ProviderStatus {
+function makeStatus(name: string, overrides: Partial<ProviderRecord> = {}): ProviderRecord {
   return {
     name,
     kind: "local",
@@ -76,11 +77,13 @@ describe("ProvidersView conflict resolution", () => {
     expect(screen.getByRole("switch", { name: "Enable Ollama"    }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("optimistically disables conflicting providers when the user enables one", () => {
-    const setProviderEnabled = vi.fn(async () => undefined);
+  it("optimistically disables conflicting providers when the user enables one", async () => {
+    // Use a deferred promise so we can observe the optimistic UI state before
+    // the action resolves and clears the pending toggles.
+    let resolveAction: (() => void) | null = null;
+    const setProviderEnabled = vi.fn(() => new Promise<void>(r => { resolveAction = () => r(); }));
     const actions = { ...createRuntimeConsoleActions(), setProviderEnabled };
 
-    // Start with llamacpp enabled, localai disabled.
     const state = createRuntimeConsoleFixture({
       session: adminSession,
       providerPresets: presets,
@@ -99,18 +102,24 @@ describe("ProvidersView conflict resolution", () => {
     const localaiToggle = screen.getByRole("switch", { name: "Enable LocalAI" });
     expect(localaiToggle.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(localaiToggle);
+    const user = userEvent.setup();
+    await user.click(localaiToggle);
 
-    // Backend was called for the toggled provider.
+    // The action's promise has not resolved — optimistic UI state is visible.
     expect(setProviderEnabled).toHaveBeenCalledWith("localai", true);
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Enable llama.cpp" }).getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByRole("switch", { name: "Enable LocalAI"   }).getAttribute("aria-checked")).toBe("true");
+    });
 
-    // After the click, llamacpp should appear off (optimistic mutual exclusion).
-    expect(screen.getByRole("switch", { name: "Enable llama.cpp" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByRole("switch", { name: "Enable LocalAI"   }).getAttribute("aria-checked")).toBe("true");
+    // Resolve and let the .then() that clears pending toggles run, wrapped in act
+    // so React batches the resulting state update without a warning.
+    await act(async () => { resolveAction!(); });
   });
 
-  it("does not flip conflicting providers when the user disables one", () => {
-    const setProviderEnabled = vi.fn(async () => undefined);
+  it("does not flip conflicting providers when the user disables one", async () => {
+    let resolveAction: (() => void) | null = null;
+    const setProviderEnabled = vi.fn(() => new Promise<void>(r => { resolveAction = () => r(); }));
     const actions = { ...createRuntimeConsoleActions(), setProviderEnabled };
 
     const state = createRuntimeConsoleFixture({
@@ -128,11 +137,16 @@ describe("ProvidersView conflict resolution", () => {
 
     render(<ProvidersView state={state} actions={actions} />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Enable llama.cpp" }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("switch", { name: "Enable llama.cpp" }));
 
     expect(setProviderEnabled).toHaveBeenCalledWith("llamacpp", false);
-    // llamacpp now off, localai stays where the CP put it (still off — backend hasn't re-resolved).
-    expect(screen.getByRole("switch", { name: "Enable llama.cpp" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByRole("switch", { name: "Enable LocalAI"   }).getAttribute("aria-checked")).toBe("false");
+    // llamacpp now off, localai stays off (backend hasn't re-resolved).
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Enable llama.cpp" }).getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByRole("switch", { name: "Enable LocalAI"   }).getAttribute("aria-checked")).toBe("false");
+    });
+
+    await act(async () => { resolveAction!(); });
   });
 });

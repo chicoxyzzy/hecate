@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ObservabilityView } from "./ObservabilityView";
-import { createRuntimeConsoleFixture } from "../../test/runtime-console-fixture";
+import { createRuntimeConsoleActions, createRuntimeConsoleFixture } from "../../test/runtime-console-fixture";
 
 const adminSession = {
   kind: "admin" as const, label: "Admin", role: "admin", isAdmin: true, isAuthenticated: true,
@@ -28,18 +28,19 @@ afterEach(() => {
 });
 
 describe("ObservabilityView", () => {
-  it("renders without crashing for an admin session", () => {
+  it("renders without crashing for an admin session", async () => {
     const state = createRuntimeConsoleFixture({ session: adminSession });
-    render(<ObservabilityView state={state} />);
-    // Just assert at least one common label appears.
+    await act(async () => {
+      render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+    });
     expect(document.body).toBeTruthy();
   });
 
   it("does not call admin endpoints for anonymous session", async () => {
     const state = createRuntimeConsoleFixture(); // anonymous default
-    render(<ObservabilityView state={state} />);
-    // Wait a tick — the effects fire async, but should bail out for non-admin.
-    await new Promise(r => setTimeout(r, 10));
+    await act(async () => {
+      render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+    });
     const adminCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url).startsWith("/admin/")
     );
@@ -48,10 +49,13 @@ describe("ObservabilityView", () => {
 
   it("calls /admin/runtime/stats and /admin/traces for admin session", async () => {
     const state = createRuntimeConsoleFixture({ session: adminSession });
-    render(<ObservabilityView state={state} />);
-    await new Promise(r => setTimeout(r, 20));
-    const adminCalls = fetchMock.mock.calls.map(([url]) => String(url));
-    expect(adminCalls.some(u => u.startsWith("/admin/runtime/stats"))).toBe(true);
-    expect(adminCalls.some(u => u.startsWith("/admin/traces"))).toBe(true);
+    await act(async () => {
+      render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+    });
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([u]) => String(u));
+      expect(urls.some(u => u.startsWith("/admin/runtime/stats"))).toBe(true);
+      expect(urls.some(u => u.startsWith("/admin/traces"))).toBe(true);
+    });
   });
 });

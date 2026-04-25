@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatView } from "./ChatView";
@@ -35,13 +36,15 @@ describe("ChatView input", () => {
     expect(send.disabled).toBe(false);
   });
 
-  it("calls setMessage as user types", () => {
+  it("calls setMessage as user types", async () => {
     const setMessage = vi.fn();
-    const { state, actions } = setup({}, { setMessage });
+    // Start with empty message so the assertion sees only what we typed.
+    const { state, actions } = setup({ message: "" }, { setMessage });
     render(<ChatView state={state} actions={actions} />);
     const ta = screen.getByPlaceholderText(/Message/i) as HTMLTextAreaElement;
-    fireEvent.change(ta, { target: { value: "typed text" } });
-    expect(setMessage).toHaveBeenCalledWith("typed text");
+    const user = userEvent.setup();
+    await user.type(ta, "h");
+    expect(setMessage).toHaveBeenCalledWith("h");
   });
 });
 
@@ -76,13 +79,14 @@ describe("ChatView sessions sidebar", () => {
     expect(screen.getByText("Second chat")).toBeTruthy();
   });
 
-  it("calls selectChatSession when clicking a session row", () => {
+  it("calls selectChatSession when clicking a session row", async () => {
     const selectChatSession = vi.fn(async () => undefined);
     const { state, actions } = setup({
       chatSessions: [{ id: "s1", title: "Pick me", turn_count: 0 } as any],
     }, { selectChatSession });
     render(<ChatView state={state} actions={actions} />);
-    fireEvent.click(screen.getByText("Pick me"));
+    const user = userEvent.setup();
+    await user.click(screen.getByText("Pick me"));
     expect(selectChatSession).toHaveBeenCalledWith("s1");
   });
 });

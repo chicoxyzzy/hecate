@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { Badge, CopyBtn, Dot, Icon, Icons, InlineError, Toggle } from "./ui";
@@ -10,20 +11,21 @@ describe("Toggle", () => {
     expect(sw.getAttribute("aria-checked")).toBe("true");
   });
 
-  it("invokes onChange with negation on click", () => {
+  it("invokes onChange with negation on click", async () => {
     const onChange = vi.fn();
     render(<Toggle on={false} onChange={onChange} ariaLabel="x" />);
-    fireEvent.click(screen.getByRole("switch"));
+    await userEvent.setup().click(screen.getByRole("switch"));
     expect(onChange).toHaveBeenCalledWith(true);
   });
 
-  it("supports being clicked multiple times", () => {
+  it("supports being clicked multiple times", async () => {
     const onChange = vi.fn();
+    const user = userEvent.setup();
     const { rerender } = render(<Toggle on={false} onChange={onChange} ariaLabel="x" />);
-    fireEvent.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch"));
     expect(onChange).toHaveBeenLastCalledWith(true);
     rerender(<Toggle on={true} onChange={onChange} ariaLabel="x" />);
-    fireEvent.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch"));
     expect(onChange).toHaveBeenLastCalledWith(false);
   });
 
@@ -82,6 +84,9 @@ describe("Icon", () => {
 });
 
 describe("CopyBtn", () => {
+  // Direct navigator.clipboard integration test — userEvent.setup() installs its
+  // own clipboard mock that would intercept our spy, so we use the lower-level
+  // fireEvent here. This is the documented approach for clipboard interop tests.
   it("invokes navigator.clipboard.writeText on click", () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", {
