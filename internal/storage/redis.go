@@ -14,6 +14,11 @@ import (
 
 var ErrNil = errors.New("redis nil reply")
 
+const (
+	maxRedisBulkReplySize = 64 * 1024 * 1024
+	maxRedisArrayElements = 100000
+)
+
 type RedisConfig struct {
 	Address  string
 	Password string
@@ -236,6 +241,12 @@ func readReply(r *bufio.Reader) (any, error) {
 		if size == -1 {
 			return nil, ErrNil
 		}
+		if size < -1 {
+			return nil, fmt.Errorf("invalid redis bulk reply size %d", size)
+		}
+		if size > maxRedisBulkReplySize {
+			return nil, fmt.Errorf("redis bulk reply size %d exceeds limit %d", size, maxRedisBulkReplySize)
+		}
 		buf := make([]byte, size+2)
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return nil, err
@@ -252,6 +263,12 @@ func readReply(r *bufio.Reader) (any, error) {
 		}
 		if count == -1 {
 			return nil, ErrNil
+		}
+		if count < -1 {
+			return nil, fmt.Errorf("invalid redis array reply count %d", count)
+		}
+		if count > maxRedisArrayElements {
+			return nil, fmt.Errorf("redis array reply count %d exceeds limit %d", count, maxRedisArrayElements)
 		}
 		out := make([]any, 0, count)
 		for i := 0; i < count; i++ {
