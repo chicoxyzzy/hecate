@@ -315,7 +315,7 @@ func spanSpecForEvent(name string) spanSpec {
 }
 
 func otelAttributesForEvent(name string, attrs map[string]any) map[string]any {
-	out := make(map[string]any, len(attrs)+2)
+	out := make(map[string]any, len(attrs))
 	for key, value := range attrs {
 		out[key] = value
 	}

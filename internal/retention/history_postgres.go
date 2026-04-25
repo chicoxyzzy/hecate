@@ -10,10 +10,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/storage"
 )
 
-const (
-	defaultHistoryListLimit = 20
-	maxHistoryListLimit     = 200
-)
+const maxHistoryListLimit = 1_000
 
 type PostgresHistoryStore struct {
 	db    *sql.DB
@@ -70,7 +67,7 @@ func (s *PostgresHistoryStore) AppendRun(ctx context.Context, record HistoryReco
 
 func (s *PostgresHistoryStore) ListRuns(ctx context.Context, limit int) ([]HistoryRecord, error) {
 	if limit <= 0 {
-		limit = defaultHistoryListLimit
+		limit = 20
 	} else if limit > maxHistoryListLimit {
 		limit = maxHistoryListLimit
 	}

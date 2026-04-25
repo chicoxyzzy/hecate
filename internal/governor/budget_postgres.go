@@ -170,9 +170,13 @@ func (s *PostgresBudgetStore) AppendEvent(ctx context.Context, event BudgetEvent
 	return err
 }
 
+const maxBudgetEventListLimit = 1_000
+
 func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit int) ([]BudgetEvent, error) {
 	if limit <= 0 {
 		limit = 20
+	} else if limit > maxBudgetEventListLimit {
+		limit = maxBudgetEventListLimit
 	}
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
@@ -239,6 +243,8 @@ func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit 
 func (s *PostgresBudgetStore) ListRecentEvents(ctx context.Context, limit int) ([]BudgetEvent, error) {
 	if limit <= 0 {
 		limit = 20
+	} else if limit > maxBudgetEventListLimit {
+		limit = maxBudgetEventListLimit
 	}
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`

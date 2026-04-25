@@ -15,8 +15,8 @@ import (
 var ErrNil = errors.New("redis nil reply")
 
 const (
-	maxRedisBulkReplySize = 64 * 1024 * 1024
-	maxRedisArrayElements = 100000
+	maxRedisBulkReplySize = 64 * 1024 * 1024 // 64 MB
+	maxRedisArrayElements = 100_000
 )
 
 type RedisConfig struct {
@@ -241,7 +241,7 @@ func readReply(r *bufio.Reader) (any, error) {
 		if size == -1 {
 			return nil, ErrNil
 		}
-		if size < -1 {
+		if size < 0 {
 			return nil, fmt.Errorf("invalid redis bulk reply size %d", size)
 		}
 		if size > maxRedisBulkReplySize {
@@ -264,7 +264,7 @@ func readReply(r *bufio.Reader) (any, error) {
 		if count == -1 {
 			return nil, ErrNil
 		}
-		if count < -1 {
+		if count < 0 {
 			return nil, fmt.Errorf("invalid redis array reply count %d", count)
 		}
 		if count > maxRedisArrayElements {

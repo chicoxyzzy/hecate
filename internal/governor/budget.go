@@ -184,9 +184,7 @@ func (s *MemoryBudgetStore) ListRecentEvents(_ context.Context, limit int) ([]Bu
 	if limit <= 0 || limit > len(all) {
 		limit = len(all)
 	}
-	out := make([]BudgetEvent, limit)
-	copy(out, all[:limit])
-	return out, nil
+	return append([]BudgetEvent(nil), all[:limit]...), nil
 }
 
 func (s *MemoryBudgetStore) PruneEvents(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
@@ -342,9 +340,7 @@ func (s *RedisBudgetStore) ListRecentEvents(ctx context.Context, limit int) ([]B
 	if limit <= 0 || limit > len(all) {
 		limit = len(all)
 	}
-	out := make([]BudgetEvent, limit)
-	copy(out, all[:limit])
-	return out, nil
+	return append([]BudgetEvent(nil), all[:limit]...), nil
 }
 
 func (s *RedisBudgetStore) PruneEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {

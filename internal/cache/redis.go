@@ -4,10 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"math"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
@@ -75,7 +72,7 @@ func (s *RedisStore) Prune(ctx context.Context, maxAge time.Duration, maxCount i
 	}
 
 	now := time.Now()
-	deleted := 0
+	var deleted int64
 	candidates := make([]candidate, 0, len(keys))
 	for _, key := range keys {
 		payload, err := s.client.Get(ctx, key)
@@ -89,12 +86,9 @@ func (s *RedisStore) Prune(ctx context.Context, maxAge time.Duration, maxCount i
 		if maxAge > 0 && !envelope.WrittenAt.IsZero() && envelope.WrittenAt.Before(now.Add(-maxAge)) {
 			n, err := s.client.Del(ctx, key)
 			if err != nil {
-				return deleted, err
+				return int(deleted), err
 			}
-			if (strconv.IntSize == 32 && (n > math.MaxInt32 || n < math.MinInt32)) || (strconv.IntSize == 64 && (n > math.MaxInt64 || n < math.MinInt64)) {
-				return deleted, fmt.Errorf("DEL result out of int range: %d", n)
-			}
-			deleted += int(n)
+			deleted += n
 			continue
 		}
 		candidates = append(candidates, candidate{key: key, writtenAt: envelope.WrittenAt})
@@ -107,15 +101,12 @@ func (s *RedisStore) Prune(ctx context.Context, maxAge time.Duration, maxCount i
 		for _, item := range candidates[maxCount:] {
 			n, err := s.client.Del(ctx, item.key)
 			if err != nil {
-				return deleted, err
+				return int(deleted), err
 			}
-			if (strconv.IntSize == 32 && (n > math.MaxInt32 || n < math.MinInt32)) || (strconv.IntSize == 64 && (n > math.MaxInt64 || n < math.MinInt64)) {
-				return deleted, fmt.Errorf("DEL result out of int range: %d", n)
-			}
-			deleted += int(n)
+			deleted += n
 		}
 	}
-	return deleted, nil
+	return int(deleted), nil
 }
 
 func (s *RedisStore) cacheKey(key string) string {
