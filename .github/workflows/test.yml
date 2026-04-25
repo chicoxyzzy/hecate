@@ -10,6 +10,9 @@ on:
     paths-ignore:
       - '**/*.md'
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same branch / PR when a new commit is pushed.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
