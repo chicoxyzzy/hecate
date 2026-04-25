@@ -11,6 +11,7 @@ import {
   updateChatSession as updateChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
   deleteProvider as deleteProviderRequest,
+  deleteProviderCredential as deleteProviderCredentialRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
   getBudget,
@@ -815,6 +816,17 @@ export function useRuntimeConsole() {
     });
   }
 
+  async function deleteProviderCredential(id: string) {
+    await runAdminMutation({
+      successMessage: "API key removed.",
+      errorMessage: "Failed to remove API key.",
+      failureDetail: "failed to remove provider credential",
+      action: async () => {
+        await deleteProviderCredentialRequest(id, authToken);
+      },
+    });
+  }
+
   async function setTenantEnabled(id: string, enabled: boolean) {
     await runAdminMutation({
       successMessage: `Tenant ${enabled ? "enabled" : "disabled"}.`,
@@ -1050,6 +1062,7 @@ export function useRuntimeConsole() {
       copyCommand,
       deleteAPIKey,
       deleteProvider,
+      deleteProviderCredential,
       deleteTenant,
       createChatSession,
       deleteChatSession,

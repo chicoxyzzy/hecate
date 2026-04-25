@@ -93,6 +93,7 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     deleteChatSession: async () => undefined,
     deleteAPIKey: async () => undefined,
     deleteProvider: async () => undefined,
+    deleteProviderCredential: async () => undefined,
     deleteTenant: async () => undefined,
     loadDashboard: async () => undefined,
     resetBudget: async () => undefined,

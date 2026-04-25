@@ -44,6 +44,20 @@ func (s *FileStore) RotateProviderSecret(ctx context.Context, id string, secret 
 	return provider, nil
 }
 
+func (s *FileStore) DeleteProviderCredential(ctx context.Context, id string) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	provider, err := applyDeleteProviderCredential(ctx, &s.data, id)
+	if err != nil {
+		return Provider{}, err
+	}
+	if err := s.persistLocked(); err != nil {
+		return Provider{}, err
+	}
+	return provider, nil
+}
+
 func (s *FileStore) DeleteProvider(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,6 +113,24 @@ func (s *RedisStore) RotateProviderSecret(ctx context.Context, id string, secret
 		return Provider{}, err
 	}
 	provider, err := applyRotateProviderSecret(ctx, &state, id, secret)
+	if err != nil {
+		return Provider{}, err
+	}
+	if err := s.writeState(ctx, state); err != nil {
+		return Provider{}, err
+	}
+	return provider, nil
+}
+
+func (s *RedisStore) DeleteProviderCredential(ctx context.Context, id string) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return Provider{}, err
+	}
+	provider, err := applyDeleteProviderCredential(ctx, &state, id)
 	if err != nil {
 		return Provider{}, err
 	}

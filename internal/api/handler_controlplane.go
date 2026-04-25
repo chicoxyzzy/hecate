@@ -55,8 +55,8 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	for _, key := range state.APIKeys {
 		payload.Data.APIKeys = append(payload.Data.APIKeys, renderControlPlaneAPIKey(key))
 	}
-	for _, provider := range state.Providers {
-		payload.Data.Providers = append(payload.Data.Providers, renderControlPlaneProvider(provider, state.ProviderSecrets))
+	for _, record := range buildControlPlaneProviderList(h.config, state) {
+		payload.Data.Providers = append(payload.Data.Providers, record)
 	}
 	for _, rule := range state.PolicyRules {
 		payload.Data.PolicyRules = append(payload.Data.PolicyRules, renderControlPlanePolicyRule(rule))
@@ -405,6 +405,30 @@ func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *htt
 	})
 }
 
+func (h *Handler) HandleControlPlaneDeleteProviderCredential(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	id := r.PathValue("id")
+	if err := h.providerRuntime.DeleteCredential(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id); err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "control_plane_provider_credential_deleted",
+		"data": map[string]string{
+			"id": id,
+		},
+	})
+}
+
 func (h *Handler) HandleControlPlaneUpsertPolicyRule(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireControlPlane(w, r)
 	if !ok {
@@ -578,6 +602,69 @@ func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAud
 	return record
 }
 
+// buildControlPlaneProviderList returns a record for every known provider.
+// Order of precedence (highest wins): vault secret > env key > built-in preset.
+// All built-in providers appear even if never explicitly saved to the CP store.
+func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) []ControlPlaneProviderRecord {
+	envKeyByID := make(map[string]bool)
+	for _, pc := range cfg.Providers.OpenAICompatible {
+		if pc.APIKey != "" {
+			envKeyByID[pc.Name] = true
+		}
+	}
+
+	cpByID := make(map[string]controlplane.Provider, len(state.Providers))
+	for _, p := range state.Providers {
+		cpByID[p.ID] = p
+	}
+
+	seen := make(map[string]struct{})
+	var records []ControlPlaneProviderRecord
+
+	for _, builtIn := range config.BuiltInProviders() {
+		seen[builtIn.ID] = struct{}{}
+
+		if cp, ok := cpByID[builtIn.ID]; ok {
+			// CP store record exists — use it; vault key takes priority.
+			record := renderControlPlaneProvider(cp, state.ProviderSecrets)
+			if !record.CredentialConfigured && envKeyByID[builtIn.ID] {
+				record.CredentialConfigured = true
+				record.CredentialSource = "env"
+			}
+			records = append(records, record)
+			continue
+		}
+
+		// Synthetic record from built-in preset.
+		record := ControlPlaneProviderRecord{
+			ID:           builtIn.ID,
+			Name:         builtIn.ID,
+			PresetID:     builtIn.ID,
+			Kind:         builtIn.Kind,
+			Protocol:     builtIn.Protocol,
+			BaseURL:      builtIn.BaseURL,
+			APIVersion:   builtIn.APIVersion,
+			DefaultModel: builtIn.DefaultModel,
+			Enabled:      true,
+		}
+		if envKeyByID[builtIn.ID] {
+			record.CredentialConfigured = true
+			record.CredentialSource = "env"
+		}
+		records = append(records, record)
+	}
+
+	// Include any CP-only providers that aren't built-ins (custom providers).
+	for _, cp := range state.Providers {
+		if _, ok := seen[cp.ID]; ok {
+			continue
+		}
+		records = append(records, renderControlPlaneProvider(cp, state.ProviderSecrets))
+	}
+
+	return records
+}
+
 func renderControlPlaneProvider(provider controlplane.Provider, secrets []controlplane.ProviderSecret) ControlPlaneProviderRecord {
 	inheritedFields := controlPlaneInheritedFields(provider)
 	record := ControlPlaneProviderRecord{
@@ -596,6 +683,7 @@ func renderControlPlaneProvider(provider controlplane.Provider, secrets []contro
 	for _, secret := range secrets {
 		if secret.ProviderID == provider.ID {
 			record.CredentialConfigured = secret.APIKeyEncrypted != ""
+			record.CredentialSource = "vault"
 			record.CredentialPreview = secret.APIKeyPreview
 			break
 		}

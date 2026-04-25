@@ -133,6 +133,13 @@ func (m *ControlPlaneRuntimeManager) RotateSecret(ctx context.Context, id, apiKe
 	return saved, nil
 }
 
+func (m *ControlPlaneRuntimeManager) DeleteCredential(ctx context.Context, id string) error {
+	if _, err := m.store.DeleteProviderCredential(ctx, id); err != nil {
+		return err
+	}
+	return m.Reload(ctx)
+}
+
 func (m *ControlPlaneRuntimeManager) Delete(ctx context.Context, id string) error {
 	if err := m.store.DeleteProvider(ctx, id); err != nil {
 		return err

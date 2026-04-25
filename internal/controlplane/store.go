@@ -93,6 +93,7 @@ type Store interface {
 	UpsertProvider(ctx context.Context, provider Provider, secret *ProviderSecret) (Provider, error)
 	SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error)
 	RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error)
+	DeleteProviderCredential(ctx context.Context, id string) (Provider, error)
 	DeleteProvider(ctx context.Context, id string) error
 	UpsertPolicyRule(ctx context.Context, rule config.PolicyRuleConfig) (config.PolicyRuleConfig, error)
 	DeletePolicyRule(ctx context.Context, id string) error

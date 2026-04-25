@@ -489,6 +489,7 @@ type ControlPlaneProviderRecord struct {
 	InheritedFields      []string `json:"inherited_fields,omitempty"`
 	Enabled              bool     `json:"enabled"`
 	CredentialConfigured bool     `json:"credential_configured"`
+	CredentialSource     string   `json:"credential_source,omitempty"`
 	CredentialPreview    string   `json:"credential_preview,omitempty"`
 	CreatedAt            string   `json:"created_at,omitempty"`
 	UpdatedAt            string   `json:"updated_at,omitempty"`

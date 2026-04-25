@@ -56,6 +56,24 @@ func (s *PostgresStore) RotateProviderSecret(ctx context.Context, id string, sec
 	return provider, nil
 }
 
+func (s *PostgresStore) DeleteProviderCredential(ctx context.Context, id string) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.readState(ctx)
+	if err != nil {
+		return Provider{}, err
+	}
+	provider, err := applyDeleteProviderCredential(ctx, &state, id)
+	if err != nil {
+		return Provider{}, err
+	}
+	if err := s.writeState(ctx, state); err != nil {
+		return Provider{}, err
+	}
+	return provider, nil
+}
+
 func (s *PostgresStore) DeleteProvider(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

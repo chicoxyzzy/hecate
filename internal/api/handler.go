@@ -39,6 +39,7 @@ type ProviderRuntime interface {
 	Upsert(ctx context.Context, provider controlplane.Provider, apiKey string) (controlplane.Provider, error)
 	SetEnabled(ctx context.Context, id string, enabled bool) (controlplane.Provider, error)
 	RotateSecret(ctx context.Context, id, apiKey string) (controlplane.Provider, error)
+	DeleteCredential(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 }
 

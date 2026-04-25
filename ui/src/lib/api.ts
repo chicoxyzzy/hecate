@@ -261,6 +261,10 @@ export async function deleteProvider(id: string, authToken?: string): Promise<un
   return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "DELETE" });
 }
 
+export async function deleteProviderCredential(id: string, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/credential`, { authToken, method: "DELETE" });
+}
+
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {
   return fetchJSON<RetentionRunResponse>("/admin/retention/run", { authToken, method: "POST", body: payload });
 }

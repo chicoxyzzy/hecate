@@ -373,6 +373,7 @@ export type ConfiguredProviderRecord = {
   inherited_fields?: string[];
   enabled: boolean;
   credential_configured: boolean;
+  credential_source?: "env" | "vault";
   credential_preview?: string;
   created_at?: string;
   updated_at?: string;

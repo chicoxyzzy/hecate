@@ -122,6 +122,18 @@ func applyRotateProviderSecret(ctx context.Context, state *State, id string, sec
 	return state.Providers[index], nil
 }
 
+func applyDeleteProviderCredential(ctx context.Context, state *State, id string) (Provider, error) {
+	index := providerIndex(state.Providers, id)
+	if index < 0 {
+		return Provider{}, fmt.Errorf("provider %q not found", id)
+	}
+	deleteProviderSecret(state, id)
+	state.Providers[index].CredentialID = ""
+	state.Providers[index].UpdatedAt = time.Now().UTC()
+	appendAuditEvent(state, newAuditEvent(ctx, "provider.credential_deleted", "provider", state.Providers[index].ID, state.Providers[index].Name))
+	return state.Providers[index], nil
+}
+
 func applyDeleteProvider(ctx context.Context, state *State, id string) error {
 	index := providerIndex(state.Providers, id)
 	if index < 0 {

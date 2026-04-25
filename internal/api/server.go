@@ -56,6 +56,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /admin/control-plane/api-keys/delete", handler.HandleControlPlaneDeleteAPIKey)
 	mux.HandleFunc("POST /admin/control-plane/providers", handler.HandleControlPlaneUpsertProvider)
 	mux.HandleFunc("PATCH /admin/control-plane/providers/{id}", handler.HandleControlPlaneSetProviderEnabled)
+	mux.HandleFunc("DELETE /admin/control-plane/providers/{id}/credential", handler.HandleControlPlaneDeleteProviderCredential)
 	mux.HandleFunc("DELETE /admin/control-plane/providers/{id}", handler.HandleControlPlaneDeleteProvider)
 	mux.HandleFunc("POST /admin/control-plane/providers/{id}/rotate-secret", handler.HandleControlPlaneRotateProviderSecret)
 	mux.HandleFunc("POST /admin/control-plane/policy-rules", handler.HandleControlPlaneUpsertPolicyRule)

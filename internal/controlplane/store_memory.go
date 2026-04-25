@@ -204,6 +204,12 @@ func (s *MemoryStore) RotateProviderSecret(ctx context.Context, id string, secre
 	return applyRotateProviderSecret(ctx, &s.data, id, secret)
 }
 
+func (s *MemoryStore) DeleteProviderCredential(ctx context.Context, id string) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return applyDeleteProviderCredential(ctx, &s.data, id)
+}
+
 func (s *MemoryStore) DeleteProvider(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
