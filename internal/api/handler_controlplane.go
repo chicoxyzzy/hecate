@@ -264,61 +264,6 @@ func (h *Handler) HandleControlPlaneDeleteAPIKey(w http.ResponseWriter, r *http.
 	})
 }
 
-func (h *Handler) HandleControlPlaneUpsertProvider(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireControlPlane(w, r)
-	if !ok {
-		return
-	}
-	if h.providerRuntime == nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
-		return
-	}
-
-	var req ControlPlaneProviderUpsertRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	providerInput := controlplane.Provider{
-		ID:       req.ID,
-		Name:     req.Name,
-		PresetID: req.PresetID,
-		Enabled:  req.Enabled,
-	}
-	if req.Kind != nil {
-		providerInput.Kind = *req.Kind
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "kind")
-	}
-	if req.Protocol != nil {
-		providerInput.Protocol = *req.Protocol
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "protocol")
-	}
-	if req.BaseURL != nil {
-		providerInput.BaseURL = *req.BaseURL
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "base_url")
-	}
-	if req.APIVersion != nil {
-		providerInput.APIVersion = *req.APIVersion
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "api_version")
-	}
-	if req.DefaultModel != nil {
-		providerInput.DefaultModel = *req.DefaultModel
-		providerInput.ExplicitFields = append(providerInput.ExplicitFields, "default_model")
-	}
-
-	provider, err := h.providerRuntime.Upsert(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), providerInput, req.Key)
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
-		return
-	}
-
-	state, _ := h.controlPlane.Snapshot(r.Context())
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"object": "control_plane_provider",
-		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
-	})
-}
-
 func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireControlPlane(w, r)
 	if !ok {
@@ -350,7 +295,9 @@ func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r 
 	})
 }
 
-func (h *Handler) HandleControlPlaneRotateProviderSecret(w http.ResponseWriter, r *http.Request) {
+// HandleControlPlaneSetProviderAPIKey is the single endpoint for managing a provider's
+// API key. PUT with a non-empty `key` sets/updates it; PUT with an empty `key` clears it.
+func (h *Handler) HandleControlPlaneSetProviderAPIKey(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireControlPlane(w, r)
 	if !ok {
 		return
@@ -368,64 +315,28 @@ func (h *Handler) HandleControlPlaneRotateProviderSecret(w http.ResponseWriter, 
 		return
 	}
 
-	provider, err := h.providerRuntime.RotateSecret(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id, req.Key)
+	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
+	if req.Key == "" {
+		if err := h.providerRuntime.DeleteCredential(ctx, id); err != nil {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{
+			"object": "control_plane_provider_api_key",
+			"data":   map[string]string{"id": id, "status": "cleared"},
+		})
+		return
+	}
+
+	provider, err := h.providerRuntime.RotateSecret(ctx, id, req.Key)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
 	}
-
 	state, _ := h.controlPlane.Snapshot(r.Context())
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"object": "control_plane_provider",
+		"object": "control_plane_provider_api_key",
 		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
-	})
-}
-
-func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireControlPlane(w, r)
-	if !ok {
-		return
-	}
-	if h.providerRuntime == nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
-		return
-	}
-
-	id := r.PathValue("id")
-	if err := h.providerRuntime.Delete(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id); err != nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
-		return
-	}
-
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"object": "control_plane_provider_deleted",
-		"data": map[string]string{
-			"id": id,
-		},
-	})
-}
-
-func (h *Handler) HandleControlPlaneDeleteProviderCredential(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireControlPlane(w, r)
-	if !ok {
-		return
-	}
-	if h.providerRuntime == nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
-		return
-	}
-
-	id := r.PathValue("id")
-	if err := h.providerRuntime.DeleteCredential(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id); err != nil {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
-		return
-	}
-
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"object": "control_plane_provider_credential_deleted",
-		"data": map[string]string{
-			"id": id,
-		},
 	})
 }
 
@@ -602,9 +513,10 @@ func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAud
 	return record
 }
 
-// buildControlPlaneProviderList returns a record for every known provider.
-// Order of precedence (highest wins): vault secret > env key > built-in preset.
-// All built-in providers appear even if never explicitly saved to the CP store.
+// buildControlPlaneProviderList returns one record per built-in provider. The set is
+// fixed — providers cannot be added or removed. The CP store contributes overrides for
+// `Enabled` and credential information; everything else is sourced from the preset.
+// When two built-ins share a base URL, only one is reported as enabled.
 func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) []ControlPlaneProviderRecord {
 	envKeyByID := make(map[string]bool)
 	for _, pc := range cfg.Providers.OpenAICompatible {
@@ -612,30 +524,14 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 			envKeyByID[pc.Name] = true
 		}
 	}
-
 	cpByID := make(map[string]controlplane.Provider, len(state.Providers))
 	for _, p := range state.Providers {
 		cpByID[p.ID] = p
 	}
 
-	seen := make(map[string]struct{})
-	var records []ControlPlaneProviderRecord
-
-	for _, builtIn := range config.BuiltInProviders() {
-		seen[builtIn.ID] = struct{}{}
-
-		if cp, ok := cpByID[builtIn.ID]; ok {
-			// CP store record exists — use it; vault key takes priority.
-			record := renderControlPlaneProvider(cp, state.ProviderSecrets)
-			if !record.CredentialConfigured && envKeyByID[builtIn.ID] {
-				record.CredentialConfigured = true
-				record.CredentialSource = "env"
-			}
-			records = append(records, record)
-			continue
-		}
-
-		// Synthetic record from built-in preset.
+	builtIns := config.BuiltInProviders()
+	records := make([]ControlPlaneProviderRecord, 0, len(builtIns))
+	for _, builtIn := range builtIns {
 		record := ControlPlaneProviderRecord{
 			ID:           builtIn.ID,
 			Name:         builtIn.ID,
@@ -647,22 +543,70 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 			DefaultModel: builtIn.DefaultModel,
 			Enabled:      true,
 		}
-		if envKeyByID[builtIn.ID] {
+		if cp, ok := cpByID[builtIn.ID]; ok {
+			record.Enabled = cp.Enabled
+			if !cp.CreatedAt.IsZero() {
+				record.CreatedAt = cp.CreatedAt.UTC().Format(time.RFC3339)
+			}
+			if !cp.UpdatedAt.IsZero() {
+				record.UpdatedAt = cp.UpdatedAt.UTC().Format(time.RFC3339)
+			}
+			for _, secret := range state.ProviderSecrets {
+				if secret.ProviderID == builtIn.ID {
+					record.CredentialConfigured = secret.APIKeyEncrypted != ""
+					record.CredentialSource = "vault"
+					record.CredentialPreview = secret.APIKeyPreview
+					break
+				}
+			}
+		}
+		if !record.CredentialConfigured && envKeyByID[builtIn.ID] {
 			record.CredentialConfigured = true
 			record.CredentialSource = "env"
 		}
 		records = append(records, record)
 	}
 
-	// Include any CP-only providers that aren't built-ins (custom providers).
-	for _, cp := range state.Providers {
-		if _, ok := seen[cp.ID]; ok {
+	resolveDefaultProviderConflicts(records)
+	return records
+}
+
+// resolveDefaultProviderConflicts mutates records in place: when a base URL is shared
+// between providers, only one is left enabled. The winner is the alphabetically-first
+// provider by ID that is currently enabled in the group; if none are enabled, the
+// alphabetically-first provider in the group is enabled. Built-ins are already iterated
+// in alphabetical order by `BuiltInProviders()`, so the input slice is sorted.
+func resolveDefaultProviderConflicts(records []ControlPlaneProviderRecord) {
+	groupByURL := make(map[string][]int)
+	for i, r := range records {
+		if r.BaseURL == "" {
 			continue
 		}
-		records = append(records, renderControlPlaneProvider(cp, state.ProviderSecrets))
+		groupByURL[r.BaseURL] = append(groupByURL[r.BaseURL], i)
 	}
-
-	return records
+	for _, group := range groupByURL {
+		if len(group) < 2 {
+			continue
+		}
+		// Alphabetically-first enabled record wins (records are already sorted by ID).
+		winner := -1
+		for _, idx := range group {
+			if records[idx].Enabled {
+				winner = idx
+				break
+			}
+		}
+		// Nothing enabled in the group — enable the alphabetically-first one.
+		if winner < 0 {
+			winner = group[0]
+			records[winner].Enabled = true
+		}
+		for _, idx := range group {
+			if idx != winner {
+				records[idx].Enabled = false
+			}
+		}
+	}
 }
 
 func renderControlPlaneProvider(provider controlplane.Provider, secrets []controlplane.ProviderSecret) ControlPlaneProviderRecord {

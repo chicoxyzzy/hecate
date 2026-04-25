@@ -1493,7 +1493,10 @@ func TestControlPlanePolicyAndPricebookCRUD(t *testing.T) {
 	admin.mustRequest(http.MethodPost, "/admin/control-plane/pricebook/delete", `{"provider":"openai","model":"custom-model"}`)
 }
 
-func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.T) {
+// TestControlPlaneStatusReturnsAllBuiltInsWithPresetMetadata verifies that the control
+// plane endpoint returns one record per built-in provider, with fields sourced from the
+// preset (Kind, BaseURL, etc.) and credential info merged from the CP store when present.
+func TestControlPlaneStatusReturnsAllBuiltInsWithPresetMetadata(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -1501,42 +1504,168 @@ func TestControlPlaneStatusIncludesProviderPresetInheritanceMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	if _, err := store.UpsertProvider(context.Background(), controlplane.Provider{
-		Name:           "groq",
-		PresetID:       "groq",
-		Kind:           "cloud",
-		Protocol:       "openai",
-		BaseURL:        "https://api.groq.com/openai/v1",
-		DefaultModel:   "openai/gpt-oss-20b",
-		ExplicitFields: []string{"default_model"},
-		Enabled:        true,
-	}, &controlplane.ProviderSecret{
+	// Set a credential for groq via the supported flow.
+	if _, err := store.RotateProviderSecret(context.Background(), "groq", controlplane.ProviderSecret{
 		ProviderID:      "groq",
 		APIKeyEncrypted: "encrypted",
 		APIKeyPreview:   "gr...ret",
 	}); err != nil {
-		t.Fatalf("UpsertProvider() error = %v", err)
+		t.Fatalf("RotateProviderSecret() error = %v", err)
 	}
 
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
-		Server: config.ServerConfig{
-			AuthToken: "admin-secret",
-		},
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
 	}, governor.NewMemoryBudgetStore(), store)
 	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
 	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
-	if len(response.Data.Providers) != 1 {
-		t.Fatalf("provider count = %d, want 1", len(response.Data.Providers))
+
+	if len(response.Data.Providers) != len(config.BuiltInProviders()) {
+		t.Fatalf("provider count = %d, want %d", len(response.Data.Providers), len(config.BuiltInProviders()))
 	}
-	got := response.Data.Providers[0]
-	if got.PresetID != "groq" {
-		t.Fatalf("preset_id = %q, want groq", got.PresetID)
+	var groq *ControlPlaneProviderRecord
+	for i := range response.Data.Providers {
+		if response.Data.Providers[i].ID == "groq" {
+			groq = &response.Data.Providers[i]
+			break
+		}
 	}
-	if len(got.ExplicitFields) != 1 || got.ExplicitFields[0] != "default_model" {
-		t.Fatalf("explicit_fields = %#v, want [default_model]", got.ExplicitFields)
+	if groq == nil {
+		t.Fatal("groq missing from providers list")
 	}
-	if len(got.InheritedFields) == 0 {
-		t.Fatal("inherited_fields = empty, want inherited built-in defaults")
+	if groq.PresetID != "groq" {
+		t.Fatalf("preset_id = %q, want groq", groq.PresetID)
+	}
+	if groq.Kind != "cloud" {
+		t.Fatalf("kind = %q, want cloud", groq.Kind)
+	}
+	if groq.BaseURL == "" {
+		t.Fatal("base_url empty — should inherit from built-in preset")
+	}
+	if !groq.CredentialConfigured {
+		t.Fatal("credential_configured = false, want true (vault secret was set)")
+	}
+	if groq.CredentialSource != "vault" {
+		t.Fatalf("credential_source = %q, want vault", groq.CredentialSource)
+	}
+}
+
+// TestControlPlaneStatusResolvesDefaultProviderConflicts verifies that when multiple
+// built-in providers share a base URL (e.g. llamacpp + localai both at 127.0.0.1:8080),
+// only one of them is enabled in the default state.
+func TestControlPlaneStatusResolvesDefaultProviderConflicts(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
+	}, governor.NewMemoryBudgetStore(), store)
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
+
+	enabledByURL := map[string][]string{}
+	for _, p := range response.Data.Providers {
+		if p.Enabled && p.BaseURL != "" {
+			enabledByURL[p.BaseURL] = append(enabledByURL[p.BaseURL], p.ID)
+		}
+	}
+	for url, ids := range enabledByURL {
+		if len(ids) > 1 {
+			t.Fatalf("multiple enabled providers share base URL %q: %v", url, ids)
+		}
+	}
+}
+
+// TestControlPlaneStatusResolvesConflictsFromExistingCPRecords verifies that even when
+// the CP store already has multiple conflicting providers explicitly enabled (e.g. from
+// a stale state), the API response reconciles them so only one is reported as enabled.
+func TestControlPlaneStatusResolvesConflictsFromExistingCPRecords(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	// Stash both as enabled CP records, simulating a bad/stale state.
+	if _, err := store.UpsertProvider(context.Background(), controlplane.Provider{
+		ID:      "llamacpp",
+		Name:    "llamacpp",
+		Kind:    "local",
+		BaseURL: "http://127.0.0.1:8080/v1",
+		Enabled: true,
+	}, nil); err != nil {
+		t.Fatalf("UpsertProvider(llamacpp) error = %v", err)
+	}
+	if _, err := store.UpsertProvider(context.Background(), controlplane.Provider{
+		ID:      "localai",
+		Name:    "localai",
+		Kind:    "local",
+		BaseURL: "http://127.0.0.1:8080/v1",
+		Enabled: true,
+	}, nil); err != nil {
+		t.Fatalf("UpsertProvider(localai) error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
+	}, governor.NewMemoryBudgetStore(), store)
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
+
+	enabledShared := 0
+	for _, p := range response.Data.Providers {
+		if p.Enabled && p.BaseURL == "http://127.0.0.1:8080/v1" {
+			enabledShared++
+		}
+	}
+	if enabledShared != 1 {
+		t.Fatalf("enabled providers at shared base URL = %d, want 1", enabledShared)
+	}
+}
+
+// TestControlPlaneStatusKeepsDisabledBuiltIns verifies that disabling a built-in provider
+// does not remove it from the control-plane response. The UI relies on this so toggled-off
+// providers stay visible.
+func TestControlPlaneStatusKeepsDisabledBuiltIns(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if _, err := store.SetProviderEnabled(context.Background(), "llamacpp", false); err != nil {
+		t.Fatalf("SetProviderEnabled() error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
+	}, governor.NewMemoryBudgetStore(), store)
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
+
+	if len(response.Data.Providers) != len(config.BuiltInProviders()) {
+		t.Fatalf("provider count = %d, want %d (all built-ins must be returned)",
+			len(response.Data.Providers), len(config.BuiltInProviders()))
+	}
+	var llamacpp *ControlPlaneProviderRecord
+	for i := range response.Data.Providers {
+		if response.Data.Providers[i].ID == "llamacpp" {
+			llamacpp = &response.Data.Providers[i]
+			break
+		}
+	}
+	if llamacpp == nil {
+		t.Fatal("llamacpp missing from providers list after disable")
+	}
+	if llamacpp.Enabled {
+		t.Fatal("llamacpp.Enabled = true after disable, want false")
 	}
 }
 

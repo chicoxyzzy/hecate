@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, deleteProvider, getBudget, getSession, getTrace, rotateProviderSecret, setProviderEnabled } from "./api";
+import { buildRequestOptions, chatCompletions, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -201,27 +201,30 @@ describe("api client", () => {
       );
     });
 
-    it("DELETE /providers/{id} to remove a provider", async () => {
-      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    it("PUT /providers/{id}/api-key to set credentials", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
 
-      await deleteProvider("openai", "admin-secret");
+      await setProviderAPIKey("anthropic", "sk-new-key", "admin-secret");
 
       expect(fetchMock).toHaveBeenCalledWith(
-        "/admin/control-plane/providers/openai",
-        expect.objectContaining({ method: "DELETE" }),
+        "/admin/control-plane/providers/anthropic/api-key",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ key: "sk-new-key" }),
+        }),
       );
     });
 
-    it("POST /providers/{id}/rotate-secret to rotate credentials", async () => {
+    it("PUT /providers/{id}/api-key with empty key clears credentials", async () => {
       fetchMock.mockResolvedValue(jsonResponse({}));
 
-      await rotateProviderSecret("anthropic", "sk-new-key", "admin-secret");
+      await setProviderAPIKey("anthropic", "", "admin-secret");
 
       expect(fetchMock).toHaveBeenCalledWith(
-        "/admin/control-plane/providers/anthropic/rotate-secret",
+        "/admin/control-plane/providers/anthropic/api-key",
         expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ key: "sk-new-key" }),
+          method: "PUT",
+          body: JSON.stringify({ key: "" }),
         }),
       );
     });

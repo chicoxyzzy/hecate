@@ -965,6 +965,7 @@ func newGatewayServerWithRealProvider(t *testing.T, upstreamURL, providerName, d
 		BaseURL:      upstreamURL,
 		DefaultModel: defaultModel,
 		APIKey:       "fake-upstream-key",
+		Enabled:      true,
 	}
 	realProvider := providers.NewOpenAICompatibleProvider(providerCfg, logger)
 

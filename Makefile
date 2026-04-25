@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test run dev ui-install ui-dev ui-build
+.PHONY: test run dev ui-install ui-dev ui-build ui-test ui-test-e2e
 
 test:
 	mkdir -p "$(GOCACHE_DIR)"
@@ -29,3 +29,11 @@ ui-dev:
 ui-build:
 	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
 	cd ui && bun run build
+
+ui-test:
+	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
+	cd ui && bun run test
+
+ui-test-e2e:
+	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
+	cd ui && bun run test:e2e

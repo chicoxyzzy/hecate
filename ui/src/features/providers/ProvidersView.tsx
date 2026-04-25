@@ -29,7 +29,6 @@ function iconColorByID(id: string): string {
 
 export function ProvidersView({ state, actions }: Props) {
   const [selectedID, setSelectedID] = useState<string | null>(null);
-  const [testing, setTesting] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState("");
   const [pendingToggles, setPendingToggles] = useState<Map<string, boolean>>(new Map());
 
@@ -48,12 +47,15 @@ export function ProvidersView({ state, actions }: Props) {
   const allCloudIDs = configuredProviders.filter(p => p.kind === "cloud").map(p => p.id).sort(stableSort);
   const allLocalIDs = configuredProviders.filter(p => p.kind === "local").map(p => p.id).sort(stableSort);
 
-  function runtimeEnabled(id: string): boolean {
-    return statusByName.get(id)?.status !== "disabled";
+  // The CP response is the source of truth for enabled state — it has been
+  // conflict-resolved server-side. Runtime status (state.providers) is only used
+  // for health, not for the toggle itself.
+  function configuredEnabled(id: string): boolean {
+    return configuredByID.get(id)?.enabled ?? true;
   }
 
   function resolveEnabled(id: string): boolean {
-    return pendingToggles.has(id) ? pendingToggles.get(id)! : runtimeEnabled(id);
+    return pendingToggles.has(id) ? pendingToggles.get(id)! : configuredEnabled(id);
   }
 
   const configuredByName = new Map(configuredProviders.filter(p => p.base_url).map(p => [p.name, p]));
@@ -67,27 +69,36 @@ export function ProvidersView({ state, actions }: Props) {
   const selectedStatus = selectedID ? statusByName.get(selectedID) : null;
   const selectedPreset = selectedID ? state.providerPresets.find(p => p.id === selectedID) : null;
 
+  // Optimistically reflect mutual exclusion in the UI: enabling a provider flips
+  // any conflicting providers to disabled in the pending overlay so the toggle
+  // visually updates without waiting for the dashboard refresh. Backend enforces
+  // the same constraint authoritatively.
   function toggleProvider(id: string, enabled: boolean) {
-    setPendingToggles(m => new Map(m).set(id, enabled));
-    void actions.setProviderEnabled(id, enabled).then(() => {
-      setPendingToggles(m => { const n = new Map(m); n.delete(id); return n; });
+    const conflicts = enabled ? (conflictMap.get(id) ?? []) : [];
+    setPendingToggles(m => {
+      const n = new Map(m);
+      n.set(id, enabled);
+      for (const cid of conflicts) n.set(cid, false);
+      return n;
     });
-  }
-
-  async function testConnection(id: string) {
-    setTesting(id);
-    await actions.loadDashboard();
-    setTesting(null);
+    void actions.setProviderEnabled(id, enabled).then(() => {
+      setPendingToggles(m => {
+        const n = new Map(m);
+        n.delete(id);
+        for (const cid of conflicts) n.delete(cid);
+        return n;
+      });
+    });
   }
 
   const cloudEnabledCount = allCloudIDs.filter(id => resolveEnabled(id)).length;
   const localEnabledCount = allLocalIDs.filter(id => resolveEnabled(id)).length;
 
-  function renderCard(id: string, isLocal?: boolean) {
+  function renderCard(id: string) {
     const cp = configuredByID.get(id);
     const rt = statusByName.get(id);
     const preset = state.providerPresets.find(p => p.id === id);
-    const displayName = cp?.name || preset?.name || id;
+    const displayName = preset?.name || cp?.name || id;
     const description = preset?.description ?? "";
     const baseURL = resolvedBaseURL(id, cp ?? undefined, state.providerPresets);
     const enabled = resolveEnabled(id);
@@ -116,7 +127,7 @@ export function ProvidersView({ state, actions }: Props) {
           <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
             {conflicts.length > 0 && <span title={conflictTitle} style={{ fontSize: 11, color: "var(--amber)", cursor: "help" }}>⚠</span>}
             <Dot color={providerDotColor(enabled, healthy)} />
-            <Toggle on={enabled} onChange={v => toggleProvider(id, v)} />
+            <Toggle on={enabled} onChange={v => toggleProvider(id, v)} ariaLabel={`Enable ${displayName}`} />
           </div>
         </div>
         {description && (
@@ -128,13 +139,6 @@ export function ProvidersView({ state, actions }: Props) {
           </span>
           {baseURL && (
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{baseURL}</span>
-          )}
-          {isLocal && enabled && (
-            <button className="btn btn-ghost btn-sm"
-              style={{ marginLeft: "auto", padding: "2px 6px", fontSize: 10, flexShrink: 0 }}
-              onClick={e => { e.stopPropagation(); void testConnection(id); }}>
-              {testing === id ? "testing…" : "test"}
-            </button>
           )}
         </div>
       </div>
@@ -167,7 +171,7 @@ export function ProvidersView({ state, actions }: Props) {
               </span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 10 }}>
-              {allLocalIDs.map(id => renderCard(id, true))}
+              {allLocalIDs.map(id => renderCard(id))}
             </div>
           </>
         )}
@@ -211,15 +215,9 @@ export function ProvidersView({ state, actions }: Props) {
             ))}
           </div>
 
-          {/* API key (cloud) / test connection (local) */}
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
-            {selectedConfig.kind === "local" ? (
-              <button className="btn btn-sm" style={{ justifyContent: "center" }}
-                onClick={() => void testConnection(selectedID)}>
-                <Icon d={Icons.activity} size={13} />
-                {testing === selectedID ? "Testing…" : "Test connection"}
-              </button>
-            ) : (
+          {/* API key (cloud only — local providers don't need credentials) */}
+          {selectedConfig.kind !== "local" && (
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
               <>
                 <label style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", gap: 6 }}>
                   API Key
@@ -238,19 +236,19 @@ export function ProvidersView({ state, actions }: Props) {
                 )}
                 <button className="btn btn-primary btn-sm" style={{ justifyContent: "center" }}
                   disabled={!pendingKey.trim()}
-                  onClick={() => void actions.saveProviderKey(selectedID, pendingKey).then(() => setPendingKey(""))}>
+                  onClick={() => void actions.setProviderAPIKey(selectedID, pendingKey).then(() => setPendingKey(""))}>
                   <Icon d={Icons.check} size={13} />
                   {selectedConfig.credential_configured ? "Update API key" : "Save API key"}
                 </button>
                 {selectedConfig.credential_source === "vault" && (
                   <button className="btn btn-danger btn-sm" style={{ justifyContent: "center" }}
-                    onClick={() => void actions.deleteProviderCredential(selectedID)}>
+                    onClick={() => void actions.setProviderAPIKey(selectedID, "")}>
                     <Icon d={Icons.trash} size={13} /> Delete API key
                   </button>
                 )}
               </>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Model list */}
           {selectedStatus?.models && selectedStatus.models.length > 0 && (

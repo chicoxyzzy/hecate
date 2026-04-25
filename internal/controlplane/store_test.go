@@ -306,6 +306,60 @@ func TestFileStoreAuditEventsCaptureActorAndMutationTrail(t *testing.T) {
 	}
 }
 
+// TestSetProviderEnabledDisablesConflictingProviders verifies that enabling a provider
+// automatically disables any other provider sharing the same base URL. The default
+// llamacpp/localai pair both target 127.0.0.1:8080.
+func TestSetProviderEnabledDisablesConflictingProviders(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "control-plane.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Enable llamacpp first.
+	if _, err := store.SetProviderEnabled(ctx, "llamacpp", true); err != nil {
+		t.Fatalf("SetProviderEnabled(llamacpp, true) error = %v", err)
+	}
+	// Now enable localai — should disable llamacpp because they share 127.0.0.1:8080.
+	if _, err := store.SetProviderEnabled(ctx, "localai", true); err != nil {
+		t.Fatalf("SetProviderEnabled(localai, true) error = %v", err)
+	}
+
+	state, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	enabled := map[string]bool{}
+	for _, p := range state.Providers {
+		enabled[p.ID] = p.Enabled
+	}
+	if !enabled["localai"] {
+		t.Fatalf("localai should be enabled after explicit enable")
+	}
+	if enabled["llamacpp"] {
+		t.Fatalf("llamacpp should be auto-disabled (shares endpoint with localai)")
+	}
+
+	// Auto-disabled placeholder records must carry hydrated built-in fields so the
+	// frontend's group-by-kind rendering doesn't drop them.
+	for _, p := range state.Providers {
+		if p.ID != "llamacpp" && p.ID != "localai" {
+			continue
+		}
+		if p.Kind == "" {
+			t.Fatalf("provider %q has empty Kind — placeholder must inherit from built-in preset", p.ID)
+		}
+		if p.BaseURL == "" {
+			t.Fatalf("provider %q has empty BaseURL — placeholder must inherit from built-in preset", p.ID)
+		}
+	}
+}
+
 type fakeRedisClient struct {
 	data map[string][]byte
 }

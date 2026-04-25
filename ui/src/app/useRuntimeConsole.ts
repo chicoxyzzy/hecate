@@ -10,8 +10,6 @@ import {
   deleteChatSession as deleteChatSessionRequest,
   updateChatSession as updateChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
-  deleteProvider as deleteProviderRequest,
-  deleteProviderCredential as deleteProviderCredentialRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
   getBudget,
@@ -26,7 +24,7 @@ import {
   getRetentionRuns,
   getSession,
   rotateAPIKey as rotateAPIKeyRequest,
-  rotateProviderSecret as rotateProviderSecretRequest,
+  setProviderAPIKey as setProviderAPIKeyRequest,
   runRetention as runRetentionRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
@@ -35,7 +33,6 @@ import {
   setTenantEnabled as setTenantEnabledRequest,
   topUpBudget as topUpBudgetRequest,
   upsertAPIKey as upsertAPIKeyRequest,
-  upsertProvider as upsertProviderRequest,
   upsertTenant as upsertTenantRequest,
 } from "../lib/api";
 import type {
@@ -135,8 +132,6 @@ export function useRuntimeConsole() {
   const [apiKeyFormRole, setAPIKeyFormRole] = useState("tenant");
   const [apiKeyFormProviders, setAPIKeyFormProviders] = useState("");
   const [apiKeyFormModels, setAPIKeyFormModels] = useState("");
-  const [rotateProviderID, setRotateProviderID] = useState("");
-  const [rotateProviderSecret, setRotateProviderSecret] = useState("");
   const [rotateAPIKeyID, setRotateAPIKeyID] = useState("");
   const [rotateAPIKeySecret, setRotateAPIKeySecret] = useState("");
   const [retentionSubsystems, setRetentionSubsystems] = useState("");
@@ -370,11 +365,6 @@ export function useRuntimeConsole() {
     setAPIKeyFormTenant("");
     setAPIKeyFormProviders("");
     setAPIKeyFormModels("");
-  }
-
-  function resetRotateProviderForm() {
-    setRotateProviderID("");
-    setRotateProviderSecret("");
   }
 
   function resetRotateAPIKeyForm() {
@@ -754,26 +744,15 @@ export function useRuntimeConsole() {
     void loadDashboard();
   }
 
-  async function saveProviderKey(name: string, key: string) {
+  // setProviderAPIKey is the single operation for managing a provider's API key.
+  // An empty `key` clears the existing credential; non-empty sets/replaces it.
+  async function setProviderAPIKey(id: string, key: string) {
     await runAdminMutation({
-      successMessage: "API key saved.",
-      errorMessage: "Failed to save API key.",
-      failureDetail: "failed to save provider api key",
+      successMessage: key === "" ? "API key cleared." : "API key saved.",
+      errorMessage: key === "" ? "Failed to clear API key." : "Failed to save API key.",
+      failureDetail: key === "" ? "failed to clear provider api key" : "failed to save provider api key",
       action: async () => {
-        const payload = buildProviderUpsertPayload({
-          presetID: name,
-          id: name,
-          name,
-          kind: "",
-          protocol: "",
-          baseURL: "",
-          apiVersion: "",
-          defaultModel: "",
-          enabled: true,
-          key,
-          presets: providerPresets,
-        });
-        await upsertProviderRequest(payload, authToken);
+        await setProviderAPIKeyRequest(id, key, authToken);
       },
     });
   }
@@ -785,44 +764,6 @@ export function useRuntimeConsole() {
       failureDetail: "failed to update provider state",
       action: async () => {
         await setProviderEnabledRequest(id, enabled, authToken);
-      },
-    });
-  }
-
-  async function rotateProviderCredential() {
-    await runAdminMutation({
-      successMessage: "Provider secret rotated.",
-      errorMessage: "Failed to rotate provider secret.",
-      failureDetail: "failed to rotate provider secret",
-      action: async () => {
-        await rotateProviderSecretRequest(rotateProviderID, rotateProviderSecret, authToken);
-        resetRotateProviderForm();
-      },
-    });
-  }
-
-  async function deleteProvider(id: string) {
-    resetAdminFeedback();
-    if (!window.confirm(`Delete provider "${id}"? This cannot be undone.`)) {
-      return;
-    }
-    await runAdminMutation({
-      successMessage: "Provider deleted.",
-      errorMessage: "Failed to delete provider.",
-      failureDetail: "failed to delete provider",
-      action: async () => {
-        await deleteProviderRequest(id, authToken);
-      },
-    });
-  }
-
-  async function deleteProviderCredential(id: string) {
-    await runAdminMutation({
-      successMessage: "API key removed.",
-      errorMessage: "Failed to remove API key.",
-      failureDetail: "failed to remove provider credential",
-      action: async () => {
-        await deleteProviderCredentialRequest(id, authToken);
       },
     });
   }
@@ -1037,8 +978,6 @@ export function useRuntimeConsole() {
       providerScopedModels,
       providers,
       providerPresets,
-      rotateProviderID,
-      rotateProviderSecret,
       activeChatSession,
       activeChatSessionID,
       retentionError,
@@ -1061,8 +1000,6 @@ export function useRuntimeConsole() {
     actions: {
       copyCommand,
       deleteAPIKey,
-      deleteProvider,
-      deleteProviderCredential,
       deleteTenant,
       createChatSession,
       deleteChatSession,
@@ -1070,7 +1007,6 @@ export function useRuntimeConsole() {
       loadDashboard,
       resetBudget,
       rotateAPIKey,
-      rotateProviderCredential,
       setAPIKeyEnabled,
       setAPIKeyFormID,
       setAPIKeyFormModels,
@@ -1091,8 +1027,6 @@ export function useRuntimeConsole() {
       setRetentionSubsystems,
       setRotateAPIKeyID,
       setRotateAPIKeySecret,
-      setRotateProviderID,
-      setRotateProviderSecret,
       setTenantEnabled,
       setTenant,
       setTenantFormID,
@@ -1109,76 +1043,12 @@ export function useRuntimeConsole() {
       updateToolResult,
       topUpBudget,
       upsertAPIKey,
-      saveProviderKey,
+      setProviderAPIKey,
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
       dismissNotice: () => setNotice(null),
     },
   };
-}
-
-function buildProviderUpsertPayload(args: {
-  presetID: string;
-  id: string;
-  name: string;
-  kind: string;
-  protocol: string;
-  baseURL: string;
-  apiVersion: string;
-  defaultModel: string;
-  enabled: boolean;
-  key: string;
-  presets: ProviderPresetRecord[];
-}) {
-  const payload: {
-    id: string;
-    name: string;
-    preset_id?: string;
-    kind?: string;
-    protocol?: string;
-    base_url?: string;
-    api_version?: string;
-    default_model?: string;
-    enabled: boolean;
-    key: string;
-  } = {
-    id: args.id,
-    name: args.name,
-    enabled: args.enabled,
-    key: args.key,
-  };
-
-  const preset = args.presets.find((entry) => entry.id === args.presetID);
-  if (!preset) {
-    payload.kind = args.kind;
-    payload.protocol = args.protocol;
-    payload.base_url = args.baseURL;
-    if (args.apiVersion) {
-      payload.api_version = args.apiVersion;
-    }
-    if (args.defaultModel) {
-      payload.default_model = args.defaultModel;
-    }
-    return payload;
-  }
-
-  payload.preset_id = preset.id;
-  if (args.kind && args.kind !== preset.kind) {
-    payload.kind = args.kind;
-  }
-  if (args.protocol && args.protocol !== preset.protocol) {
-    payload.protocol = args.protocol;
-  }
-  if (args.baseURL && args.baseURL !== preset.base_url) {
-    payload.base_url = args.baseURL;
-  }
-  if (args.apiVersion && args.apiVersion !== (preset.api_version ?? "")) {
-    payload.api_version = args.apiVersion;
-  }
-  if (args.defaultModel) {
-    payload.default_model = args.defaultModel;
-  }
-  return payload;
 }
 
 function deriveChatSessionTitle(message: string): string {

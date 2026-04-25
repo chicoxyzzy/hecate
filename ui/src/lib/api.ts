@@ -87,18 +87,6 @@ export type RotateAPIKeyPayload = {
   key: string;
 };
 
-export type ProviderUpsertPayload = {
-  id: string;
-  name: string;
-  preset_id?: string;
-  kind?: string;
-  protocol?: string;
-  base_url?: string;
-  api_version?: string;
-  default_model?: string;
-  enabled: boolean;
-  key: string;
-};
 
 export type RetentionRunPayload = {
   subsystems: string[];
@@ -245,24 +233,13 @@ export async function deleteAPIKey(payload: DeletePayload, authToken?: string): 
   return fetchJSON("/admin/control-plane/api-keys/delete", { authToken, method: "POST", body: payload });
 }
 
-export async function upsertProvider(payload: ProviderUpsertPayload, authToken?: string): Promise<unknown> {
-  return fetchJSON("/admin/control-plane/providers", { authToken, method: "POST", body: payload });
-}
-
 export async function setProviderEnabled(id: string, enabled: boolean, authToken?: string): Promise<unknown> {
   return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { enabled } });
 }
 
-export async function rotateProviderSecret(id: string, key: string, authToken?: string): Promise<unknown> {
-  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/rotate-secret`, { authToken, method: "POST", body: { key } });
-}
-
-export async function deleteProvider(id: string, authToken?: string): Promise<unknown> {
-  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "DELETE" });
-}
-
-export async function deleteProviderCredential(id: string, authToken?: string): Promise<unknown> {
-  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/credential`, { authToken, method: "DELETE" });
+// setProviderAPIKey sets the provider's API key. An empty `key` clears it.
+export async function setProviderAPIKey(id: string, key: string, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/api-key`, { authToken, method: "PUT", body: { key } });
 }
 
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {

@@ -23,15 +23,40 @@ export const MOCK_MODELS = [
   { id: "gpt-4o-mini",      owned_by: "openai",    metadata: { provider: "openai",    provider_kind: "cloud", default: false } },
 ];
 
+// MOCK_ADMIN_CONFIG mirrors the real backend contract: all 12 built-ins are always
+// returned, and conflicts are pre-resolved (llamacpp + localai share 127.0.0.1:8080,
+// so only the alphabetically-first — llamacpp — is enabled by default).
 export const MOCK_ADMIN_CONFIG = {
   providers: [
-    { id: "anthropic", name: "anthropic", kind: "cloud", protocol: "anthropic", base_url: "https://api.anthropic.com/v1", enabled: true, credential_configured: true },
-    { id: "openai",    name: "openai",    kind: "cloud", protocol: "openai",    base_url: "https://api.openai.com/v1",    enabled: true, credential_configured: true },
+    { id: "anthropic", name: "anthropic", kind: "cloud", protocol: "openai", base_url: "https://api.anthropic.com/v1", enabled: true,  credential_configured: true,  credential_source: "vault" },
+    { id: "deepseek",  name: "deepseek",  kind: "cloud", protocol: "openai", base_url: "https://api.deepseek.com/v1",  enabled: true,  credential_configured: false },
+    { id: "google",    name: "google",    kind: "cloud", protocol: "openai", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", enabled: true, credential_configured: false },
+    { id: "groq",      name: "groq",      kind: "cloud", protocol: "openai", base_url: "https://api.groq.com/openai/v1", enabled: true, credential_configured: false },
+    { id: "mistral",   name: "mistral",   kind: "cloud", protocol: "openai", base_url: "https://api.mistral.ai/v1",     enabled: true, credential_configured: false },
+    { id: "openai",    name: "openai",    kind: "cloud", protocol: "openai", base_url: "https://api.openai.com/v1",     enabled: true, credential_configured: true,  credential_source: "vault" },
+    { id: "together",  name: "together",  kind: "cloud", protocol: "openai", base_url: "https://api.together.xyz/v1",   enabled: true, credential_configured: false },
+    { id: "xai",       name: "xai",       kind: "cloud", protocol: "openai", base_url: "https://api.x.ai/v1",           enabled: true, credential_configured: false },
+    { id: "llamacpp",  name: "llamacpp",  kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      enabled: true,  credential_configured: false },
+    { id: "lmstudio",  name: "lmstudio",  kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1",      enabled: true,  credential_configured: false },
+    { id: "localai",   name: "localai",   kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      enabled: false, credential_configured: false },
+    { id: "ollama",    name: "ollama",    kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1",     enabled: true,  credential_configured: false },
   ],
   tenants: [],
   api_keys: [],
   policy_rules: [],
 };
+
+export const MOCK_FULL_PRESETS = [
+  ...MOCK_PRESETS,
+  { id: "deepseek",  name: "DeepSeek",  kind: "cloud", protocol: "openai", base_url: "https://api.deepseek.com/v1",   description: "DeepSeek hosted models." },
+  { id: "google",    name: "Google",    kind: "cloud", protocol: "openai", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", description: "Google Gemini." },
+  { id: "groq",      name: "Groq",      kind: "cloud", protocol: "openai", base_url: "https://api.groq.com/openai/v1", description: "Groq inference." },
+  { id: "mistral",   name: "Mistral",   kind: "cloud", protocol: "openai", base_url: "https://api.mistral.ai/v1",     description: "Mistral hosted models." },
+  { id: "together",  name: "Together AI", kind: "cloud", protocol: "openai", base_url: "https://api.together.xyz/v1", description: "Together AI hosted models." },
+  { id: "xai",       name: "xAI",       kind: "cloud", protocol: "openai", base_url: "https://api.x.ai/v1",           description: "xAI Grok models." },
+  { id: "lmstudio",  name: "LM Studio", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1",      description: "Local inference via LM Studio." },
+  { id: "localai",   name: "LocalAI",   kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      description: "Local inference via LocalAI." },
+];
 
 // ── Route mocking ─────────────────────────────────────────────────────────────
 
@@ -67,7 +92,7 @@ export async function mockGatewayAPIs(page: Page) {
   );
 
   await page.route("/v1/provider-presets*", r =>
-    r.fulfill(ok({ object: "list", data: MOCK_PRESETS })),
+    r.fulfill(ok({ object: "list", data: MOCK_FULL_PRESETS })),
   );
 
   await page.route("/admin/budget*", r =>
