@@ -559,6 +559,281 @@ func TestRealOpenAICodexStreaming(t *testing.T) {
 	}
 }
 
+// ─── additional endpoint tests ───────────────────────────────────────────────
+
+// TestGatewayModelsEndpoint verifies that GET /v1/models returns the expected
+// OpenAI-compatible list envelope even when no provider is configured.
+func TestGatewayModelsEndpoint(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/v1/models", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["object"] != "list" {
+		t.Fatalf("expected object=list, got %v", result["object"])
+	}
+	if _, ok := result["data"]; !ok {
+		t.Fatal("expected 'data' key in /v1/models response")
+	}
+}
+
+// TestGatewayWhoAmI verifies that GET /v1/whoami returns session information
+// in single-user admin mode.
+func TestGatewayWhoAmI(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/v1/whoami", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/whoami: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["object"] != "session" {
+		t.Fatalf("expected object=session, got %v", result["object"])
+	}
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected 'data' object in response, got %T", result["data"])
+	}
+	if auth, _ := data["authenticated"].(bool); !auth {
+		t.Fatal("expected authenticated=true in single-user admin mode")
+	}
+}
+
+// TestGatewayAdminProviderStatus verifies that GET /admin/providers returns
+// the provider-status envelope shape.
+func TestGatewayAdminProviderStatus(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/admin/providers", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/providers: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["object"] != "provider_status" {
+		t.Fatalf("expected object=provider_status, got %v", result["object"])
+	}
+	if _, ok := result["data"]; !ok {
+		t.Fatal("expected 'data' key in /admin/providers response")
+	}
+}
+
+// TestGatewayAdminRuntimeStats verifies that GET /admin/runtime/stats returns
+// the runtime-stats envelope shape.
+func TestGatewayAdminRuntimeStats(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/admin/runtime/stats", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/runtime/stats: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["object"] != "runtime_stats" {
+		t.Fatalf("expected object=runtime_stats, got %v", result["object"])
+	}
+	if _, ok := result["data"]; !ok {
+		t.Fatal("expected 'data' key in /admin/runtime/stats response")
+	}
+}
+
+// TestGatewayProviderPresets verifies that GET /v1/provider-presets returns a
+// non-empty list of built-in provider presets.
+func TestGatewayProviderPresets(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/v1/provider-presets", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/provider-presets: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result["object"] != "provider_presets" {
+		t.Fatalf("expected object=provider_presets, got %v", result["object"])
+	}
+	data, _ := result["data"].([]interface{})
+	if len(data) == 0 {
+		t.Fatal("expected at least one provider preset in /v1/provider-presets response")
+	}
+}
+
+// TestGatewayInvalidJSONBodyReturns400 verifies that sending a malformed JSON
+// body to POST /v1/chat/completions results in a 400 Bad Request.
+func TestGatewayInvalidJSONBodyReturns400(t *testing.T) {
+	t.Parallel()
+	base := gatewayServer(t)
+
+	resp := postJSON(t, base+"/v1/chat/completions", `{not valid json`, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid JSON body, got %d", resp.StatusCode)
+	}
+	var errResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if _, ok := errResp["error"]; !ok {
+		t.Fatal("expected 'error' key in 400 response body")
+	}
+}
+
+// TestGatewayRateLimitHeaders verifies that when rate limiting is enabled the
+// gateway injects X-RateLimit-Limit, X-RateLimit-Remaining, and
+// X-RateLimit-Reset response headers.
+func TestGatewayRateLimitHeaders(t *testing.T) {
+	t.Parallel()
+
+	fakeResp := `{"id":"chatcmpl-e2e","object":"chat.completion","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`
+	upstream := fakeOpenAIServer(t, "/v1/chat/completions", fakeResp, false)
+
+	base := gatewayServer(t,
+		"PROVIDER_FAKE_API_KEY=dummy",
+		"PROVIDER_FAKE_BASE_URL="+upstream,
+		"PROVIDER_FAKE_PROTOCOL=openai",
+		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o-mini",
+		"PROVIDER_FAKE_KIND=local",
+		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
+		"GATEWAY_RATE_LIMIT_ENABLED=true",
+		"GATEWAY_RATE_LIMIT_RPM=120",
+	)
+
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
+	resp := postJSON(t, base+"/v1/chat/completions", body, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	for _, hdr := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if resp.Header.Get(hdr) == "" {
+			t.Fatalf("expected %s header in response", hdr)
+		}
+	}
+	t.Logf("X-RateLimit-Limit=%s X-RateLimit-Remaining=%s",
+		resp.Header.Get("X-RateLimit-Limit"),
+		resp.Header.Get("X-RateLimit-Remaining"),
+	)
+}
+
+// TestGatewayFakeUpstreamStreamingClaudeCode verifies the /v1/messages
+// endpoint streams SSE with the Anthropic event envelope when the upstream
+// is an OpenAI-compatible fake server.
+func TestGatewayFakeUpstreamStreamingClaudeCode(t *testing.T) {
+	t.Parallel()
+
+	upstream := fakeOpenAIServer(t, "/v1/chat/completions", "", true)
+
+	base := gatewayServer(t,
+		"PROVIDER_FAKE_API_KEY=dummy",
+		"PROVIDER_FAKE_BASE_URL="+upstream,
+		"PROVIDER_FAKE_PROTOCOL=openai",
+		"PROVIDER_FAKE_DEFAULT_MODEL=claude-sonnet-4-20250514",
+		"PROVIDER_FAKE_KIND=local",
+		"GATEWAY_DEFAULT_MODEL=claude-sonnet-4-20250514",
+	)
+
+	body := `{"model":"claude-sonnet-4-20250514","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]}`
+	resp := postJSON(t, base+"/v1/messages", body, map[string]string{
+		"x-api-key":         "test-token",
+		"anthropic-version": "2023-06-01",
+	})
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content-type, got %s", ct)
+	}
+
+	events := readSSE(t, resp)
+	if len(events) == 0 {
+		t.Fatal("expected at least one SSE event from /v1/messages streaming")
+	}
+
+	var first map[string]interface{}
+	if err := json.Unmarshal([]byte(events[0].Data), &first); err != nil {
+		t.Fatalf("parse first SSE event: %v", err)
+	}
+	if first["type"] != "message_start" {
+		t.Fatalf("expected first SSE event type=message_start, got %v", first["type"])
+	}
+	t.Logf("received %d SSE events (fake upstream Claude Code streaming)", len(events))
+}
+
 // ─── fake upstream helper ────────────────────────────────────────────────────
 
 // fakeOpenAIServer starts an httptest.Server that mimics an OpenAI-compatible
