@@ -196,17 +196,6 @@ export function ProvidersView({ state, actions }: Props) {
             </button>
           </div>
 
-          {/* Status + toggle */}
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-              <Dot color={providerDotColor(resolveEnabled(selectedID), healthyNames.has(selectedID))} />
-              <span style={{ fontSize: 12, color: "var(--t1)" }}>
-                {selectedStatus?.status || (resolveEnabled(selectedID) ? "unknown" : "disabled")}
-              </span>
-            </div>
-            <Toggle on={resolveEnabled(selectedID)} onChange={v => toggleProvider(selectedID, v)} label={resolveEnabled(selectedID) ? "Enabled" : "Disabled"} />
-          </div>
-
           {/* Stats grid */}
           <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {([
@@ -222,21 +211,8 @@ export function ProvidersView({ state, actions }: Props) {
             ))}
           </div>
 
-          {/* Model list */}
-          {selectedStatus?.models && selectedStatus.models.length > 0 && (
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>Models</div>
-              {selectedStatus.models.map(m => (
-                <div key={m} style={{ display: "flex", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--t0)", flex: 1 }}>{m}</span>
-                  {m === selectedConfig.default_model && <span className="badge badge-teal" style={{ fontSize: 9 }}>default</span>}
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* API key (cloud) / test connection (local) */}
-          <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
             {selectedConfig.kind === "local" ? (
               <button className="btn btn-sm" style={{ justifyContent: "center" }}
                 onClick={() => void testConnection(selectedID)}>
@@ -275,6 +251,19 @@ export function ProvidersView({ state, actions }: Props) {
               </>
             )}
           </div>
+
+          {/* Model list */}
+          {selectedStatus?.models && selectedStatus.models.length > 0 && (
+            <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
+              <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>Models</div>
+              {selectedStatus.models.map(m => (
+                <div key={m} style={{ display: "flex", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--t0)", flex: 1 }}>{m}</span>
+                  {m === selectedConfig.default_model && <span className="badge badge-teal" style={{ fontSize: 9 }}>default</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
