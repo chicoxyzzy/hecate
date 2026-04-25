@@ -994,15 +994,15 @@ func newGatewayServerWithRealProvider(t *testing.T, upstreamURL, providerName, d
 	})
 
 	svc := gateway.NewService(gateway.Dependencies{
-		Logger:    logger,
-		Cache:     cache.NewMemoryStore(time.Minute),
-		Router:    router.NewRuleRouter(defaultModel, providerCatalog),
-		Catalog:   providerCatalog,
-		Governor:  governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
-		Providers: registry,
-		Pricebook: pricebook,
-		Tracer:    profiler.NewInMemoryTracer(nil),
-		Metrics:   telemetry.NewMetrics(),
+		Logger:       logger,
+		Cache:        cache.NewMemoryStore(time.Minute),
+		Router:       router.NewRuleRouter(defaultModel, providerCatalog),
+		Catalog:      providerCatalog,
+		Governor:     governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
+		Providers:    registry,
+		Pricebook:    pricebook,
+		Tracer:       profiler.NewInMemoryTracer(nil),
+		Metrics:      telemetry.NewMetrics(),
 		ChatSessions: chatstate.NewMemoryStore(),
 	})
 

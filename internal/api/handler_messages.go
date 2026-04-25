@@ -444,8 +444,8 @@ func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message,
 			}
 			contentBlocks = append(contentBlocks, cb)
 			toolCalls = append(toolCalls, types.ToolCall{
-				ID:   b.ID,
-				Type: "function",
+				ID:       b.ID,
+				Type:     "function",
 				Function: types.ToolCallFunction{Name: b.Name, Arguments: args},
 			})
 		case "tool_result":

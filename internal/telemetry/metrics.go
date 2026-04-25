@@ -203,14 +203,14 @@ type QueueWaitRecord struct {
 // subsystem: run/step throughput and latency, approval gate wait, queue wait,
 // and lease-extend failure counts.
 type OrchestratorMetrics struct {
-	runsTotal              otmetric.Int64Counter
-	runDuration            otmetric.Int64Histogram
-	queueWaitDuration      otmetric.Int64Histogram
-	stepsTotal             otmetric.Int64Counter
-	stepDuration           otmetric.Int64Histogram
-	approvalsTotal         otmetric.Int64Counter
-	approvalWaitDuration   otmetric.Int64Histogram
-	leaseExtendFailures    otmetric.Int64Counter
+	runsTotal            otmetric.Int64Counter
+	runDuration          otmetric.Int64Histogram
+	queueWaitDuration    otmetric.Int64Histogram
+	stepsTotal           otmetric.Int64Counter
+	stepDuration         otmetric.Int64Histogram
+	approvalsTotal       otmetric.Int64Counter
+	approvalWaitDuration otmetric.Int64Histogram
+	leaseExtendFailures  otmetric.Int64Counter
 }
 
 // NewOrchestratorMetrics registers all orchestrator instruments against

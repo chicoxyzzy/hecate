@@ -529,8 +529,8 @@ func TestChatCompletionsNormalizesToolsAndRendersToolCalls(t *testing.T) {
 					Message: types.Message{
 						Role: "assistant",
 						ToolCalls: []types.ToolCall{{
-							ID:   "call_n",
-							Type: "function",
+							ID:       "call_n",
+							Type:     "function",
 							Function: types.ToolCallFunction{Name: "lookup", Arguments: `{"q":"foo"}`},
 						}},
 					},

@@ -121,8 +121,8 @@ func TestValidateEventAttrsReturnsMissingSubset(t *testing.T) {
 	}
 	missing := ValidateEventAttrs(EventProviderCallStarted, attrs)
 	want := map[string]bool{
-		AttrGenAIRequestModel:    true,
-		AttrHecateRetryAttempt:   true,
+		AttrGenAIRequestModel:  true,
+		AttrHecateRetryAttempt: true,
 	}
 	for _, k := range missing {
 		if !want[k] {
