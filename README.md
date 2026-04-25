@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/chicoxyzzy/hecate)](LICENSE)
 [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-f5a800?logo=opentelemetry&logoColor=white)](https://opentelemetry.io/)
 
-Hecate is an open-source AI gateway and coding-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and first-class OpenTelemetry.
+Hecate is an open-source AI gateway and agent-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and first-class OpenTelemetry.
 
 ## Table Of Contents
 
@@ -17,7 +17,7 @@ Hecate is an open-source AI gateway and coding-task runtime that gives teams one
 - [Auth, Policy, And Spend](#auth-policy-and-spend)
 - [Observability](#observability)
 - [Operator UI](#operator-ui)
-- [Using Hecate For Coding](#using-hecate-for-coding)
+- [Using Hecate For Agent Tasks](#using-hecate-for-agent-tasks)
 - [Using Hecate With Codex And Claude Code](#using-hecate-with-codex-and-claude-code)
 - [Durable Queue Execution Flow](#durable-queue-execution-flow)
 - [Config Highlights](#config-highlights)
@@ -31,7 +31,7 @@ Hecate today is a practical runtime you can use in two ways:
 
 - as a gateway for OpenAI-compatible and Anthropic-style traffic with routing,
   auth, policy, budgets, and observability
-- as a task runtime for queued coding work with approvals, sandboxed execution,
+- as a task runtime for queued agent work with approvals, sandboxed execution,
   persisted run state/events, and resumable runs
 
 That means one deployment can serve both model access and agent-style execution
@@ -211,12 +211,12 @@ The operator UI includes:
 The app shell lives in `ui/src/app`, shared console primitives live in
 `ui/src/features/shared`, and feature-owned styles live beside feature views.
 
-## Using Hecate For Coding
+## Using Hecate For Agent Tasks
 
-Hecate is already useful behind coding assistants even when orchestration logic
+Hecate is already useful behind agent clients even when orchestration logic
 still lives in the client.
 
-Current coding-runtime foundation:
+Current task-runtime foundation:
 
 - task/run/step/artifact/approval APIs
 - shell, file, and git executors
@@ -230,7 +230,7 @@ Current coding-runtime foundation:
 
 ## Using Hecate With Codex And Claude Code
 
-Hecate supports both OpenAI-compatible clients and Anthropic Messages clients, so you can point Codex and Claude Code at one gateway.
+Hecate supports both OpenAI-compatible clients and Anthropic Messages clients, so you can point Codex and Claude Code at one gateway. These are examples, not exclusive integrations.
 
 Use:
 
@@ -242,7 +242,7 @@ For copy-paste setup and auth/header examples, see [`docs/client-integration.md`
 
 ## Config Highlights
 
-Runtime and queue knobs commonly adjusted for coding workflows:
+Runtime and queue knobs commonly adjusted for agent-task workflows:
 
 - `GATEWAY_TASKS_BACKEND=memory|postgres`
 - `GATEWAY_TASK_QUEUE_BACKEND=memory|postgres`
@@ -281,7 +281,7 @@ Near term:
 
 1. checkpoint controls for partial replay and selective continuation
 2. broader policy-driven approval classes with safer defaults
-3. deeper coding UI workflows for bulk operations and richer artifact/diff views
+3. deeper task UI workflows for bulk operations and richer artifact/diff views
 
 Platform:
 

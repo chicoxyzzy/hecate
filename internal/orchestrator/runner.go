@@ -43,6 +43,7 @@ type Runner struct {
 	queueLease time.Duration
 	workerID   string
 	jobMu      sync.Mutex
+	queueMu    sync.RWMutex
 	jobs       map[string]context.CancelFunc
 	policies   map[string]struct{}
 	metrics    *telemetry.OrchestratorMetrics
@@ -166,13 +167,14 @@ func (r *Runner) SetMetrics(m *telemetry.OrchestratorMetrics) {
 }
 
 func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
+	q := r.getQueue()
 	queueDepth := 0
 	queueCapacity := 0
-	if r.queue != nil {
-		if depth, err := r.queue.Depth(ctx); err == nil {
+	if q != nil {
+		if depth, err := q.Depth(ctx); err == nil {
 			queueDepth = depth
 		}
-		queueCapacity = r.queue.Capacity()
+		queueCapacity = q.Capacity()
 	}
 	stats := RuntimeStats{
 		CheckedAt:     time.Now().UTC(),
@@ -180,8 +182,8 @@ func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
 		QueueCapacity: queueCapacity,
 		WorkerCount:   maxInt(r.config.QueueWorkers, 1),
 	}
-	if r.queue != nil {
-		stats.QueueBackend = r.queue.Backend()
+	if q != nil {
+		stats.QueueBackend = q.Backend()
 	}
 	r.jobMu.Lock()
 	stats.InFlightJobs = len(r.jobs)
@@ -220,11 +222,20 @@ func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
 	return stats, nil
 }
 
+func (r *Runner) getQueue() RunQueue {
+	r.queueMu.RLock()
+	q := r.queue
+	r.queueMu.RUnlock()
+	return q
+}
+
 func (r *Runner) SetQueue(queue RunQueue) {
 	if queue == nil {
 		return
 	}
+	r.queueMu.Lock()
 	r.queue = queue
+	r.queueMu.Unlock()
 }
 
 func (r *Runner) ReconcilePendingRuns(ctx context.Context) error {
@@ -410,7 +421,7 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 		trace.Record(telemetry.EventQueueEnqueued, map[string]any{
 			telemetry.AttrHecateTaskID:       task.ID,
 			telemetry.AttrHecateRunID:        run.ID,
-			telemetry.AttrHecateQueueBackend: r.queue.Backend(),
+			telemetry.AttrHecateQueueBackend: r.getQueue().Backend(),
 		})
 	}
 
@@ -680,11 +691,12 @@ func (r *Runner) cancelRunWithMessage(ctx context.Context, task types.Task, run 
 
 func (r *Runner) processQueue() {
 	for {
-		if r.queue == nil {
+		q := r.getQueue()
+		if q == nil {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		claim, ok, err := r.queue.Claim(context.Background(), r.workerID, 2*time.Second)
+		claim, ok, err := q.Claim(context.Background(), r.workerID, 2*time.Second)
 		if err != nil {
 			time.Sleep(150 * time.Millisecond)
 			continue
@@ -697,23 +709,24 @@ func (r *Runner) processQueue() {
 }
 
 func (r *Runner) processQueuedRun(claim QueueClaim) {
+	q := r.getQueue()
 	task, found, err := r.store.GetTask(context.Background(), claim.Job.TaskID)
 	if err != nil || !found {
-		_ = r.queue.Ack(context.Background(), claim.ClaimID)
+		_ = q.Ack(context.Background(), claim.ClaimID)
 		return
 	}
 	run, found, err := r.store.GetRun(context.Background(), claim.Job.TaskID, claim.Job.RunID)
 	if err != nil || !found {
-		_ = r.queue.Ack(context.Background(), claim.ClaimID)
+		_ = q.Ack(context.Background(), claim.ClaimID)
 		return
 	}
 	if run.Status != "queued" {
-		_ = r.queue.Ack(context.Background(), claim.ClaimID)
+		_ = q.Ack(context.Background(), claim.ClaimID)
 		return
 	}
 	allowed, limitErr := r.canStartRunForTenant(context.Background(), task, run.ID)
 	if limitErr != nil {
-		_ = r.queue.Nack(context.Background(), claim.ClaimID, limitErr.Error())
+		_ = q.Nack(context.Background(), claim.ClaimID, limitErr.Error())
 		return
 	}
 	if !allowed {
@@ -721,7 +734,7 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 			"tenant": task.Tenant,
 			"limit":  r.config.MaxConcurrentPerTenant,
 		})
-		_ = r.queue.Nack(context.Background(), claim.ClaimID, "tenant concurrency limit")
+		_ = q.Nack(context.Background(), claim.ClaimID, "tenant concurrency limit")
 		return
 	}
 
@@ -750,8 +763,8 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 		queueWaitMS = now.Sub(run.StartedAt).Milliseconds()
 	}
 	queueBackend := ""
-	if r.queue != nil {
-		queueBackend = r.queue.Backend()
+	if q != nil {
+		queueBackend = q.Backend()
 	}
 	trace.Record(telemetry.EventQueueClaimed, map[string]any{
 		telemetry.AttrHecateTaskID:       task.ID,
@@ -824,7 +837,7 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 		telemetry.AttrHecateRunID:        run.ID,
 		telemetry.AttrHecateQueueBackend: queueBackend,
 	})
-	_ = r.queue.Ack(context.Background(), claim.ClaimID)
+	_ = q.Ack(context.Background(), claim.ClaimID)
 }
 
 func (r *Runner) canStartRunForTenant(ctx context.Context, task types.Task, runID string) (bool, error) {
@@ -862,10 +875,11 @@ func (r *Runner) canStartRunForTenant(ctx context.Context, task types.Task, runI
 }
 
 func (r *Runner) enqueueRun(taskID, runID string) error {
-	if r.queue == nil {
+	q := r.getQueue()
+	if q == nil {
 		return fmt.Errorf("run queue is not configured")
 	}
-	return r.queue.Enqueue(context.Background(), QueueJob{TaskID: taskID, RunID: runID})
+	return q.Enqueue(context.Background(), QueueJob{TaskID: taskID, RunID: runID})
 }
 
 func (r *Runner) registerJob(runID string, cancel context.CancelFunc) {
@@ -1284,7 +1298,7 @@ func (r *Runner) emitRunEvent(ctx context.Context, taskID, runID, eventType, req
 }
 
 func (r *Runner) heartbeatClaim(claimID string, stop <-chan struct{}) {
-	if r.queue == nil || claimID == "" {
+	if r.getQueue() == nil || claimID == "" {
 		return
 	}
 	interval := r.queueLease / 2
@@ -1298,8 +1312,10 @@ func (r *Runner) heartbeatClaim(claimID string, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			if err := r.queue.ExtendLease(context.Background(), claimID, r.queueLease); err != nil {
-				r.metrics.RecordLeaseExtendFailed(context.Background())
+			if q := r.getQueue(); q != nil {
+				if err := q.ExtendLease(context.Background(), claimID, r.queueLease); err != nil {
+					r.metrics.RecordLeaseExtendFailed(context.Background())
+				}
 			}
 		}
 	}
