@@ -4,7 +4,7 @@ import type {
   ChatResponse,
   ChatSessionResponse,
   ChatSessionsResponse,
-  ControlPlaneResponse,
+  ConfiguredStateResponse,
   HealthResponse,
   ModelResponse,
   ProviderPresetResponse,
@@ -23,6 +23,7 @@ import type {
   TaskStepsResponse,
   TasksResponse,
   TraceResponse,
+  TraceListResponse,
   RetentionRunResponse,
   RetentionRunsResponse,
 } from "../types/runtime";
@@ -72,12 +73,12 @@ export type APIKeyUpsertPayload = {
   enabled: boolean;
 };
 
-export type ControlPlaneEnabledPayload = {
+export type EnabledPayload = {
   id: string;
   enabled: boolean;
 };
 
-export type ControlPlaneDeletePayload = {
+export type DeletePayload = {
   id: string;
 };
 
@@ -117,6 +118,8 @@ export type CreateTaskPayload = {
   file_operation?: string;
   file_path?: string;
   file_content?: string;
+  requested_model?: string;
+  requested_provider?: string;
 };
 
 export type ResolveTaskApprovalPayload = {
@@ -160,6 +163,10 @@ export async function getTrace(requestID: string, authToken?: string): Promise<T
   return fetchJSON<TraceResponse>(`/v1/traces?request_id=${encodeURIComponent(requestID)}`, { authToken });
 }
 
+export async function getRecentTraces(authToken?: string, limit = 50): Promise<TraceListResponse> {
+  return fetchJSON<TraceListResponse>(`/admin/traces?limit=${encodeURIComponent(String(limit))}`, { authToken });
+}
+
 export async function getBudget(query = "", authToken?: string): Promise<BudgetStatusResponse> {
   return fetchJSON<BudgetStatusResponse>(`/admin/budget${query}`, { authToken });
 }
@@ -168,8 +175,10 @@ export async function getAccountSummary(query = "", authToken?: string): Promise
   return fetchJSON<AccountSummaryResponse>(`/admin/accounts/summary${query}`, { authToken });
 }
 
-export async function getChatSessions(authToken?: string, limit = 20): Promise<ChatSessionsResponse> {
-  return fetchJSON<ChatSessionsResponse>(`/v1/chat/sessions?limit=${encodeURIComponent(String(limit))}`, { authToken });
+export async function getChatSessions(authToken?: string, limit = 20, offset = 0): Promise<ChatSessionsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (offset > 0) params.set("offset", String(offset));
+  return fetchJSON<ChatSessionsResponse>(`/v1/chat/sessions?${params.toString()}`, { authToken });
 }
 
 export async function createChatSession(payload: CreateChatSessionPayload, authToken?: string): Promise<ChatSessionResponse> {
@@ -204,8 +213,8 @@ export async function setBudgetLimit(payload: Record<string, unknown>, authToken
   return fetchJSON<BudgetStatusResponse>("/admin/budget/limit", { authToken, method: "POST", body: payload });
 }
 
-export async function getControlPlane(authToken?: string): Promise<ControlPlaneResponse> {
-  return fetchJSON<ControlPlaneResponse>("/admin/control-plane", { authToken });
+export async function getAdminConfig(authToken?: string): Promise<ConfiguredStateResponse> {
+  return fetchJSON<ConfiguredStateResponse>("/admin/control-plane", { authToken });
 }
 
 export async function upsertTenant(payload: TenantUpsertPayload, authToken?: string): Promise<unknown> {
@@ -216,15 +225,15 @@ export async function upsertAPIKey(payload: APIKeyUpsertPayload, authToken?: str
   return fetchJSON("/admin/control-plane/api-keys", { authToken, method: "POST", body: payload });
 }
 
-export async function setTenantEnabled(payload: ControlPlaneEnabledPayload, authToken?: string): Promise<unknown> {
+export async function setTenantEnabled(payload: EnabledPayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/tenants/enabled", { authToken, method: "POST", body: payload });
 }
 
-export async function deleteTenant(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
+export async function deleteTenant(payload: DeletePayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/tenants/delete", { authToken, method: "POST", body: payload });
 }
 
-export async function setAPIKeyEnabled(payload: ControlPlaneEnabledPayload, authToken?: string): Promise<unknown> {
+export async function setAPIKeyEnabled(payload: EnabledPayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/api-keys/enabled", { authToken, method: "POST", body: payload });
 }
 
@@ -232,7 +241,7 @@ export async function rotateAPIKey(payload: RotateAPIKeyPayload, authToken?: str
   return fetchJSON("/admin/control-plane/api-keys/rotate", { authToken, method: "POST", body: payload });
 }
 
-export async function deleteAPIKey(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
+export async function deleteAPIKey(payload: DeletePayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/api-keys/delete", { authToken, method: "POST", body: payload });
 }
 
@@ -240,16 +249,16 @@ export async function upsertProvider(payload: ProviderUpsertPayload, authToken?:
   return fetchJSON("/admin/control-plane/providers", { authToken, method: "POST", body: payload });
 }
 
-export async function setProviderEnabled(payload: ControlPlaneEnabledPayload, authToken?: string): Promise<unknown> {
-  return fetchJSON("/admin/control-plane/providers/enabled", { authToken, method: "POST", body: payload });
+export async function setProviderEnabled(id: string, enabled: boolean, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { enabled } });
 }
 
-export async function rotateProviderSecret(payload: RotateAPIKeyPayload, authToken?: string): Promise<unknown> {
-  return fetchJSON("/admin/control-plane/providers/rotate-secret", { authToken, method: "POST", body: payload });
+export async function rotateProviderSecret(id: string, key: string, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/rotate-secret`, { authToken, method: "POST", body: { key } });
 }
 
-export async function deleteProvider(payload: ControlPlaneDeletePayload, authToken?: string): Promise<unknown> {
-  return fetchJSON("/admin/control-plane/providers/delete", { authToken, method: "POST", body: payload });
+export async function deleteProvider(id: string, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "DELETE" });
 }
 
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {
@@ -274,6 +283,10 @@ export async function getTask(taskID: string, authToken?: string): Promise<TaskR
 
 export async function getTaskRuns(taskID: string, authToken?: string): Promise<TaskRunsResponse> {
   return fetchJSON<TaskRunsResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs`, { authToken });
+}
+
+export async function deleteTask(taskID: string, authToken?: string): Promise<void> {
+  await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}`, { authToken, method: "DELETE" });
 }
 
 export async function startTask(taskID: string, authToken?: string): Promise<TaskRunResponse> {

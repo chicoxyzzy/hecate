@@ -237,6 +237,54 @@ func (h *Handler) HandleTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	if h.taskStore == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task store is not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task id is required")
+		return
+	}
+
+	task, found, err := h.taskStore.GetTask(ctx, id)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	if !found {
+		WriteError(w, http.StatusNotFound, errCodeNotFound, "task not found")
+		return
+	}
+	if !principal.IsAdmin() && principal.Tenant != "" && task.Tenant != principal.Tenant {
+		WriteError(w, http.StatusForbidden, errCodeForbidden, "task is outside the active tenant scope")
+		return
+	}
+	if task.Status == "running" {
+		WriteError(w, http.StatusConflict, errCodeInvalidRequest, "cannot delete a running task; cancel it first")
+		return
+	}
+
+	if err := h.taskStore.DeleteTask(ctx, id); err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.tasks.delete.failed",
+			slog.String("event.name", "gateway.tasks.delete.failed"),
+			slog.String("task_id", id),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) HandleStartTask(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAny(w, r)
 	if !ok {

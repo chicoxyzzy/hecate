@@ -154,15 +154,34 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 	byName := make(map[string]config.OpenAICompatibleProviderConfig, len(configs))
 	order := make([]string, 0, len(configs)+len(state.Providers))
 	for _, cfg := range configs {
+		cfg.Enabled = true
 		byName[cfg.Name] = cfg
 		order = append(order, cfg.Name)
 	}
 
 	for _, item := range state.Providers {
 		if !item.Enabled {
+			// Mark matching env-configured provider as disabled rather than removing it,
+			// so it stays in the registry and reports status "disabled" in health checks.
+			name := item.Name
+			if name == "" {
+				name = item.ID
+			}
+			if existing, ok := byName[name]; ok {
+				existing.Enabled = false
+				byName[name] = existing
+			} else if name != "" {
+				// CP-only entry (no base config): add a disabled placeholder.
+				order = append(order, name)
+				byName[name] = config.OpenAICompatibleProviderConfig{Name: name, Enabled: false}
+			}
 			continue
 		}
 		item = hydrateControlPlaneProviderDefaults(item)
+		if strings.TrimSpace(item.Name) == "" {
+			m.logger.Warn("skipping control-plane provider with empty name", slog.String("provider_id", item.ID))
+			continue
+		}
 		apiKey := ""
 		if item.CredentialID != "" {
 			if m.cipher == nil {
@@ -190,6 +209,7 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 			APIVersion:   item.APIVersion,
 			DefaultModel: item.DefaultModel,
 			Timeout:      30 * time.Second,
+			Enabled:      true,
 		}
 		if _, ok := byName[cfg.Name]; !ok {
 			order = append(order, cfg.Name)
@@ -304,6 +324,10 @@ func (m *ControlPlaneRuntimeManager) snapshot(ctx context.Context) (controlplane
 func buildProviders(configs []config.OpenAICompatibleProviderConfig, logger *slog.Logger) []Provider {
 	items := make([]Provider, 0, len(configs))
 	for _, providerCfg := range configs {
+		if strings.TrimSpace(providerCfg.Name) == "" {
+			logger.Warn("skipping provider with empty name")
+			continue
+		}
 		switch strings.ToLower(strings.TrimSpace(providerCfg.Protocol)) {
 		case "anthropic":
 			items = append(items, NewAnthropicProvider(providerCfg, logger))

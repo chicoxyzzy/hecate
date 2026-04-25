@@ -142,7 +142,7 @@ func main() {
 		pruneableSemanticCache(semanticStore),
 		retentionHistoryStore,
 	)
-	providerCatalog := catalog.NewRegistryCatalog(providerRegistry, healthTracker)
+	providerCatalog := catalog.NewRegistryCatalogWithSelfAddr(providerRegistry, healthTracker, cfg.Server.Address)
 	routerEngine := router.NewRuleRouter(
 		cfg.Router.DefaultModel,
 		providerCatalog,
@@ -337,7 +337,7 @@ func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClie
 		}
 		return store
 	default:
-		return nil
+		return controlplane.NewMemoryStore()
 	}
 }
 

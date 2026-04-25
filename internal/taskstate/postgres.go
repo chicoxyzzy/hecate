@@ -134,6 +134,19 @@ func (s *PostgresStore) UpdateTask(ctx context.Context, task types.Task) (types.
 	return s.CreateTask(ctx, task)
 }
 
+func (s *PostgresStore) DeleteTask(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("task id is required")
+	}
+	for _, table := range []string{s.eventsTable, s.artifactsTable, s.approvalsTable, s.stepsTable, s.runsTable} {
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE task_id = $1`, table), id); err != nil {
+			return err
+		}
+	}
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.tasksTable), id)
+	return err
+}
+
 func (s *PostgresStore) CreateRun(ctx context.Context, run types.TaskRun) (types.TaskRun, error) {
 	if strings.TrimSpace(run.ID) == "" {
 		return types.TaskRun{}, fmt.Errorf("run id is required")

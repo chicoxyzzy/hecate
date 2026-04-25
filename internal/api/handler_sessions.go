@@ -76,7 +76,18 @@ func (h *Handler) HandleChatSessions(w http.ResponseWriter, r *http.Request) {
 		limit = value
 	}
 
-	filter := chatstate.Filter{Limit: limit}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "offset query parameter must be a non-negative integer")
+			return
+		}
+		offset = value
+	}
+
+	// Fetch limit+1 to determine whether more sessions exist.
+	filter := chatstate.Filter{Limit: limit + 1, Offset: offset}
 	if principal.IsAdmin() {
 		filter.Tenant = strings.TrimSpace(r.URL.Query().Get("tenant"))
 	} else {
@@ -93,16 +104,23 @@ func (h *Handler) HandleChatSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]ChatSessionSummaryItem, 0, len(result.Sessions))
-	for _, session := range result.Sessions {
+	hasMore := len(result.Sessions) > limit
+	sessions := result.Sessions
+	if hasMore {
+		sessions = sessions[:limit]
+	}
+
+	items := make([]ChatSessionSummaryItem, 0, len(sessions))
+	for _, session := range sessions {
 		if !principal.IsAdmin() && principal.Tenant != "" && session.Tenant != principal.Tenant {
 			continue
 		}
 		items = append(items, renderChatSessionSummary(session))
 	}
 	WriteJSON(w, http.StatusOK, ChatSessionsResponse{
-		Object: "chat_sessions",
-		Data:   items,
+		Object:  "chat_sessions",
+		Data:    items,
+		HasMore: hasMore,
 	})
 }
 

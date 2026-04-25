@@ -17,6 +17,7 @@ import (
 type Tracer interface {
 	Start(requestID string) *Trace
 	Get(requestID string) (*Trace, bool)
+	List(limit int) []*Trace
 	Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
@@ -75,6 +76,22 @@ func (t *InMemoryTracer) Get(requestID string) (*Trace, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (t *InMemoryTracer) List(limit int) []*Trace {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	n := len(t.traces)
+	if limit > 0 && limit < n {
+		n = limit
+	}
+	out := make([]*Trace, n)
+	// Return most-recent first.
+	for i := 0; i < n; i++ {
+		out[i] = t.traces[len(t.traces)-1-i]
+	}
+	return out
 }
 
 func (t *InMemoryTracer) Prune(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {

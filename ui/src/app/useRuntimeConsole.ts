@@ -16,7 +16,7 @@ import {
   getBudget,
   getChatSession,
   getChatSessions,
-  getControlPlane,
+  getAdminConfig,
   getHealth,
   getModels,
   getProviderPresets,
@@ -24,7 +24,6 @@ import {
   getRequestLedger,
   getRetentionRuns,
   getSession,
-  getTrace,
   rotateAPIKey as rotateAPIKeyRequest,
   rotateProviderSecret as rotateProviderSecretRequest,
   runRetention as runRetentionRequest,
@@ -44,7 +43,7 @@ import type {
   ChatResponse,
   ChatSessionRecord,
   ChatSessionsResponse,
-  ControlPlaneResponse,
+  ConfiguredStateResponse,
   HealthResponse,
   ModelFilter,
   ModelResponse,
@@ -54,8 +53,6 @@ import type {
   RequestLedgerResponse,
   RuntimeHeaders,
   SessionResponse,
-  TraceResponse,
-  TraceSpanRecord,
   RetentionRunData,
 } from "../types/runtime";
 
@@ -90,13 +87,14 @@ export function useRuntimeConsole() {
   const [budget, setBudget] = useState<BudgetStatusResponse["data"] | null>(null);
   const [accountSummary, setAccountSummary] = useState<AccountSummaryResponse["data"] | null>(null);
   const [requestLedger, setRequestLedger] = useState<RequestLedgerResponse["data"]>([]);
-  const [controlPlane, setControlPlane] = useState<ControlPlaneResponse["data"] | null>(null);
+  const [adminConfig, setAdminConfig] = useState<ConfiguredStateResponse["data"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [model, setModel] = useState("");
-  const [tenant, setTenant] = useState("team-a");
+  const [tenant, setTenant] = useState("");
   const [message, setMessage] = useState(defaultPrompt);
+  const [systemPrompt, setSystemPrompt] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
@@ -105,14 +103,11 @@ export function useRuntimeConsole() {
   // Thread of messages that preceded the pending tool calls (history + user message + assistant tool_calls message).
   const [pendingThread, setPendingThread] = useState<import("../lib/api").ChatMessage[] | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSessionsResponse["data"]>([]);
+  const [chatSessionsHasMore, setChatSessionsHasMore] = useState(false);
+  const [chatSessionsLoadingMore, setChatSessionsLoadingMore] = useState(false);
   const [activeChatSessionID, setActiveChatSessionID] = useState("");
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionRecord | null>(null);
   const [runtimeHeaders, setRuntimeHeaders] = useState<RuntimeHeaders | null>(null);
-  const [traceSpans, setTraceSpans] = useState<TraceSpanRecord[]>([]);
-  const [traceRoute, setTraceRoute] = useState<TraceResponse["data"]["route"] | null>(null);
-  const [traceStartedAt, setTraceStartedAt] = useState("");
-  const [traceLoading, setTraceLoading] = useState(false);
-  const [traceError, setTraceError] = useState("");
   const [chatError, setChatError] = useState("");
   const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>("auto");
@@ -124,7 +119,7 @@ export function useRuntimeConsole() {
 
   const [authToken, setAuthToken] = useState("");
   const [sessionInfo, setSessionInfo] = useState<SessionResponse["data"] | null>(null);
-  const [controlPlaneError, setControlPlaneError] = useState("");
+  const [adminConfigError, setAdminConfigError] = useState("");
   const [notice, setNotice] = useState<NoticeState | null>(null);
 
   const [tenantFormName, setTenantFormName] = useState("");
@@ -139,16 +134,6 @@ export function useRuntimeConsole() {
   const [apiKeyFormRole, setAPIKeyFormRole] = useState("tenant");
   const [apiKeyFormProviders, setAPIKeyFormProviders] = useState("");
   const [apiKeyFormModels, setAPIKeyFormModels] = useState("");
-  const [providerFormID, setProviderFormID] = useState("");
-  const [providerFormName, setProviderFormName] = useState("");
-  const [providerFormKind, setProviderFormKind] = useState("cloud");
-  const [providerFormProtocol, setProviderFormProtocol] = useState("openai");
-  const [providerFormBaseURL, setProviderFormBaseURL] = useState("");
-  const [providerFormAPIVersion, setProviderFormAPIVersion] = useState("");
-  const [providerFormDefaultModel, setProviderFormDefaultModel] = useState("");
-  const [providerFormEnabled, setProviderFormEnabled] = useState("true");
-  const [providerFormSecret, setProviderFormSecret] = useState("");
-  const [providerFormPresetID, setProviderFormPresetID] = useState("");
   const [rotateProviderID, setRotateProviderID] = useState("");
   const [rotateProviderSecret, setRotateProviderSecret] = useState("");
   const [rotateAPIKeyID, setRotateAPIKeyID] = useState("");
@@ -192,7 +177,23 @@ export function useRuntimeConsole() {
     if (storedChatSessionID) {
       setActiveChatSessionID(storedChatSessionID);
     }
+    const storedModel = window.localStorage.getItem("hecate.model");
+    if (storedModel) {
+      setModel(storedModel);
+    }
+    const storedProvider = window.localStorage.getItem("hecate.providerFilter");
+    if (storedProvider) {
+      setProviderFilter(storedProvider as ProviderFilter);
+    }
+    const storedSystemPrompt = window.localStorage.getItem("hecate.systemPrompt");
+    if (storedSystemPrompt) {
+      setSystemPrompt(storedSystemPrompt);
+    }
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("hecate.systemPrompt", systemPrompt);
+  }, [systemPrompt]);
 
   useEffect(() => {
     void loadDashboard();
@@ -201,6 +202,16 @@ export function useRuntimeConsole() {
   useEffect(() => {
     window.localStorage.setItem("hecate.authToken", authToken);
   }, [authToken]);
+
+  useEffect(() => {
+    if (model) {
+      window.localStorage.setItem("hecate.model", model);
+    }
+  }, [model]);
+
+  useEffect(() => {
+    window.localStorage.setItem("hecate.providerFilter", providerFilter);
+  }, [providerFilter]);
 
   useEffect(() => {
     if (activeChatSessionID) {
@@ -222,9 +233,6 @@ export function useRuntimeConsole() {
 
   useEffect(() => {
     if (providerFilter === "auto") {
-      if (model !== "") {
-        setModel("");
-      }
       return;
     }
     const stillValid = isModelValidForProvider(model, providerFilter, models, providers, providerPresets);
@@ -251,6 +259,15 @@ export function useRuntimeConsole() {
     setModel(defaultModelForProvider(providerFilter, models, providers, providerPresets));
   }, [model, models, providers, providerFilter, providerPresets]);
 
+  // When models load, validate the selected model. If it's not in the list (e.g. stale localStorage),
+  // fall back to the gateway default. If no model is set at all, pick the default.
+  useEffect(() => {
+    if (models.length === 0) return;
+    if (model !== "" && models.some((m) => m.id === model)) return;
+    const defaultM = models.find((m) => m.metadata?.default)?.id ?? models[0]?.id ?? "";
+    if (defaultM) setModel(defaultM);
+  }, [model, models]);
+
   useEffect(() => {
     if (providerFilter !== "auto" && session.allowedProviders.length > 0 && !session.allowedProviders.includes(providerFilter)) {
       setProviderFilter("auto");
@@ -271,20 +288,13 @@ export function useRuntimeConsole() {
     setPendingThread(null);
   }
 
-  function resetTraceState() {
-    setTraceSpans([]);
-    setTraceRoute(null);
-    setTraceStartedAt("");
-  }
-
   function resetChatWorkspaceState() {
     setChatResult(null);
     setStreamingContent(null);
     setRuntimeHeaders(null);
     clearPendingToolState();
-    resetTraceState();
     setChatError("");
-    setTraceError("");
+    setSystemPrompt("");
   }
 
   function activateChatSession(sessionRecord: ChatSessionRecord) {
@@ -374,7 +384,7 @@ export function useRuntimeConsole() {
   async function loadDashboard() {
     setLoading(true);
     setError("");
-    setControlPlaneError("");
+    setAdminConfigError("");
 
     try {
       const snapshot = await resolveDashboardSnapshot({
@@ -387,7 +397,7 @@ export function useRuntimeConsole() {
           chatSessions,
           activeChatSession,
           requestLedger,
-          controlPlane,
+          adminConfig,
           retentionRuns,
           retentionLastRun,
         },
@@ -401,10 +411,11 @@ export function useRuntimeConsole() {
       setBudget(snapshot.budget);
       setAccountSummary(snapshot.accountSummary);
       setChatSessions(snapshot.chatSessions);
+      setChatSessionsHasMore(snapshot.chatSessionsHasMore);
       setActiveChatSessionID(snapshot.activeChatSessionID);
       setActiveChatSession(snapshot.activeChatSession);
       setRequestLedger(snapshot.requestLedger);
-      setControlPlane(snapshot.controlPlane);
+      setAdminConfig(snapshot.adminConfig);
       setRetentionRuns(snapshot.retentionRuns);
       setRetentionLastRun(snapshot.retentionLastRun);
     } catch (loadError) {
@@ -423,7 +434,7 @@ export function useRuntimeConsole() {
     event.preventDefault();
     setChatLoading(true);
     setChatError("");
-    setTraceError("");
+    setRuntimeHeaders(null);
 
     try {
       let sessionID = activeChatSessionID;
@@ -432,8 +443,36 @@ export function useRuntimeConsole() {
         sessionID = createdSession.id;
       }
 
-      const messages = buildMessagesForSubmission(activeChatSession, message);
+      const messages = buildMessagesForSubmission(activeChatSession, message, systemPrompt);
       clearPendingToolState();
+
+      // Show the user message immediately, before streaming starts.
+      const optimisticMessage = message;
+      setMessage("");
+      setActiveChatSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              turns: [
+                ...(prev.turns ?? []),
+                {
+                  id: `pending-${Date.now()}`,
+                  request_id: "",
+                  user_message: { role: "user", content: optimisticMessage },
+                  assistant_message: { role: "assistant", content: null },
+                  provider: "",
+                  model: "",
+                  cost_micros_usd: 0,
+                  cost_usd: "0",
+                  prompt_tokens: 0,
+                  completion_tokens: 0,
+                  total_tokens: 0,
+                  created_at: new Date().toISOString(),
+                },
+              ],
+            }
+          : prev,
+      );
 
       const chatExecution = await executeChatRequest(buildChatPayload(messages, sessionID), messages);
       if (chatExecution.kind === "tool_calls") {
@@ -441,9 +480,24 @@ export function useRuntimeConsole() {
       }
       const { headers } = chatExecution;
 
+      // Patch the optimistic turn with the real assistant content so it's visible
+      // immediately, regardless of whether the backend session refresh wins the race.
+      const assistantContent = chatExecution.chatResult.choices[0]?.message.content ?? "";
+      setActiveChatSession((prev) => {
+        if (!prev?.turns?.length) return prev;
+        const turns = [...prev.turns];
+        const last = turns[turns.length - 1];
+        if (last.id.startsWith("pending-")) {
+          turns[turns.length - 1] = {
+            ...last,
+            assistant_message: { role: "assistant", content: assistantContent },
+            model: headers.resolvedModel || model,
+          };
+        }
+        return { ...prev, turns };
+      });
+
       setChatResult(chatExecution.chatResult);
-      setMessage("");
-      await refreshTrace(headers.requestId, true);
 
       try {
         const scopedBudget = await getBudget(
@@ -456,6 +510,7 @@ export function useRuntimeConsole() {
       }
 
       await refreshChatSessionState(sessionID);
+      setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (submitError) {
       setChatError(submitError instanceof Error ? submitError.message : "unknown request error");
@@ -489,8 +544,8 @@ export function useRuntimeConsole() {
 
       clearPendingToolState();
       setChatResult(chatExecution.chatResult);
-      await refreshTrace(chatExecution.headers.requestId, false);
       await refreshChatSessionState(activeChatSessionID);
+      setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "unknown error");
@@ -518,10 +573,10 @@ export function useRuntimeConsole() {
       fullContent += delta;
       setStreamingContent(fullContent);
     });
-    setStreamingContent(null);
     setRuntimeHeaders(response.headers);
 
     if (response.finishReason === "tool_calls" && response.toolCalls.length > 0) {
+      setStreamingContent(null);
       const assistantMsg = buildAssistantToolCallMessage(fullContent, response.toolCalls);
       setPendingThread([...toolCallBaseMessages, assistantMsg]);
       setPendingToolCalls(response.toolCalls.map((tc) => ({ ...tc, result: "" })));
@@ -533,28 +588,6 @@ export function useRuntimeConsole() {
       headers: response.headers,
       chatResult: buildSyntheticChatResult(response.headers, model, fullContent),
     };
-  }
-
-  async function refreshTrace(requestID: string, reportErrors: boolean) {
-    setTraceLoading(true);
-    try {
-      const trace = await getTrace(requestID, authToken);
-      setTraceSpans(trace.data.spans ?? []);
-      setTraceRoute(trace.data.route ?? null);
-      setTraceStartedAt(trace.data.started_at ?? "");
-      if (reportErrors) {
-        setTraceError("");
-      }
-    } catch (traceLoadError) {
-      setTraceSpans([]);
-      setTraceRoute(null);
-      setTraceStartedAt("");
-      if (reportErrors) {
-        setTraceError(traceLoadError instanceof Error ? traceLoadError.message : "failed to load trace");
-      }
-    } finally {
-      setTraceLoading(false);
-    }
   }
 
   async function resetBudget() {
@@ -652,37 +685,37 @@ export function useRuntimeConsole() {
   }
 
   function setNoticeMessage(kind: NoticeState["kind"], message: string) {
-    setNotice({ kind, message });
+    if (message) setNotice({ kind, message });
   }
 
   function describeError(error: unknown, fallback: string): string {
     return error instanceof Error ? error.message : fallback;
   }
 
-  function resetControlPlaneFeedback() {
-    setControlPlaneError("");
+  function resetAdminFeedback() {
+    setAdminConfigError("");
     setNotice(null);
   }
 
-  async function runControlPlaneMutation(options: {
+  async function runAdminMutation(options: {
     action: () => Promise<void>;
     successMessage: string;
     errorMessage: string;
     failureDetail: string;
   }) {
-    resetControlPlaneFeedback();
+    resetAdminFeedback();
     try {
       await options.action();
       await loadDashboard();
       setNoticeMessage("success", options.successMessage);
     } catch (error) {
-      setControlPlaneError(describeError(error, options.failureDetail));
+      setAdminConfigError(describeError(error, options.failureDetail));
       setNoticeMessage("error", options.errorMessage);
     }
   }
 
   async function upsertTenant() {
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "Tenant saved.",
       errorMessage: "Failed to save tenant.",
       failureDetail: "failed to save tenant",
@@ -703,114 +736,87 @@ export function useRuntimeConsole() {
   }
 
   async function upsertAPIKey() {
-    await runControlPlaneMutation({
+    await upsertAPIKeyRequest(
+      {
+        id: apiKeyFormID,
+        name: apiKeyFormName,
+        key: apiKeyFormSecret,
+        tenant: apiKeyFormTenant,
+        role: apiKeyFormRole,
+        allowed_providers: parseCSV(apiKeyFormProviders),
+        allowed_models: parseCSV(apiKeyFormModels),
+        enabled: true,
+      },
+      authToken,
+    );
+    resetAPIKeyForm();
+    void loadDashboard();
+  }
+
+  async function saveProviderKey(name: string, key: string) {
+    await runAdminMutation({
       successMessage: "API key saved.",
       errorMessage: "Failed to save API key.",
-      failureDetail: "failed to save api key",
-      action: async () => {
-        await upsertAPIKeyRequest(
-          {
-            id: apiKeyFormID,
-            name: apiKeyFormName,
-            key: apiKeyFormSecret,
-            tenant: apiKeyFormTenant,
-            role: apiKeyFormRole,
-            allowed_providers: parseCSV(apiKeyFormProviders),
-            allowed_models: parseCSV(apiKeyFormModels),
-            enabled: true,
-          },
-          authToken,
-        );
-        resetAPIKeyForm();
-      },
-    });
-  }
-
-  function populateProviderFormFromPreset(presetID: string) {
-    setProviderFormPresetID(presetID);
-    const preset = providerPresets.find((entry) => entry.id === presetID);
-    if (!preset) {
-      return;
-    }
-    setProviderFormID(preset.id);
-    setProviderFormName(preset.id);
-    setProviderFormKind(preset.kind);
-    setProviderFormProtocol(preset.protocol);
-    setProviderFormBaseURL(preset.base_url);
-    setProviderFormAPIVersion(preset.api_version ?? "");
-    setProviderFormDefaultModel("");
-    setProviderFormEnabled("true");
-    setProviderFormSecret("");
-  }
-
-  async function upsertProvider() {
-    await runControlPlaneMutation({
-      successMessage: "Provider saved.",
-      errorMessage: "Failed to save provider.",
-      failureDetail: "failed to save provider",
+      failureDetail: "failed to save provider api key",
       action: async () => {
         const payload = buildProviderUpsertPayload({
-          presetID: providerFormPresetID,
-          id: providerFormID,
-          name: providerFormName,
-          kind: providerFormKind,
-          protocol: providerFormProtocol,
-          baseURL: providerFormBaseURL,
-          apiVersion: providerFormAPIVersion,
-          defaultModel: providerFormDefaultModel,
-          enabled: providerFormEnabled === "true",
-          key: providerFormSecret,
+          presetID: name,
+          id: name,
+          name,
+          kind: "",
+          protocol: "",
+          baseURL: "",
+          apiVersion: "",
+          defaultModel: "",
+          enabled: true,
+          key,
           presets: providerPresets,
         });
-        await upsertProviderRequest(
-          payload,
-          authToken,
-        );
-        setProviderFormSecret("");
+        await upsertProviderRequest(payload, authToken);
       },
     });
   }
 
   async function setProviderEnabled(id: string, enabled: boolean) {
-    await runControlPlaneMutation({
-      successMessage: `Provider ${enabled ? "enabled" : "disabled"}.`,
+    await runAdminMutation({
+      successMessage: "",
       errorMessage: "Failed to update provider state.",
       failureDetail: "failed to update provider state",
       action: async () => {
-        await setProviderEnabledRequest({ id, enabled }, authToken);
+        await setProviderEnabledRequest(id, enabled, authToken);
       },
     });
   }
 
   async function rotateProviderCredential() {
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "Provider secret rotated.",
       errorMessage: "Failed to rotate provider secret.",
       failureDetail: "failed to rotate provider secret",
       action: async () => {
-        await rotateProviderSecretRequest({ id: rotateProviderID, key: rotateProviderSecret }, authToken);
+        await rotateProviderSecretRequest(rotateProviderID, rotateProviderSecret, authToken);
         resetRotateProviderForm();
       },
     });
   }
 
   async function deleteProvider(id: string) {
-    resetControlPlaneFeedback();
+    resetAdminFeedback();
     if (!window.confirm(`Delete provider "${id}"? This cannot be undone.`)) {
       return;
     }
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "Provider deleted.",
       errorMessage: "Failed to delete provider.",
       failureDetail: "failed to delete provider",
       action: async () => {
-        await deleteProviderRequest({ id }, authToken);
+        await deleteProviderRequest(id, authToken);
       },
     });
   }
 
   async function setTenantEnabled(id: string, enabled: boolean) {
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: `Tenant ${enabled ? "enabled" : "disabled"}.`,
       errorMessage: "Failed to update tenant state.",
       failureDetail: "failed to update tenant state",
@@ -821,11 +827,11 @@ export function useRuntimeConsole() {
   }
 
   async function deleteTenant(id: string) {
-    resetControlPlaneFeedback();
+    resetAdminFeedback();
     if (!window.confirm(`Delete tenant "${id}"? This cannot be undone.`)) {
       return;
     }
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "Tenant deleted.",
       errorMessage: "Failed to delete tenant.",
       failureDetail: "failed to delete tenant",
@@ -836,7 +842,7 @@ export function useRuntimeConsole() {
   }
 
   async function setAPIKeyEnabled(id: string, enabled: boolean) {
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: `API key ${enabled ? "enabled" : "disabled"}.`,
       errorMessage: "Failed to update API key state.",
       failureDetail: "failed to update api key state",
@@ -847,7 +853,7 @@ export function useRuntimeConsole() {
   }
 
   async function rotateAPIKey() {
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "API key rotated.",
       errorMessage: "Failed to rotate API key.",
       failureDetail: "failed to rotate api key",
@@ -859,11 +865,11 @@ export function useRuntimeConsole() {
   }
 
   async function deleteAPIKey(id: string) {
-    resetControlPlaneFeedback();
+    resetAdminFeedback();
     if (!window.confirm(`Delete API key "${id}"? This cannot be undone.`)) {
       return;
     }
-    await runControlPlaneMutation({
+    await runAdminMutation({
       successMessage: "API key deleted.",
       errorMessage: "Failed to delete API key.",
       failureDetail: "failed to delete api key",
@@ -907,15 +913,8 @@ export function useRuntimeConsole() {
     }
   }
 
-  async function createChatSession() {
-    setNotice(null);
-    try {
-      await createChatSessionRecord(deriveChatSessionTitle(message));
-      setNoticeMessage("success", "Chat session created.");
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : "failed to create chat session");
-      setNoticeMessage("error", "Failed to create chat session.");
-    }
+  function createChatSession() {
+    startNewChat();
   }
 
   async function selectChatSession(id: string) {
@@ -965,6 +964,20 @@ export function useRuntimeConsole() {
     }
   }
 
+  async function loadMoreChatSessions() {
+    if (chatSessionsLoadingMore || !chatSessionsHasMore) return;
+    setChatSessionsLoadingMore(true);
+    try {
+      const result = await getChatSessions(authToken, 20, chatSessions.length);
+      setChatSessions((current) => [...current, ...(result.data ?? [])]);
+      setChatSessionsHasMore(result.has_more ?? false);
+    } catch {
+      // Keep sidebar responsive; silently skip failed page loads.
+    } finally {
+      setChatSessionsLoadingMore(false);
+    }
+  }
+
   return {
     state: {
       apiKeyFormID,
@@ -989,8 +1002,8 @@ export function useRuntimeConsole() {
       chatSessions,
       cloudModels,
       cloudProviders,
-      controlPlane,
-      controlPlaneError,
+      adminConfig,
+      adminConfigError,
       copiedCommand,
       error,
       health,
@@ -1002,6 +1015,7 @@ export function useRuntimeConsole() {
       localProviderIssues,
       localProviders,
       message,
+      systemPrompt,
       model,
       modelFilter,
       models,
@@ -1009,16 +1023,6 @@ export function useRuntimeConsole() {
       session,
       providerFilter,
       providerScopedModels,
-      providerFormAPIVersion,
-      providerFormBaseURL,
-      providerFormDefaultModel,
-      providerFormEnabled,
-      providerFormID,
-      providerFormKind,
-      providerFormName,
-      providerFormPresetID,
-      providerFormProtocol,
-      providerFormSecret,
       providers,
       providerPresets,
       rotateProviderID,
@@ -1033,11 +1037,8 @@ export function useRuntimeConsole() {
       rotateAPIKeyID,
       rotateAPIKeySecret,
       runtimeHeaders,
-      traceError,
-      traceSpans,
-      traceLoading,
-      traceRoute,
-      traceStartedAt,
+      chatSessionsHasMore,
+      chatSessionsLoadingMore,
       tenant,
       tenantFormID,
       tenantFormModels,
@@ -1069,20 +1070,11 @@ export function useRuntimeConsole() {
       setBudgetAmountUsd,
       setBudgetLimitUsd,
       setMessage,
+      setSystemPrompt,
       setModel,
       setModelFilter,
       setProviderFilter: selectProviderRoute,
       setProviderEnabled,
-      setProviderFormAPIVersion,
-      setProviderFormBaseURL,
-      setProviderFormDefaultModel,
-      setProviderFormEnabled,
-      setProviderFormID,
-      setProviderFormKind,
-      setProviderFormName,
-      setProviderFormPresetID,
-      setProviderFormProtocol,
-      setProviderFormSecret,
       setRetentionSubsystems,
       setRotateAPIKeyID,
       setRotateAPIKeySecret,
@@ -1095,16 +1087,16 @@ export function useRuntimeConsole() {
       setTenantFormName,
       setTenantFormProviders,
       setBudgetLimit,
-      populateProviderFormFromPreset,
       runRetention,
       selectChatSession,
       startNewChat,
       submitChat,
+      loadMoreChatSessions,
       submitToolResults,
       updateToolResult,
       topUpBudget,
       upsertAPIKey,
-      upsertProvider,
+      saveProviderKey,
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
       dismissNotice: () => setNotice(null),
@@ -1187,7 +1179,7 @@ function deriveChatSessionTitle(message: string): string {
   return `${normalized.slice(0, 45)}...`;
 }
 
-function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string): ChatMessage[] {
+function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, message: string, systemPrompt = ""): ChatMessage[] {
   const history: ChatMessage[] =
     activeSession?.turns?.flatMap((turn) => {
       const user: ChatMessage = { role: "user", content: turn.user_message.content ?? "" };
@@ -1196,7 +1188,8 @@ function buildMessagesForSubmission(activeSession: ChatSessionRecord | null, mes
         : { role: "assistant", content: turn.assistant_message.content ?? "" };
       return [user, assistant];
     }) ?? [];
-  return [...history, { role: "user", content: message }];
+  const prefix: ChatMessage[] = systemPrompt.trim() ? [{ role: "system", content: systemPrompt.trim() }] : [];
+  return [...prefix, ...history, { role: "user", content: message }];
 }
 
 function buildAssistantToolCallMessage(
@@ -1293,7 +1286,7 @@ type DashboardResults = {
   accountSummary: PromiseSettledResult<AccountSummaryResponse>;
   chatSessions: PromiseSettledResult<ChatSessionsResponse>;
   requestLedger: PromiseSettledResult<RequestLedgerResponse>;
-  controlPlane: PromiseSettledResult<ControlPlaneResponse>;
+  adminConfig: PromiseSettledResult<ConfiguredStateResponse>;
   retentionRuns: PromiseSettledResult<{ object: string; data: RetentionRunData[] }>;
 };
 
@@ -1304,7 +1297,7 @@ type DashboardPreviousState = {
   chatSessions: ChatSessionsResponse["data"];
   activeChatSession: ChatSessionRecord | null;
   requestLedger: RequestLedgerResponse["data"];
-  controlPlane: ControlPlaneResponse["data"] | null;
+  adminConfig: ConfiguredStateResponse["data"] | null;
   retentionRuns: RetentionRunData[];
   retentionLastRun: RetentionRunData | null;
 };
@@ -1318,10 +1311,11 @@ type DashboardSnapshot = {
   budget: BudgetStatusResponse["data"] | null;
   accountSummary: AccountSummaryResponse["data"] | null;
   chatSessions: ChatSessionsResponse["data"];
+  chatSessionsHasMore: boolean;
   activeChatSessionID: string;
   activeChatSession: ChatSessionRecord | null;
   requestLedger: RequestLedgerResponse["data"];
-  controlPlane: ControlPlaneResponse["data"] | null;
+  adminConfig: ConfiguredStateResponse["data"] | null;
   retentionRuns: RetentionRunData[];
   retentionLastRun: RetentionRunData | null;
 };
@@ -1352,9 +1346,9 @@ async function resolveDashboardSnapshot(args: {
     unauthorized: [],
     other: args.previous.requestLedger,
   });
-  const controlPlane = resolveAuthorizedDashboardResult(results.controlPlane, {
+  const adminConfig = resolveAuthorizedDashboardResult(results.adminConfig, {
     unauthorized: null,
-    other: args.previous.controlPlane,
+    other: args.previous.adminConfig,
   });
   const retentionRuns = resolveAuthorizedDashboardResult(results.retentionRuns, {
     unauthorized: [],
@@ -1378,10 +1372,11 @@ async function resolveDashboardSnapshot(args: {
     budget,
     accountSummary,
     chatSessions: chatState.sessions,
+    chatSessionsHasMore: chatState.hasMore,
     activeChatSessionID: chatState.activeChatSessionID,
     activeChatSession: chatState.activeChatSession,
     requestLedger,
-    controlPlane,
+    adminConfig,
     retentionRuns,
     retentionLastRun,
   };
@@ -1398,7 +1393,7 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
     accountSummary,
     chatSessions,
     requestLedger,
-    controlPlane,
+    adminConfig,
     retentionRuns,
   ] = await Promise.allSettled([
     getHealth(),
@@ -1410,7 +1405,7 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
     getAccountSummary("", authToken),
     getChatSessions(authToken, 20),
     getRequestLedger(authToken, 20),
-    getControlPlane(authToken),
+    getAdminConfig(authToken),
     getRetentionRuns(authToken, 10),
   ]);
 
@@ -1424,7 +1419,7 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
     accountSummary,
     chatSessions,
     requestLedger,
-    controlPlane,
+    adminConfig,
     retentionRuns,
   };
 }
@@ -1467,6 +1462,7 @@ async function resolveChatDashboardState(args: {
   result: PromiseSettledResult<ChatSessionsResponse>;
 }): Promise<{
   sessions: ChatSessionsResponse["data"];
+  hasMore: boolean;
   activeChatSessionID: string;
   activeChatSession: ChatSessionRecord | null;
 }> {
@@ -1474,18 +1470,21 @@ async function resolveChatDashboardState(args: {
     if (isInvalidBearerTokenError(args.result.reason)) {
       return {
         sessions: [],
+        hasMore: false,
         activeChatSessionID: "",
         activeChatSession: null,
       };
     }
     return {
       sessions: args.previousSessions,
+      hasMore: false,
       activeChatSessionID: args.activeChatSessionID,
       activeChatSession: args.previousActiveSession,
     };
   }
 
   const sessions = args.result.value.data ?? [];
+  const hasMore = args.result.value.has_more ?? false;
   const activeChatSessionID = sessions.some((entry) => entry.id === args.activeChatSessionID)
     ? args.activeChatSessionID
     : sessions[0]?.id ?? "";
@@ -1493,6 +1492,7 @@ async function resolveChatDashboardState(args: {
   if (!activeChatSessionID) {
     return {
       sessions,
+      hasMore,
       activeChatSessionID,
       activeChatSession: null,
     };
@@ -1502,12 +1502,14 @@ async function resolveChatDashboardState(args: {
     const sessionResult = await getChatSession(activeChatSessionID, args.authToken);
     return {
       sessions,
+      hasMore,
       activeChatSessionID,
       activeChatSession: sessionResult.data,
     };
   } catch {
     return {
       sessions,
+      hasMore,
       activeChatSessionID,
       activeChatSession: null,
     };
@@ -1520,9 +1522,10 @@ function isInvalidBearerTokenError(error: unknown): boolean {
 
 function deriveSessionState(sessionInfo: SessionResponse["data"] | null): SessionState {
   const role = sessionInfo?.role ?? "anonymous";
+  const authDisabled = sessionInfo?.source === "auth_disabled";
   const kind: SessionKind = sessionInfo?.invalid_token
     ? "invalid"
-    : role === "admin"
+    : role === "admin" || authDisabled
       ? "admin"
       : sessionInfo?.authenticated
         ? "tenant"

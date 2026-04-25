@@ -102,6 +102,39 @@ func (s *MemoryStore) UpdateTask(_ context.Context, task types.Task) (types.Task
 	return task, nil
 }
 
+func (s *MemoryStore) DeleteTask(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return fmt.Errorf("task %q not found", id)
+	}
+	delete(s.tasks, id)
+	for runID, run := range s.runs {
+		if run.TaskID != id {
+			continue
+		}
+		delete(s.runs, runID)
+		delete(s.steps, runID)
+		delete(s.events, run.TaskID+"/"+runID)
+	}
+	for k, step := range s.steps {
+		if step.TaskID == id {
+			delete(s.steps, k)
+		}
+	}
+	for k, approval := range s.approvals {
+		if approval.TaskID == id {
+			delete(s.approvals, k)
+		}
+	}
+	for k, artifact := range s.artifacts {
+		if artifact.TaskID == id {
+			delete(s.artifacts, k)
+		}
+	}
+	return nil
+}
+
 func (s *MemoryStore) CreateRun(_ context.Context, run types.TaskRun) (types.TaskRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

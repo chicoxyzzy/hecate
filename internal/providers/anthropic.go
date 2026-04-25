@@ -128,6 +128,10 @@ func (p *AnthropicProvider) Name() string {
 	return p.config.Name
 }
 
+func (p *AnthropicProvider) Enabled() bool {
+	return p.config.Enabled
+}
+
 func (p *AnthropicProvider) Kind() Kind {
 	if p.config.Kind == string(KindLocal) {
 		return KindLocal

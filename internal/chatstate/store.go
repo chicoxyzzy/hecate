@@ -18,6 +18,7 @@ import (
 type Filter struct {
 	Tenant string
 	Limit  int
+	Offset int
 }
 
 type Store interface {
@@ -81,6 +82,12 @@ func (s *MemoryStore) ListSessions(_ context.Context, filter Filter) ([]types.Ch
 		items = append(items, cloned)
 	}
 	sortSessionsDesc(items)
+	if filter.Offset > 0 {
+		if filter.Offset >= len(items) {
+			return nil, nil
+		}
+		items = items[filter.Offset:]
+	}
 	if filter.Limit > 0 && len(items) > filter.Limit {
 		items = items[:filter.Limit]
 	}
@@ -191,6 +198,12 @@ func (s *FileStore) ListSessions(_ context.Context, filter Filter) ([]types.Chat
 		items = append(items, cloned)
 	}
 	sortSessionsDesc(items)
+	if filter.Offset > 0 {
+		if filter.Offset >= len(items) {
+			return nil, nil
+		}
+		items = items[filter.Offset:]
+	}
 	if filter.Limit > 0 && len(items) > filter.Limit {
 		items = items[:filter.Limit]
 	}
@@ -362,6 +375,10 @@ func (s *PostgresStore) ListSessions(ctx context.Context, filter Filter) ([]type
 	if filter.Limit > 0 {
 		args = append(args, filter.Limit)
 		query += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	if filter.Offset > 0 {
+		args = append(args, filter.Offset)
+		query += fmt.Sprintf(` OFFSET $%d`, len(args))
 	}
 	rows, err := s.client.DB().QueryContext(ctx, query, args...)
 	if err != nil {

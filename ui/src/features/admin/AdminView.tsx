@@ -1,460 +1,832 @@
+import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import { formatDateTime, formatUsd } from "../../lib/format";
-import { budgetConsumedPercent, budgetWarningTone, describeBudgetScope } from "../../lib/runtime-utils";
-import {
-  DefinitionList,
-  EmptyState,
-  InlineNotice,
-  ShellSection,
-  StatusPill,
-  Surface,
-  TextAreaField,
-  TextField,
-  ToolbarButton,
-} from "../shared/ConsolePrimitives";
-import "../shared/Workbench.css";
-import "./AdminView.css";
+import type { ConfiguredAPIKeyRecord } from "../../types/runtime";
+import { Badge, CopyBtn, Dot, Icon, Icons, InlineError } from "../shared/ui";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
   actions: RuntimeConsoleViewModel["actions"];
 };
 
+type Tab = "keys" | "tenants" | "budget" | "usage" | "retention";
+
 export function AdminView({ state, actions }: Props) {
-  const budgetPercent = budgetConsumedPercent(state.budget);
-  const retentionLastRun = state.retentionLastRun;
+  const [tab, setTab] = useState<Tab>("keys");
 
   return (
-    <div className="workspace-grid">
-      <div className="workspace-main">
-        <ShellSection eyebrow="Budget controls" title="Budget">
-          <div className="two-column-grid">
-            <Surface>
-              {state.budget ? (
-                <div className="stack-lg">
-                  <div className="stack-sm">
-                    <div className="action-row">
-                      <StatusPill label={describeBudgetScope(state.budget)} tone="neutral" />
-                      <StatusPill label={`${budgetPercent}% debited`} tone={budgetPercent >= 90 ? "danger" : budgetPercent >= 70 ? "warning" : "healthy"} />
-                    </div>
-                    <div className="metric-grid metric-grid--compact">
-                      <BudgetMetric label="Balance" value={formatUsd(state.budget.balance_usd)} />
-                      <BudgetMetric label="Debited" value={formatUsd(state.budget.debited_usd)} />
-                      <BudgetMetric label="Credited" value={formatUsd(state.budget.credited_usd)} />
-                    </div>
-                  </div>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Admin bearer token */}
+      <AdminToken state={state} actions={actions} />
 
-                  <DefinitionList
-                    items={[
-                      { label: "Scope", value: state.budget.scope },
-                      { label: "Key", value: state.budget.key },
-                      { label: "Backend", value: state.budget.backend },
-                      { label: "Balance source", value: state.budget.balance_source },
-                      { label: "Provider", value: state.budget.provider || "n/a" },
-                      { label: "Tenant", value: state.budget.tenant || "n/a" },
-                    ]}
-                  />
-
-                  <div className="stack-sm">
-                    <p className="label-muted">Warning thresholds</p>
-                    {state.budget.warnings?.length ? (
-                      <div className="budget-thresholds">
-                        {state.budget.warnings.map((warning) => (
-                          <div className="budget-threshold" key={warning.threshold_percent}>
-                            <div className="action-row">
-                              <StatusPill label={`${warning.threshold_percent}%`} tone={budgetWarningTone(warning.triggered)} />
-                              <span className="body-muted">{formatUsd((warning.threshold_micros_usd / 1_000_000).toFixed(6))}</span>
-                            </div>
-                            <p className="body-muted">
-                              {warning.triggered ? "Low-balance threshold reached for current scope." : "Balance is above this threshold."}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <EmptyState title="No warnings" detail="No warning thresholds returned for this budget scope." />
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <EmptyState title="No budget data" detail="Admin access required." />
-              )}
-            </Surface>
-
-            <Surface tone="strong">
-              <div className="stack-md">
-                <TextField label="Top-up amount (USD)" onChange={actions.setBudgetAmountUsd} value={state.budgetAmountUsd} />
-                <TextField label="Set balance (USD)" onChange={actions.setBudgetLimitUsd} value={state.budgetLimitUsd} />
-                {state.budgetActionError ? <InlineNotice message={state.budgetActionError} tone="error" /> : null}
-                <div className="action-row">
-                  <ToolbarButton onClick={() => void actions.topUpBudget()} tone="primary">
-                    Top up balance
-                  </ToolbarButton>
-                  <ToolbarButton onClick={() => void actions.setBudgetLimit()}>Set balance</ToolbarButton>
-                  <ToolbarButton onClick={() => void actions.resetBudget()} tone="danger">
-                    Reset account
-                  </ToolbarButton>
-                </div>
-              </div>
-            </Surface>
-          </div>
-
-          <div className="mt-4">
-            <Surface>
-              <div className="stack-sm">
-                <p className="label-muted">Recent request debits</p>
-                {state.requestLedger.length ? (
-                  <ul className="budget-history-list">
-                    {state.requestLedger.map((entry, index) => (
-                      <li className="budget-history-item" key={`${entry.timestamp}-${entry.request_id}-${index}`}>
-                        <div className="budget-history-item__head">
-                          <div className="action-row">
-                            <strong>{entry.model || renderBudgetHistoryLabel(entry.type)}</strong>
-                            <StatusPill label={entry.provider || "unknown provider"} tone="neutral" />
-                            {entry.tenant ? <StatusPill label={entry.tenant} tone="neutral" /> : null}
-                          </div>
-                          <span className="body-muted">{formatDateTime(entry.timestamp)}</span>
-                        </div>
-                        <div className="budget-history-item__body">
-                          {entry.request_id ? <span>{entry.request_id}</span> : null}
-                          <span>{formatUsd(entry.amount_usd)}</span>
-                          {typeof entry.prompt_tokens === "number" && entry.prompt_tokens > 0 ? <span>Prompt {entry.prompt_tokens}</span> : null}
-                          {typeof entry.completion_tokens === "number" && entry.completion_tokens > 0 ? <span>Completion {entry.completion_tokens}</span> : null}
-                          {typeof entry.total_tokens === "number" && entry.total_tokens > 0 ? <span>Total {entry.total_tokens}</span> : null}
-                          <span>Balance {formatUsd(entry.balance_usd)}</span>
-                        </div>
-                        {entry.detail ? <p className="body-muted">{entry.detail}</p> : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState title="No recent request debits" detail="Recent debit events across accounts will appear here after requests are served." />
-                )}
-              </div>
-            </Surface>
-          </div>
-
-          <div className="mt-4">
-            <Surface>
-              <div className="stack-sm">
-                <p className="label-muted">Account ledger</p>
-                {state.budget?.history?.length ? (
-                  <ul className="budget-history-list">
-                    {state.budget.history.map((entry, index) => (
-                      <li className="budget-history-item" key={`${entry.timestamp}-${entry.type}-${index}`}>
-                        <div className="budget-history-item__head">
-                          <div className="action-row">
-                            <strong>{renderBudgetHistoryLabel(entry.type)}</strong>
-                            <StatusPill label={entry.provider || "scope"} tone="neutral" />
-                            {entry.request_id ? <StatusPill label={entry.request_id} tone="neutral" /> : null}
-                          </div>
-                          <span className="body-muted">{formatDateTime(entry.timestamp)}</span>
-                        </div>
-                        <div className="budget-history-item__body">
-                          <span>{formatUsd(entry.amount_usd)}</span>
-                          <span>Balance {formatUsd(entry.balance_usd)}</span>
-                          <span>Credited {formatUsd(entry.credited_usd)}</span>
-                          <span>Debited {formatUsd(entry.debited_usd)}</span>
-                          {entry.model ? <span>{entry.model}</span> : null}
-                          {typeof entry.total_tokens === "number" && entry.total_tokens > 0 ? <span>{entry.total_tokens} tokens</span> : null}
-                          {entry.actor ? <span>{entry.actor}</span> : null}
-                        </div>
-                        {entry.detail ? <p className="body-muted">{entry.detail}</p> : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState title="No ledger history" detail="Top-ups, debits, balance resets, and manual balance changes will appear here." />
-                )}
-              </div>
-            </Surface>
-          </div>
-
-          <div className="mt-4">
-            <Surface>
-              <div className="stack-sm">
-                <p className="label-muted">Model balance estimates</p>
-                {state.accountSummary?.estimates?.length ? (
-                  <div className="trace-inline-grid">
-                    {state.accountSummary.estimates.slice(0, 24).map((estimate) => (
-                      <div className="trace-inline-card" key={`${estimate.provider}-${estimate.model}`}>
-                        <div className="action-row action-row--wide">
-                          <p className="trace-inline-card__title">{estimate.model}</p>
-                          <StatusPill label={estimate.provider} tone={estimate.provider_kind === "local" ? "healthy" : "neutral"} />
-                        </div>
-                        <p className="body-muted">
-                          {estimate.priced ? "Priced from current pricebook" : "No explicit pricebook entry"}
-                        </p>
-                        <div className="stack-sm">
-                          <span className="body-muted">Prompt tokens left: {estimate.estimated_remaining_prompt_tokens.toLocaleString()}</span>
-                          <span className="body-muted">Output tokens left: {estimate.estimated_remaining_output_tokens.toLocaleString()}</span>
-                        </div>
-                        {estimate.default ? <StatusPill label="default" tone="neutral" /> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState title="No model estimates" detail="Model-level token estimates will appear when account balance and pricebook data are available." />
-                )}
-              </div>
-            </Surface>
-          </div>
-        </ShellSection>
-
-        <ShellSection eyebrow="Retention" title="Retention">
-          <div className="two-column-grid">
-            <Surface tone="strong">
-              <div className="stack-md">
-                <TextAreaField
-                  label="Subsystems (comma separated)"
-                  onChange={actions.setRetentionSubsystems}
-                  rows={3}
-                  value={state.retentionSubsystems}
-                  placeholder="trace_snapshots,exact_cache,semantic_cache,budget_events,audit_events"
-                />
-                <p className="body-muted">
-                  Leave empty to run every configured subsystem. Use a comma-separated subset for targeted cleanup passes.
-                </p>
-                {state.retentionError ? <InlineNotice message={state.retentionError} tone="error" /> : null}
-                <div className="action-row">
-                  <ToolbarButton onClick={() => void actions.runRetention()} tone="primary">
-                    {state.retentionLoading ? "Running retention..." : "Run retention"}
-                  </ToolbarButton>
-                  <StatusPill label={state.retentionLastRun ? `Last run ${formatDateTime(state.retentionLastRun.finished_at)}` : "No runs yet"} tone="neutral" />
-                </div>
-              </div>
-            </Surface>
-
-            <Surface>
-              {retentionLastRun ? (
-                <div className="stack-md">
-                  <div className="action-row action-row--wide">
-                    <StatusPill label={retentionLastRun.trigger} tone="neutral" />
-                    <StatusPill
-                      label={`${retentionLastRun.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`}
-                      tone="healthy"
-                    />
-                  </div>
-                  <DefinitionList
-                    items={[
-                      { label: "Started", value: formatDateTime(retentionLastRun.started_at) },
-                      { label: "Finished", value: formatDateTime(retentionLastRun.finished_at) },
-                      { label: "Actor", value: retentionLastRun.actor || "system" },
-                      { label: "Subsystems", value: retentionLastRun.results.length.toString() },
-                    ]}
-                  />
-                  <div className="trace-inline-grid">
-                    {retentionLastRun.results.map((result) => (
-                      <div className="trace-inline-card" key={`${retentionLastRun.finished_at}-${result.name}`}>
-                        <p className="trace-inline-card__title">{result.name}</p>
-                        <div className="action-row">
-                          <StatusPill
-                            label={result.error ? "failed" : result.skipped ? "skipped" : `${result.deleted} deleted`}
-                            tone={result.error ? "danger" : result.skipped ? "neutral" : result.deleted > 0 ? "healthy" : "warning"}
-                          />
-                        </div>
-                        <p className="body-muted">
-                          max age {result.max_age || "n/a"} · max count {result.max_count}
-                        </p>
-                        {result.error ? <p className="body-muted">{result.error}</p> : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <EmptyState title="No retention run" detail="Run retention to inspect deleted rows, skipped subsystems, and per-subsystem limits." />
-              )}
-            </Surface>
-          </div>
-
-          <div className="mt-4">
-            <Surface>
-              <div className="stack-sm">
-                <p className="label-muted">Recent retention runs</p>
-                {state.retentionRuns.length ? (
-                  <ul className="budget-history-list">
-                    {state.retentionRuns.map((run, index) => (
-                      <li className="budget-history-item" key={`${run.finished_at}-${index}`}>
-                        <div className="budget-history-item__head">
-                          <div className="action-row">
-                            <strong>{run.trigger}</strong>
-                            <StatusPill label={`${run.results.filter((item) => !item.skipped).reduce((sum, item) => sum + item.deleted, 0)} deleted`} tone="healthy" />
-                          </div>
-                          <span className="body-muted">{formatDateTime(run.finished_at)}</span>
-                        </div>
-                        <div className="budget-history-item__body">
-                          {run.actor ? <span>actor: {run.actor}</span> : null}
-                          {run.request_id ? <span>request: {run.request_id}</span> : null}
-                          {run.results.map((result) => (
-                            <span key={`${run.finished_at}-${result.name}`}>
-                              {result.name}: {result.error ? "failed" : result.skipped ? "skipped" : `${result.deleted} deleted`}
-                            </span>
-                          ))}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyState title="No retention history" detail="Persisted retention runs will appear here after the first cleanup cycle." />
-                )}
-              </div>
-            </Surface>
-          </div>
-        </ShellSection>
-
-        <ShellSection
-          eyebrow="Control plane"
-          title="Control plane"
-        >
-          {state.controlPlaneError ? <InlineNotice message={state.controlPlaneError} tone="error" /> : null}
-          <div className="two-column-grid">
-            <Surface>
-              <div className="stack-lg">
-                <div className="stack-sm">
-                  <p className="label-muted">Create or update tenant</p>
-                  <TextField label="Tenant ID" onChange={actions.setTenantFormID} value={state.tenantFormID} />
-                  <TextField label="Tenant name" onChange={actions.setTenantFormName} value={state.tenantFormName} />
-                  <TextAreaField label="Allowed providers (comma separated)" onChange={actions.setTenantFormProviders} rows={3} value={state.tenantFormProviders} />
-                  <TextAreaField label="Allowed models (comma separated)" onChange={actions.setTenantFormModels} rows={3} value={state.tenantFormModels} />
-                  <ToolbarButton onClick={() => void actions.upsertTenant()} tone="primary">
-                    Save tenant
-                  </ToolbarButton>
-                </div>
-
-                <div className="stack-sm">
-                  <p className="label-muted">Create or update API key</p>
-                  <TextField label="Key ID" onChange={actions.setAPIKeyFormID} value={state.apiKeyFormID} />
-                  <TextField label="Name" onChange={actions.setAPIKeyFormName} value={state.apiKeyFormName} />
-                  <TextField label="Secret" onChange={actions.setAPIKeyFormSecret} value={state.apiKeyFormSecret} />
-                  <TextField label="Tenant" onChange={actions.setAPIKeyFormTenant} value={state.apiKeyFormTenant} />
-                  <TextField label="Role" onChange={actions.setAPIKeyFormRole} value={state.apiKeyFormRole} />
-                  <TextAreaField label="Allowed providers (comma separated)" onChange={actions.setAPIKeyFormProviders} rows={3} value={state.apiKeyFormProviders} />
-                  <TextAreaField label="Allowed models (comma separated)" onChange={actions.setAPIKeyFormModels} rows={3} value={state.apiKeyFormModels} />
-                  <ToolbarButton onClick={() => void actions.upsertAPIKey()} tone="primary">
-                    Save API key
-                  </ToolbarButton>
-                </div>
-              </div>
-            </Surface>
-
-            <Surface>
-              <div className="stack-lg">
-                <div className="stack-sm">
-                  <p className="label-muted">Rotate API key</p>
-                  <TextField label="Key ID" onChange={actions.setRotateAPIKeyID} value={state.rotateAPIKeyID} />
-                  <TextField label="New secret" onChange={actions.setRotateAPIKeySecret} value={state.rotateAPIKeySecret} />
-                  <ToolbarButton onClick={() => void actions.rotateAPIKey()}>Rotate key</ToolbarButton>
-                </div>
-
-                <div className="stack-sm">
-                  <p className="label-muted">Tenants</p>
-                  {state.controlPlane?.tenants.length ? (
-                    state.controlPlane.tenants.map((tenant) => (
-                      <div className="data-row" key={tenant.id}>
-                        <div className="data-row__primary">
-                          <div className="action-row">
-                            <strong>{tenant.name || tenant.id}</strong>
-                            <StatusPill label={tenant.enabled ? "enabled" : "disabled"} tone={tenant.enabled ? "healthy" : "warning"} />
-                          </div>
-                          <p className="body-muted">{tenant.id}</p>
-                        </div>
-                        <div className="action-row">
-                          <ToolbarButton onClick={() => void actions.setTenantEnabled(tenant.id, !tenant.enabled)}>
-                            {tenant.enabled ? "Disable" : "Enable"}
-                          </ToolbarButton>
-                          <ToolbarButton onClick={() => void actions.deleteTenant(tenant.id)} tone="danger">
-                            Delete
-                          </ToolbarButton>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <EmptyState title="No tenants" detail="Create one to begin." />
-                  )}
-                </div>
-
-                <div className="stack-sm">
-                  <p className="label-muted">API keys</p>
-                  {state.controlPlane?.api_keys.length ? (
-                    state.controlPlane.api_keys.map((apiKey) => (
-                      <div className="data-row" key={apiKey.id}>
-                        <div className="data-row__primary">
-                          <div className="action-row">
-                            <strong>{apiKey.name || apiKey.id}</strong>
-                            <StatusPill label={apiKey.role} tone="neutral" />
-                            <StatusPill label={apiKey.enabled ? "enabled" : "disabled"} tone={apiKey.enabled ? "healthy" : "warning"} />
-                          </div>
-                          <p className="body-muted">
-                            {apiKey.id} • {apiKey.tenant || "no tenant"} • Updated {formatDateTime(apiKey.updated_at)}
-                          </p>
-                        </div>
-                        <div className="action-row">
-                          <ToolbarButton onClick={() => void actions.setAPIKeyEnabled(apiKey.id, !apiKey.enabled)}>
-                            {apiKey.enabled ? "Disable" : "Enable"}
-                          </ToolbarButton>
-                          <ToolbarButton onClick={() => void actions.deleteAPIKey(apiKey.id)} tone="danger">
-                            Delete
-                          </ToolbarButton>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <EmptyState title="No API keys" detail="Create one to begin." />
-                  )}
-                </div>
-              </div>
-            </Surface>
-          </div>
-        </ShellSection>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        {(["keys", "tenants", "budget", "usage", "retention"] as Tab[]).map(t => (
+          <button key={t} type="button"
+            onClick={() => setTab(t)}
+            style={{
+              padding: "7px 12px",
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+              background: "none",
+              border: "none",
+              borderBottom: tab === t ? "2px solid var(--teal)" : "2px solid transparent",
+              color: tab === t ? "var(--teal)" : "var(--t2)",
+              cursor: "pointer",
+              marginBottom: -1,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}>
+            {t}
+          </button>
+        ))}
       </div>
 
-      <aside className="workspace-rail">
-        <ShellSection eyebrow="Audit" title="Events">
-          <Surface>
-            {state.controlPlane?.events.length ? (
-              <ul className="audit-list">
-                {state.controlPlane.events.slice(0, 12).map((event) => (
-                  <li key={`${event.timestamp}-${event.action}-${event.target_id}`}>
-                    <strong>{event.action}</strong>
-                    <span>
-                      {event.target_type}:{event.target_id}
-                    </span>
-                    <small>
-                      {event.actor} • {formatDateTime(event.timestamp)}
-                    </small>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState title="No events" detail="No audit events loaded." />
-            )}
-          </Surface>
-        </ShellSection>
-      </aside>
+      {/* Tab content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        {tab === "keys"      && <KeysTab state={state} actions={actions} />}
+        {tab === "tenants"   && <TenantsTab state={state} actions={actions} />}
+        {tab === "budget"    && <BudgetTab state={state} actions={actions} />}
+        {tab === "usage"     && <UsageTab state={state} />}
+        {tab === "retention" && <RetentionTab state={state} actions={actions} />}
+      </div>
     </div>
   );
 }
 
-function BudgetMetric({ label, value }: { label: string; value: string }) {
+// ─── Admin bearer token ───────────────────────────────────────────────────────
+
+function AdminToken({ state, actions }: Props) {
+  const [visible, setVisible] = useState(false);
+
   return (
-    <div className="budget-metric">
-      <p className="budget-metric__label">{label}</p>
-      <p className="budget-metric__value">{value}</p>
+    <div className="card" style={{ margin: "12px 16px 0", padding: "10px 14px", flexShrink: 0 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)", whiteSpace: "nowrap" }}>Admin token</span>
+        <Badge status={state.authToken ? "healthy" : "down"} label={state.authToken ? "active" : "not set"} />
+        <div style={{ flex: 1, background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "5px 10px", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {visible ? (state.authToken || "not set") : "••••••••••••••••••••••••••••••••••••••••••••"}
+        </div>
+        <button className="btn btn-sm" onClick={() => setVisible(v => !v)}>{visible ? "Hide" : "Reveal"}</button>
+        <button className="btn btn-sm" onClick={() => void actions.rotateAPIKey()}>
+          <Icon d={Icons.refresh} size={13} /> Rotate
+        </button>
+      </div>
+      <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+        GATEWAY_ADMIN_TOKEN — required for control-plane operations
+      </div>
     </div>
   );
 }
 
-function renderBudgetHistoryLabel(value: string): string {
-  switch (value) {
-    case "top_up":
-      return "Top up";
-    case "set_balance":
-      return "Set balance";
-    case "reset":
-      return "Reset";
-    case "debit":
-      return "Debit";
-    default:
-      return value;
+// ─── Keys tab ────────────────────────────────────────────────────────────────
+
+function KeysTab({ state, actions }: Props) {
+  const [filterTenant, setFilterTenant] = useState("all");
+  const [newKeyOpen, setNewKeyOpen] = useState(false);
+  const [rotateOpen, setRotateOpen] = useState(false);
+  const [createdKeyToken, setCreatedKeyToken] = useState<string | null>(null);
+  const [createKeyError, setCreateKeyError] = useState("");
+
+  const apiKeys = state.adminConfig?.api_keys ?? [];
+  const tenants = state.adminConfig?.tenants ?? [];
+  const tenantNames = [...new Set(apiKeys.map(k => k.tenant).filter(Boolean))] as string[];
+
+  const filteredKeys = filterTenant === "all" ? apiKeys : apiKeys.filter(k => k.tenant === filterTenant);
+  const grouped = tenantNames.map(t => ({ tenant: t, keys: filteredKeys.filter(k => k.tenant === t) })).filter(g => g.keys.length > 0);
+  const ungrouped = filteredKeys.filter(k => !k.tenant);
+
+  function generateSecret(): string {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return "hct_sk_" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
   }
+
+  function openNewKey() {
+    setNewKeyOpen(true);
+    setCreatedKeyToken(null);
+    setCreateKeyError("");
+    actions.setAPIKeyFormName("");
+    actions.setAPIKeyFormTenant("");
+    actions.setAPIKeyFormRole("tenant");
+    actions.setAPIKeyFormSecret(generateSecret());
+  }
+
+  async function handleCreateKey() {
+    if (!state.apiKeyFormName.trim() || !state.apiKeyFormSecret.trim()) return;
+    const secret = state.apiKeyFormSecret;
+    setCreateKeyError("");
+    try {
+      await actions.upsertAPIKey();
+      setCreatedKeyToken(secret);
+    } catch (err) {
+      setCreateKeyError(err instanceof Error ? err.message : "Failed to create key.");
+    }
+  }
+
+  async function handleRotateKey() {
+    if (!state.rotateAPIKeyID.trim()) return;
+    await actions.rotateAPIKey();
+    setRotateOpen(false);
+  }
+
+  return (
+    <>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>API keys</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{apiKeys.length} total</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {tenantNames.length > 0 && (
+            <select className="select" value={filterTenant} onChange={e => setFilterTenant(e.target.value)}>
+              <option value="all">All tenants</option>
+              {tenantNames.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          )}
+          <button className="btn btn-sm" onClick={() => setRotateOpen(true)}>
+            <Icon d={Icons.refresh} size={13} /> Rotate key
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={openNewKey}>
+            <Icon d={Icons.plus} size={13} /> New key
+          </button>
+        </div>
+      </div>
+
+      {/* Keys grouped by tenant */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {grouped.map(group => (
+          <div key={group.tenant}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--teal)", fontWeight: 500 }}>{group.tenant}</span>
+              <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>{group.keys.length} key{group.keys.length !== 1 ? "s" : ""}</span>
+            </div>
+            <KeyTable keys={group.keys} onDelete={id => void actions.deleteAPIKey(id)} onToggle={(id, enabled) => void actions.setAPIKeyEnabled(id, enabled)} />
+          </div>
+        ))}
+        {ungrouped.length > 0 && (
+          <div>
+            <div style={{ marginBottom: 6 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--t2)" }}>no tenant</span>
+            </div>
+            <KeyTable keys={ungrouped} onDelete={id => void actions.deleteAPIKey(id)} onToggle={(id, enabled) => void actions.setAPIKeyEnabled(id, enabled)} />
+          </div>
+        )}
+        {apiKeys.length === 0 && (
+          <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+            No API keys. Create one above.
+          </div>
+        )}
+      </div>
+
+      {/* New key slide-over */}
+      {newKeyOpen && (
+        <SlideOver title="New API key" onClose={() => setNewKeyOpen(false)}
+          footer={
+            <>
+              {createKeyError && <div style={{ marginBottom: 8 }}><InlineError message={createKeyError} /></div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                {!createdKeyToken ? (
+                  <>
+                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }}
+                      disabled={!state.apiKeyFormName.trim() || !state.apiKeyFormSecret.trim()}
+                      onClick={() => void handleCreateKey()}>
+                      <Icon d={Icons.plus} size={14} /> Create key
+                    </button>
+                    <button className="btn" onClick={() => setNewKeyOpen(false)}>Cancel</button>
+                  </>
+                ) : (
+                  <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={() => setNewKeyOpen(false)}>Done</button>
+                )}
+              </div>
+            </>
+          }>
+          {createdKeyToken ? (
+            <div style={{ padding: "20px 0" }}>
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "var(--green-bg)", border: "1px solid var(--green-border)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}>
+                  <Icon d={Icons.check} size={20} />
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: "var(--t0)" }}>Key created</div>
+                <div style={{ fontSize: 12, color: "var(--red)", marginTop: 4 }}>Copy this now — it won't be shown again.</div>
+              </div>
+              <div style={{ background: "var(--bg0)", border: "1px solid var(--teal-border)", borderRadius: "var(--radius-sm)", padding: "10px 12px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--teal)", wordBreak: "break-all", marginBottom: 10 }}>
+                {createdKeyToken}
+              </div>
+              <CopyBtn text={createdKeyToken} />
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="KEY NAME">
+                <input className="input" placeholder="e.g. eng-team-ci" value={state.apiKeyFormName}
+                  onChange={e => actions.setAPIKeyFormName(e.target.value)} />
+              </Field>
+              <Field label="TENANT">
+                <select className="select" style={{ width: "100%", padding: "7px 10px" }} value={state.apiKeyFormTenant}
+                  onChange={e => actions.setAPIKeyFormTenant(e.target.value)}>
+                  <option value="">— none —</option>
+                  {tenants.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                </select>
+              </Field>
+              <Field label="ROLE">
+                <select className="select" style={{ width: "100%", padding: "7px 10px" }} value={state.apiKeyFormRole}
+                  onChange={e => actions.setAPIKeyFormRole(e.target.value)}>
+                  <option value="tenant">tenant</option>
+                  <option value="gateway">gateway</option>
+                  <option value="admin">admin</option>
+                  <option value="readonly">readonly</option>
+                </select>
+              </Field>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+                  <label style={{ fontSize: 11, color: "var(--t2)", fontFamily: "var(--font-mono)", flex: 1 }}>SECRET</label>
+                  <button className="btn btn-ghost btn-sm" style={{ fontSize: 10, padding: "2px 6px" }}
+                    onClick={() => actions.setAPIKeyFormSecret(generateSecret())}>Regenerate</button>
+                </div>
+                <input className="input" type="text" value={state.apiKeyFormSecret}
+                  onChange={e => actions.setAPIKeyFormSecret(e.target.value)}
+                  style={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3 }}>Auto-generated. You can replace with your own value.</div>
+              </div>
+            </div>
+          )}
+        </SlideOver>
+      )}
+
+      {/* Rotate key slide-over */}
+      {rotateOpen && (
+        <SlideOver title="Rotate API key" onClose={() => setRotateOpen(false)}
+          footer={
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }}
+                disabled={!state.rotateAPIKeyID.trim()}
+                onClick={() => void handleRotateKey()}>
+                <Icon d={Icons.refresh} size={14} /> Rotate
+              </button>
+              <button className="btn" onClick={() => setRotateOpen(false)}>Cancel</button>
+            </div>
+          }>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Field label="KEY ID">
+              <select className="select" style={{ width: "100%", padding: "7px 10px" }}
+                value={state.rotateAPIKeyID}
+                onChange={e => actions.setRotateAPIKeyID(e.target.value)}>
+                <option value="">— select key —</option>
+                {apiKeys.map(k => <option key={k.id} value={k.id}>{k.name} ({k.id})</option>)}
+              </select>
+            </Field>
+            <Field label="NEW SECRET (optional — leave blank to auto-generate)">
+              <input className="input" type="text" value={state.rotateAPIKeySecret}
+                onChange={e => actions.setRotateAPIKeySecret(e.target.value)}
+                placeholder="leave blank to auto-generate"
+                style={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+            </Field>
+            <div style={{ fontSize: 11, color: "var(--amber)", fontFamily: "var(--font-mono)" }}>
+              The old secret will be invalidated immediately.
+            </div>
+          </div>
+        </SlideOver>
+      )}
+    </>
+  );
+}
+
+function KeyTable({ keys, onDelete, onToggle }: {
+  keys: ConfiguredAPIKeyRecord[];
+  onDelete: (id: string) => void;
+  onToggle: (id: string, enabled: boolean) => void;
+}) {
+  return (
+    <div className="card" style={{ overflow: "hidden" }}>
+      <table className="table">
+        <thead>
+          <tr><th>Name</th><th>Preview</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr>
+        </thead>
+        <tbody>
+          {keys.map(k => (
+            <tr key={k.id}>
+              <td className="mono" style={{ color: "var(--t0)", fontWeight: 500 }}>{k.name}</td>
+              <td>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>
+                    {k.key_preview || "••••••••"}
+                  </span>
+                  {k.key_preview && <CopyBtn text={k.key_preview} />}
+                </div>
+              </td>
+              <td>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, background: "var(--bg3)", padding: "2px 6px", borderRadius: 3, border: "1px solid var(--border)", color: "var(--t1)" }}>
+                  {k.role}
+                </span>
+              </td>
+              <td><Badge status={k.enabled ? "enabled" : "disabled"} /></td>
+              <td className="mono" style={{ color: "var(--t3)" }}>{k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}</td>
+              <td>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button className="btn btn-ghost btn-sm" style={{ padding: "3px 6px" }}
+                    onClick={() => onToggle(k.id, !k.enabled)} title={k.enabled ? "Disable" : "Enable"}>
+                    <Icon d={k.enabled ? Icons.eye : Icons.check} size={12} />
+                  </button>
+                  <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", padding: "3px 6px" }}
+                    onClick={() => onDelete(k.id)}>
+                    <Icon d={Icons.trash} size={13} />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Tenants tab ─────────────────────────────────────────────────────────────
+
+function TenantsTab({ state, actions }: Props) {
+  const [newOpen, setNewOpen] = useState(false);
+  const [createError, setCreateError] = useState("");
+
+  const tenants = state.adminConfig?.tenants ?? [];
+
+  async function handleCreate() {
+    if (!state.tenantFormName.trim()) return;
+    setCreateError("");
+    try {
+      await actions.upsertTenant();
+      setNewOpen(false);
+      actions.setTenantFormName("");
+      actions.setTenantFormID("");
+      actions.setTenantFormProviders("");
+      actions.setTenantFormModels("");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Failed to create tenant.");
+    }
+  }
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Tenants</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{tenants.length} total</span>
+        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={() => {
+          setNewOpen(true);
+          setCreateError("");
+          actions.setTenantFormName("");
+          actions.setTenantFormID("");
+          actions.setTenantFormProviders("");
+          actions.setTenantFormModels("");
+        }}>
+          <Icon d={Icons.plus} size={13} /> New tenant
+        </button>
+      </div>
+
+      {tenants.length > 0 ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table className="table">
+            <thead>
+              <tr><th>Name</th><th>ID</th><th>Status</th><th>Allowed providers</th><th>Allowed models</th><th></th></tr>
+            </thead>
+            <tbody>
+              {tenants.map(t => (
+                <tr key={t.id}>
+                  <td style={{ color: "var(--t0)", fontWeight: 500 }}>{t.name}</td>
+                  <td className="mono" style={{ color: "var(--t2)" }}>{t.id}</td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <Badge status={t.enabled ? "enabled" : "disabled"} />
+                      <button className="btn btn-ghost btn-sm" style={{ padding: "2px 5px", fontSize: 10 }}
+                        onClick={() => void actions.setTenantEnabled(t.id, !t.enabled)}>
+                        {t.enabled ? "Disable" : "Enable"}
+                      </button>
+                    </div>
+                  </td>
+                  <td className="mono" style={{ color: "var(--t2)" }}>{t.allowed_providers?.join(", ") || "all"}</td>
+                  <td className="mono" style={{ color: "var(--t2)" }}>{(t as Record<string, unknown>).allowed_models as string ?? "all"}</td>
+                  <td>
+                    <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", padding: "3px 6px" }}
+                      onClick={() => void actions.deleteTenant(t.id)}>
+                      <Icon d={Icons.trash} size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+          No tenants. Create one above.
+        </div>
+      )}
+
+      {newOpen && (
+        <SlideOver title="New tenant" onClose={() => setNewOpen(false)}
+          footer={
+            <>
+              {createError && <div style={{ marginBottom: 8 }}><InlineError message={createError} /></div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }}
+                  disabled={!state.tenantFormName.trim()}
+                  onClick={() => void handleCreate()}>
+                  <Icon d={Icons.plus} size={14} /> Create tenant
+                </button>
+                <button className="btn" onClick={() => setNewOpen(false)}>Cancel</button>
+              </div>
+            </>
+          }>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Field label="NAME">
+              <input className="input" placeholder="e.g. engineering" value={state.tenantFormName}
+                onChange={e => actions.setTenantFormName(e.target.value)} />
+            </Field>
+            <Field label="ID (optional — auto-generated if blank)">
+              <input className="input" placeholder="e.g. engineering" value={state.tenantFormID}
+                onChange={e => actions.setTenantFormID(e.target.value)}
+                style={{ fontFamily: "var(--font-mono)" }} />
+            </Field>
+            <Field label="ALLOWED PROVIDERS (comma-separated, blank = all)">
+              <input className="input" placeholder="e.g. openai, anthropic"
+                value={state.tenantFormProviders}
+                onChange={e => actions.setTenantFormProviders(e.target.value)} />
+            </Field>
+            <Field label="ALLOWED MODELS (comma-separated, blank = all)">
+              <input className="input" placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                value={state.tenantFormModels}
+                onChange={e => actions.setTenantFormModels(e.target.value)} />
+            </Field>
+          </div>
+        </SlideOver>
+      )}
+    </>
+  );
+}
+
+// ─── Budget tab ───────────────────────────────────────────────────────────────
+
+function BudgetTab({ state, actions }: Props) {
+  const [editingID, setEditingID] = useState<string | null>(null);
+  const [editLimit, setEditLimit] = useState("");
+  const [editWarn, setEditWarn] = useState("");
+
+  const budget = state.budget;
+  const accountSummary = state.accountSummary;
+
+  function pct(debited: number, limit: number) {
+    if (!limit) return 0;
+    return Math.min(100, Math.round((debited / limit) * 100));
+  }
+
+  function barClass(p: number, warnThreshold: number): string {
+    if (p >= 90) return "progress-red";
+    if (p >= warnThreshold) return "progress-amber";
+    return "progress-teal";
+  }
+
+  if (!budget) {
+    return (
+      <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+        Budget data unavailable. Admin access required.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 10 }}>Account budget</div>
+      <div className="card" style={{ padding: "14px 16px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>{budget.scope}</span>
+          {budget.enforced ? <Badge status="enabled" label="enforced" /> : <Badge status="disabled" label="not enforced" />}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {editingID === "account" ? (
+              <>
+                <button className="btn btn-primary btn-sm" onClick={() => { void actions.setBudgetLimit(); setEditingID(null); }}>Save</button>
+                <button className="btn btn-sm" onClick={() => setEditingID(null)}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <button className="btn btn-ghost btn-sm" onClick={() => void actions.topUpBudget()} style={{ gap: 4, fontSize: 11 }}>
+                  <Icon d={Icons.plus} size={12} /> Top up
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => {
+                  setEditingID("account");
+                  setEditLimit(String(budget.credited_micros_usd / 1_000_000));
+                  setEditWarn("80");
+                }} style={{ gap: 4, fontSize: 11 }}>
+                  <Icon d={Icons.edit} size={12} /> Adjust
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+            <span style={{ fontSize: 11, color: "var(--t2)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", fontWeight: 500 }}>{budget.debited_usd}</span>{" "}spent of {budget.credited_usd} credited
+            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)" }}>
+              {pct(budget.debited_micros_usd, budget.credited_micros_usd)}%
+            </span>
+          </div>
+          <div className="progress-wrap">
+            <div className={`progress-bar ${barClass(pct(budget.debited_micros_usd, budget.credited_micros_usd), 75)}`}
+              style={{ width: `${pct(budget.debited_micros_usd, budget.credited_micros_usd)}%` }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+            <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>balance: {budget.balance_usd}</span>
+            <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>available: {budget.available_usd}</span>
+          </div>
+        </div>
+
+        {editingID === "account" && (
+          <div style={{ display: "flex", gap: 10, marginBottom: 10, padding: 10, background: "var(--bg3)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>CREDIT AMOUNT ($)</label>
+              <input className="input" type="number" value={editLimit}
+                onChange={e => { setEditLimit(e.target.value); void actions.setBudgetAmountUsd(e.target.value); }}
+                style={{ fontFamily: "var(--font-mono)" }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>LIMIT ($)</label>
+              <input className="input" type="number" value={editWarn}
+                onChange={e => { setEditWarn(e.target.value); void actions.setBudgetLimitUsd(e.target.value); }}
+                style={{ fontFamily: "var(--font-mono)" }} />
+            </div>
+          </div>
+        )}
+
+        {budget.warnings?.some(w => w.triggered) && (
+          <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 6 }}>
+            <Icon d={Icons.warning} size={13} /> Warning threshold triggered at {budget.warnings.find(w => w.triggered)?.threshold_percent}%
+          </div>
+        )}
+      </div>
+
+      {/* Model cost estimates */}
+      {accountSummary?.estimates && accountSummary.estimates.length > 0 && (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 10 }}>Model cost estimates</div>
+          <div className="card" style={{ overflow: "hidden" }}>
+            <table className="table" style={{ tableLayout: "fixed" }}>
+              <colgroup>
+                <col /><col style={{ width: 100 }} /><col style={{ width: 140 }} /><col style={{ width: 120 }} />
+              </colgroup>
+              <thead>
+                <tr><th>Model</th><th>Provider</th><th>Est. prompt tokens</th><th>Est. output tokens</th></tr>
+              </thead>
+              <tbody>
+                {accountSummary.estimates.slice(0, 10).map((e, i) => (
+                  <tr key={`${e.provider}-${e.model}-${i}`}>
+                    <td className="mono" style={{ color: "var(--t0)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.model}</td>
+                    <td className="mono" style={{ color: "var(--t2)" }}>{e.provider}</td>
+                    <td className="mono">{e.estimated_remaining_prompt_tokens?.toLocaleString() ?? "—"}</td>
+                    <td className="mono">{e.estimated_remaining_output_tokens?.toLocaleString() ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// ─── Usage tab ────────────────────────────────────────────────────────────────
+
+function UsageTab({ state }: { state: Props["state"] }) {
+  const ledger = state.requestLedger ?? [];
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Token usage log</span>
+        <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>live</span>
+        <Dot color="green" />
+      </div>
+      {ledger.length > 0 ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table className="table" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: 80 }} /><col style={{ width: 90 }} /><col /><col style={{ width: 80 }} /><col style={{ width: 70 }} /><col style={{ width: 130 }} /><col style={{ width: 52 }} />
+            </colgroup>
+            <thead>
+              <tr><th>Time</th><th>Tenant</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Request ID</th><th></th></tr>
+            </thead>
+            <tbody>
+              {ledger.slice(0, 100).map(e => (
+                <tr key={e.request_id || e.timestamp}>
+                  <td className="mono" style={{ color: "var(--t3)" }}>{e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : "—"}</td>
+                  <td className="mono" style={{ color: "var(--teal)" }}>{e.tenant || "—"}</td>
+                  <td className="mono" style={{ color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.model || "—"}</td>
+                  <td className="mono">{e.total_tokens?.toLocaleString() ?? "—"}</td>
+                  <td className="mono" style={{ color: "var(--t0)", fontWeight: 500 }}>{e.amount_usd || "—"}</td>
+                  <td className="mono" style={{ color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.request_id || "—"}</td>
+                  <td>{e.request_id && <CopyBtn text={e.request_id} />}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+          No usage events recorded yet.
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Retention tab ────────────────────────────────────────────────────────────
+
+const KNOWN_SUBSYSTEMS = [
+  "trace_snapshots",
+  "budget_events",
+  "audit_events",
+  "exact_cache",
+  "semantic_cache",
+] as const;
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function RetentionTab({ state, actions }: Props) {
+  const runs = state.retentionRuns ?? [];
+  const lastRun = state.retentionLastRun;
+
+  // Parse CSV state into a local Set for chip toggles
+  const selectedSet = new Set(
+    state.retentionSubsystems
+      .split(",")
+      .map(s => s.trim())
+      .filter(s => KNOWN_SUBSYSTEMS.includes(s as typeof KNOWN_SUBSYSTEMS[number]))
+  );
+
+  function toggleSubsystem(name: string) {
+    const next = new Set(selectedSet);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    actions.setRetentionSubsystems([...next].join(","));
+  }
+
+  const totalDeleted = lastRun?.results.filter(r => !r.skipped).reduce((n, r) => n + (r.deleted ?? 0), 0) ?? 0;
+  const maxDeleted = Math.max(1, ...(lastRun?.results.map(r => r.deleted ?? 0) ?? []));
+
+  return (
+    <>
+      {/* Controls */}
+      <div className="card" style={{ padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <span style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)" }}>Subsystems to prune</span>
+          <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>
+            {selectedSet.size === 0 ? "all" : `${selectedSet.size} selected`}
+          </span>
+          <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }}
+            disabled={state.retentionLoading}
+            onClick={() => void actions.runRetention()}>
+            <Icon d={Icons.refresh} size={13} /> {state.retentionLoading ? "Running…" : "Run now"}
+          </button>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {KNOWN_SUBSYSTEMS.map(name => {
+            const active = selectedSet.has(name);
+            return (
+              <button key={name} type="button" onClick={() => toggleSubsystem(name)}
+                style={{
+                  padding: "4px 10px",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  borderRadius: "var(--radius-sm)",
+                  border: `1px solid ${active ? "var(--teal-border)" : "var(--border)"}`,
+                  background: active ? "var(--teal-bg)" : "var(--bg3)",
+                  color: active ? "var(--teal)" : "var(--t2)",
+                  cursor: "pointer",
+                  transition: "background 0.1s, color 0.1s, border-color 0.1s",
+                }}>
+                {name}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 8 }}>
+          No selection = prune all subsystems
+        </div>
+        {state.retentionError && <div style={{ marginTop: 8 }}><InlineError message={state.retentionError} /></div>}
+      </div>
+
+      {/* Last run summary */}
+      {lastRun && (
+        <div className="card" style={{ padding: "14px 16px", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)" }}>Last run</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>
+              {relativeTime(lastRun.finished_at)}
+            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>·</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)" }}>{lastRun.trigger}</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>·</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: totalDeleted > 0 ? "var(--teal)" : "var(--t3)" }}>
+              {totalDeleted} deleted
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {lastRun.results.map(r => (
+              <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: r.skipped ? "var(--t3)" : "var(--t1)", width: 140, flexShrink: 0 }}>
+                  {r.name}
+                </span>
+                {r.skipped ? (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", fontStyle: "italic" }}>skipped</span>
+                ) : r.error ? (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--red)" }}>{r.error}</span>
+                ) : (
+                  <>
+                    <div style={{ flex: 1, height: 4, background: "var(--bg3)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%",
+                        width: `${Math.round((r.deleted / maxDeleted) * 100)}%`,
+                        background: r.deleted > 0 ? "var(--teal)" : "var(--bg3)",
+                        borderRadius: 2,
+                      }} />
+                    </div>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: r.deleted > 0 ? "var(--teal)" : "var(--t3)", width: 48, textAlign: "right", flexShrink: 0 }}>
+                      {r.deleted} del
+                    </span>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* History */}
+      <div style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)", marginBottom: 8 }}>History</div>
+      {runs.length > 0 ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          {runs.slice(0, 20).map((r, i) => {
+            const del = r.results?.filter(s => !s.skipped).reduce((n, s) => n + (s.deleted ?? 0), 0) ?? 0;
+            const errored = r.results?.some(s => s.error);
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: i < Math.min(runs.length, 20) - 1 ? "1px solid var(--border)" : "none" }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)", width: 70, flexShrink: 0 }}>{r.trigger}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{relativeTime(r.finished_at)}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: del > 0 ? "var(--teal)" : "var(--t3)", marginLeft: "auto" }}>
+                  {del} deleted
+                </span>
+                {errored && <Badge status="down" label="error" />}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+          No retention runs yet.
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function SlideOver({ title, children, footer, onClose }: {
+  title: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", background: "oklch(0 0 0 / 0.5)" }}
+      onClick={onClose}>
+      <div style={{ marginLeft: "auto", width: 420, background: "var(--bg1)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", height: "100%" }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 500, fontSize: 13 }}>{title}</span>
+          <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto", padding: "3px 6px" }} onClick={onClose}>
+            <Icon d={Icons.x} size={14} />
+          </button>
+        </div>
+        <div style={{ padding: 16, flex: 1, overflowY: "auto" }}>{children}</div>
+        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>{footer}</div>
+      </div>
+    </div>
+  );
 }

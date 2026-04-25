@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/billing"
@@ -462,6 +464,83 @@ func (h *StreamHandle) Execute(w io.Writer) error {
 	return h.stream(w)
 }
 
+// StreamedContent holds the text accumulated during a streaming response.
+type StreamedContent struct {
+	Content      string
+	FinishReason string
+	Model        string
+}
+
+// ExecuteAndCapture writes the SSE stream to w and simultaneously captures
+// content deltas so the caller can record the turn after streaming completes.
+func (h *StreamHandle) ExecuteAndCapture(w io.Writer) (StreamedContent, error) {
+	cap := &sseCapture{dst: w}
+	err := h.stream(cap)
+	return StreamedContent{
+		Content:      cap.content.String(),
+		FinishReason: cap.finishReason,
+		Model:        cap.model,
+	}, err
+}
+
+// sseCapture wraps a writer and parses OpenAI-format SSE content deltas as
+// they flow through, so the accumulated text is available after streaming ends.
+type sseCapture struct {
+	dst          io.Writer
+	pending      []byte
+	content      strings.Builder
+	model        string
+	finishReason string
+}
+
+func (c *sseCapture) Write(p []byte) (int, error) {
+	n, err := c.dst.Write(p)
+	c.pending = append(c.pending, p[:n]...)
+	c.drain()
+	return n, err
+}
+
+func (c *sseCapture) drain() {
+	for {
+		idx := bytes.IndexByte(c.pending, '\n')
+		if idx < 0 {
+			break
+		}
+		line := strings.TrimRight(string(c.pending[:idx]), "\r")
+		c.pending = c.pending[idx+1:]
+
+		const prefix = "data: "
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		data := line[len(prefix):]
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Model   string `json:"model"`
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Model != "" && c.model == "" {
+			c.model = chunk.Model
+		}
+		for _, choice := range chunk.Choices {
+			c.content.WriteString(choice.Delta.Content)
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				c.finishReason = *choice.FinishReason
+			}
+		}
+	}
+}
+
 // RouteForStream runs governor/routing checks and returns a StreamHandle ready to
 // write to any io.Writer. This lets the HTTP handler set response headers and status
 // between routing and streaming, so errors during routing still produce JSON responses.
@@ -770,6 +849,27 @@ func (s *Service) RecordChatTurn(ctx context.Context, sessionID string, req type
 		return nil, err
 	}
 	return &ChatSessionResult{Session: session}, nil
+}
+
+type TraceListResult struct {
+	Items []TraceResult
+}
+
+func (s *Service) ListTraces(ctx context.Context, limit int) (*TraceListResult, error) {
+	traces := s.tracer.List(limit)
+	items := make([]TraceResult, 0, len(traces))
+	for _, t := range traces {
+		spans := t.Spans()
+		item := TraceResult{
+			RequestID: t.RequestID,
+			TraceID:   t.TraceID,
+			StartedAt: t.StartedAt,
+			Spans:     spans,
+			Route:     buildRouteDecisionReport(spans),
+		}
+		items = append(items, item)
+	}
+	return &TraceListResult{Items: items}, nil
 }
 
 func (s *Service) Trace(ctx context.Context, requestID string) (*TraceResult, error) {

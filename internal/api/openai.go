@@ -79,8 +79,9 @@ type SessionResponse struct {
 }
 
 type ChatSessionsResponse struct {
-	Object string                   `json:"object"`
-	Data   []ChatSessionSummaryItem `json:"data"`
+	Object  string                   `json:"object"`
+	Data    []ChatSessionSummaryItem `json:"data"`
+	HasMore bool                     `json:"has_more"`
 }
 
 type ChatSessionResponse struct {
@@ -165,6 +166,22 @@ type ProviderStatusResponse struct {
 type ProviderPresetResponse struct {
 	Object string                       `json:"object"`
 	Data   []ProviderPresetResponseItem `json:"data"`
+}
+
+type TraceListResponse struct {
+	Object string          `json:"object"`
+	Data   []TraceListItem `json:"data"`
+}
+
+type TraceListItem struct {
+	RequestID     string                 `json:"request_id"`
+	TraceID       string                 `json:"trace_id,omitempty"`
+	StartedAt     string                 `json:"started_at,omitempty"`
+	SpanCount     int                    `json:"span_count"`
+	DurationMS    int64                  `json:"duration_ms,omitempty"`
+	StatusCode    string                 `json:"status_code,omitempty"`
+	StatusMessage string                 `json:"status_message,omitempty"`
+	Route         TraceRouteReportRecord `json:"route,omitempty"`
 }
 
 type TraceResponse struct {
@@ -566,8 +583,3 @@ type ControlPlaneAPIKeyLifecycleRequest struct {
 	Key     string `json:"key"`
 }
 
-type ControlPlaneProviderLifecycleRequest struct {
-	ID      string `json:"id"`
-	Enabled bool   `json:"enabled"`
-	Key     string `json:"key"`
-}

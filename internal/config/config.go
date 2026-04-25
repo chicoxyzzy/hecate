@@ -221,6 +221,7 @@ type OpenAICompatibleProviderConfig struct {
 	StubMode     bool          `json:"stub_mode"`
 	StubResponse string        `json:"stub_response"`
 	DefaultModel string        `json:"default_model"`
+	Enabled      bool          `json:"enabled"`
 }
 
 func LoadFromEnv() Config {

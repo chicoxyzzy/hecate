@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,60 @@ import (
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
+
+func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
+	_, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 200 {
+			limit = v
+		}
+	}
+
+	result, err := h.service.ListTraces(r.Context(), limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	items := make([]TraceListItem, 0, len(result.Items))
+	for _, t := range result.Items {
+		item := TraceListItem{
+			RequestID: t.RequestID,
+			TraceID:   t.TraceID,
+			SpanCount: len(t.Spans),
+			Route: TraceRouteReportRecord{
+				FinalProvider:     t.Route.FinalProvider,
+				FinalProviderKind: t.Route.FinalProviderKind,
+				FinalModel:        t.Route.FinalModel,
+				FinalReason:       t.Route.FinalReason,
+				FallbackFrom:      t.Route.FallbackFrom,
+				Candidates:        renderTraceRouteCandidates(t.Route.Candidates),
+			},
+		}
+		if !t.StartedAt.IsZero() {
+			item.StartedAt = t.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		// Derive duration and status from root span.
+		for _, span := range t.Spans {
+			if span.Name == "gateway.request" {
+				if !span.StartTime.IsZero() && !span.EndTime.IsZero() {
+					item.DurationMS = span.EndTime.Sub(span.StartTime).Milliseconds()
+				}
+				item.StatusCode = span.StatusCode
+				item.StatusMessage = span.StatusMessage
+				break
+			}
+		}
+		items = append(items, item)
+	}
+
+	WriteJSON(w, http.StatusOK, TraceListResponse{Object: "list", Data: items})
+}
 
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAny(w, r)

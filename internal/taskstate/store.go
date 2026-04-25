@@ -32,6 +32,7 @@ type Store interface {
 	GetTask(ctx context.Context, id string) (types.Task, bool, error)
 	ListTasks(ctx context.Context, filter TaskFilter) ([]types.Task, error)
 	UpdateTask(ctx context.Context, task types.Task) (types.Task, error)
+	DeleteTask(ctx context.Context, id string) error
 
 	CreateRun(ctx context.Context, run types.TaskRun) (types.TaskRun, error)
 	GetRun(ctx context.Context, taskID, runID string) (types.TaskRun, bool, error)

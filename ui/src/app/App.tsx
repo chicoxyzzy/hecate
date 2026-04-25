@@ -5,7 +5,10 @@ import { useRuntimeConsole } from "./useRuntimeConsole";
 
 export default function App() {
   const { state, actions } = useRuntimeConsole();
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceID>("overview");
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceID>(() => {
+    const saved = localStorage.getItem("hecate.workspace") as WorkspaceID | null;
+    return saved ?? "playground";
+  });
 
   const workspaces = useMemo(() => getAvailableWorkspaces(state.session.isAdmin), [state.session.isAdmin]);
 
@@ -16,5 +19,10 @@ export default function App() {
     setActiveWorkspace("overview");
   }, [activeWorkspace, workspaces]);
 
-  return <ConsoleShell actions={actions} activeWorkspace={activeWorkspace} onSelectWorkspace={setActiveWorkspace} state={state} />;
+  function handleSelectWorkspace(id: WorkspaceID) {
+    localStorage.setItem("hecate.workspace", id);
+    setActiveWorkspace(id);
+  }
+
+  return <ConsoleShell actions={actions} activeWorkspace={activeWorkspace} onSelectWorkspace={handleSelectWorkspace} state={state} />;
 }

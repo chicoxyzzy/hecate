@@ -171,7 +171,8 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 	w.Header().Set("X-Span-Id", handle.Metadata.SpanID)
 	w.WriteHeader(http.StatusOK)
 
-	if err := handle.Execute(flushWriter{w, flusher}); err != nil {
+	captured, err := handle.ExecuteAndCapture(flushWriter{w, flusher})
+	if err != nil {
 		telemetry.Error(h.logger, streamCtx, "gen_ai.gateway.stream.failed",
 			slog.String("event.name", "gen_ai.gateway.stream.failed"),
 			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
@@ -185,6 +186,39 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 		}
 		fmt.Fprintf(w, "data: {\"error\":{\"message\":%q}}\n\ndata: [DONE]\n\n", errMsg)
 		flusher.Flush()
+		return
+	}
+
+	if req.SessionID != "" && captured.Content != "" {
+		resolvedModel := captured.Model
+		if resolvedModel == "" {
+			resolvedModel = handle.Metadata.Model
+		}
+		syntheticResult := &gateway.ChatResult{
+			Response: &types.ChatResponse{
+				ID:    handle.Metadata.RequestID,
+				Model: resolvedModel,
+				Choices: []types.ChatChoice{{
+					Index:        0,
+					Message:      types.Message{Role: "assistant", Content: captured.Content},
+					FinishReason: captured.FinishReason,
+				}},
+			},
+			Metadata: gateway.ResponseMetadata{
+				RequestID:    handle.Metadata.RequestID,
+				Provider:     handle.Metadata.Provider,
+				ProviderKind: handle.Metadata.ProviderKind,
+				RouteReason:  handle.Metadata.RouteReason,
+				Model:        resolvedModel,
+			},
+		}
+		if _, err := h.service.RecordChatTurn(streamCtx, req.SessionID, req, syntheticResult); err != nil {
+			telemetry.Warn(h.logger, streamCtx, "gateway.chat.sessions.stream_record_failed",
+				slog.String("event.name", "gateway.chat.sessions.stream_record_failed"),
+				slog.String("hecate.chat.session_id", req.SessionID),
+				slog.Any("error", err),
+			)
+		}
 	}
 }
 

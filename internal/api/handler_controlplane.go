@@ -329,12 +329,15 @@ func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r 
 		return
 	}
 
-	var req ControlPlaneProviderLifecycleRequest
+	id := r.PathValue("id")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	provider, err := h.providerRuntime.SetEnabled(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID, req.Enabled)
+	provider, err := h.providerRuntime.SetEnabled(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id, req.Enabled)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
@@ -357,12 +360,15 @@ func (h *Handler) HandleControlPlaneRotateProviderSecret(w http.ResponseWriter, 
 		return
 	}
 
-	var req ControlPlaneProviderLifecycleRequest
+	id := r.PathValue("id")
+	var req struct {
+		Key string `json:"key"`
+	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	provider, err := h.providerRuntime.RotateSecret(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID, req.Key)
+	provider, err := h.providerRuntime.RotateSecret(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id, req.Key)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
@@ -385,12 +391,8 @@ func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *htt
 		return
 	}
 
-	var req ControlPlaneProviderLifecycleRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	if err := h.providerRuntime.Delete(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), req.ID); err != nil {
+	id := r.PathValue("id")
+	if err := h.providerRuntime.Delete(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id); err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
 	}
@@ -398,7 +400,7 @@ func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *htt
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"object": "control_plane_provider_deleted",
 		"data": map[string]string{
-			"id": req.ID,
+			"id": id,
 		},
 	})
 }

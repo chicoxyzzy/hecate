@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, getBudget, getSession, getTrace } from "./api";
+import { buildRequestOptions, chatCompletions, deleteProvider, getBudget, getSession, getTrace, rotateProviderSecret, setProviderEnabled } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -173,6 +173,58 @@ describe("api client", () => {
     expect(result.data.request_id).toBe("req-123");
     expect(result.data.spans).toHaveLength(1);
     expect(result.data.spans?.[0]?.events).toHaveLength(2);
+  });
+
+  describe("provider REST API", () => {
+    it("PATCH /providers/{id} to enable a provider", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await setProviderEnabled("anthropic", true, "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/providers/anthropic",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ enabled: true }),
+        }),
+      );
+    });
+
+    it("PATCH /providers/{id} URL-encodes provider names with special characters", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await setProviderEnabled("my provider", false, "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/providers/my%20provider",
+        expect.anything(),
+      );
+    });
+
+    it("DELETE /providers/{id} to remove a provider", async () => {
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+      await deleteProvider("openai", "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/providers/openai",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("POST /providers/{id}/rotate-secret to rotate credentials", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await rotateProviderSecret("anthropic", "sk-new-key", "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/providers/anthropic/rotate-secret",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ key: "sk-new-key" }),
+        }),
+      );
+    });
   });
 });
 

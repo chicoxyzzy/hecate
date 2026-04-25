@@ -64,7 +64,7 @@ describe("useRuntimeConsole", () => {
     expect(result.current.state.providerPresets).toHaveLength(1);
     expect(result.current.state.providers).toEqual([]);
     expect(result.current.state.budget).toBeNull();
-    expect(result.current.state.controlPlane).toBeNull();
+    expect(result.current.state.adminConfig).toBeNull();
   });
 
   it("persists auth token changes to local storage", async () => {
@@ -319,9 +319,6 @@ describe("useRuntimeConsole", () => {
 
     await waitFor(() => {
       expect(result.current.state.runtimeHeaders?.requestId).toBe("req-123");
-      expect(result.current.state.traceSpans).toHaveLength(1);
-      expect(result.current.state.traceRoute?.final_provider).toBe("openai");
-      expect(result.current.state.traceSpans[0]?.events?.[0]?.name).toBe("request.received");
       expect(result.current.state.activeChatSession?.turns).toHaveLength(1);
     });
   });
@@ -449,112 +446,6 @@ describe("useRuntimeConsole", () => {
     });
   });
 
-  it("sends a minimal preset-backed provider payload", async () => {
-    fetchMock.mockImplementation(async (input, init) => {
-      const url = String(input);
-      const headers = new Headers(init?.headers);
-      const authHeader = headers.get("Authorization");
-      if (url === "/healthz") {
-        return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
-      }
-      if (url === "/v1/whoami") {
-        if (authHeader === "Bearer admin-secret") {
-          return jsonResponse({
-            object: "session",
-            data: {
-              authenticated: true,
-              invalid_token: false,
-              role: "admin",
-              name: "admin",
-              source: "admin_token",
-            },
-          });
-        }
-        return jsonResponse({
-          object: "session",
-          data: {
-            authenticated: false,
-            invalid_token: false,
-            role: "anonymous",
-            source: "no_token",
-          },
-        });
-      }
-      if (url === "/v1/models") {
-        return jsonResponse({ object: "list", data: [] });
-      }
-      if (url === "/v1/provider-presets") {
-        return jsonResponse({
-          object: "provider_presets",
-          data: [
-            {
-              id: "openai",
-              name: "OpenAI",
-              kind: "cloud",
-              protocol: "openai",
-              base_url: "https://api.openai.com",
-              api_version: "",
-            },
-          ],
-        });
-      }
-      if (url === "/admin/providers") {
-        return jsonResponse({ object: "provider_status", data: [] });
-      }
-      if (url === "/admin/budget") {
-        return unauthorizedResponse();
-      }
-      if (url === "/admin/control-plane") {
-        return jsonResponse({ object: "control_plane", data: { backend: "file", tenants: [], api_keys: [], providers: [], events: [] } });
-      }
-      if (url === "/admin/accounts/summary") {
-        return unauthorizedResponse();
-      }
-      if (url === "/admin/retention/runs?limit=10") {
-        return jsonResponse({ object: "retention_runs", data: [] });
-      }
-      if (url === "/v1/chat/sessions?limit=20") {
-        return jsonResponse({ object: "chat_sessions", data: [] });
-      }
-      if (url === "/admin/control-plane/providers") {
-        return jsonResponse({ object: "control_plane_provider", data: { id: "openai", name: "openai" } });
-      }
-      return unauthorizedResponse();
-    });
-
-    const { result } = renderHook(() => useRuntimeConsole());
-
-    act(() => {
-      result.current.actions.setAuthToken("admin-secret");
-    });
-
-    await waitFor(() => {
-      expect(result.current.state.loading).toBe(false);
-      expect(result.current.state.session.kind).toBe("admin");
-    });
-
-    act(() => {
-      result.current.actions.populateProviderFormFromPreset("openai");
-      result.current.actions.setProviderFormSecret("openai-secret");
-    });
-
-    await act(async () => {
-      await result.current.actions.upsertProvider();
-    });
-
-    const providerCall = fetchMock.mock.calls.find(([url]) => String(url) === "/admin/control-plane/providers");
-    expect(providerCall).toBeTruthy();
-    const init = providerCall?.[1];
-    expect(init?.method).toBe("POST");
-    const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    expect(payload).toEqual({
-      id: "openai",
-      name: "openai",
-      preset_id: "openai",
-      enabled: true,
-      key: "openai-secret",
-    });
-  });
 
   it("resets an unavailable preset example model for a configured provider", async () => {
     fetchMock.mockImplementation(async (input) => {

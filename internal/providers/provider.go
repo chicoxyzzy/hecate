@@ -50,6 +50,13 @@ type Capabilities struct {
 	RefreshedAt     time.Time
 }
 
+// Enabler is an optional interface a Provider may implement to signal that it
+// has been administratively disabled. The catalog short-circuits health checks
+// for disabled providers and reports them as status "disabled".
+type Enabler interface {
+	Enabled() bool
+}
+
 type Registry interface {
 	Get(name string) (Provider, bool)
 	All() []Provider

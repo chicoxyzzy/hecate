@@ -143,6 +143,14 @@ func (p *OpenAICompatibleProvider) Name() string {
 	return p.config.Name
 }
 
+func (p *OpenAICompatibleProvider) Enabled() bool {
+	return p.config.Enabled
+}
+
+func (p *OpenAICompatibleProvider) BaseURL() string {
+	return p.config.BaseURL
+}
+
 func (p *OpenAICompatibleProvider) Kind() Kind {
 	if p.config.Kind == string(KindLocal) {
 		return KindLocal

@@ -199,8 +199,8 @@ For full telemetry details, see [`docs/telemetry.md`](docs/telemetry.md).
 
 The operator UI includes:
 
-- provider/model visibility and setup presets
-- managed provider lifecycle flows (enable/disable/delete/rotate)
+- provider/model visibility and health status
+- managed provider lifecycle flows (enable/disable/delete/rotate credentials)
 - playground and runtime metadata inspection
 - task creation, run starts, approvals, cancellation, and live stdout/stderr
 - telemetry health panel with signal status and run SLO cards

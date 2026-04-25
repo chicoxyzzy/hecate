@@ -73,7 +73,18 @@ func applyProviderUpsert(ctx context.Context, state *State, provider Provider, s
 func applySetProviderEnabled(ctx context.Context, state *State, id string, enabled bool) (Provider, error) {
 	index := providerIndex(state.Providers, id)
 	if index < 0 {
-		return Provider{}, fmt.Errorf("provider %q not found", id)
+		// Provider is not in the control-plane store (e.g. env-configured).
+		// Create a minimal override entry so the enabled flag is persisted.
+		p := Provider{
+			ID:        id,
+			Name:      id,
+			Enabled:   enabled,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}
+		state.Providers = append(state.Providers, p)
+		appendAuditEvent(state, newAuditEvent(ctx, "provider.enabled_changed", "provider", p.ID, fmt.Sprintf("enabled=%t", enabled)))
+		return p, nil
 	}
 	state.Providers[index].Enabled = enabled
 	state.Providers[index].UpdatedAt = time.Now().UTC()

@@ -88,6 +88,7 @@ export type ChatSessionRecord = {
 export type ChatSessionsResponse = {
   object: string;
   data: ChatSessionSummaryRecord[];
+  has_more?: boolean;
 };
 
 export type ChatSessionResponse = {
@@ -272,6 +273,29 @@ export type RequestLedgerResponse = {
   data: NonNullable<BudgetRecord["history"]>;
 };
 
+export type TraceListItem = {
+  request_id: string;
+  trace_id?: string;
+  started_at?: string;
+  span_count: number;
+  duration_ms?: number;
+  status_code?: string;
+  status_message?: string;
+  route?: {
+    final_provider?: string;
+    final_provider_kind?: string;
+    final_model?: string;
+    final_reason?: string;
+    fallback_from?: string;
+    candidates?: NonNullable<TraceResponse["data"]["route"]>["candidates"];
+  };
+};
+
+export type TraceListResponse = {
+  object: string;
+  data: TraceListItem[];
+};
+
 export type RuntimeStatsResponse = {
   object: string;
   data: {
@@ -314,7 +338,7 @@ export type RuntimeStatsResponse = {
   };
 };
 
-export type ControlPlaneTenantRecord = {
+export type ConfiguredTenantRecord = {
   id: string;
   name: string;
   description?: string;
@@ -323,7 +347,7 @@ export type ControlPlaneTenantRecord = {
   enabled: boolean;
 };
 
-export type ControlPlaneAPIKeyRecord = {
+export type ConfiguredAPIKeyRecord = {
   id: string;
   name: string;
   tenant?: string;
@@ -336,7 +360,7 @@ export type ControlPlaneAPIKeyRecord = {
   updated_at?: string;
 };
 
-export type ControlPlaneProviderRecord = {
+export type ConfiguredProviderRecord = {
   id: string;
   name: string;
   preset_id?: string;
@@ -354,7 +378,7 @@ export type ControlPlaneProviderRecord = {
   updated_at?: string;
 };
 
-export type ControlPlanePolicyRuleRecord = {
+export type ConfiguredPolicyRuleRecord = {
   id: string;
   action: string;
   reason?: string;
@@ -369,7 +393,7 @@ export type ControlPlanePolicyRuleRecord = {
   rewrite_model_to?: string;
 };
 
-export type ControlPlanePricebookRecord = {
+export type ConfiguredPricebookRecord = {
   provider: string;
   model: string;
   input_micros_usd_per_million_tokens: number;
@@ -377,7 +401,7 @@ export type ControlPlanePricebookRecord = {
   cached_input_micros_usd_per_million_tokens: number;
 };
 
-export type ControlPlaneAuditEventRecord = {
+export type ConfiguredAuditEventRecord = {
   timestamp?: string;
   actor: string;
   action: string;
@@ -386,17 +410,17 @@ export type ControlPlaneAuditEventRecord = {
   detail?: string;
 };
 
-export type ControlPlaneResponse = {
+export type ConfiguredStateResponse = {
   object: string;
   data: {
     backend: string;
     path?: string;
-    tenants: ControlPlaneTenantRecord[];
-    api_keys: ControlPlaneAPIKeyRecord[];
-    providers: ControlPlaneProviderRecord[];
-    policy_rules: ControlPlanePolicyRuleRecord[];
-    pricebook: ControlPlanePricebookRecord[];
-    events: ControlPlaneAuditEventRecord[];
+    tenants: ConfiguredTenantRecord[];
+    api_keys: ConfiguredAPIKeyRecord[];
+    providers: ConfiguredProviderRecord[];
+    policy_rules: ConfiguredPolicyRuleRecord[];
+    pricebook: ConfiguredPricebookRecord[];
+    events: ConfiguredAuditEventRecord[];
   };
 };
 
