@@ -106,11 +106,12 @@ PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```bash
 make ui-install
 make build
-./gateway
+make serve
 ```
 
 The gateway and the operator UI are now both served from
-`http://127.0.0.1:8080`.
+`http://127.0.0.1:8080`. `make serve` stops any earlier `./gateway` process
+still bound to that port before starting, so re-running it is always safe.
 
 Alternatively, for live UI iteration with hot reload, run the gateway and
 the Vite dev server side by side:
