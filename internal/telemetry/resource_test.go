@@ -4,6 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 func TestBuildResourcePopulatesServiceIdentity(t *testing.T) {
@@ -73,4 +77,80 @@ func TestBuildResourceFallsBackToDefaultServiceName(t *testing.T) {
 		}
 	}
 	t.Error("service.name attribute missing")
+}
+
+func TestBuildResourceIncludesExtraAttributes(t *testing.T) {
+	res, err := BuildResource(context.Background(), ResourceOptions{
+		ServiceName: "hecate",
+		ExtraAttributes: []attribute.KeyValue{
+			attribute.String("hecate.region", "us-west-2"),
+			attribute.Int("hecate.shard", 7),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildResource: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, kv := range res.Attributes() {
+		got[string(kv.Key)] = kv.Value.Emit()
+	}
+
+	if got["hecate.region"] != "us-west-2" {
+		t.Errorf("hecate.region = %q, want %q", got["hecate.region"], "us-west-2")
+	}
+	if got["hecate.shard"] != "7" {
+		t.Errorf("hecate.shard = %q, want %q", got["hecate.shard"], "7")
+	}
+}
+
+// TestBuildResourceHonorsOTELResourceAttributes verifies that values from
+// OTEL_RESOURCE_ATTRIBUTES override the typed inputs. This is the standard
+// OpenTelemetry escape hatch operators reach for when they need to tag
+// instances at deploy time without rebuilding the binary.
+func TestBuildResourceHonorsOTELResourceAttributes(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.version=env-override,deployment.environment.name=prod-env")
+
+	res, err := BuildResource(context.Background(), ResourceOptions{
+		ServiceName:    "hecate",
+		ServiceVersion: "code-set-1.0.0",
+		DeploymentEnv:  "code-set-staging",
+	})
+	if err != nil {
+		t.Fatalf("BuildResource: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, kv := range res.Attributes() {
+		got[string(kv.Key)] = kv.Value.AsString()
+	}
+
+	if got["service.version"] != "env-override" {
+		t.Errorf("service.version = %q, want %q (env should override code)", got["service.version"], "env-override")
+	}
+	if got["deployment.environment.name"] != "prod-env" {
+		t.Errorf("deployment.environment.name = %q, want %q (env should override code)", got["deployment.environment.name"], "prod-env")
+	}
+}
+
+func TestServiceNameFromResource(t *testing.T) {
+	t.Run("nil resource returns default", func(t *testing.T) {
+		if got := serviceNameFromResource(nil); got != ServiceName {
+			t.Errorf("serviceNameFromResource(nil) = %q, want %q", got, ServiceName)
+		}
+	})
+
+	t.Run("resource with service.name returns it", func(t *testing.T) {
+		res := resource.NewSchemaless(semconv.ServiceName("custom-name"))
+		if got := serviceNameFromResource(res); got != "custom-name" {
+			t.Errorf("serviceNameFromResource = %q, want %q", got, "custom-name")
+		}
+	})
+
+	t.Run("resource without service.name falls back", func(t *testing.T) {
+		res := resource.NewSchemaless(attribute.String("hecate.region", "us-west-2"))
+		if got := serviceNameFromResource(res); got != ServiceName {
+			t.Errorf("serviceNameFromResource (no service.name) = %q, want default %q", got, ServiceName)
+		}
+	})
 }
