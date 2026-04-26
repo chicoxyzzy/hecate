@@ -9,22 +9,18 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 type OTelMetricOptions struct {
-	Enabled     bool
-	Endpoint    string
-	Headers     map[string]string
-	ServiceName string
-	Timeout     time.Duration
-	Interval    time.Duration
+	Enabled  bool
+	Endpoint string
+	Headers  map[string]string
+	Resource *resource.Resource
+	Timeout  time.Duration
+	Interval time.Duration
 }
 
 func NewMeterProvider(ctx context.Context, opts OTelMetricOptions) (*sdkmetric.MeterProvider, func(context.Context) error, error) {
-	if strings.TrimSpace(opts.ServiceName) == "" {
-		opts.ServiceName = ServiceName
-	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
@@ -32,13 +28,9 @@ func NewMeterProvider(ctx context.Context, opts OTelMetricOptions) (*sdkmetric.M
 		opts.Interval = 30 * time.Second
 	}
 
-	resource := resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName(opts.ServiceName),
-	)
-
-	providerOpts := []sdkmetric.Option{
-		sdkmetric.WithResource(resource),
+	providerOpts := []sdkmetric.Option{}
+	if opts.Resource != nil {
+		providerOpts = append(providerOpts, sdkmetric.WithResource(opts.Resource))
 	}
 
 	if opts.Enabled {

@@ -2,38 +2,53 @@ package profiler
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-func NewTracerProvider(ctx context.Context, enabled bool, endpoint string, headers map[string]string, serviceName string, timeout time.Duration) (*sdktrace.TracerProvider, error) {
-	opts := []sdktrace.TracerProviderOption{
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		sdktrace.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(serviceName),
-		)),
+// TracerProviderOptions carries the inputs to NewTracerProvider. Resource and
+// Sampler are required for first-class OpenTelemetry behavior — Resource is
+// the shared service identity reused across signals, Sampler controls trace
+// volume, and an explicit nil-or-default fallback keeps tests trivial.
+type TracerProviderOptions struct {
+	Enabled  bool
+	Endpoint string
+	Headers  map[string]string
+	Timeout  time.Duration
+	Resource *resource.Resource
+	Sampler  sdktrace.Sampler
+}
+
+func NewTracerProvider(ctx context.Context, opts TracerProviderOptions) (*sdktrace.TracerProvider, error) {
+	if opts.Sampler == nil {
+		opts.Sampler = sdktrace.ParentBased(sdktrace.AlwaysSample())
+	}
+	tpOpts := []sdktrace.TracerProviderOption{
+		sdktrace.WithSampler(opts.Sampler),
+	}
+	if opts.Resource != nil {
+		tpOpts = append(tpOpts, sdktrace.WithResource(opts.Resource))
 	}
 
-	if enabled && endpoint != "" {
+	if opts.Enabled && strings.TrimSpace(opts.Endpoint) != "" {
 		exporter, err := otlptracehttp.New(
 			ctx,
-			otlptracehttp.WithEndpointURL(endpoint),
-			otlptracehttp.WithHeaders(headers),
-			otlptracehttp.WithTimeout(timeout),
+			otlptracehttp.WithEndpointURL(opts.Endpoint),
+			otlptracehttp.WithHeaders(opts.Headers),
+			otlptracehttp.WithTimeout(opts.Timeout),
 		)
 		if err != nil {
 			return nil, err
 		}
-		opts = append(opts, sdktrace.WithBatcher(exporter))
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 	}
 
-	return sdktrace.NewTracerProvider(opts...), nil
+	return sdktrace.NewTracerProvider(tpOpts...), nil
 }
 
 func NewOTelTracer(provider oteltrace.TracerProvider) oteltrace.Tracer {

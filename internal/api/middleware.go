@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
@@ -19,6 +22,18 @@ func Chain(handler http.Handler, middleware ...middleware) http.Handler {
 		wrapped = middleware[i](wrapped)
 	}
 	return wrapped
+}
+
+// TraceContextMiddleware extracts W3C trace context (traceparent, tracestate)
+// and baggage from inbound request headers using the globally configured
+// TextMapPropagator. Without this, upstream traces lose their parent link the
+// moment a request enters the gateway, so it MUST run before any handler that
+// starts a span.
+func TraceContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func RequestIDMiddleware(next http.Handler) http.Handler {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/hecate/agent-runtime/internal/api"
 	"github.com/hecate/agent-runtime/internal/billing"
@@ -33,12 +34,29 @@ import (
 
 func main() {
 	cfg := config.LoadFromEnv()
+
+	otelResource, err := telemetry.BuildResource(context.Background(), telemetry.ResourceOptions{
+		ServiceName:       cfg.OTel.ServiceName,
+		ServiceVersion:    cfg.OTel.ServiceVersion,
+		ServiceInstanceID: cfg.OTel.ServiceInstanceID,
+		DeploymentEnv:     cfg.OTel.DeploymentEnvironment,
+	})
+	if err != nil {
+		slog.Error("otel resource init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+
 	logger, shutdownLogs, err := telemetry.NewLoggerWithOTLP(context.Background(), cfg.LogLevel, telemetry.OTelLogOptions{
-		Enabled:     cfg.OTel.Logs.Enabled,
-		Endpoint:    firstNonEmpty(cfg.OTel.Logs.Endpoint, cfg.OTel.Traces.Endpoint),
-		Headers:     firstNonEmptyMap(cfg.OTel.Logs.Headers, cfg.OTel.Traces.Headers),
-		ServiceName: cfg.OTel.ServiceName,
-		Timeout:     firstNonZeroDuration(cfg.OTel.Logs.Timeout, cfg.OTel.Traces.Timeout),
+		Enabled:  cfg.OTel.Logs.Enabled,
+		Endpoint: firstNonEmpty(cfg.OTel.Logs.Endpoint, cfg.OTel.Traces.Endpoint),
+		Headers:  firstNonEmptyMap(cfg.OTel.Logs.Headers, cfg.OTel.Traces.Headers),
+		Resource: otelResource,
+		Timeout:  firstNonZeroDuration(cfg.OTel.Logs.Timeout, cfg.OTel.Traces.Timeout),
 	})
 	if err != nil {
 		slog.Error("otel logger init failed", slog.Any("error", err))
@@ -52,12 +70,12 @@ func main() {
 		}
 	}()
 	meterProvider, shutdownMetrics, err := telemetry.NewMeterProvider(context.Background(), telemetry.OTelMetricOptions{
-		Enabled:     cfg.OTel.Metrics.Enabled,
-		Endpoint:    cfg.OTel.Metrics.Endpoint,
-		Headers:     cfg.OTel.Metrics.Headers,
-		ServiceName: cfg.OTel.ServiceName,
-		Timeout:     cfg.OTel.Metrics.Timeout,
-		Interval:    cfg.OTel.MetricsInterval,
+		Enabled:  cfg.OTel.Metrics.Enabled,
+		Endpoint: cfg.OTel.Metrics.Endpoint,
+		Headers:  cfg.OTel.Metrics.Headers,
+		Resource: otelResource,
+		Timeout:  cfg.OTel.Metrics.Timeout,
+		Interval: cfg.OTel.MetricsInterval,
 	})
 	if err != nil {
 		slog.Error("otel meter provider init failed", slog.Any("error", err))
@@ -106,18 +124,19 @@ func main() {
 
 	staticPricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
 	pricebook := billing.NewRegistryAwarePricebook(billing.NewControlPlanePricebook(staticPricebook, controlPlaneStore), providerRegistry)
-	otelProvider, err := profiler.NewTracerProvider(
-		context.Background(),
-		cfg.OTel.Traces.Enabled,
-		cfg.OTel.Traces.Endpoint,
-		cfg.OTel.Traces.Headers,
-		cfg.OTel.ServiceName,
-		cfg.OTel.Traces.Timeout,
-	)
+	otelProvider, err := profiler.NewTracerProvider(context.Background(), profiler.TracerProviderOptions{
+		Enabled:  cfg.OTel.Traces.Enabled,
+		Endpoint: cfg.OTel.Traces.Endpoint,
+		Headers:  cfg.OTel.Traces.Headers,
+		Timeout:  cfg.OTel.Traces.Timeout,
+		Resource: otelResource,
+		Sampler:  telemetry.BuildSampler(cfg.OTel.TracesSampler, cfg.OTel.TracesSamplerArg),
+	})
 	if err != nil {
 		logger.Error("otel tracer provider init failed", slog.Any("error", err))
 		os.Exit(1)
 	}
+	otel.SetTracerProvider(otelProvider)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

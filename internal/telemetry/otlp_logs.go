@@ -13,28 +13,26 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type OTelLogOptions struct {
-	Enabled     bool
-	Endpoint    string
-	Headers     map[string]string
-	ServiceName string
-	Timeout     time.Duration
+	Enabled  bool
+	Endpoint string
+	Headers  map[string]string
+	Resource *resource.Resource
+	Timeout  time.Duration
 }
 
 func NewLoggerWithOTLP(ctx context.Context, level string, opts OTelLogOptions) (*slog.Logger, func(context.Context) error, error) {
 	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(level)})
 
+	serviceName := serviceNameFromResource(opts.Resource)
+
 	if !opts.Enabled {
-		return slog.New(jsonHandler).With(slog.String(AttrServiceName, ServiceName)), func(context.Context) error { return nil }, nil
+		return slog.New(jsonHandler).With(slog.String(AttrServiceName, serviceName)), func(context.Context) error { return nil }, nil
 	}
 
-	if strings.TrimSpace(opts.ServiceName) == "" {
-		opts.ServiceName = ServiceName
-	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
@@ -55,13 +53,13 @@ func NewLoggerWithOTLP(ctx context.Context, level string, opts OTelLogOptions) (
 		return nil, nil, fmt.Errorf("create otlp log exporter: %w", err)
 	}
 
-	provider := sdklog.NewLoggerProvider(
+	providerOpts := []sdklog.LoggerProviderOption{
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
-		sdklog.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(opts.ServiceName),
-		)),
-	)
+	}
+	if opts.Resource != nil {
+		providerOpts = append(providerOpts, sdklog.WithResource(opts.Resource))
+	}
+	provider := sdklog.NewLoggerProvider(providerOpts...)
 
 	otelHandler := newOTLPHandler(provider.Logger("hecate.telemetry"), parseLevel(level))
 	handler := newMultiHandler(jsonHandler, otelHandler)
@@ -69,7 +67,24 @@ func NewLoggerWithOTLP(ctx context.Context, level string, opts OTelLogOptions) (
 		return provider.Shutdown(ctx)
 	}
 
-	return slog.New(handler).With(slog.String(AttrServiceName, opts.ServiceName)), shutdown, nil
+	return slog.New(handler).With(slog.String(AttrServiceName, serviceName)), shutdown, nil
+}
+
+// serviceNameFromResource extracts the service.name attribute from the supplied
+// Resource so the slog handler tags every record with it. Falls back to the
+// package default when the resource is missing or has no service.name set.
+func serviceNameFromResource(res *resource.Resource) string {
+	if res == nil {
+		return ServiceName
+	}
+	for _, kv := range res.Attributes() {
+		if string(kv.Key) == AttrServiceName {
+			if v := kv.Value.AsString(); v != "" {
+				return v
+			}
+		}
+	}
+	return ServiceName
 }
 
 type multiHandler struct {

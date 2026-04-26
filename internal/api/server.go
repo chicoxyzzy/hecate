@@ -68,6 +68,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 
 	return Chain(
 		mux,
+		TraceContextMiddleware,
 		RequestIDMiddleware,
 		LoggingMiddleware(logger),
 		RecoveryMiddleware(logger),

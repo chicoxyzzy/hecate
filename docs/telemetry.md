@@ -52,9 +52,17 @@ The trace endpoint returns:
 
 All OTLP export is over HTTP. Each signal is enabled independently.
 
-Shared identity:
+Shared identity (applied to traces, metrics, and logs as a single OpenTelemetry Resource):
 
 - `GATEWAY_OTEL_SERVICE_NAME`
+- `GATEWAY_OTEL_SERVICE_VERSION`
+- `GATEWAY_OTEL_SERVICE_INSTANCE_ID` (auto-generated per process when unset)
+- `GATEWAY_OTEL_DEPLOYMENT_ENVIRONMENT` (e.g. `production`, `staging`)
+- `OTEL_RESOURCE_ATTRIBUTES` is honored last and can override any of the above
+
+The runtime also auto-detects telemetry SDK, host, and process attributes
+(`telemetry.sdk.name`, `host.name`, `process.runtime.name`, etc.) so backends
+can group instances without extra wiring.
 
 Traces:
 
@@ -62,6 +70,8 @@ Traces:
 - `GATEWAY_OTEL_TRACES_ENDPOINT`
 - `GATEWAY_OTEL_TRACES_HEADERS`
 - `GATEWAY_OTEL_TRACES_TIMEOUT`
+- `GATEWAY_OTEL_TRACES_SAMPLER` — one of `always_on`, `always_off`, `traceidratio`, `parentbased_always_on` (default), `parentbased_always_off`, `parentbased_traceidratio`
+- `GATEWAY_OTEL_TRACES_SAMPLER_ARG` — float in `[0, 1]`, used by the ratio samplers
 
 Metrics:
 
@@ -89,6 +99,19 @@ Trace body capture is configured separately from OTLP export:
 
 - `GATEWAY_TRACE_BODIES`
 - `GATEWAY_TRACE_BODY_MAX_BYTES`
+
+## Inbound Trace Context Propagation
+
+Hecate registers a global W3C TextMap propagator on startup, so any inbound
+request carrying `traceparent` (and optional `tracestate` / `baggage`) headers
+becomes the parent of the gateway's root span automatically. Operators do not
+need to enable this — it is always on. With the default
+`parentbased_always_on` sampler, sampling decisions made upstream are honored
+end-to-end across the gateway.
+
+If you front Hecate with a service that does not propagate trace context, the
+gateway starts a fresh trace per request and the request id remains the
+single correlation key.
 
 ## Core Vocabulary
 

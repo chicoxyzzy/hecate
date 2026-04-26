@@ -89,11 +89,16 @@ type OTelSignalConfig struct {
 }
 
 type OTelConfig struct {
-	ServiceName     string
-	Traces          OTelSignalConfig
-	Metrics         OTelSignalConfig
-	MetricsInterval time.Duration
-	Logs            OTelSignalConfig
+	ServiceName           string
+	ServiceVersion        string
+	ServiceInstanceID     string
+	DeploymentEnvironment string
+	Traces                OTelSignalConfig
+	TracesSampler         string
+	TracesSamplerArg      float64
+	Metrics               OTelSignalConfig
+	MetricsInterval       time.Duration
+	Logs                  OTelSignalConfig
 }
 
 type GovernorConfig struct {
@@ -271,8 +276,13 @@ func LoadFromEnv() Config {
 			SessionLimit:    getEnvInt("GATEWAY_CHAT_SESSIONS_LIMIT", 50),
 		},
 		OTel: OTelConfig{
-			ServiceName:     getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
-			MetricsInterval: getEnvDuration("GATEWAY_OTEL_METRICS_INTERVAL", 30*time.Second),
+			ServiceName:           getEnv("GATEWAY_OTEL_SERVICE_NAME", "hecate-gateway"),
+			ServiceVersion:        getEnv("GATEWAY_OTEL_SERVICE_VERSION", ""),
+			ServiceInstanceID:     getEnv("GATEWAY_OTEL_SERVICE_INSTANCE_ID", ""),
+			DeploymentEnvironment: getEnv("GATEWAY_OTEL_DEPLOYMENT_ENVIRONMENT", ""),
+			MetricsInterval:       getEnvDuration("GATEWAY_OTEL_METRICS_INTERVAL", 30*time.Second),
+			TracesSampler:         getEnv("GATEWAY_OTEL_TRACES_SAMPLER", ""),
+			TracesSamplerArg:      getEnvFloat64("GATEWAY_OTEL_TRACES_SAMPLER_ARG", 1.0),
 			Traces: OTelSignalConfig{
 				Enabled:  getEnvBool("GATEWAY_OTEL_TRACES_ENABLED", false),
 				Endpoint: getEnv("GATEWAY_OTEL_TRACES_ENDPOINT", ""),
