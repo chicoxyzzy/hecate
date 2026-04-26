@@ -287,20 +287,55 @@ For copy-paste setup and auth/header examples, see [`docs/client-integration.md`
 
 ## Config Highlights
 
-Runtime and queue knobs commonly adjusted for agent-task workflows:
+The full env surface lives in `.env.example`; the table-of-contents below
+covers the knobs operators reach for most often. Anything not listed
+here keeps a sensible default — see [`internal/config/config.go`](internal/config/config.go)
+for the authoritative list.
 
-- `GATEWAY_TASKS_BACKEND=memory|postgres`
-- `GATEWAY_TASK_QUEUE_BACKEND=memory|postgres`
-- `GATEWAY_TASK_QUEUE_WORKERS=<int>`
-- `GATEWAY_TASK_QUEUE_BUFFER=<int>`
-- `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
-- `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
-- `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>`
-- `GATEWAY_DATA_DIR=<path>` — where the auto-generated bootstrap file lives
-- `GATEWAY_AUTH_TOKEN=<token>` — override the auto-generated admin token
+### Auth and data
 
-Use `.env.example` as the baseline. For the full env surface, see
-`internal/config/config.go`.
+| Variable | Default | What it does |
+|---|---|---|
+| `GATEWAY_AUTH_TOKEN` | auto-generated | Admin bearer token. Empty → generated on first run, persisted to the bootstrap file, printed once to stderr. |
+| `GATEWAY_DATA_DIR` | `.` | Where auto-generated state goes (the bootstrap file by default). Mount a volume here in production. |
+| `GATEWAY_CONTROL_PLANE_SECRET_KEY` | auto-generated | AES-GCM key for encrypted provider credentials at rest. Empty → generated and persisted. |
+
+### Storage backends
+
+Every store accepts `memory` (in-process, ephemeral) by default. Switch
+to `postgres` (or `redis` where available) for persistence across restarts.
+
+| Variable | Accepted values |
+|---|---|
+| `GATEWAY_CONTROL_PLANE_BACKEND` | `memory` \| `redis` \| `postgres` (`none` is a legacy synonym for `memory`) |
+| `GATEWAY_RETENTION_HISTORY_BACKEND` | `memory` \| `redis` \| `postgres` |
+| `GATEWAY_CHAT_SESSIONS_BACKEND` | `memory` \| `postgres` |
+| `GATEWAY_TASKS_BACKEND` | `memory` \| `postgres` |
+| `GATEWAY_TASK_QUEUE_BACKEND` | `memory` \| `postgres` |
+| `GATEWAY_CACHE_BACKEND` | `memory` \| `redis` \| `postgres` |
+| `GATEWAY_SEMANTIC_CACHE_BACKEND` | `memory` \| `postgres` |
+| `GATEWAY_BUDGET_BACKEND` | `memory` \| `redis` \| `postgres` |
+
+A single `POSTGRES_DSN` and the top-level `REDIS_*` block configure the
+clients that any of the above can share. If any backend is set to
+`postgres`, `POSTGRES_DSN` must be reachable at startup or the gateway
+exits — there is no silent fallback to `memory`.
+
+### Agent task runtime
+
+| Variable | Default | What it does |
+|---|---|---|
+| `GATEWAY_TASK_QUEUE_WORKERS` | `1` | Concurrency: how many runs the queue dispatches in parallel. |
+| `GATEWAY_TASK_QUEUE_BUFFER` | `128` | In-memory queue capacity (memory backend only). |
+| `GATEWAY_TASK_QUEUE_LEASE_SECONDS` | `30` | How long a worker holds a claimed run before it can be reclaimed. |
+| `GATEWAY_TASK_APPROVAL_POLICIES` | `shell_exec` | Comma-separated approval gates: `shell_exec`, `git_exec`, `file_write`, `network_egress`. |
+| `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT` | `0` | Per-tenant concurrency cap. `0` = unlimited. |
+
+### Telemetry
+
+OpenTelemetry traces, metrics, and logs are off by default. See
+[`docs/telemetry.md`](docs/telemetry.md) for the full export surface
+(`GATEWAY_OTEL_*` env vars, samplers, OTLP recipes).
 
 ## Docs
 
