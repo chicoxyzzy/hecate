@@ -9,6 +9,14 @@ on:
     branches: [master]
     paths-ignore:
       - '**/*.md'
+  # merge_group fires for PRs in a GitHub merge queue. Listing it here is a
+  # no-op until queues are enabled, but adding it now means turning queues on
+  # later is a one-line setting flip rather than a workflow edit.
+  merge_group:
+  # workflow_dispatch lets us trigger a full run manually from the Actions tab
+  # without pushing a no-op commit (handy after flake fixes or for debugging
+  # cache behaviour).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,18 +33,24 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       typescript: ${{ steps.filter.outputs.typescript }}
+      workflow: ${{ steps.filter.outputs.workflow }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # The `workflow` filter is OR'd into both downstream gates so a
+          # change to this file always re-runs every job — the alternative
+          # (listing the workflow path under both `go` and `typescript`)
+          # silently drifts when one filter is updated without the other.
           filters: |
+            workflow:
+              - '.github/workflows/test.yml'
             go:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
-              - '.github/workflows/test.yml'
             typescript:
               - 'ui/**/*.ts'
               - 'ui/**/*.tsx'
@@ -48,12 +62,11 @@ jobs:
               - 'ui/vitest.config.*'
               - 'ui/playwright.config.*'
               - 'ui/e2e/**'
-              - '.github/workflows/test.yml'
 
   lint-go:
     name: Lint (go)
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -77,7 +90,7 @@ jobs:
   test-go:
     name: Go tests
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -93,7 +106,7 @@ jobs:
   build-gateway:
     name: Build gateway
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -117,7 +130,7 @@ jobs:
   e2e:
     name: E2E tests (fake upstream)
     needs: [changes, build-gateway]
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -143,7 +156,7 @@ jobs:
   e2e-ollama:
     name: E2E tests (Ollama)
     needs: [changes, build-gateway]
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -210,7 +223,7 @@ jobs:
   typescript:
     name: TypeScript tests
     needs: changes
-    if: needs.changes.outputs.typescript == 'true'
+    if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
