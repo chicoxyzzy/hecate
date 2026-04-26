@@ -208,7 +208,7 @@ func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit 
 	}
 	defer rows.Close()
 
-	events := make([]BudgetEvent, 0, limit)
+	events := make([]BudgetEvent, 0, min(limit, maxBudgetEventListLimit))
 	for rows.Next() {
 		var event BudgetEvent
 		if err := rows.Scan(
@@ -275,7 +275,7 @@ func (s *PostgresBudgetStore) ListRecentEvents(ctx context.Context, limit int) (
 	}
 	defer rows.Close()
 
-	events := make([]BudgetEvent, 0, limit)
+	events := make([]BudgetEvent, 0, min(limit, maxBudgetEventListLimit))
 	for rows.Next() {
 		var event BudgetEvent
 		if err := rows.Scan(

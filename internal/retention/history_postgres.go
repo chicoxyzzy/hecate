@@ -83,7 +83,7 @@ func (s *PostgresHistoryStore) ListRuns(ctx context.Context, limit int) ([]Histo
 	}
 	defer rows.Close()
 
-	records := make([]HistoryRecord, 0, limit)
+	records := make([]HistoryRecord, 0, min(limit, maxHistoryListLimit))
 	for rows.Next() {
 		var record HistoryRecord
 		var resultsJSON []byte
