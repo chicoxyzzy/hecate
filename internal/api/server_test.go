@@ -2892,7 +2892,15 @@ func mustRequestJSONStatus[T any](client apiTestClient, status int, method, path
 
 type taskTestClient = apiTestClient
 
-const asyncWaitTimeout = 10 * time.Second
+// asyncWaitTimeout caps how long the test waits for an orchestrator-driven
+// task to reach a desired state. The task itself completes in well under
+// a second under any real load, but on GitHub's 2-core runners the
+// combination of -race overhead and t.Parallel() across many tests in
+// this package can starve the orchestrator goroutine for several seconds.
+// 30s gives generous headroom while still failing fast on real
+// regressions — a stuck task hits the same fatal whether the cap is 10s
+// or 30s, the higher number just stops blaming the CPU scheduler.
+const asyncWaitTimeout = 30 * time.Second
 
 func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
 	t.Helper()
