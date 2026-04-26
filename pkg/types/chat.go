@@ -197,13 +197,18 @@ type BudgetHistoryEntry struct {
 }
 
 type ChatSession struct {
-	ID        string
-	Title     string
-	Tenant    string
-	User      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Turns     []ChatSessionTurn
+	ID    string
+	Title string
+	// SystemPrompt is prepended as a system-role message to chat
+	// completions made against this session, unless the incoming request
+	// already starts with a system message. Empty means no per-session
+	// system prompt — clients fall back to whatever they send inline.
+	SystemPrompt string
+	Tenant       string
+	User         string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Turns        []ChatSessionTurn
 }
 
 type ChatSessionTurn struct {

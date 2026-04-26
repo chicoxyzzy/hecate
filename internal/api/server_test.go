@@ -1898,6 +1898,124 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 	}
 }
 
+// TestChatSessionSystemPromptIsPrepended is the end-to-end check for B1:
+// PATCH a session's system_prompt, GET it back, then make a chat call
+// targeting that session and verify the gateway prepended the prompt as a
+// system-role message before forwarding to the provider.
+func TestChatSessionSystemPromptIsPrepended(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{
+			ID:        "msg_1",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Now().UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+		},
+	}
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{provider}, config.Config{
+		Router: config.RouterConfig{DefaultModel: "gpt-4o-mini"},
+	})
+	client := newAPITestClient(t, handler)
+
+	created := mustRequestJSON[ChatSessionResponse](client, http.MethodPost, "/v1/chat/sessions", `{"title":"with system"}`)
+	if created.Data.SystemPrompt != "" {
+		t.Fatalf("freshly-created session SystemPrompt = %q, want empty", created.Data.SystemPrompt)
+	}
+
+	const prompt = "you are a terse assistant"
+	patched := mustRequestJSON[ChatSessionResponse](client, http.MethodPatch, "/v1/chat/sessions/"+created.Data.ID, `{"system_prompt":"`+prompt+`"}`)
+	if patched.Data.SystemPrompt != prompt {
+		t.Fatalf("PATCH response SystemPrompt = %q, want %q", patched.Data.SystemPrompt, prompt)
+	}
+	// PATCH must not clobber the title.
+	if patched.Data.Title != "with system" {
+		t.Fatalf("PATCH cleared Title: got %q, want %q", patched.Data.Title, "with system")
+	}
+
+	// GET round-trip — confirms persistence (memory store, but exercises
+	// the API response shape too).
+	roundTripped := mustRequestJSON[ChatSessionResponse](client, http.MethodGet, "/v1/chat/sessions/"+created.Data.ID, "")
+	if roundTripped.Data.SystemPrompt != prompt {
+		t.Fatalf("GET SystemPrompt = %q, want %q", roundTripped.Data.SystemPrompt, prompt)
+	}
+
+	// Chat completion targeting the session — the prompt should be
+	// prepended so the provider sees [system, user] instead of [user].
+	body := fmt.Sprintf(`{"model":"gpt-4o-mini","provider":"openai","session_id":"%s","messages":[{"role":"user","content":"hi"}]}`, created.Data.ID)
+	rec := performJSONRequest(t, handler, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got := provider.LastRequest()
+	if len(got.Messages) != 2 {
+		t.Fatalf("provider received %d messages, want 2 (prepended system + user); got %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].Role != "system" || got.Messages[0].Content != prompt {
+		t.Fatalf("first message = {%q, %q}, want {system, %q}", got.Messages[0].Role, got.Messages[0].Content, prompt)
+	}
+	if got.Messages[1].Role != "user" || got.Messages[1].Content != "hi" {
+		t.Fatalf("second message = {%q, %q}, want {user, hi}", got.Messages[1].Role, got.Messages[1].Content)
+	}
+}
+
+// TestChatSessionSystemPromptDoesNotOverrideExplicit covers the "client
+// already sends a system message" branch — the session's stored prompt
+// must NOT be prepended in that case, otherwise per-call overrides become
+// impossible.
+func TestChatSessionSystemPromptDoesNotOverrideExplicit(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{
+			ID:        "msg_1",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Now().UTC(),
+			Choices:   []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Usage:     types.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+		},
+	}
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{provider}, config.Config{
+		Router: config.RouterConfig{DefaultModel: "gpt-4o-mini"},
+	})
+	client := newAPITestClient(t, handler)
+
+	created := mustRequestJSON[ChatSessionResponse](client, http.MethodPost, "/v1/chat/sessions", `{"title":"override test"}`)
+	mustRequestJSON[ChatSessionResponse](client, http.MethodPatch, "/v1/chat/sessions/"+created.Data.ID, `{"system_prompt":"session-level prompt"}`)
+
+	body := fmt.Sprintf(`{"model":"gpt-4o-mini","provider":"openai","session_id":"%s","messages":[{"role":"system","content":"per-call override"},{"role":"user","content":"hi"}]}`, created.Data.ID)
+	rec := performJSONRequest(t, handler, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, want 200", rec.Code)
+	}
+
+	got := provider.LastRequest()
+	if len(got.Messages) != 2 {
+		t.Fatalf("provider received %d messages, want exactly 2 (no double system); got %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].Content != "per-call override" {
+		t.Fatalf("first message Content = %q, want per-call override (session prompt should NOT have been prepended on top)", got.Messages[0].Content)
+	}
+}
+
 func TestTasksCreateListAndGet(t *testing.T) {
 	t.Parallel()
 
@@ -3258,6 +3376,12 @@ type fakeProvider struct {
 	err          error
 	errSequence  []error
 	calls        int
+	// lastRequest is the most recent ChatRequest the provider was asked to
+	// handle. Tests that need to assert what the gateway forwarded
+	// (system-prompt prepending, model rewrites, etc.) read this. The
+	// stored value is a copy — the slice headers are independent so test
+	// code mutating it can't race with concurrent Chat calls.
+	lastRequest  types.ChatRequest
 	capabilities providers.Capabilities
 	capsErr      error
 }
@@ -3301,11 +3425,15 @@ func (p *fakeProvider) Capabilities(_ context.Context) (providers.Capabilities, 
 	}, nil
 }
 
-func (p *fakeProvider) Chat(_ context.Context, _ types.ChatRequest) (*types.ChatResponse, error) {
+func (p *fakeProvider) Chat(_ context.Context, req types.ChatRequest) (*types.ChatResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.calls++
+	// Defensive-copy the messages slice so a later test mutation can't
+	// race with another Chat call appending to the same backing array.
+	p.lastRequest = req
+	p.lastRequest.Messages = append([]types.Message(nil), req.Messages...)
 	if len(p.errSequence) > 0 {
 		err := p.errSequence[0]
 		p.errSequence = p.errSequence[1:]
@@ -3320,6 +3448,16 @@ func (p *fakeProvider) Chat(_ context.Context, _ types.ChatRequest) (*types.Chat
 	cloned := *p.response
 	cloned.Choices = append([]types.ChatChoice(nil), p.response.Choices...)
 	return &cloned, nil
+}
+
+// LastRequest returns a snapshot of the most recently received chat
+// request. Safe to call from a different goroutine than Chat.
+func (p *fakeProvider) LastRequest() types.ChatRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.lastRequest
+	out.Messages = append([]types.Message(nil), p.lastRequest.Messages...)
+	return out
 }
 
 func (p *fakeProvider) Supports(model string) bool {

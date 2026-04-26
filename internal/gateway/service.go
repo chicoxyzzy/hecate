@@ -814,6 +814,17 @@ func (s *Service) UpdateChatSessionTitle(ctx context.Context, id string, title s
 	return &ChatSessionResult{Session: session}, nil
 }
 
+func (s *Service) UpdateChatSessionSystemPrompt(ctx context.Context, id string, prompt string) (*ChatSessionResult, error) {
+	if s.chatSessions == nil {
+		return nil, fmt.Errorf("chat session store not configured")
+	}
+	session, err := s.chatSessions.UpdateSessionSystemPrompt(ctx, id, prompt)
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSessionResult{Session: session}, nil
+}
+
 func (s *Service) RecordChatTurn(ctx context.Context, sessionID string, req types.ChatRequest, result *ChatResult) (*ChatSessionResult, error) {
 	if s.chatSessions == nil || sessionID == "" || result == nil || result.Response == nil {
 		return nil, nil

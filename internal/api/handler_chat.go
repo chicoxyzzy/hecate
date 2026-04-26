@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/hecate/agent-runtime/internal/auth"
 	"github.com/hecate/agent-runtime/internal/gateway"
@@ -36,6 +37,13 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusForbidden, errCodeForbidden, err.Error())
 		return
 	}
+
+	// If the request targets a session that has a stored system prompt,
+	// prepend it as a system-role message — but only when the request
+	// doesn't already lead with one. This lets the session prompt act as
+	// the default while still allowing the client to override per-call by
+	// sending its own system message at index 0.
+	h.applySessionSystemPrompt(ctx, &internalReq)
 
 	if internalReq.Stream {
 		h.handleChatCompletionsStream(w, r, ctx, internalReq)
@@ -229,6 +237,31 @@ type flushWriter struct {
 
 func (fw flushWriter) Write(p []byte) (int, error) { return fw.w.Write(p) }
 func (fw flushWriter) Flush()                      { fw.flusher.Flush() }
+
+// applySessionSystemPrompt looks up the session referenced by req.SessionID
+// (if any) and, if the session has a non-empty SystemPrompt, prepends it as
+// a system-role message. The prepend is skipped when the request already
+// has a system message at index 0 — that lets clients override per-call.
+// Lookup failures are silently ignored: a flaky session store shouldn't
+// kill the chat path; the worst case is the session prompt is missing
+// from this one request.
+func (h *Handler) applySessionSystemPrompt(ctx context.Context, req *types.ChatRequest) {
+	if req == nil || req.SessionID == "" {
+		return
+	}
+	if len(req.Messages) > 0 && strings.EqualFold(req.Messages[0].Role, "system") {
+		return
+	}
+	result, err := h.service.GetChatSession(ctx, req.SessionID)
+	if err != nil || result == nil {
+		return
+	}
+	if result.Session.SystemPrompt == "" {
+		return
+	}
+	prompt := types.Message{Role: "system", Content: result.Session.SystemPrompt}
+	req.Messages = append([]types.Message{prompt}, req.Messages...)
+}
 
 func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
 	messages := make([]types.Message, 0, len(req.Messages))

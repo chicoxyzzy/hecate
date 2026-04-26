@@ -208,9 +208,12 @@ func (h *Handler) HandleUpdateChatSession(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "title is required")
+	if req.Title == nil && req.SystemPrompt == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "request must include at least one of title, system_prompt")
+		return
+	}
+	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "title cannot be set to an empty string")
 		return
 	}
 
@@ -224,18 +227,39 @@ func (h *Handler) HandleUpdateChatSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	updated, err := h.service.UpdateChatSessionTitle(ctx, id, title)
-	if err != nil {
-		telemetry.Error(h.logger, ctx, "gateway.chat.sessions.update.failed",
-			slog.String("event.name", "gateway.chat.sessions.update.failed"),
-			slog.Any("error", err),
-		)
-		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
-		return
+	// Apply each field that the client included. Title and system_prompt
+	// are independent UPDATEs in the store; doing them in sequence keeps
+	// the storage interface simple at the cost of two round trips when a
+	// client patches both at once. PATCH semantics — fields not included
+	// stay as they were.
+	updatedSession := existing.Session
+	if req.Title != nil {
+		result, err := h.service.UpdateChatSessionTitle(ctx, id, strings.TrimSpace(*req.Title))
+		if err != nil {
+			telemetry.Error(h.logger, ctx, "gateway.chat.sessions.update.failed",
+				slog.String("event.name", "gateway.chat.sessions.update.failed"),
+				slog.Any("error", err),
+			)
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+		updatedSession = result.Session
+	}
+	if req.SystemPrompt != nil {
+		result, err := h.service.UpdateChatSessionSystemPrompt(ctx, id, *req.SystemPrompt)
+		if err != nil {
+			telemetry.Error(h.logger, ctx, "gateway.chat.sessions.update.failed",
+				slog.String("event.name", "gateway.chat.sessions.update.failed"),
+				slog.Any("error", err),
+			)
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		}
+		updatedSession = result.Session
 	}
 	WriteJSON(w, http.StatusOK, ChatSessionResponse{
 		Object: "chat_session",
-		Data:   renderChatSession(updated.Session),
+		Data:   renderChatSession(updatedSession),
 	})
 }
 
@@ -265,11 +289,12 @@ func renderChatSessionSummary(session types.ChatSession) ChatSessionSummaryItem 
 
 func renderChatSession(session types.ChatSession) ChatSessionItem {
 	item := ChatSessionItem{
-		ID:     session.ID,
-		Title:  session.Title,
-		Tenant: session.Tenant,
-		User:   session.User,
-		Turns:  make([]ChatSessionTurnItem, 0, len(session.Turns)),
+		ID:           session.ID,
+		Title:        session.Title,
+		SystemPrompt: session.SystemPrompt,
+		Tenant:       session.Tenant,
+		User:         session.User,
+		Turns:        make([]ChatSessionTurnItem, 0, len(session.Turns)),
 	}
 	if !session.CreatedAt.IsZero() {
 		item.CreatedAt = session.CreatedAt.UTC().Format(time.RFC3339Nano)

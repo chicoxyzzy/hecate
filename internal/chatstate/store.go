@@ -26,6 +26,7 @@ type Store interface {
 	AppendTurn(ctx context.Context, sessionID string, turn types.ChatSessionTurn) (types.ChatSession, error)
 	DeleteSession(ctx context.Context, id string) error
 	UpdateSession(ctx context.Context, id string, title string) (types.ChatSession, error)
+	UpdateSessionSystemPrompt(ctx context.Context, id string, prompt string) (types.ChatSession, error)
 }
 
 type MemoryStore struct {
@@ -130,6 +131,19 @@ func (s *MemoryStore) UpdateSession(_ context.Context, id string, title string) 
 	return cloneSession(session), nil
 }
 
+func (s *MemoryStore) UpdateSessionSystemPrompt(_ context.Context, id string, prompt string) (types.ChatSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[id]
+	if !ok {
+		return types.ChatSession{}, fmt.Errorf("chat session %q not found", id)
+	}
+	session.SystemPrompt = prompt
+	session.UpdatedAt = time.Now().UTC()
+	s.sessions[id] = session
+	return cloneSession(session), nil
+}
+
 type PostgresStore struct {
 	client        *storage.PostgresClient
 	sessionsTable string
@@ -166,10 +180,11 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session types.ChatSes
 	_, err := s.client.DB().ExecContext(
 		ctx,
 		fmt.Sprintf(
-			`INSERT INTO %s (id, title, tenant, user_name, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6)
+			`INSERT INTO %s (id, title, system_prompt, tenant, user_name, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 ON CONFLICT (id) DO UPDATE
 			 SET title = EXCLUDED.title,
+			     system_prompt = EXCLUDED.system_prompt,
 			     tenant = EXCLUDED.tenant,
 			     user_name = EXCLUDED.user_name,
 			     updated_at = EXCLUDED.updated_at`,
@@ -177,6 +192,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session types.ChatSes
 		),
 		session.ID,
 		session.Title,
+		session.SystemPrompt,
 		session.Tenant,
 		session.User,
 		session.CreatedAt.UTC(),
@@ -200,7 +216,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, id string) (types.ChatSe
 }
 
 func (s *PostgresStore) ListSessions(ctx context.Context, filter Filter) ([]types.ChatSession, error) {
-	query := fmt.Sprintf(`SELECT id, title, tenant, user_name, created_at, updated_at FROM %s`, s.sessionsTable)
+	query := fmt.Sprintf(`SELECT id, title, system_prompt, tenant, user_name, created_at, updated_at FROM %s`, s.sessionsTable)
 	args := make([]any, 0, 2)
 	if filter.Tenant != "" {
 		query += ` WHERE tenant = $1`
@@ -224,7 +240,7 @@ func (s *PostgresStore) ListSessions(ctx context.Context, filter Filter) ([]type
 	var items []types.ChatSession
 	for rows.Next() {
 		var session types.ChatSession
-		if err := rows.Scan(&session.ID, &session.Title, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if err := rows.Scan(&session.ID, &session.Title, &session.SystemPrompt, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan postgres chat session: %w", err)
 		}
 		items = append(items, session)
@@ -315,6 +331,18 @@ func (s *PostgresStore) UpdateSession(ctx context.Context, id string, title stri
 	return s.loadSession(ctx, id)
 }
 
+func (s *PostgresStore) UpdateSessionSystemPrompt(ctx context.Context, id string, prompt string) (types.ChatSession, error) {
+	now := time.Now().UTC()
+	if _, err := s.client.DB().ExecContext(
+		ctx,
+		fmt.Sprintf(`UPDATE %s SET system_prompt = $1, updated_at = $2 WHERE id = $3`, s.sessionsTable),
+		prompt, now, id,
+	); err != nil {
+		return types.ChatSession{}, fmt.Errorf("update postgres chat session system prompt: %w", err)
+	}
+	return s.loadSession(ctx, id)
+}
+
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	if err := s.client.EnsureSchema(ctx); err != nil {
 		return err
@@ -325,6 +353,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			`CREATE TABLE IF NOT EXISTS %s (
 				id TEXT PRIMARY KEY,
 				title TEXT NOT NULL,
+				system_prompt TEXT NOT NULL DEFAULT '',
 				tenant TEXT NOT NULL,
 				user_name TEXT NOT NULL,
 				created_at TIMESTAMPTZ NOT NULL,
@@ -334,6 +363,15 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 		),
 	); err != nil {
 		return fmt.Errorf("migrate postgres chat sessions: %w", err)
+	}
+	// ALTER for existing tables that pre-date the system_prompt column.
+	// Postgres `ADD COLUMN IF NOT EXISTS` is a no-op when the column is
+	// already present, which is the case for fresh CREATE TABLE above.
+	if _, err := s.client.DB().ExecContext(
+		ctx,
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS system_prompt TEXT NOT NULL DEFAULT ''`, s.sessionsTable),
+	); err != nil {
+		return fmt.Errorf("migrate postgres chat sessions system_prompt: %w", err)
 	}
 	if _, err := s.client.DB().ExecContext(
 		ctx,
@@ -382,9 +420,9 @@ func (s *PostgresStore) loadSession(ctx context.Context, id string) (types.ChatS
 	var session types.ChatSession
 	err := s.client.DB().QueryRowContext(
 		ctx,
-		fmt.Sprintf(`SELECT id, title, tenant, user_name, created_at, updated_at FROM %s WHERE id = $1`, s.sessionsTable),
+		fmt.Sprintf(`SELECT id, title, system_prompt, tenant, user_name, created_at, updated_at FROM %s WHERE id = $1`, s.sessionsTable),
 		id,
-	).Scan(&session.ID, &session.Title, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt)
+	).Scan(&session.ID, &session.Title, &session.SystemPrompt, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return types.ChatSession{}, storage.ErrNil

@@ -93,8 +93,13 @@ type CreateChatSessionRequest struct {
 	Title string `json:"title"`
 }
 
+// UpdateChatSessionRequest patches an existing chat session. Both fields
+// are pointers so a request can leave a field unchanged by omitting it
+// entirely (`null` and "absent" are treated the same — leave alone). To
+// clear a field, send the empty string explicitly.
 type UpdateChatSessionRequest struct {
-	Title string `json:"title"`
+	Title        *string `json:"title,omitempty"`
+	SystemPrompt *string `json:"system_prompt,omitempty"`
 }
 
 type SessionResponseItem struct {
@@ -124,13 +129,14 @@ type ChatSessionSummaryItem struct {
 }
 
 type ChatSessionItem struct {
-	ID        string                `json:"id"`
-	Title     string                `json:"title"`
-	Tenant    string                `json:"tenant,omitempty"`
-	User      string                `json:"user,omitempty"`
-	CreatedAt string                `json:"created_at,omitempty"`
-	UpdatedAt string                `json:"updated_at,omitempty"`
-	Turns     []ChatSessionTurnItem `json:"turns"`
+	ID           string                `json:"id"`
+	Title        string                `json:"title"`
+	SystemPrompt string                `json:"system_prompt,omitempty"`
+	Tenant       string                `json:"tenant,omitempty"`
+	User         string                `json:"user,omitempty"`
+	CreatedAt    string                `json:"created_at,omitempty"`
+	UpdatedAt    string                `json:"updated_at,omitempty"`
+	Turns        []ChatSessionTurnItem `json:"turns"`
 }
 
 type ChatSessionTurnItem struct {
