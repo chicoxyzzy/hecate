@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -99,8 +100,13 @@ func buildTaskStore(cfg config.Config, logger *slog.Logger, postgresClient *stor
 	case "postgres":
 		store, err := taskstate.NewPostgresStore(context.Background(), postgresClient)
 		if err != nil {
+			// Hard-fail rather than silently fall back to memory: if the
+			// operator asked for postgres they want persistence, and a
+			// memory-backed run after `BACKEND=postgres` would lose every
+			// task on the first restart without anyone noticing. Match the
+			// pattern used by every other store builder in cmd/gateway.
 			logger.Error("task store init failed", slog.Any("error", err))
-			return taskstate.NewMemoryStore()
+			os.Exit(1)
 		}
 		return store
 	default:
@@ -117,8 +123,10 @@ func buildTaskQueue(cfg config.Config, logger *slog.Logger, postgresClient *stor
 	case "postgres":
 		queue, err := orchestrator.NewPostgresRunQueue(context.Background(), postgresClient, lease)
 		if err != nil {
+			// See buildTaskStore — a memory-queue masquerading as the
+			// requested postgres queue means runs vanish across restarts.
 			logger.Error("task queue init failed", slog.Any("error", err))
-			return orchestrator.NewMemoryRunQueue(cfg.Server.TaskQueueBuffer, lease)
+			os.Exit(1)
 		}
 		return queue
 	default:
