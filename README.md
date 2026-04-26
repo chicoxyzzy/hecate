@@ -109,12 +109,13 @@ and paste it into the prompt. The browser remembers it in localStorage;
 subsequent visits go straight to the dashboard. If you scroll past the
 banner, the token also lives in the bootstrap file on the `hecate-data`
 volume — the gateway image is distroless, so use `docker compose cp` to
-read it out without a shell:
+copy it out without a shell:
 
 ```bash
-docker compose cp gateway:/data/hecate.bootstrap.json - | jq -r .admin_token
+docker compose cp gateway:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_token
 ```
 
+(`docker compose cp ... -` emits a tar archive, hence the `tar -xO`.)
 Restarts of the same volume reuse the same token.
 
 Configure providers through the UI once the token is in, or by creating a

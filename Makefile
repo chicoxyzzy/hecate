@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e
+.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke
 
 # build produces a single self-contained gateway binary with the UI bundle
 # embedded. The UI is built first so //go:embed picks up the real assets;
@@ -82,3 +82,11 @@ ui-test:
 ui-test-e2e:
 	test -d ui/node_modules/@tailwindcss/vite || (echo "UI dependencies are out of date. Run 'make ui-install' first." && exit 1)
 	cd ui && bun run test:e2e
+
+# test-docker-smoke spins up `docker compose` with the production image
+# and verifies /healthz, /v1/models auth, and the bootstrap volume round
+# trip. Runs against a separate compose project name so it can't collide
+# with a developer's already-running `docker compose up`. Requires Docker.
+test-docker-smoke:
+	mkdir -p "$(GOCACHE_DIR)"
+	GOCACHE="$(GOCACHE_DIR)" go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...

@@ -55,6 +55,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/gateway \
     ./cmd/gateway
 
+# Pre-create an empty /data dir owned by distroless's nonroot uid (65532)
+# so that, when compose mounts a named volume on top, the volume inherits
+# nonroot ownership on first mount. Without this the binary boots as
+# nonroot but can't write the bootstrap file because /data is root-owned.
+# Distroless has no shell, so we have to set ownership in this builder
+# stage and copy the prepared directory over with --chown below.
+RUN mkdir -p /out/data && chown 65532:65532 /out/data
+
 # ── 3. Runtime ──────────────────────────────────────────────────────────────
 
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
@@ -64,10 +72,13 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=go-builder /out/gateway /usr/local/bin/gateway
 
 # /data holds the auto-generated bootstrap secrets (control-plane encryption
-# key + admin bearer token) and any file-backed control-plane state. It must
-# be writable by the nonroot user; compose mounts a volume here so secrets
-# survive container restarts. distroless has no `mkdir`, but VOLUME tells
-# Docker to create the path with the container user as owner at first run.
+# key + admin bearer token) and any file-backed control-plane state. We
+# copy in a pre-chowned empty dir from the builder so that when compose
+# mounts a named volume here, the volume inherits nonroot ownership on
+# first creation. Without this, the volume mounts root-owned and the
+# nonroot binary can't persist its bootstrap file.
+COPY --from=go-builder --chown=65532:65532 /out/data /data
+
 ENV GATEWAY_ADDRESS=:8080 \
     GATEWAY_DATA_DIR=/data
 VOLUME ["/data"]
