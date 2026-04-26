@@ -50,8 +50,8 @@ jobs:
               - 'ui/e2e/**'
               - '.github/workflows/test.yml'
 
-  go:
-    name: Go tests
+  lint-go:
+    name: Lint (go)
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
@@ -74,11 +74,24 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+  test-go:
+    name: Go tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Test
         run: go test -race -timeout 10m ./...
 
-  e2e:
-    name: E2E tests (fake upstream)
+  build-gateway:
+    name: Build gateway
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
@@ -91,16 +104,45 @@ jobs:
           cache: true
 
       - name: Build gateway binary
-        run: go build -o /tmp/gateway ./cmd/gateway
+        run: go build -o gateway ./cmd/gateway
+
+      - name: Upload gateway artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-binary
+          path: gateway
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    name: E2E tests (fake upstream)
+    needs: [changes, build-gateway]
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download gateway binary
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-binary
+          path: /tmp
 
       - name: Run e2e tests
-        run: go test -tags e2e -count=1 -timeout 3m ./e2e/...
+        run: |
+          chmod +x /tmp/gateway
+          go test -tags e2e -count=1 -timeout 3m ./e2e/...
         env:
           E2E_GATEWAY_BIN: /tmp/gateway
 
   e2e-ollama:
     name: E2E tests (Ollama)
-    needs: changes
+    needs: [changes, build-gateway]
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -111,8 +153,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build gateway binary
-        run: go build -o /tmp/gateway ./cmd/gateway
+      - name: Download gateway binary
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-binary
+          path: /tmp
 
       - name: Cache Ollama model weights
         uses: actions/cache@v4
@@ -120,6 +165,25 @@ jobs:
           path: ~/.ollama/models
           # Bump the suffix to force a fresh pull when you change the model.
           key: ollama-${{ runner.os }}-smollm2-135m-v1
+
+      # Cache the Ollama image as a saved tarball. ~300 MB compressed, but it
+      # avoids the Docker Hub round-trip on every run and decouples CI from
+      # rate limits / hub outages.
+      - name: Cache Ollama Docker image
+        id: ollama-image-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ollama-image.tar
+          key: docker-ollama-0.5.7
+
+      - name: Load or pull Ollama image
+        run: |
+          if [ -f /tmp/ollama-image.tar ]; then
+            docker load -i /tmp/ollama-image.tar
+          else
+            docker pull ollama/ollama:0.5.7
+            docker save -o /tmp/ollama-image.tar ollama/ollama:0.5.7
+          fi
 
       - name: Start Ollama
         run: |
@@ -136,7 +200,9 @@ jobs:
       - name: Run e2e Ollama tests
         # -run TestOllama: fake-upstream (TestGateway*) tests are already covered
         # by the e2e job running in parallel.
-        run: go test -tags 'e2e ollama' -count=1 -run TestOllama -timeout 10m ./e2e/...
+        run: |
+          chmod +x /tmp/gateway
+          go test -tags 'e2e ollama' -count=1 -run TestOllama -timeout 10m ./e2e/...
         env:
           E2E_GATEWAY_BIN: /tmp/gateway
           OLLAMA_HOST: http://127.0.0.1:11434
@@ -167,6 +233,16 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      # Cache Playwright browser binaries (~150 MB) keyed on bun.lock so the
+      # cache invalidates whenever @playwright/test is bumped.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: Install Playwright browsers
         run: bunx playwright install chromium --with-deps
