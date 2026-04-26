@@ -3,6 +3,7 @@ import { getRecentTraces, getRuntimeStats, getTrace } from "../../lib/api";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { RuntimeStatsResponse, TraceListItem, TraceResponse, TraceSpanRecord } from "../../types/runtime";
 import { Dot } from "../shared/ui";
+import { ConnectYourClient } from "./ConnectYourClient";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -148,8 +149,16 @@ export function ObservabilityView({ state }: Props) {
     ? computeSpans(traceDetail.spans)
     : { spans: [], totalMs: 0 };
 
+  // Gateway URL: derive from the page origin (UI is served from the same
+  // host:port as the API now thanks to the embed). This keeps the snippets
+  // accurate whether the operator visits via 127.0.0.1, localhost, or a
+  // reverse-proxy hostname.
+  const gatewayURL = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8080";
+
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
+
+      <ConnectYourClient gatewayURL={gatewayURL} token={state.authToken} />
 
       {/* Runtime stats */}
       {stats && (

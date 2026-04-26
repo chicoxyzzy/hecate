@@ -5,6 +5,7 @@ import { ObservabilityView } from "../features/overview/ObservabilityView";
 import { ChatView } from "../features/playground/ChatView";
 import { ProvidersView } from "../features/providers/ProvidersView";
 import { TasksView } from "../features/runs/TasksView";
+import { InlineError } from "../features/shared/ui";
 import type { RuntimeConsoleViewModel } from "./useRuntimeConsole";
 
 export type WorkspaceID = "overview" | "runs" | "playground" | "providers" | "admin";
@@ -59,7 +60,10 @@ export function getAvailableWorkspaces(isAdmin: boolean): WorkspaceDefinition[] 
 // auto-generates an admin bearer token on first start and prints it to the
 // server logs; the operator pastes it here once and we persist it in
 // localStorage. We render this gate whenever no token is set so the rest of
-// the console doesn't 401-spin behind the scenes.
+// the console doesn't 401-spin behind the scenes. Visually it mirrors the
+// rest of the console: same .card, .input, .btn-primary classes, same
+// monospace section labels, and the shared InlineError for the validation
+// message.
 function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
@@ -67,23 +71,86 @@ function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
     e.preventDefault();
     const trimmed = value.trim();
     if (!trimmed) {
-      setError("paste the token from your gateway logs to continue.");
+      setError("Paste the token from your gateway logs to continue.");
       return;
     }
     onSubmit(trimmed);
   };
   return (
-    <div className="hecate-shell" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <form onSubmit={handleSubmit} style={{ maxWidth: "32rem", padding: "2rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <h1 style={{ fontSize: "1.25rem", margin: 0 }}>Hecate — admin token required</h1>
-        <p style={{ color: "var(--mid, #6b7280)", margin: 0, lineHeight: 1.5 }}>
-          The gateway auto-generated an admin bearer token on first start.
+    <div className="hecate-shell" style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+    }}>
+      <form
+        onSubmit={handleSubmit}
+        className="card"
+        style={{
+          width: "100%",
+          maxWidth: "32rem",
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div style={{
+          fontSize: 11,
+          color: "var(--t3)",
+          fontFamily: "var(--font-mono)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}>
+          Authentication
+        </div>
+
+        <h1 style={{
+          fontSize: 18,
+          fontWeight: 600,
+          color: "var(--t0)",
+          margin: 0,
+          lineHeight: 1.3,
+        }}>
+          Admin token required
+        </h1>
+
+        <p style={{
+          color: "var(--t2)",
+          fontSize: 13,
+          lineHeight: 1.55,
+          margin: 0,
+        }}>
+          The gateway auto-generates an admin bearer token on first start.
           Find it in the server logs (look for the
-          {" "}<code>Hecate first-run setup</code>{" "}
-          banner, or read it from the bootstrap file). Paste it below; we'll
-          remember it locally so you only do this once per browser.
+          {" "}<code style={{
+            background: "var(--bg3)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            padding: "1px 5px",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            color: "var(--t1)",
+          }}>Hecate first-run setup</code>{" "}
+          banner) or read it from the bootstrap file. We'll remember it in
+          this browser so you only paste it once.
         </p>
+
+        <label
+          htmlFor="hecate-admin-token"
+          style={{
+            fontSize: 11,
+            color: "var(--t3)",
+            fontFamily: "var(--font-mono)",
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          Admin bearer token
+        </label>
         <input
+          id="hecate-admin-token"
+          className="input"
           aria-label="Admin bearer token"
           autoFocus
           spellCheck={false}
@@ -91,11 +158,19 @@ function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
           type="password"
           value={value}
           onChange={(e) => { setValue(e.target.value); setError(""); }}
-          placeholder="paste token here"
-          style={{ padding: "0.6rem 0.8rem", fontFamily: "var(--font-mono, monospace)", fontSize: "0.95rem" }}
+          placeholder="Paste token here"
+          style={{ fontFamily: "var(--font-mono)" }}
         />
-        {error && <span style={{ color: "var(--red, #b91c1c)", fontSize: "0.85rem" }}>{error}</span>}
-        <button type="submit" style={{ padding: "0.6rem 1rem", cursor: "pointer" }}>Connect</button>
+
+        {error && <InlineError message={error} />}
+
+        <button
+          type="submit"
+          className="btn btn-primary"
+          style={{ alignSelf: "flex-start" }}
+        >
+          Connect
+        </button>
       </form>
     </div>
   );
