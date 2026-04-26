@@ -90,9 +90,16 @@ func gatewayServer(t *testing.T, extraEnv ...string) string {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	baseURL := "http://" + addr
 
+	// Pin both bootstrap-managed values via env so the gateway doesn't
+	// generate or persist them. GATEWAY_AUTH_TOKEN supplies the admin
+	// bearer that the existing "Bearer test-token" headers expect.
+	// GATEWAY_DATA_DIR points at a per-test temp dir so any state file the
+	// runtime touches (bootstrap, control plane) lands under the test's
+	// own filesystem and gets cleaned up automatically.
 	env := append(os.Environ(),
 		"GATEWAY_ADDRESS="+addr,
-		"GATEWAY_SINGLE_USER_ADMIN_MODE=true",
+		"GATEWAY_AUTH_TOKEN=test-token",
+		"GATEWAY_DATA_DIR="+t.TempDir(),
 	)
 	env = append(env, extraEnv...)
 

@@ -24,18 +24,21 @@ func (p Principal) IsAdmin() bool {
 }
 
 type Authenticator struct {
-	adminToken          string
-	singleUserAdminMode bool
-	store               controlplane.Store
-	enabled             bool
+	adminToken string
+	store      controlplane.Store
+	enabled    bool
 }
 
+// NewAuthenticator wires the authenticator. Auth is "enabled" iff at least
+// one credential source is configured (an admin token or an API-key store);
+// the gateway boot path always supplies the admin token now (auto-generated
+// in bootstrap), so the only path where Enabled() returns false is in tests
+// that pass a bare ServerConfig with no store.
 func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authenticator {
 	return &Authenticator{
-		adminToken:          cfg.AuthToken,
-		singleUserAdminMode: cfg.SingleUserAdminMode,
-		store:               store,
-		enabled:             cfg.AuthToken != "" || store != nil,
+		adminToken: cfg.AuthToken,
+		store:      store,
+		enabled:    cfg.AuthToken != "" || store != nil,
 	}
 }
 
@@ -47,9 +50,6 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 	if a == nil {
 		return Principal{Role: "anonymous"}, true
 	}
-	if a.singleUserAdminMode {
-		return singleUserAdminPrincipal(), true
-	}
 	if !a.enabled {
 		return Principal{Role: "anonymous"}, true
 	}
@@ -60,11 +60,11 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 	}
 
 	if a.adminToken != "" && token == a.adminToken {
-		return a.normalizePrincipal(Principal{
+		return Principal{
 			Name:   "admin",
 			Role:   "admin",
 			Source: "admin_token",
-		}), true
+		}, true
 	}
 
 	if a.store != nil {
@@ -77,7 +77,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 				if key.Tenant != "" && !tenantEnabled(state.Tenants, key.Tenant) {
 					return Principal{}, false
 				}
-				principal := Principal{
+				return Principal{
 					Name:             key.Name,
 					Role:             key.Role,
 					Tenant:           key.Tenant,
@@ -85,8 +85,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 					KeyID:            key.ID,
 					AllowedProviders: mergedAllowlist(key.AllowedProviders, tenantAllowProviders(state.Tenants, key.Tenant)),
 					AllowedModels:    mergedAllowlist(key.AllowedModels, tenantAllowModels(state.Tenants, key.Tenant)),
-				}
-				return a.normalizePrincipal(principal), true
+				}, true
 			}
 		}
 	}
@@ -107,12 +106,6 @@ func (a *Authenticator) Introspect(r *http.Request) Introspection {
 				Role:   "anonymous",
 				Source: "auth_disabled",
 			},
-		}
-	}
-	if a.singleUserAdminMode {
-		return Introspection{
-			Authenticated: true,
-			Principal:     singleUserAdminPrincipal(),
 		}
 	}
 	if !a.enabled {
@@ -169,28 +162,6 @@ func requestToken(r *http.Request) string {
 		return token
 	}
 	return strings.TrimSpace(r.Header.Get("x-api-key"))
-}
-
-func singleUserAdminPrincipal() Principal {
-	return Principal{
-		Name:   "single-user",
-		Role:   "admin",
-		Source: "single_user_admin_mode",
-	}
-}
-
-func (a *Authenticator) normalizePrincipal(principal Principal) Principal {
-	if !a.singleUserAdminMode {
-		return principal
-	}
-	if principal.IsAdmin() {
-		return principal
-	}
-	if principal.Source == "control_plane_api_key" {
-		principal.Role = "admin"
-		principal.Source = "single_user_admin_mode"
-	}
-	return principal
 }
 
 func bearerToken(header string) string {

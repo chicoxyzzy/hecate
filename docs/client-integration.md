@@ -23,9 +23,8 @@ Hecate accepts either:
 
 Token sources:
 
-- `GATEWAY_AUTH_TOKEN` (admin token)
-- control-plane API keys (recommended for non-admin client access)
-- with `GATEWAY_SINGLE_USER_ADMIN_MODE=true`, requests are treated as admin (single-user local mode)
+- `GATEWAY_AUTH_TOKEN` — admin token. Auto-generated on first run when unset; printed once to stderr inside a `Hecate first-run setup` banner and persisted in `${GATEWAY_DATA_DIR}/hecate.bootstrap.json` (mode 0600). Read it back at any time with `jq -r .admin_token "${GATEWAY_DATA_DIR}/hecate.bootstrap.json"`.
+- Control-plane API keys — recommended for non-admin client access. Create them through the operator UI's Access tab once you've signed in with the admin token.
 
 If both headers are present, Hecate uses `Authorization` first.
 

@@ -63,11 +63,14 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 # only file we add is the gateway itself.
 COPY --from=go-builder /out/gateway /usr/local/bin/gateway
 
-# Default to single-user admin mode so a `docker run` with no extra
-# configuration boots into a fully usable, login-less control plane. Real
-# deployments override this through their compose / k8s env block.
-ENV GATEWAY_SINGLE_USER_ADMIN_MODE=true \
-    GATEWAY_ADDRESS=:8080
+# /data holds the auto-generated bootstrap secrets (control-plane encryption
+# key + admin bearer token) and any file-backed control-plane state. It must
+# be writable by the nonroot user; compose mounts a volume here so secrets
+# survive container restarts. distroless has no `mkdir`, but VOLUME tells
+# Docker to create the path with the container user as owner at first run.
+ENV GATEWAY_ADDRESS=:8080 \
+    GATEWAY_DATA_DIR=/data
+VOLUME ["/data"]
 
 EXPOSE 8080
 USER nonroot:nonroot

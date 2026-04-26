@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { AdminView } from "../features/admin/AdminView";
 import { ObservabilityView } from "../features/overview/ObservabilityView";
@@ -55,6 +55,52 @@ export function getAvailableWorkspaces(isAdmin: boolean): WorkspaceDefinition[] 
   return isAdmin ? [...baseWorkspaces, adminWorkspace] : baseWorkspaces;
 }
 
+// TokenGate is the first-run / forgotten-token landing screen. The gateway
+// auto-generates an admin bearer token on first start and prints it to the
+// server logs; the operator pastes it here once and we persist it in
+// localStorage. We render this gate whenever no token is set so the rest of
+// the console doesn't 401-spin behind the scenes.
+function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setError("paste the token from your gateway logs to continue.");
+      return;
+    }
+    onSubmit(trimmed);
+  };
+  return (
+    <div className="hecate-shell" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <form onSubmit={handleSubmit} style={{ maxWidth: "32rem", padding: "2rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <h1 style={{ fontSize: "1.25rem", margin: 0 }}>Hecate — admin token required</h1>
+        <p style={{ color: "var(--mid, #6b7280)", margin: 0, lineHeight: 1.5 }}>
+          The gateway auto-generated an admin bearer token on first start.
+          Find it in the server logs (look for the
+          {" "}<code>Hecate first-run setup</code>{" "}
+          banner, or read it from the bootstrap file). Paste it below; we'll
+          remember it locally so you only do this once per browser.
+        </p>
+        <input
+          aria-label="Admin bearer token"
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+          type="password"
+          value={value}
+          onChange={(e) => { setValue(e.target.value); setError(""); }}
+          placeholder="paste token here"
+          style={{ padding: "0.6rem 0.8rem", fontFamily: "var(--font-mono, monospace)", fontSize: "0.95rem" }}
+        />
+        {error && <span style={{ color: "var(--red, #b91c1c)", fontSize: "0.85rem" }}>{error}</span>}
+        <button type="submit" style={{ padding: "0.6rem 1rem", cursor: "pointer" }}>Connect</button>
+      </form>
+    </div>
+  );
+}
+
 export function ConsoleShell({
   activeWorkspace,
   onSelectWorkspace,
@@ -66,6 +112,13 @@ export function ConsoleShell({
   state: ConsoleState;
   actions: ConsoleActions;
 }) {
+  // Block the rest of the console behind the token gate when no admin token
+  // is set OR when the saved token was rejected on the most recent attempt.
+  // The gateway always requires a token now, so an empty token == new user.
+  if (!state.authToken) {
+    return <TokenGate onSubmit={actions.setAuthToken} />;
+  }
+
   const workspaces = getAvailableWorkspaces(state.session.isAdmin);
 
   useEffect(() => {

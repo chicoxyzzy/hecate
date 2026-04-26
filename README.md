@@ -91,9 +91,35 @@ docker compose up
 open http://127.0.0.1:8080
 ```
 
-The gateway and operator UI both come up on port 8080. Configure providers
-through the UI, or by creating a `.env` file before `docker compose up`
-(the compose stack picks it up automatically).
+On the first run, the gateway auto-generates an admin bearer token and
+prints it to the container logs inside a banner like:
+
+```
+============================================================
+  Hecate first-run setup — admin bearer token generated.
+
+    7f2a91b... (truncated)
+
+  Saved to /data/hecate.bootstrap.json (mode 0600).
+============================================================
+```
+
+Copy the token from the logs (`docker compose logs gateway`), open the UI,
+and paste it into the prompt. The browser remembers it in localStorage;
+subsequent visits go straight to the dashboard. If you scroll past the
+banner, the token also lives in the bootstrap file on the `hecate-data`
+volume — the gateway image is distroless, so use `docker compose cp` to
+read it out without a shell:
+
+```bash
+docker compose cp gateway:/data/hecate.bootstrap.json - | jq -r .admin_token
+```
+
+Restarts of the same volume reuse the same token.
+
+Configure providers through the UI once the token is in, or by creating a
+`.env` file before `docker compose up` (the compose stack picks it up
+automatically).
 
 Optional services live behind profiles:
 
@@ -180,9 +206,9 @@ Default local base URLs:
 
 Auth supports:
 
-- admin bearer token
+- admin bearer token (auto-generated on first run when `GATEWAY_AUTH_TOKEN`
+  is unset, persisted to the bootstrap file, printed once to stderr)
 - persisted API keys from the control plane
-- optional single-user admin mode (`GATEWAY_SINGLE_USER_ADMIN_MODE=true`) that treats requests as admin for tokenless local development
 
 Control plane supports:
 
@@ -269,7 +295,8 @@ Runtime and queue knobs commonly adjusted for agent-task workflows:
 - `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
 - `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
 - `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>`
-- `GATEWAY_SINGLE_USER_ADMIN_MODE=true|false`
+- `GATEWAY_DATA_DIR=<path>` — where the auto-generated bootstrap file lives
+- `GATEWAY_AUTH_TOKEN=<token>` — override the auto-generated admin token
 
 Use `.env.example` as the baseline. For the full env surface, see
 `internal/config/config.go`.

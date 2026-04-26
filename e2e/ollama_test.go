@@ -80,7 +80,6 @@ func TestMain(m *testing.M) {
 		"GATEWAY_OTEL_METRICS_ENABLED=true",
 		"GATEWAY_OTEL_METRICS_ENDPOINT=http://"+suiteOTLP.addr(),
 		"GATEWAY_OTEL_METRICS_INTERVAL=2s",
-		"GATEWAY_SINGLE_USER_ADMIN_MODE=true",
 	)
 	if err != nil {
 		log.Fatalf("start gateway: %v", err)
@@ -420,10 +419,12 @@ func (s *otlpSink) waitForMetric(substr string, timeout time.Duration) bool {
 
 // ─── gateway process lifecycle (TestMain-scoped, no *testing.T) ──────────────
 
-// startGatewayProcess builds the gateway binary once, starts it with the given
-// extra env vars plus GATEWAY_SINGLE_USER_ADMIN_MODE=true, waits for /healthz,
-// and returns the base URL.  The process is intentionally not tracked for
-// cleanup: it is killed by the OS when the test binary exits.
+// startGatewayProcess builds the gateway binary once, starts it with the
+// given extra env vars plus a fixed admin token (so existing "Bearer
+// test-token" headers in tests authenticate) and a per-process temp data
+// dir for the bootstrap file. Waits for /healthz, returns the base URL.
+// The process is intentionally not tracked for cleanup: it is killed by
+// the OS when the test binary exits.
 func startGatewayProcess(extraEnv ...string) (string, error) {
 	bin, err := buildGatewayBin()
 	if err != nil {
@@ -438,9 +439,18 @@ func startGatewayProcess(extraEnv ...string) (string, error) {
 	ln.Close()
 	baseURL := "http://" + addr
 
+	// See gateway_test.go for the auth/env rationale: explicit token + a
+	// temp data dir so the bootstrap file lands somewhere ephemeral. We use
+	// MkdirTemp here (not t.TempDir) because this helper is called from
+	// TestMain where no *testing.T is in scope.
+	dataDir, err := os.MkdirTemp("", "hecate-e2e-data-*")
+	if err != nil {
+		return "", fmt.Errorf("mkdir temp data dir: %w", err)
+	}
 	env := append(os.Environ(),
 		"GATEWAY_ADDRESS="+addr,
-		"GATEWAY_SINGLE_USER_ADMIN_MODE=true",
+		"GATEWAY_AUTH_TOKEN=test-token",
+		"GATEWAY_DATA_DIR="+dataDir,
 	)
 	env = append(env, extraEnv...)
 

@@ -19,11 +19,6 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Single-user admin mode means no token is required for control-plane
-      # endpoints. Safe for `docker compose up` on a developer laptop;
-      # override with GATEWAY_SINGLE_USER_ADMIN_MODE=false for shared
-      # environments.
-      GATEWAY_SINGLE_USER_ADMIN_MODE: "true"
       # When the ollama profile is active, the gateway reaches it via the
       # service network. With the profile inactive these vars are still set
       # but harmless — Ollama upstream calls only happen when a request
@@ -34,6 +29,13 @@ services:
       # `docker compose up`. Compose 2.24+ understands this shape.
       - path: .env
         required: false
+    volumes:
+      # Persist the bootstrap file (auto-generated encryption key + admin
+      # bearer token) and any file-backed control-plane state across
+      # restarts. Without this, every `docker compose up` would generate a
+      # fresh admin token and invalidate the one a user already pasted into
+      # the UI.
+      - hecate-data:/data
     restart: unless-stopped
 
   postgres:
@@ -66,5 +68,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  hecate-data:
   postgres-data:
   ollama-models:

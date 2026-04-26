@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/hecate/agent-runtime/internal/api"
 	"github.com/hecate/agent-runtime/internal/billing"
+	"github.com/hecate/agent-runtime/internal/bootstrap"
 	"github.com/hecate/agent-runtime/internal/cache"
 	"github.com/hecate/agent-runtime/internal/catalog"
 	"github.com/hecate/agent-runtime/internal/chatstate"
@@ -34,6 +36,24 @@ import (
 
 func main() {
 	cfg := config.LoadFromEnv()
+
+	// Resolve the auto-generated bootstrap secrets (control-plane encryption
+	// key and admin bearer token). Env values win when set; otherwise the
+	// values are loaded from the bootstrap file under DataDir, generating
+	// fresh ones on first run. We do this before logger init so we can
+	// loud-log the admin token through the same structured logger that the
+	// rest of startup uses.
+	bootstrapPath := cfg.Server.BootstrapFile
+	if bootstrapPath == "" {
+		bootstrapPath = filepath.Join(cfg.Server.DataDir, "hecate.bootstrap.json")
+	}
+	boot, printAdminToken, err := bootstrap.Resolve(bootstrapPath, cfg.Server.ControlPlaneSecretKey, cfg.Server.AuthToken)
+	if err != nil {
+		slog.Error("bootstrap secrets init failed", slog.String("path", bootstrapPath), slog.Any("error", err))
+		os.Exit(1)
+	}
+	cfg.Server.ControlPlaneSecretKey = boot.ControlPlaneSecretKey
+	cfg.Server.AuthToken = boot.AdminToken
 
 	otelResource, err := telemetry.BuildResource(context.Background(), telemetry.ResourceOptions{
 		ServiceName:       cfg.OTel.ServiceName,
@@ -197,6 +217,24 @@ func main() {
 	}
 
 	go func() {
+		// Loud-print the admin token on first run. Subsequent runs (token
+		// loaded from disk) skip this — operators read it from the
+		// bootstrap file. We bypass the structured logger here so the token
+		// shows up on a plain TTY/`docker compose logs` even when the
+		// JSON-shaped logger output would otherwise hide it from skimming.
+		if printAdminToken {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "============================================================")
+			fmt.Fprintln(os.Stderr, "  Hecate first-run setup — admin bearer token generated.")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "    "+cfg.Server.AuthToken)
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "  Saved to "+bootstrapPath+" (mode 0600).")
+			fmt.Fprintln(os.Stderr, "  Use it as a Bearer token on /admin endpoints, or paste it")
+			fmt.Fprintln(os.Stderr, "  into the UI on first load.")
+			fmt.Fprintln(os.Stderr, "============================================================")
+			fmt.Fprintln(os.Stderr, "")
+		}
 		logger.Info("gateway starting",
 			slog.String("addr", cfg.Server.Address),
 			slog.String("default_model", cfg.Router.DefaultModel),
