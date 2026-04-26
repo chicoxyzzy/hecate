@@ -148,6 +148,7 @@ type CacheConfig struct {
 
 type RetentionConfig struct {
 	Enabled        bool
+	HistoryBackend string
 	Interval       time.Duration
 	TraceSnapshots RetentionPolicy
 	BudgetEvents   RetentionPolicy
@@ -359,6 +360,7 @@ func LoadFromEnv() Config {
 		},
 		Retention: RetentionConfig{
 			Enabled:        getEnvBool("GATEWAY_RETENTION_ENABLED", false),
+			HistoryBackend: getEnv("GATEWAY_RETENTION_HISTORY_BACKEND", "memory"),
 			Interval:       getEnvDuration("GATEWAY_RETENTION_INTERVAL", 15*time.Minute),
 			TraceSnapshots: loadRetentionPolicyFromEnv("GATEWAY_RETENTION_TRACES_", 24*time.Hour, 2000),
 			BudgetEvents:   loadRetentionPolicyFromEnv("GATEWAY_RETENTION_BUDGET_EVENTS_", 30*24*time.Hour, 200),

@@ -413,7 +413,7 @@ func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *sto
 }
 
 func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) retention.HistoryStore {
-	switch cfg.Server.ControlPlaneBackend {
+	switch strings.ToLower(strings.TrimSpace(cfg.Retention.HistoryBackend)) {
 	case "redis":
 		client := storage.NewRedisClient(storage.RedisConfig{
 			Address:  cfg.Redis.Address,
@@ -576,7 +576,8 @@ func postgresRequired(cfg config.Config) bool {
 		cfg.Server.ControlPlaneBackend == "postgres" ||
 		cfg.Chat.SessionsBackend == "postgres" ||
 		cfg.Server.TasksBackend == "postgres" ||
-		cfg.Server.TaskQueueBackend == "postgres"
+		cfg.Server.TaskQueueBackend == "postgres" ||
+		cfg.Retention.HistoryBackend == "postgres"
 }
 
 func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {
