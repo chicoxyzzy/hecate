@@ -83,7 +83,12 @@ func (s *PostgresHistoryStore) ListRuns(ctx context.Context, limit int) ([]Histo
 	}
 	defer rows.Close()
 
-	records := make([]HistoryRecord, 0, min(limit, maxHistoryListLimit))
+	// Pre-allocate to the constant cap rather than `limit` so the user-controlled
+	// value never reaches make()'s size argument. CodeQL's taint analysis flags
+	// any flow from request input into make() — including via min(limit, const) —
+	// so feeding it the constant directly is the safe form. The actual row count
+	// is still bounded by the SQL LIMIT clause.
+	records := make([]HistoryRecord, 0, maxHistoryListLimit)
 	for rows.Next() {
 		var record HistoryRecord
 		var resultsJSON []byte

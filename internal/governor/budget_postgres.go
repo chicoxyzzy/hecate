@@ -208,7 +208,11 @@ func (s *PostgresBudgetStore) ListEvents(ctx context.Context, key string, limit 
 	}
 	defer rows.Close()
 
-	events := make([]BudgetEvent, 0, min(limit, maxBudgetEventListLimit))
+	// Pre-allocate to the constant cap rather than `limit` so the user-controlled
+	// value never reaches make()'s size argument. CodeQL's taint analysis treats
+	// min(limit, const) as still tainted, so we hand it the constant directly.
+	// The actual row count is still bounded by the SQL LIMIT clause.
+	events := make([]BudgetEvent, 0, maxBudgetEventListLimit)
 	for rows.Next() {
 		var event BudgetEvent
 		if err := rows.Scan(
@@ -275,7 +279,7 @@ func (s *PostgresBudgetStore) ListRecentEvents(ctx context.Context, limit int) (
 	}
 	defer rows.Close()
 
-	events := make([]BudgetEvent, 0, min(limit, maxBudgetEventListLimit))
+	events := make([]BudgetEvent, 0, maxBudgetEventListLimit)
 	for rows.Next() {
 		var event BudgetEvent
 		if err := rows.Scan(
