@@ -749,7 +749,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[OpenAIModelsResponse](client, http.MethodGet, "/v1/models", "")
 	if response.Object != "list" {
@@ -823,7 +823,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[ProviderStatusResponse](client, http.MethodGet, "/admin/providers", "")
 	if response.Object != "provider_status" {
@@ -855,7 +855,7 @@ func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, nil, nil, nil, nil))
 	client := newAPITestClient(t, handler)
 	response := mustRequestJSON[ProviderPresetResponse](client, http.MethodGet, "/v1/provider-presets", "")
 	if response.Object != "provider_presets" {
@@ -1185,7 +1185,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 		}, defaultPricebookForTests()),
 		Tracer: profiler.NewInMemoryTracer(nil),
 	})
-	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore, nil))
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, cpStore, nil, nil))
 	tenantClient := newAPITestClient(t, handler).withBearerToken("tenant-secret")
 	response := mustRequestJSON[OpenAIModelsResponse](tenantClient, http.MethodGet, "/v1/models", "")
 	if len(response.Data) != 1 {
@@ -3102,7 +3102,7 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 	})
 
 	cfg.Governor = governorCfg
-	handler := NewHandler(cfg, logger, service, cpStore, nil)
+	handler := NewHandler(cfg, logger, service, cpStore, nil, nil)
 	return NewServer(logger, handler)
 }
 
@@ -3184,7 +3184,7 @@ func newBudgetTestHandlerWithConfig(logger *slog.Logger, cfg config.Config, budg
 		ChatSessions: chatstate.NewMemoryStore(),
 	})
 
-	handler := NewHandler(cfg, logger, service, cpStore, nil)
+	handler := NewHandler(cfg, logger, service, cpStore, nil, nil)
 	return NewServer(logger, handler)
 }
 

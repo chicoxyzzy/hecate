@@ -25,12 +25,14 @@ import (
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/governor"
+	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/retention"
 	"github.com/hecate/agent-runtime/internal/router"
 	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/storage"
+	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
@@ -209,7 +211,9 @@ func main() {
 	defer retentionCancel()
 	go retentionManager.RunLoop(retentionCtx)
 
-	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, postgresClient, providerRuntime)
+	taskStore := buildTaskStore(cfg, logger, postgresClient)
+	taskQueue := buildTaskQueue(cfg, logger, postgresClient)
+	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, taskStore, taskQueue, providerRuntime)
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
 		Handler:           api.NewServer(logger, handler),
@@ -531,6 +535,40 @@ func findProviderConfig(cfg config.ProvidersConfig, name string) (config.OpenAIC
 		}
 	}
 	return config.OpenAICompatibleProviderConfig{}, false
+}
+
+func buildTaskStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) taskstate.Store {
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.TasksBackend)) {
+	case "postgres":
+		store, err := taskstate.NewPostgresStore(context.Background(), postgresClient)
+		if err != nil {
+			// Hard-fail: a memory-backed run after `BACKEND=postgres` would
+			// silently lose every task on the first restart.
+			logger.Error("task store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	default:
+		return taskstate.NewMemoryStore()
+	}
+}
+
+func buildTaskQueue(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) orchestrator.RunQueue {
+	lease := time.Duration(cfg.Server.TaskQueueLeaseSeconds) * time.Second
+	if lease <= 0 {
+		lease = 30 * time.Second
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.TaskQueueBackend)) {
+	case "postgres":
+		queue, err := orchestrator.NewPostgresRunQueue(context.Background(), postgresClient, lease)
+		if err != nil {
+			logger.Error("task queue init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return queue
+	default:
+		return orchestrator.NewMemoryRunQueue(cfg.Server.TaskQueueBuffer, lease)
+	}
 }
 
 func buildBudgetStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) governor.BudgetStore {

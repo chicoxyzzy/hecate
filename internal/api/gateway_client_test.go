@@ -1010,7 +1010,7 @@ func newGatewayServerWithRealProvider(t *testing.T, upstreamURL, providerName, d
 	cfg := config.Config{
 		Router: config.RouterConfig{DefaultModel: defaultModel},
 	}
-	return httptest.NewServer(NewServer(logger, NewHandler(cfg, logger, svc, nil, nil)))
+	return httptest.NewServer(NewServer(logger, NewHandler(cfg, logger, svc, nil, nil, nil)))
 }
 
 // TestGatewayViaRealProviderNonStreaming wires a real OpenAICompatibleProvider

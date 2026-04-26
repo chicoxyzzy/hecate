@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/ratelimit"
-	"github.com/hecate/agent-runtime/internal/storage"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 )
@@ -44,12 +42,19 @@ type ProviderRuntime interface {
 	Delete(ctx context.Context, id string) error
 }
 
-func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store, postgresClient *storage.PostgresClient, providerRuntimes ...ProviderRuntime) *Handler {
+// NewHandler wires the api.Handler from already-constructed dependencies.
+// Storage backends (taskStore, taskQueue) are built by cmd/gateway/main.go
+// alongside every other backend the gateway uses, so all dispatch lives in
+// one place. taskQueue may be nil — the runner falls back to its default
+// in-process queue, which is what the test fixtures rely on.
+func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service, cpStore controlplane.Store, taskStore taskstate.Store, taskQueue orchestrator.RunQueue, providerRuntimes ...ProviderRuntime) *Handler {
 	var providerRuntime ProviderRuntime
 	if len(providerRuntimes) > 0 {
 		providerRuntime = providerRuntimes[0]
 	}
-	taskStore := buildTaskStore(cfg, logger, postgresClient)
+	if taskStore == nil {
+		taskStore = taskstate.NewMemoryStore()
+	}
 
 	var rl *ratelimit.Store
 	if cfg.Server.RateLimit.Enabled {
@@ -74,8 +79,8 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		EnableAgentExecutor:    cfg.Server.TaskEnableAgentExecutor,
 		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
 	})
-	if queue := buildTaskQueue(cfg, logger, postgresClient); queue != nil {
-		runner.SetQueue(queue)
+	if taskQueue != nil {
+		runner.SetQueue(taskQueue)
 	}
 	runner.SetMetrics(telemetry.NewOrchestratorMetrics())
 	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
@@ -92,45 +97,6 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		taskStore:       taskStore,
 		taskRunner:      runner,
 		rateLimiter:     rl,
-	}
-}
-
-func buildTaskStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) taskstate.Store {
-	switch strings.ToLower(strings.TrimSpace(cfg.Server.TasksBackend)) {
-	case "postgres":
-		store, err := taskstate.NewPostgresStore(context.Background(), postgresClient)
-		if err != nil {
-			// Hard-fail rather than silently fall back to memory: if the
-			// operator asked for postgres they want persistence, and a
-			// memory-backed run after `BACKEND=postgres` would lose every
-			// task on the first restart without anyone noticing. Match the
-			// pattern used by every other store builder in cmd/gateway.
-			logger.Error("task store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
-	default:
-		return taskstate.NewMemoryStore()
-	}
-}
-
-func buildTaskQueue(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) orchestrator.RunQueue {
-	lease := time.Duration(cfg.Server.TaskQueueLeaseSeconds) * time.Second
-	if lease <= 0 {
-		lease = 30 * time.Second
-	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Server.TaskQueueBackend)) {
-	case "postgres":
-		queue, err := orchestrator.NewPostgresRunQueue(context.Background(), postgresClient, lease)
-		if err != nil {
-			// See buildTaskStore — a memory-queue masquerading as the
-			// requested postgres queue means runs vanish across restarts.
-			logger.Error("task queue init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return queue
-	default:
-		return orchestrator.NewMemoryRunQueue(cfg.Server.TaskQueueBuffer, lease)
 	}
 }
 
