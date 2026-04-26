@@ -2,7 +2,15 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race coverage ui-coverage run dev ui-install ui-dev ui-build ui-test ui-test-e2e
+.PHONY: test test-race coverage ui-coverage build run dev ui-install ui-dev ui-build ui-test ui-test-e2e
+
+# build produces a single self-contained gateway binary with the UI bundle
+# embedded. The UI is built first so //go:embed picks up the real assets;
+# without this step the binary still runs but serves a "UI not built"
+# fallback page instead of the React app.
+build: ui-build
+	mkdir -p "$(GOCACHE_DIR)"
+	GOCACHE="$(GOCACHE_DIR)" go build -o gateway ./cmd/gateway
 
 test:
 	mkdir -p "$(GOCACHE_DIR)"

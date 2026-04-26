@@ -5,7 +5,8 @@
 node_modules/
 ui/node_modules/
 e2e/local-ollama-*.log
-ui/dist/
+ui/dist/*
+!ui/dist/.gitkeep
 ui/*.tsbuildinfo
 ui/test-results/
 ui/playwright-report/

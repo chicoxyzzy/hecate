@@ -106,15 +106,31 @@ jobs:
   build-gateway:
     name: Build gateway
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.workflow == 'true'
+    # Triggers on Go OR TypeScript changes because the gateway binary now
+    # embeds the built UI via //go:embed — a typescript-only change must
+    # produce a rebuilt binary so any embed regression is caught here.
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.typescript == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ui/package.json
+          cache: true
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install UI dependencies
+        run: bun install --frozen-lockfile
+        working-directory: ui
+
+      - name: Build UI bundle
+        run: bun run build
+        working-directory: ui
 
       - name: Build gateway binary
         run: go build -o gateway ./cmd/gateway

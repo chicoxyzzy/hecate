@@ -101,23 +101,29 @@ GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
 PROVIDER_OPENAI_API_KEY=your_api_key_here
 ```
 
-3. Run the gateway:
-
-```bash
-make dev
-```
-
-4. Run the UI in another shell:
+3. Build the gateway with the UI bundled in (single binary, single port):
 
 ```bash
 make ui-install
-make ui-dev
+make build
+./gateway
+```
+
+The gateway and the operator UI are now both served from
+`http://127.0.0.1:8080`.
+
+Alternatively, for live UI iteration with hot reload, run the gateway and
+the Vite dev server side by side:
+
+```bash
+make dev          # gateway on :8080 (no UI bundle hot-reloaded)
+make ui-dev       # Vite on :5173, proxying API calls to :8080
 ```
 
 Default addresses:
 
-- gateway: `http://127.0.0.1:8080`
-- UI: `http://127.0.0.1:5173`
+- gateway + bundled UI (production): `http://127.0.0.1:8080`
+- Vite dev server (UI hot reload): `http://127.0.0.1:5173`
 
 ## Provider Model
 

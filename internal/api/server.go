@@ -66,6 +66,12 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", handler.HandleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", handler.HandleMessages)
 
+	// Embedded UI catch-all. Go 1.22+ mux selects the most specific pattern
+	// first, so `GET /v1/...` etc. continue to route to their handlers above.
+	// Non-API paths fall through here and are served from ui/dist (or the
+	// fallback page when the UI bundle isn't embedded).
+	mux.Handle("GET /", staticUIHandler())
+
 	return Chain(
 		mux,
 		TraceContextMiddleware,
