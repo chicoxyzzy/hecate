@@ -10,3 +10,4 @@ ui/*.tsbuildinfo
 ui/test-results/
 ui/playwright-report/
 ui/coverage/
+coverage.out
