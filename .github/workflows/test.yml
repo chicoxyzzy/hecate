@@ -34,6 +34,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       typescript: ${{ steps.filter.outputs.typescript }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      docker: ${{ steps.filter.outputs.docker }}
     steps:
       - uses: actions/checkout@v6
 
@@ -47,6 +48,10 @@ jobs:
           filters: |
             workflow:
               - '.github/workflows/test.yml'
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'docker-compose.yml'
             go:
               - '**/*.go'
               - 'go.mod'
@@ -235,6 +240,35 @@ jobs:
         env:
           E2E_GATEWAY_BIN: /tmp/gateway
           OLLAMA_HOST: http://127.0.0.1:11434
+
+  docker-smoke:
+    name: Docker smoke
+    needs: changes
+    # Triggers on go/ts/dockerfile/compose changes — anything that could
+    # cause `docker compose up` to break in production. The smoke test
+    # rebuilds the image inside docker compose, so we don't depend on
+    # build-gateway's artifact.
+    if: |
+      needs.changes.outputs.go == 'true' ||
+      needs.changes.outputs.typescript == 'true' ||
+      needs.changes.outputs.docker == 'true' ||
+      needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Buildx + GHA cache means cold image builds (~30-60s) drop to a
+      # few seconds when the source layers haven't changed. Without it
+      # the smoke job would rebuild the full UI + Go binary every run.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Run docker smoke test
+        run: go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...
 
   typescript:
     name: TypeScript tests
