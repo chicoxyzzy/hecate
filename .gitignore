@@ -9,3 +9,4 @@ ui/dist/
 ui/*.tsbuildinfo
 ui/test-results/
 ui/playwright-report/
+ui/coverage/
