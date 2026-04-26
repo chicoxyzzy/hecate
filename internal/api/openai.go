@@ -445,7 +445,6 @@ type ControlPlaneResponse struct {
 
 type ControlPlaneResponseItem struct {
 	Backend     string                         `json:"backend"`
-	Path        string                         `json:"path,omitempty"`
 	Tenants     []ControlPlaneTenantItem       `json:"tenants"`
 	APIKeys     []ControlPlaneAPIKeyRecord     `json:"api_keys"`
 	Providers   []ControlPlaneProviderRecord   `json:"providers"`

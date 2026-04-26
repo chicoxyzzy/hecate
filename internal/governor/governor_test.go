@@ -258,10 +258,7 @@ func TestStaticGovernorRoutePolicyDenyByTenantAndProviderKind(t *testing.T) {
 func TestControlPlaneGovernorUsesPersistedPolicyRule(t *testing.T) {
 	t.Parallel()
 
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	if _, err := store.UpsertPolicyRule(context.Background(), config.PolicyRuleConfig{
 		ID:            "deny-cloud",
 		Action:        "deny",
@@ -272,7 +269,7 @@ func TestControlPlaneGovernorUsesPersistedPolicyRule(t *testing.T) {
 	}
 
 	gov := NewControlPlaneGovernor(config.GovernorConfig{}, NewMemoryBudgetStore(), NewMemoryBudgetStore(), store)
-	err = gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
+	err := gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
 		Provider: "openai",
 		Model:    "gpt-4o-mini",
 	}, "cloud", 0)
@@ -287,10 +284,7 @@ func TestControlPlaneGovernorUsesPersistedPolicyRule(t *testing.T) {
 func TestControlPlaneGovernorReflectsLivePolicyUpdatesAndKeepsConfiguredRules(t *testing.T) {
 	t.Parallel()
 
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	gov := NewControlPlaneGovernor(config.GovernorConfig{
 		PolicyRules: []config.PolicyRuleConfig{
@@ -332,7 +326,7 @@ func TestControlPlaneGovernorReflectsLivePolicyUpdatesAndKeepsConfiguredRules(t 
 		t.Fatalf("UpsertPolicyRule() error = %v", err)
 	}
 
-	err = gov.CheckRoute(context.Background(), rewritten, decision, "cloud", 0)
+	err := gov.CheckRoute(context.Background(), rewritten, decision, "cloud", 0)
 	if err == nil {
 		t.Fatal("CheckRoute(after control plane rule) error = nil, want denial")
 	}

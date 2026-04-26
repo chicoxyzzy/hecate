@@ -415,7 +415,6 @@ export type ConfiguredStateResponse = {
   object: string;
   data: {
     backend: string;
-    path?: string;
     tenants: ConfiguredTenantRecord[];
     api_keys: ConfiguredAPIKeyRecord[];
     providers: ConfiguredProviderRecord[];

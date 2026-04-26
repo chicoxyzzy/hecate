@@ -147,10 +147,7 @@ func TestStaticPricebookEstimateUnknownModelPolicyError(t *testing.T) {
 func TestControlPlanePricebookUsesPersistedEntry(t *testing.T) {
 	t.Parallel()
 
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	if _, err := store.UpsertPricebookEntry(context.Background(), config.ModelPriceConfig{
 		Provider:                             "openai",
 		Model:                                "custom-model",
@@ -182,10 +179,7 @@ func TestControlPlanePricebookUsesPersistedEntry(t *testing.T) {
 func TestControlPlanePricebookCanonicalOverrideReflectsLiveControlPlaneUpdates(t *testing.T) {
 	t.Parallel()
 
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	base := NewStaticPricebook(config.ProvidersConfig{
 		OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},

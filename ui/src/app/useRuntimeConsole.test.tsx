@@ -373,7 +373,7 @@ describe("useRuntimeConsole", () => {
         return unauthorizedResponse();
       }
       if (url === "/admin/control-plane") {
-        return jsonResponse({ object: "control_plane", data: { backend: "file", tenants: [], api_keys: [], events: [] } });
+        return jsonResponse({ object: "control_plane", data: { backend: "memory", tenants: [], api_keys: [], events: [] } });
       }
       if (url === "/admin/accounts/summary") {
         return jsonResponse({

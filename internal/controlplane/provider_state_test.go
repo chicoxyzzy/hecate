@@ -2,17 +2,12 @@ package controlplane
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
-func newTestStore(t *testing.T) *FileStore {
+func newTestStore(t *testing.T) *MemoryStore {
 	t.Helper()
-	store, err := NewFileStore(filepath.Join(t.TempDir(), "cp.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	return store
+	return NewMemoryStore()
 }
 
 func TestSetProviderEnabled_CreatesPlaceholderForBuiltIn(t *testing.T) {

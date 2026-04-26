@@ -1019,10 +1019,7 @@ func TestBudgetEndpointsRequireAdminWhenTenantKeysConfigured(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	cpStore := controlplane.NewMemoryStore()
 	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
 		t.Fatalf("UpsertTenant() error = %v", err)
 	}
@@ -1056,10 +1053,7 @@ func TestTaskRunPerTenantConcurrencyLimitQueuesSecondRun(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	cpStore := controlplane.NewMemoryStore()
 	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
 		t.Fatalf("UpsertTenant() error = %v", err)
 	}
@@ -1123,10 +1117,7 @@ func TestChatCompletionAPIKeyRejectsTenantImpersonation(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	provider := &fakeProvider{name: "openai"}
-	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	cpStore := controlplane.NewMemoryStore()
 	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
 		t.Fatalf("UpsertTenant() error = %v", err)
 	}
@@ -1163,10 +1154,7 @@ func TestModelsFilteredForTenantAPIKeyAllowlist(t *testing.T) {
 	registry := providers.NewRegistry(cloudProvider, localProvider)
 	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	budgetStore := governor.NewMemoryBudgetStore()
-	cpStore, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	cpStore := controlplane.NewMemoryStore()
 	if _, err := cpStore.UpsertTenant(context.Background(), controlplane.Tenant{ID: "team-a", Name: "Team A", Enabled: true}); err != nil {
 		t.Fatalf("UpsertTenant() error = %v", err)
 	}
@@ -1212,10 +1200,7 @@ func TestSessionEndpointReturnsAnonymousTenantAndAdminStates(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	tenant, err := store.UpsertTenant(context.Background(), controlplane.Tenant{Name: "Team A"})
 	if err != nil {
 		t.Fatalf("UpsertTenant() error = %v", err)
@@ -1343,10 +1328,7 @@ func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
 		Server: config.ServerConfig{
@@ -1364,8 +1346,8 @@ func TestControlPlaneAdminEndpointsPersistAndListState(t *testing.T) {
 	admin.mustRequest(http.MethodPost, "/admin/control-plane/tenants", `{"name":"Team A","description":"Primary tenant","allowed_providers":["ollama"],"enabled":true}`)
 	admin.mustRequest(http.MethodPost, "/admin/control-plane/api-keys", `{"name":"Team A Dev","key":"hecate-team-a-dev","tenant":"team-a","role":"tenant","allowed_models":["llama3.1:8b"],"enabled":true}`)
 	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
-	if response.Data.Backend != "file" {
-		t.Fatalf("backend = %q, want file", response.Data.Backend)
+	if response.Data.Backend != "memory" {
+		t.Fatalf("backend = %q, want memory", response.Data.Backend)
 	}
 	if len(response.Data.Tenants) != 1 {
 		t.Fatalf("tenant count = %d, want 1", len(response.Data.Tenants))
@@ -1385,10 +1367,7 @@ func TestControlPlanePolicyAndPricebookCRUD(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
 		Server: config.ServerConfig{
@@ -1423,10 +1402,7 @@ func TestControlPlaneStatusReturnsAllBuiltInsWithPresetMetadata(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	// Set a credential for groq via the supported flow.
 	if _, err := store.RotateProviderSecret(context.Background(), "groq", controlplane.ProviderSecret{
 		ProviderID:      "groq",
@@ -1479,10 +1455,7 @@ func TestControlPlaneStatusResolvesDefaultProviderConflicts(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
 		Server: config.ServerConfig{AuthToken: "admin-secret"},
@@ -1510,10 +1483,7 @@ func TestControlPlaneStatusResolvesConflictsFromExistingCPRecords(t *testing.T) 
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	// Stash both as enabled CP records, simulating a bad/stale state.
 	if _, err := store.UpsertProvider(context.Background(), controlplane.Provider{
@@ -1559,10 +1529,7 @@ func TestControlPlaneStatusKeepsDisabledBuiltIns(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	if _, err := store.SetProviderEnabled(context.Background(), "llamacpp", false); err != nil {
 		t.Fatalf("SetProviderEnabled() error = %v", err)
 	}
@@ -1596,10 +1563,7 @@ func TestControlPlaneLifecycleEndpoints(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	store, err := controlplane.NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 
 	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
 		Server: config.ServerConfig{

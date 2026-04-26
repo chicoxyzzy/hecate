@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -32,12 +30,6 @@ type MemoryHistoryStore struct {
 	runs []HistoryRecord
 }
 
-type FileHistoryStore struct {
-	path string
-	mu   sync.Mutex
-	data historyState
-}
-
 type historyRedisClient interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Set(ctx context.Context, key string, value []byte) error
@@ -57,18 +49,6 @@ func NewMemoryHistoryStore() *MemoryHistoryStore {
 	return &MemoryHistoryStore{
 		runs: make([]HistoryRecord, 0, 16),
 	}
-}
-
-func NewFileHistoryStore(path string) (*FileHistoryStore, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("retention history file path is required")
-	}
-
-	store := &FileHistoryStore{path: path}
-	if err := store.load(); err != nil {
-		return nil, err
-	}
-	return store, nil
 }
 
 func NewRedisHistoryStore(client *storage.RedisClient, prefix, key string) (*RedisHistoryStore, error) {
@@ -116,19 +96,6 @@ func (s *MemoryHistoryStore) ListRuns(_ context.Context, limit int) ([]HistoryRe
 	return cloneHistoryRecords(limitHistoryRecords(s.runs, limit)), nil
 }
 
-func (s *FileHistoryStore) AppendRun(_ context.Context, record HistoryRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.Runs = append([]HistoryRecord{cloneHistoryRecord(record)}, s.data.Runs...)
-	return s.persistLocked()
-}
-
-func (s *FileHistoryStore) ListRuns(_ context.Context, limit int) ([]HistoryRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return cloneHistoryRecords(limitHistoryRecords(s.data.Runs, limit)), nil
-}
-
 func (s *RedisHistoryStore) AppendRun(ctx context.Context, record HistoryRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,42 +117,6 @@ func (s *RedisHistoryStore) ListRuns(ctx context.Context, limit int) ([]HistoryR
 		return nil, err
 	}
 	return cloneHistoryRecords(limitHistoryRecords(state.Runs, limit)), nil
-}
-
-func (s *FileHistoryStore) load() error {
-	content, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		s.data = historyState{Runs: make([]HistoryRecord, 0, 16)}
-		return s.persistLocked()
-	}
-	if err != nil {
-		return fmt.Errorf("read retention history file: %w", err)
-	}
-	if len(content) == 0 {
-		s.data = historyState{Runs: make([]HistoryRecord, 0, 16)}
-		return nil
-	}
-	if err := json.Unmarshal(content, &s.data); err != nil {
-		return fmt.Errorf("decode retention history file: %w", err)
-	}
-	if s.data.Runs == nil {
-		s.data.Runs = make([]HistoryRecord, 0, 16)
-	}
-	return nil
-}
-
-func (s *FileHistoryStore) persistLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("create retention history directory: %w", err)
-	}
-	payload, err := json.MarshalIndent(s.data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode retention history file: %w", err)
-	}
-	if err := os.WriteFile(s.path, append(payload, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write retention history file: %w", err)
-	}
-	return nil
 }
 
 func (s *RedisHistoryStore) readState(ctx context.Context) (historyState, error) {

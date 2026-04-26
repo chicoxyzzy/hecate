@@ -39,9 +39,6 @@ func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Reques
 	}
 
 	payload.Data.Backend = h.controlPlane.Backend()
-	if fileStore, ok := h.controlPlane.(*controlplane.FileStore); ok {
-		payload.Data.Path = fileStore.Path()
-	}
 	for _, tenant := range state.Tenants {
 		payload.Data.Tenants = append(payload.Data.Tenants, ControlPlaneTenantItem{
 			ID:               tenant.ID,

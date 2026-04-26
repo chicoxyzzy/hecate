@@ -15,10 +15,7 @@ func TestControlPlaneRuntimeManagerUpsertReloadsRegistryAndEncryptsSecrets(t *te
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	cipher, err := secrets.NewAESGCMCipher(key)
 	if err != nil {
@@ -72,10 +69,7 @@ func TestControlPlaneRuntimeManagerHydratesBuiltInProviderDefaults(t *testing.T)
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	cipher, err := secrets.NewAESGCMCipher(key)
 	if err != nil {
@@ -116,10 +110,7 @@ func TestControlPlaneRuntimeManagerPreservesExistingOverridesOnMinimalUpdate(t *
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
-	store, err := controlplane.NewFileStore(t.TempDir() + "/control-plane.json")
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := controlplane.NewMemoryStore()
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	cipher, err := secrets.NewAESGCMCipher(key)
 	if err != nil {

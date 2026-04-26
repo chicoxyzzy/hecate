@@ -37,7 +37,7 @@ Hecate today is a practical runtime you can use in two ways:
 That means one deployment can serve both model access and agent-style execution
 loops, while keeping operators in control of cost, safety, and traceability.
 
-Storage backends used across the system include `file`, `memory`, `Redis`, and `Postgres`.
+Storage backends used across the system include `memory`, `Redis`, and `Postgres`.
 
 ## Architecture
 

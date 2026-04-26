@@ -29,7 +29,6 @@ type ServerConfig struct {
 	DataDir                    string
 	BootstrapFile              string
 	ControlPlaneBackend        string
-	ControlPlaneFile           string
 	ControlPlaneKey            string
 	ControlPlaneSecretKey      string
 	TasksBackend               string
@@ -77,7 +76,6 @@ type ProviderConfig struct {
 
 type ChatConfig struct {
 	SessionsBackend string
-	SessionsFile    string
 	SessionsKey     string
 	SessionLimit    int
 }
@@ -242,7 +240,6 @@ func LoadFromEnv() Config {
 			DataDir:                    getEnv("GATEWAY_DATA_DIR", "."),
 			BootstrapFile:              getEnv("GATEWAY_BOOTSTRAP_FILE", ""),
 			ControlPlaneBackend:        getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "none"),
-			ControlPlaneFile:           getEnv("GATEWAY_CONTROL_PLANE_FILE", ""),
 			ControlPlaneKey:            getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
 			ControlPlaneSecretKey:      getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
 			TasksBackend:               getEnv("GATEWAY_TASKS_BACKEND", "memory"),
@@ -273,7 +270,6 @@ func LoadFromEnv() Config {
 		},
 		Chat: ChatConfig{
 			SessionsBackend: getEnv("GATEWAY_CHAT_SESSIONS_BACKEND", "memory"),
-			SessionsFile:    getEnv("GATEWAY_CHAT_SESSIONS_FILE", ""),
 			SessionsKey:     getEnv("GATEWAY_CHAT_SESSIONS_KEY", "chat-sessions"),
 			SessionLimit:    getEnvInt("GATEWAY_CHAT_SESSIONS_LIMIT", 50),
 		},

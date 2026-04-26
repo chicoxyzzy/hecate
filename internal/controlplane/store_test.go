@@ -2,148 +2,10 @@ package controlplane
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
-	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/storage"
 )
-
-func TestFileStoreUpsertTenantAndAPIKeyPersists(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "control-plane.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	tenant, err := store.UpsertTenant(context.Background(), Tenant{
-		Name:             "Team A",
-		Description:      "Primary tenant",
-		AllowedProviders: []string{"openai", "ollama"},
-		AllowedModels:    []string{"gpt-4o-mini"},
-	})
-	if err != nil {
-		t.Fatalf("UpsertTenant() error = %v", err)
-	}
-	if tenant.ID != "team-a" {
-		t.Fatalf("tenant.ID = %q, want team-a", tenant.ID)
-	}
-
-	key, err := store.UpsertAPIKey(context.Background(), APIKey{
-		Name:             "Team A Dev",
-		Key:              "hecate-team-a-dev",
-		Tenant:           tenant.ID,
-		Role:             "tenant",
-		AllowedProviders: []string{"ollama"},
-	})
-	if err != nil {
-		t.Fatalf("UpsertAPIKey() error = %v", err)
-	}
-	if key.ID != "team-a-dev" {
-		t.Fatalf("key.ID = %q, want team-a-dev", key.ID)
-	}
-	if key.CreatedAt.IsZero() || key.UpdatedAt.IsZero() {
-		t.Fatal("expected timestamps to be populated")
-	}
-
-	reloaded, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore(reload) error = %v", err)
-	}
-
-	state, err := reloaded.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if len(state.Tenants) != 1 {
-		t.Fatalf("tenant count = %d, want 1", len(state.Tenants))
-	}
-	if len(state.APIKeys) != 1 {
-		t.Fatalf("api key count = %d, want 1", len(state.APIKeys))
-	}
-	if state.APIKeys[0].Tenant != "team-a" {
-		t.Fatalf("api key tenant = %q, want team-a", state.APIKeys[0].Tenant)
-	}
-}
-
-func TestFileStoreRejectsAPIKeyForUnknownTenant(t *testing.T) {
-	t.Parallel()
-
-	store, err := NewFileStore(filepath.Join(t.TempDir(), "control-plane.json"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	if _, err := store.UpsertAPIKey(context.Background(), APIKey{
-		Name:   "Unknown Tenant Key",
-		Key:    "secret",
-		Tenant: "missing-tenant",
-		Role:   "tenant",
-	}); err == nil {
-		t.Fatal("UpsertAPIKey() error = nil, want unknown tenant error")
-	}
-}
-
-func TestFileStorePersistsPolicyRulesAndPricebookEntries(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "control-plane.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	if _, err := store.UpsertPolicyRule(context.Background(), config.PolicyRuleConfig{
-		ID:              "deny-expensive-cloud",
-		Action:          "deny",
-		Reason:          "cloud route blocked",
-		ProviderKinds:   []string{" cloud ", "cloud"},
-		RouteReasons:    []string{"fallback"},
-		MinPromptTokens: 1000,
-	}); err != nil {
-		t.Fatalf("UpsertPolicyRule() error = %v", err)
-	}
-	if _, err := store.UpsertPricebookEntry(context.Background(), config.ModelPriceConfig{
-		Provider:                             "openai",
-		Model:                                "custom-model",
-		InputMicrosUSDPerMillionTokens:       100_000,
-		OutputMicrosUSDPerMillionTokens:      200_000,
-		CachedInputMicrosUSDPerMillionTokens: 50_000,
-	}); err != nil {
-		t.Fatalf("UpsertPricebookEntry() error = %v", err)
-	}
-
-	reloaded, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore(reload) error = %v", err)
-	}
-	state, err := reloaded.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if len(state.PolicyRules) != 1 || state.PolicyRules[0].ProviderKinds[0] != "cloud" {
-		t.Fatalf("policy rules = %#v, want normalized persisted rule", state.PolicyRules)
-	}
-	if len(state.Pricebook) != 1 || state.Pricebook[0].Model != "custom-model" {
-		t.Fatalf("pricebook = %#v, want persisted entry", state.Pricebook)
-	}
-
-	if err := reloaded.DeletePolicyRule(context.Background(), "deny-expensive-cloud"); err != nil {
-		t.Fatalf("DeletePolicyRule() error = %v", err)
-	}
-	if err := reloaded.DeletePricebookEntry(context.Background(), "openai", "custom-model"); err != nil {
-		t.Fatalf("DeletePricebookEntry() error = %v", err)
-	}
-	state, err = reloaded.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot(after delete) error = %v", err)
-	}
-	if len(state.PolicyRules) != 0 || len(state.Pricebook) != 0 {
-		t.Fatalf("state after delete = %#v, want no policy or pricebook records", state)
-	}
-}
 
 func TestRedisStoreUpsertTenantAndAPIKeyPersists(t *testing.T) {
 	t.Parallel()
@@ -203,68 +65,10 @@ func TestRedisStoreRejectsUnknownTenant(t *testing.T) {
 	}
 }
 
-func TestFileStoreLifecycleOperations(t *testing.T) {
+func TestMemoryStoreAuditEventsCaptureActorAndMutationTrail(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "control-plane.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	tenant, err := store.UpsertTenant(context.Background(), Tenant{Name: "Team A"})
-	if err != nil {
-		t.Fatalf("UpsertTenant() error = %v", err)
-	}
-	key, err := store.UpsertAPIKey(context.Background(), APIKey{Name: "Team A Dev", Key: "secret", Tenant: tenant.ID})
-	if err != nil {
-		t.Fatalf("UpsertAPIKey() error = %v", err)
-	}
-
-	disabledTenant, err := store.SetTenantEnabled(context.Background(), tenant.ID, false)
-	if err != nil {
-		t.Fatalf("SetTenantEnabled() error = %v", err)
-	}
-	if disabledTenant.Enabled {
-		t.Fatal("expected tenant to be disabled")
-	}
-
-	rotatedKey, err := store.RotateAPIKey(context.Background(), key.ID, "new-secret")
-	if err != nil {
-		t.Fatalf("RotateAPIKey() error = %v", err)
-	}
-	if rotatedKey.Key != "new-secret" {
-		t.Fatalf("rotated key secret = %q, want new-secret", rotatedKey.Key)
-	}
-
-	disabledKey, err := store.SetAPIKeyEnabled(context.Background(), key.ID, false)
-	if err != nil {
-		t.Fatalf("SetAPIKeyEnabled() error = %v", err)
-	}
-	if disabledKey.Enabled {
-		t.Fatal("expected api key to be disabled")
-	}
-
-	if err := store.DeleteTenant(context.Background(), tenant.ID); err == nil {
-		t.Fatal("DeleteTenant() error = nil, want tenant referenced error")
-	}
-
-	if err := store.DeleteAPIKey(context.Background(), key.ID); err != nil {
-		t.Fatalf("DeleteAPIKey() error = %v", err)
-	}
-	if err := store.DeleteTenant(context.Background(), tenant.ID); err != nil {
-		t.Fatalf("DeleteTenant() error = %v", err)
-	}
-}
-
-func TestFileStoreAuditEventsCaptureActorAndMutationTrail(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "control-plane.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := NewMemoryStore()
 
 	ctx := WithActor(context.Background(), "admin:req-123")
 	tenant, err := store.UpsertTenant(ctx, Tenant{Name: "Team A"})
@@ -312,11 +116,7 @@ func TestFileStoreAuditEventsCaptureActorAndMutationTrail(t *testing.T) {
 func TestSetProviderEnabledDisablesConflictingProviders(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "control-plane.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
+	store := NewMemoryStore()
 
 	ctx := context.Background()
 

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/hecate/agent-runtime/internal/config"
@@ -101,69 +99,6 @@ func TestLimitHistoryRecords(t *testing.T) {
 		if len(got) != tc.wantLen {
 			t.Errorf("limitHistoryRecords(limit=%d) len = %d, want %d", tc.limit, len(got), tc.wantLen)
 		}
-	}
-}
-
-func TestNewFileHistoryStoreRequiresPath(t *testing.T) {
-	for _, p := range []string{"", "   "} {
-		if _, err := NewFileHistoryStore(p); err == nil {
-			t.Errorf("NewFileHistoryStore(%q) → err = nil, want error", p)
-		}
-	}
-}
-
-func TestFileHistoryStoreLoadsExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "history.json")
-
-	// Pre-populate with a recognizable record so load() must reconstruct it.
-	state := historyState{Runs: []HistoryRecord{{Trigger: "preexisting", Actor: "alice"}}}
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	store, err := NewFileHistoryStore(path)
-	if err != nil {
-		t.Fatalf("NewFileHistoryStore: %v", err)
-	}
-	got, err := store.ListRuns(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(got) != 1 || got[0].Trigger != "preexisting" {
-		t.Errorf("ListRuns = %+v, want preexisting record", got)
-	}
-}
-
-func TestFileHistoryStoreRejectsCorruptJSON(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "broken.json")
-	if err := os.WriteFile(path, []byte("{not valid json"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	if _, err := NewFileHistoryStore(path); err == nil {
-		t.Error("NewFileHistoryStore on corrupt JSON → err = nil, want error")
-	}
-}
-
-func TestFileHistoryStoreCreatesFileOnAppend(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "new", "history.json") // intentionally nested
-
-	store, err := NewFileHistoryStore(path)
-	if err != nil {
-		t.Fatalf("NewFileHistoryStore: %v", err)
-	}
-	// Now append; that must create the parent dir and file.
-	if err := store.AppendRun(context.Background(), HistoryRecord{Trigger: "manual"}); err != nil {
-		t.Fatalf("AppendRun: %v", err)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("expected file to exist at %s, got %v", path, err)
 	}
 }
 

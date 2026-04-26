@@ -366,13 +366,6 @@ func pruneableSemanticCache(store cache.SemanticStore) retention.CachePruner {
 
 func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) controlplane.Store {
 	switch cfg.Server.ControlPlaneBackend {
-	case "file":
-		store, err := controlplane.NewFileStore(cfg.Server.ControlPlaneFile)
-		if err != nil {
-			logger.Error("control plane store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
 	case "redis":
 		client := storage.NewRedisClient(storage.RedisConfig{
 			Address:  cfg.Cache.Redis.Address,
@@ -421,14 +414,6 @@ func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *sto
 
 func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) retention.HistoryStore {
 	switch cfg.Server.ControlPlaneBackend {
-	case "file":
-		path := retentionHistoryFilePath(cfg.Server.ControlPlaneFile)
-		store, err := retention.NewFileHistoryStore(path)
-		if err != nil {
-			logger.Error("retention history store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
 	case "redis":
 		client := storage.NewRedisClient(storage.RedisConfig{
 			Address:  cfg.Cache.Redis.Address,
@@ -596,14 +581,6 @@ func postgresRequired(cfg config.Config) bool {
 
 func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {
 	switch cfg.Chat.SessionsBackend {
-	case "file":
-		path := chatSessionFilePath(cfg.Chat.SessionsFile)
-		store, err := chatstate.NewFileStore(path)
-		if err != nil {
-			logger.Error("chat session store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
 	case "postgres":
 		store, err := chatstate.NewPostgresStore(context.Background(), postgresClient)
 		if err != nil {
@@ -614,27 +591,6 @@ func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClien
 	default:
 		return chatstate.NewMemoryStore()
 	}
-}
-
-func chatSessionFilePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "chat-sessions.json"
-	}
-	return path
-}
-
-func retentionHistoryFilePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "retention-history.json"
-	}
-	ext := filepath.Ext(path)
-	if ext == "" {
-		return path + ".retention"
-	}
-	base := strings.TrimSuffix(path, ext)
-	return base + ".retention" + ext
 }
 
 func retentionHistoryKey(key string) string {

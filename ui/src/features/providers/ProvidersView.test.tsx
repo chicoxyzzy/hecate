@@ -45,7 +45,7 @@ const adminSession = {
 
 function emptyAdminConfig() {
   return {
-    backend: "memory", path: "",
+    backend: "memory",
     tenants: [], api_keys: [], policy_rules: [], pricebook: [], events: [],
     providers: [] as ConfiguredProviderRecord[],
   };
