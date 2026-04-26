@@ -17,6 +17,11 @@ type Config struct {
 	Governor  GovernorConfig
 	Cache     CacheConfig
 	Retention RetentionConfig
+	// Redis is the top-level Redis client configuration shared across the
+	// cache, budget store, control-plane store, and retention history. It
+	// used to be nested under Cache; that was misleading because four
+	// unrelated subsystems consume it.
+	Redis     RedisConfig
 	Postgres  PostgresConfig
 	Providers ProvidersConfig
 	Pricebook PricebookConfig
@@ -138,7 +143,6 @@ type PolicyRuleConfig struct {
 type CacheConfig struct {
 	DefaultTTL time.Duration
 	Backend    string
-	Redis      RedisConfig
 	Semantic   SemanticCacheConfig
 }
 
@@ -319,16 +323,16 @@ func LoadFromEnv() Config {
 			BudgetWarningThresholds: parseEnvCSVInts(getEnv("GATEWAY_BUDGET_WARNING_THRESHOLDS", "50,80,95")),
 			BudgetHistoryLimit:      getEnvInt("GATEWAY_BUDGET_HISTORY_LIMIT", 20),
 		},
+		Redis: RedisConfig{
+			Address:  getEnv("REDIS_ADDRESS", "127.0.0.1:6379"),
+			Password: getEnv("REDIS_PASSWORD", ""),
+			DB:       getEnvInt("REDIS_DB", 0),
+			Prefix:   getEnv("REDIS_PREFIX", "agent-runtime"),
+			Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
+		},
 		Cache: CacheConfig{
 			DefaultTTL: getEnvDuration("GATEWAY_CACHE_TTL", 5*time.Minute),
 			Backend:    getEnv("GATEWAY_CACHE_BACKEND", "memory"),
-			Redis: RedisConfig{
-				Address:  getEnv("REDIS_ADDRESS", "127.0.0.1:6379"),
-				Password: getEnv("REDIS_PASSWORD", ""),
-				DB:       getEnvInt("REDIS_DB", 0),
-				Prefix:   getEnv("REDIS_PREFIX", "agent-runtime"),
-				Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
-			},
 			Semantic: SemanticCacheConfig{
 				Enabled:                          getEnvBool("GATEWAY_SEMANTIC_CACHE_ENABLED", false),
 				Backend:                          getEnv("GATEWAY_SEMANTIC_CACHE_BACKEND", "memory"),
