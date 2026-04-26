@@ -1,0 +1,70 @@
+# Quickstart stack. Defaults to "just the gateway" so a `docker compose up`
+# is enough to try Hecate end-to-end on http://127.0.0.1:8080.
+#
+# Optional services live behind profiles so they don't start by default:
+#   docker compose --profile postgres up    # adds Postgres for state
+#   docker compose --profile ollama up      # adds Ollama on :11434
+#
+# When the gateway image isn't on a registry yet, this builds locally from
+# the Dockerfile in the same directory. Once published, the `image:` tag
+# below also doubles as the pull target so `docker compose pull` works.
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/chicoxyzzy/hecate:latest
+    container_name: hecate-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      # Single-user admin mode means no token is required for control-plane
+      # endpoints. Safe for `docker compose up` on a developer laptop;
+      # override with GATEWAY_SINGLE_USER_ADMIN_MODE=false for shared
+      # environments.
+      GATEWAY_SINGLE_USER_ADMIN_MODE: "true"
+      # When the ollama profile is active, the gateway reaches it via the
+      # service network. With the profile inactive these vars are still set
+      # but harmless — Ollama upstream calls only happen when a request
+      # routes there.
+      PROVIDER_OLLAMA_BASE_URL: "http://ollama:11434/v1"
+    env_file:
+      # required:false lets users skip creating .env without breaking
+      # `docker compose up`. Compose 2.24+ understands this shape.
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["postgres", "full"]
+    image: postgres:16-alpine
+    container_name: hecate-postgres
+    environment:
+      POSTGRES_DB: hecate
+      POSTGRES_USER: hecate
+      POSTGRES_PASSWORD: hecate
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hecate -d hecate"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  ollama:
+    profiles: ["ollama", "full"]
+    image: ollama/ollama:0.5.7
+    container_name: hecate-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  ollama-models:

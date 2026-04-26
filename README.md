@@ -84,24 +84,35 @@ flowchart TD
 
 ## Quick Start
 
-1. Copy env defaults:
+### Option A: Docker (zero toolchain prerequisites)
+
+```bash
+docker compose up
+open http://127.0.0.1:8080
+```
+
+The gateway and operator UI both come up on port 8080. Configure providers
+through the UI, or by creating a `.env` file before `docker compose up`
+(the compose stack picks it up automatically).
+
+Optional services live behind profiles:
+
+```bash
+docker compose --profile postgres up    # adds Postgres for state persistence
+docker compose --profile ollama up      # adds Ollama on :11434 for local models
+docker compose --profile full up        # everything
+```
+
+### Option B: Local build (Go + Bun)
+
+1. Copy env defaults and configure at least one provider:
 
 ```bash
 cp .env.example .env
+# Edit .env — at minimum set GATEWAY_DEFAULT_MODEL plus a PROVIDER_*_API_KEY
 ```
 
-2. Configure at least one provider in `.env`.
-Configure each provider with core envs
-like `PROVIDER_<NAME>_API_KEY` and `PROVIDER_<NAME>_BASE_URL`.
-
-Example cloud-only:
-
-```bash
-GATEWAY_DEFAULT_MODEL=gpt-5.4-mini
-PROVIDER_OPENAI_API_KEY=your_api_key_here
-```
-
-3. Build the gateway with the UI bundled in (single binary, single port):
+2. Build the gateway with the UI bundled in (single binary, single port):
 
 ```bash
 make ui-install
@@ -109,7 +120,7 @@ make build
 make serve
 ```
 
-The gateway and the operator UI are now both served from
+The gateway and the operator UI are both served from
 `http://127.0.0.1:8080`. `make serve` stops any earlier `./gateway` process
 still bound to that port before starting, so re-running it is always safe.
 

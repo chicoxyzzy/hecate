@@ -1,0 +1,36 @@
+# Trim the build context. Without this list, the Docker daemon would copy
+# the entire repo (including caches and the binary) on every build, which
+# silently breaks layer caching and adds gigabytes to the upload to the
+# Docker engine.
+
+# Local Go toolchain caches kept inside the repo.
+.gocache
+.gomodcache
+.gopath
+
+# Node deps are reinstalled inside the ui-builder stage.
+node_modules
+ui/node_modules
+
+# Built artifacts — the build stages regenerate these.
+/gateway
+ui/dist
+ui/test-results
+ui/playwright-report
+ui/coverage
+coverage.out
+coverage.html
+
+# Test runner side-effects.
+e2e/local-ollama-*.log
+
+# Dev-only files. .env in particular MUST be excluded so secrets never
+# bake into the image; users mount it explicitly via env_file or -v.
+.env
+.envrc
+.git
+.github
+.claude
+.idea
+.vscode
+*.log
