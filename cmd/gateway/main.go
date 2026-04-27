@@ -45,10 +45,7 @@ func main() {
 	// fresh ones on first run. We do this before logger init so we can
 	// loud-log the admin token through the same structured logger that the
 	// rest of startup uses.
-	bootstrapPath := cfg.Server.BootstrapFile
-	if bootstrapPath == "" {
-		bootstrapPath = filepath.Join(cfg.Server.DataDir, "hecate.bootstrap.json")
-	}
+	bootstrapPath := resolveBootstrapPath(cfg.Server.BootstrapFile, cfg.Server.DataDir)
 	boot, printAdminToken, err := bootstrap.Resolve(bootstrapPath, cfg.Server.ControlPlaneSecretKey, cfg.Server.AuthToken)
 	if err != nil {
 		slog.Error("bootstrap secrets init failed", slog.String("path", bootstrapPath), slog.Any("error", err))
@@ -642,4 +639,16 @@ func retentionHistoryKey(key string) string {
 		key = "control-plane"
 	}
 	return key + ":retention-history"
+}
+
+// resolveBootstrapPath returns the location the gateway should read/write
+// the bootstrap secrets file from. An explicit GATEWAY_BOOTSTRAP_FILE
+// (carried in `bootstrapFile`) wins; otherwise the file lives at
+// `<dataDir>/hecate.bootstrap.json`, which keeps it under the same
+// volume mount in docker and the same `.data/` directory in local dev.
+func resolveBootstrapPath(bootstrapFile, dataDir string) string {
+	if bootstrapFile != "" {
+		return bootstrapFile
+	}
+	return filepath.Join(dataDir, "hecate.bootstrap.json")
 }

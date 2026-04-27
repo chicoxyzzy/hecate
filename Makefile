@@ -92,10 +92,11 @@ test-docker-smoke:
 	GOCACHE="$(GOCACHE_DIR)" go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...
 
 # reset-dev wipes local dev state back to first-run: stops the gateway on
-# :8080 and deletes the bootstrap file so the next start regenerates a
-# fresh admin token + control-plane secret. Memory-backed control plane
-# is already wiped on restart; if you've pointed Hecate at postgres or
-# redis, drop those out yourself.
+# :8080 and deletes the data directory (which holds the bootstrap file
+# with the admin token + AES-GCM key) so the next start regenerates
+# fresh secrets. Memory-backed control plane is already wiped on
+# restart; if you've pointed Hecate at postgres or redis, drop those
+# out yourself.
 reset-dev:
 	@pid=$$(lsof -ti:8080 2>/dev/null); \
 	if [ -n "$$pid" ]; then \
@@ -103,6 +104,7 @@ reset-dev:
 	  kill $$pid; \
 	  sleep 0.3; \
 	fi
+	rm -rf .data
 	rm -f hecate.bootstrap.json
 	@echo "Local dev state reset. Next 'make run'/'make serve' regenerates the admin token."
 	@echo "Clear hecate.* keys from your browser's localStorage to re-prompt the UI."

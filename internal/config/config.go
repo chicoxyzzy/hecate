@@ -240,9 +240,13 @@ func LoadFromEnv() Config {
 	providersCfg := loadProvidersFromEnv()
 	return Config{
 		Server: ServerConfig{
-			Address:       getEnv("GATEWAY_ADDRESS", ":8080"),
-			AuthToken:     getEnv("GATEWAY_AUTH_TOKEN", ""),
-			DataDir:       getEnv("GATEWAY_DATA_DIR", "."),
+			Address:   getEnv("GATEWAY_ADDRESS", ":8080"),
+			AuthToken: getEnv("GATEWAY_AUTH_TOKEN", ""),
+			// Default `.data/` keeps the auto-generated bootstrap file
+			// (admin token + AES-GCM key) out of the repo root so a stray
+			// `git add .` can't sweep it up. Docker overrides this to /data
+			// via the Dockerfile.
+			DataDir:       getEnv("GATEWAY_DATA_DIR", ".data"),
 			BootstrapFile: getEnv("GATEWAY_BOOTSTRAP_FILE", ""),
 			// Default is "memory" to match every other backend selector
 			// (chat sessions, tasks, cache, …). "none" is still accepted

@@ -162,6 +162,15 @@ The gateway and the operator UI are both served from
 `http://127.0.0.1:8080`. `make serve` stops any earlier `./gateway` process
 still bound to that port before starting, so re-running it is always safe.
 
+On first run, an admin bearer token is auto-generated, printed to stderr
+inside a `Hecate first-run setup` banner, and persisted in
+`.data/hecate.bootstrap.json` (mode 0600). If you scroll past the banner,
+read it back at any time with:
+
+```bash
+jq -r .admin_token .data/hecate.bootstrap.json
+```
+
 Alternatively, for live UI iteration with hot reload, run the gateway and
 the Vite dev server side by side:
 
@@ -176,8 +185,8 @@ Default addresses:
 - Vite dev server (UI hot reload): `http://127.0.0.1:5173`
 
 To wipe local state back to first-run (stops any gateway on :8080 and
-removes `hecate.bootstrap.json` so the next start regenerates the
-admin token):
+removes the `.data/` directory holding the bootstrap file, so the next
+start regenerates the admin token + control-plane secret):
 
 ```bash
 make reset-dev
@@ -319,7 +328,7 @@ for the authoritative list.
 | Variable | Default | What it does |
 |---|---|---|
 | `GATEWAY_AUTH_TOKEN` | auto-generated | Admin bearer token. Empty → generated on first run, persisted to the bootstrap file, printed once to stderr. |
-| `GATEWAY_DATA_DIR` | `.` | Where auto-generated state goes (the bootstrap file by default). Mount a volume here in production. |
+| `GATEWAY_DATA_DIR` | `.data` (local), `/data` (docker) | Where auto-generated state goes (the bootstrap file by default). Mount a volume here in production. |
 | `GATEWAY_CONTROL_PLANE_SECRET_KEY` | auto-generated | AES-GCM key for encrypted provider credentials at rest. Empty → generated and persisted. |
 
 ### Storage backends
@@ -375,7 +384,7 @@ make ui-install       # install UI dependencies (bun install)
 make ui-dev           # Vite dev server on :5173
 make ui-build         # build the UI bundle into ui/dist/
 make ui-test          # run UI unit tests (vitest)
-make reset-dev        # wipe local dev state (kills :8080, drops bootstrap file)
+make reset-dev        # wipe local dev state (kills :8080, removes .data/)
 make reset-docker     # wipe docker stack (down -v across all profiles)
 ```
 

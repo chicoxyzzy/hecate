@@ -331,3 +331,30 @@ func testProviderByName(items []OpenAICompatibleProviderConfig, name string) (Op
 	}
 	return OpenAICompatibleProviderConfig{}, false
 }
+
+func TestLoadFromEnvDataDirDefault(t *testing.T) {
+	t.Setenv("GATEWAY_DATA_DIR", "")
+
+	cfg := LoadFromEnv()
+	if cfg.Server.DataDir != ".data" {
+		t.Fatalf("DataDir default = %q, want .data", cfg.Server.DataDir)
+	}
+}
+
+func TestLoadFromEnvDataDirOverride(t *testing.T) {
+	t.Setenv("GATEWAY_DATA_DIR", "/var/hecate")
+
+	cfg := LoadFromEnv()
+	if cfg.Server.DataDir != "/var/hecate" {
+		t.Fatalf("DataDir override = %q, want /var/hecate", cfg.Server.DataDir)
+	}
+}
+
+func TestLoadFromEnvBootstrapFileDefault(t *testing.T) {
+	t.Setenv("GATEWAY_BOOTSTRAP_FILE", "")
+
+	cfg := LoadFromEnv()
+	if cfg.Server.BootstrapFile != "" {
+		t.Fatalf("BootstrapFile default = %q, want empty (cmd/gateway derives it from DataDir)", cfg.Server.BootstrapFile)
+	}
+}
