@@ -380,10 +380,9 @@ func pruneableSemanticCache(store cache.SemanticStore) retention.CachePruner {
 }
 
 func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) controlplane.Store {
-	// Both "memory" (the documented default) and "none" (legacy synonym)
-	// fall through to the default branch and produce a MemoryStore.
-	// Anything unrecognized does the same — same lenient shape every
-	// other backend selector uses today.
+	// "memory" (the documented default) and any unrecognized value fall
+	// through to the default branch and produce a MemoryStore — same
+	// lenient shape every other backend selector uses today.
 	switch cfg.Server.ControlPlaneBackend {
 	case "redis":
 		client := storage.NewRedisClient(storage.RedisConfig{

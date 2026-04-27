@@ -1,8 +1,8 @@
 # Runtime API Notes
 
-Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchestrated agents.
+Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchestrated agents. The runtime is durable: a run survives process restarts, can be resumed from a terminal state, and is leased to one worker at a time so two replicas can share a queue without stepping on each other.
 
-For LLM client endpoints such as `/v1/chat/completions`, `/v1/messages`, and `/v1/models`, see [`docs/client-integration.md`](client-integration.md).
+For the high-level execution flow (lease semantics, sandbox boundary, event sequence), see [`architecture.md`](architecture.md#task-runtime-flow). For LLM client endpoints (`/v1/chat/completions`, `/v1/messages`, `/v1/models`), see [`client-integration.md`](client-integration.md).
 
 ## Core resources
 

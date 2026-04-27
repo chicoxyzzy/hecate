@@ -263,8 +263,7 @@ func LoadFromEnv() Config {
 			DataDir:       getEnv("GATEWAY_DATA_DIR", ".data"),
 			BootstrapFile: getEnv("GATEWAY_BOOTSTRAP_FILE", ""),
 			// Default is "memory" to match every other backend selector
-			// (chat sessions, tasks, cache, …). "none" is still accepted
-			// as a legacy synonym for "memory".
+			// (chat sessions, tasks, cache, …).
 			ControlPlaneBackend:        getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "memory"),
 			ControlPlaneKey:            getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
 			ControlPlaneSecretKey:      getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),

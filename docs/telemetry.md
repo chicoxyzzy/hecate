@@ -9,6 +9,12 @@ Hecate uses OpenTelemetry-style traces, metrics, and logs, but the important thi
 
 The runtime keeps standard OpenTelemetry keys where they already fit and uses `hecate.*` only for product-specific fields.
 
+The Observe tab in the operator UI surfaces all of this without needing an external collector — request ledger, trace inspector with route-report drilldown, and OTel signal status are all visible immediately.
+
+![Observe tab — request ledger and route diagnostics](screenshots/observe.png)
+
+For the full request lifecycle that produces these traces, see [`architecture.md`](architecture.md).
+
 ## What You Can Inspect Today
 
 Telemetry currently shows up in three places:

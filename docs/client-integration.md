@@ -1,6 +1,22 @@
 # Client Integration (Codex And Claude Code)
 
-This guide explains how to point external coding clients at Hecate as the model gateway.
+This guide explains how to point external coding clients at Hecate as the model gateway. Hecate accepts both OpenAI-compatible and Anthropic-shaped traffic on the same port, so one gateway URL works for both Codex-style and Claude-Code-style clients.
+
+For the request lifecycle Hecate runs each call through (auth → policy → cache → router → provider), see [`architecture.md`](architecture.md#gateway-request-flow). For task-runtime (`/v1/tasks/...`) endpoints, see [`runtime-api.md`](runtime-api.md).
+
+## The easy path — Admin → Integrations
+
+The fastest way to wire a coding client up is the **Integrations** sub-tab in the operator UI's Admin view. The base URL is auto-filled from your browser location (so it works as-is for local dev, internal hostnames, and public deploys behind TLS terminators), each snippet has its own copy button, and the panel cross-links the Keys tab where you mint a scoped API key.
+
+![Integrations tab — copy-paste Codex / Claude Code / curl snippets pre-filled with the gateway URL](screenshots/admin-integrations.png)
+
+Workflow:
+
+1. Open the operator UI, sign in with the admin token, navigate to **Admin → Integrations**.
+2. Mint an API key in the **Keys** tab (scope it to a tenant, provider list, or model list as needed).
+3. Copy the snippet for whichever client you're using (Codex / Claude Code), paste the API key in place of `<paste an API key from the Keys tab>`, and run.
+
+The rest of this guide covers the same ground at the protocol level — useful for scripted setups, custom clients, and operators automating multi-environment provisioning.
 
 ## Base URL and endpoints
 
