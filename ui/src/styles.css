@@ -38,6 +38,32 @@ body { margin: 0; }
   --green-bg: oklch(0.16 0.04 145);
   --green-border: oklch(0.28 0.07 145);
 
+  /* Scrim — translucent overlay rendered behind modal/slide-over
+     surfaces. One opacity for the whole app so backdrops feel
+     consistent regardless of which dialog is up. */
+  --scrim: oklch(0 0 0 / 0.55);
+
+  /* Provider brand accents used by the providers panel icon dots.
+     Values are taken from each vendor's primary brand color (logo /
+     press kit / product UI), not arbitrary palette picks. Where a
+     provider's brand is a gradient (Gemini), we pick the dominant
+     blue start. Providers with no distinctive brand color stay on
+     semantic tokens (--teal/--amber/--t0/--t2) inside PRESET_COLORS. */
+  --brand-anthropic: #CC785C;  /* coral / Claude mark */
+  --brand-openai:    #10A37F;  /* OpenAI product green */
+  --brand-gemini:    #4285F4;  /* Google blue (Gemini gradient start) */
+  --brand-mistral:   #FA520F;  /* Mistral orange */
+  --brand-groq:      #F55036;  /* Groq red-orange */
+
+  /* Elevation scale — one token per surface so the rest of the app
+     never re-declares a shadow inline. Naming is by surface (popover
+     / dropdown / modal) rather than abstract size (sm/md/lg) so picks
+     are unambiguous. The legacy `--shadow` below is kept as an alias
+     in case anyone reaches for it via the old name. */
+  --shadow-popover:  0 2px 8px oklch(0 0 0 / 0.4);
+  --shadow-dropdown: 0 4px 12px oklch(0 0 0 / 0.2);
+  --shadow-modal:    0 12px 40px oklch(0 0 0 / 0.4);
+
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'Cascadia Code', monospace;
 

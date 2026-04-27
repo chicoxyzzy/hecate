@@ -98,7 +98,7 @@ export function TaskDetail({
                     position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 41,
                     minWidth: 220, maxHeight: 320, overflowY: "auto",
                     background: "var(--bg1)", border: "1px solid var(--border)",
-                    borderRadius: "var(--radius)", boxShadow: "0 4px 12px oklch(0 0 0 / 0.2)",
+                    borderRadius: "var(--radius)", boxShadow: "var(--shadow-dropdown)",
                   }}
                 >
                   {runs.map(r => (

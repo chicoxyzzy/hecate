@@ -56,7 +56,7 @@ export function TaskList({ tasks, selectedTaskID, loading, busyAction, onSelect,
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
               <Badge status={taskBadgeStatus(t.status)} />
               {t.execution_kind && (
-                <span style={{ fontSize: 9, color: "var(--teal)", fontFamily: "var(--font-mono)", background: "var(--teal-bg, oklch(0.2 0.04 190))", padding: "1px 5px", borderRadius: 3 }}>
+                <span style={{ fontSize: 9, color: "var(--teal)", fontFamily: "var(--font-mono)", background: "var(--teal-bg)", padding: "1px 5px", borderRadius: 3 }}>
                   {t.execution_kind}
                 </span>
               )}

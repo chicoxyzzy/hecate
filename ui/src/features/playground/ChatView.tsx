@@ -394,7 +394,7 @@ export function ChatView({ state, actions }: Props) {
             height: 28, padding: "0 12px", borderRadius: 14,
             background: "var(--bg3)", border: "1px solid var(--border)",
             cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
-            color: "var(--t1)", fontSize: 12, boxShadow: "0 2px 8px oklch(0 0 0 / 0.4)",
+            color: "var(--t1)", fontSize: 12, boxShadow: "var(--shadow-popover)",
             zIndex: 10, whiteSpace: "nowrap",
           }}>
             <Icon d={Icons.chevD} size={12} /> Scroll to bottom

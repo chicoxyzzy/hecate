@@ -402,7 +402,7 @@ function DialogChrome({
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "oklch(0 0 0 / 0.55)", backdropFilter: "blur(2px)" }}
+      style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--scrim)", backdropFilter: "blur(2px)" }}
       onClick={onClose}>
       <div
         role="dialog"
@@ -492,7 +492,7 @@ export function Modal({ title, children, footer, onClose, width = 560 }: {
         borderRadius: "var(--radius)",
         display: "flex",
         flexDirection: "column",
-        boxShadow: "0 12px 40px oklch(0 0 0 / 0.4)",
+        boxShadow: "var(--shadow-modal)",
       }}>
       {children}
     </DialogChrome>

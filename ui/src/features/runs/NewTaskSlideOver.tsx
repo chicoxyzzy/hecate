@@ -97,7 +97,7 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
   if (!open) return null;
 
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", background: "oklch(0 0 0 / 0.5)" }} onClick={onClose}>
+    <div style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", background: "var(--scrim)" }} onClick={onClose}>
       <div style={{ marginLeft: "auto", width: 480, background: "var(--bg1)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", height: "100%" }} onClick={e => e.stopPropagation()}>
         <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontWeight: 500, fontSize: 13 }}>New task</span>

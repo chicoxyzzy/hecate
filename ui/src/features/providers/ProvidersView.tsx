@@ -9,18 +9,25 @@ type Props = {
 };
 
 const PRESET_COLORS: Record<string, string> = {
-  anthropic:  "#c084fc",
-  openai:     "var(--t0)",
-  gemini:     "#4ade80",
-  deepseek:   "var(--teal)",
-  mistral:    "var(--amber)",
-  groq:       "var(--amber)",
+  // Vendor-specific brand accents — sourced from each provider's
+  // primary brand color, not an aesthetic guess. The rest fall back
+  // to semantic tokens because the provider has no distinctive
+  // brand color (xAI/OpenAI mark are monochrome black/white; Ollama
+  // is grayscale; LMStudio/llama.cpp/LocalAI are community projects
+  // without a strong color identity). Edit the --brand-* tokens in
+  // styles.css to retune; do not put hex literals here.
+  anthropic:   "var(--brand-anthropic)",
+  openai:      "var(--brand-openai)",
+  gemini:      "var(--brand-gemini)",
+  mistral:     "var(--brand-mistral)",
+  groq:        "var(--brand-groq)",
+  deepseek:    "var(--teal)",
   together_ai: "var(--t2)",
-  xai:        "var(--t0)",
-  ollama:     "var(--teal)",
-  lmstudio:   "var(--t2)",
-  llamacpp:   "var(--t2)",
-  localai:    "var(--t2)",
+  xai:         "var(--t0)",
+  ollama:      "var(--teal)",
+  lmstudio:    "var(--t2)",
+  llamacpp:    "var(--t2)",
+  localai:     "var(--t2)",
 };
 
 function iconColorByID(id: string): string {
