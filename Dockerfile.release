@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+#
+# Release image used by goreleaser. The dev Dockerfile (./Dockerfile)
+# builds Go from source in-image; this one is a pure copy job — it
+# expects goreleaser to have cross-compiled the static `gateway` binary
+# on the host and staged it into the build context root.
+#
+# Final image is byte-identical in shape to the dev Dockerfile's runtime
+# stage (distroless static, nonroot, /data volume, port 8080), so users
+# get the same artifact whichever path they go through.
+#
+# The alpine prep stage exists only so we can chown an empty /data dir
+# to nonroot's uid (65532) before copying it into distroless. Distroless
+# has no shell, so we can't `RUN mkdir && chown` directly there; without
+# the pre-chown, a docker named volume mounted on /data inherits root
+# ownership and the nonroot binary can't persist its bootstrap file.
+
+FROM alpine:3.20 AS prep
+RUN mkdir -p /data && chown 65532:65532 /data
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY gateway /usr/local/bin/gateway
+COPY --from=prep --chown=65532:65532 /data /data
+
+ENV GATEWAY_ADDRESS=:8080 \
+    GATEWAY_DATA_DIR=/data
+
+VOLUME ["/data"]
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/gateway"]

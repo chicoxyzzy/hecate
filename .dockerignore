@@ -8,6 +8,14 @@
 .gomodcache
 .gopath
 
+# Local data dir holding the auto-generated bootstrap file (admin token
+# + AES-GCM control-plane key, mode 0600). Never want this anywhere
+# near a docker build context — even though the dev Dockerfile doesn't
+# COPY it directly, the intermediate go-builder stage runs `COPY . .`
+# and the file would land in that layer's filesystem.
+.data
+*.bootstrap.json
+
 # Node deps are reinstalled inside the ui-builder stage.
 node_modules
 ui/node_modules

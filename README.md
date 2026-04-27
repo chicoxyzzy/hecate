@@ -91,6 +91,13 @@ docker compose up
 open http://127.0.0.1:8080
 ```
 
+`docker-compose.yml` references `ghcr.io/chicoxyzzy/hecate:latest`, a
+multi-arch (`linux/amd64`, `linux/arm64`) image published from this repo
+on every `v*` tag — `docker compose pull` is enough on a fresh host. To
+pin to a specific release, replace `:latest` with `:vX.Y.Z`. If you've
+checked out the source, `docker compose up` will rebuild locally from
+the bundled `Dockerfile` instead.
+
 On the first run, the gateway auto-generates an admin bearer token and
 prints it to the container logs inside a banner like:
 
