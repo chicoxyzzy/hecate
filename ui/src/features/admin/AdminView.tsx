@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import type { ConfiguredAPIKeyRecord } from "../../types/runtime";
-import { Badge, CodeBlock, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
+import type { ConfiguredAPIKeyRecord, ConfiguredPolicyRuleRecord } from "../../types/runtime";
+import type { PolicyRuleUpsertPayload } from "../../lib/api";
+import { Badge, ChipInput, CodeBlock, ConfirmModal, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
 import { PricebookTab } from "./PricebookTab";
 
 type Props = {
@@ -13,7 +14,7 @@ type Props = {
 // Adding a new tab means: add the id here, add a body conditional in
 // the render, and add a content component. Don't duplicate the list
 // — both the tab bar and the localStorage validator read from this.
-const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "integrations", "retention"] as const;
+const TABS = ["keys", "tenants", "policy", "budget", "usage", "pricebook", "integrations", "retention"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_STORAGE_KEY = "hecate.adminTab";
@@ -65,6 +66,7 @@ export function AdminView({ state, actions }: Props) {
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
         {tab === "keys"         && <KeysTab state={state} actions={actions} />}
         {tab === "tenants"      && <TenantsTab state={state} actions={actions} />}
+        {tab === "policy"       && <PolicyTab state={state} actions={actions} />}
         {tab === "budget"       && <BudgetTab state={state} actions={actions} />}
         {tab === "usage"        && <UsageTab state={state} />}
         {tab === "pricebook"    && <PricebookTab state={state} actions={actions} />}
@@ -131,7 +133,16 @@ function KeysTab({ state, actions }: Props) {
     actions.setAPIKeyFormTenant("");
     actions.setAPIKeyFormRole("tenant");
     actions.setAPIKeyFormSecret(generateSecret());
+    // Reset scoping fields too — leaving stale chips from a previous
+    // open would silently scope a new key to an unrelated key's
+    // permissions.
+    actions.setAPIKeyFormProviders([]);
+    actions.setAPIKeyFormModels([]);
   }
+
+  // Autocomplete sources for the chip inputs in the New key form.
+  const providerOptions = (state.providerPresets ?? []).map(p => ({ id: p.id, label: p.name }));
+  const modelOptions = state.models.map(m => ({ id: m.id, label: m.id }));
 
   async function handleCreateKey() {
     if (!state.apiKeyFormName.trim() || !state.apiKeyFormSecret.trim()) return;
@@ -268,6 +279,24 @@ function KeysTab({ state, actions }: Props) {
                   style={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
                 <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3 }}>Auto-generated. You can replace with your own value.</div>
               </div>
+              <Field label="ALLOWED PROVIDERS (blank = all)">
+                <ChipInput
+                  values={state.apiKeyFormProviders}
+                  onChange={actions.setAPIKeyFormProviders}
+                  options={providerOptions}
+                  placeholder="all providers"
+                  ariaLabel="Allowed providers for this key"
+                />
+              </Field>
+              <Field label="ALLOWED MODELS (blank = all)">
+                <ChipInput
+                  values={state.apiKeyFormModels}
+                  onChange={actions.setAPIKeyFormModels}
+                  options={modelOptions}
+                  placeholder="all models"
+                  ariaLabel="Allowed models for this key"
+                />
+              </Field>
             </div>
           )}
         </SlideOver>
@@ -369,6 +398,13 @@ function TenantsTab({ state, actions }: Props) {
 
   const tenants = state.adminConfig?.tenants ?? [];
 
+  // Autocomplete sources for the chip inputs in the New tenant form:
+  // every cloud / local provider preset (so operators can scope by id
+  // even when the gateway hasn't yet seen the provider's models) and
+  // every discovered model.
+  const providerOptions = (state.providerPresets ?? []).map(p => ({ id: p.id, label: p.name }));
+  const modelOptions = state.models.map(m => ({ id: m.id, label: m.id }));
+
   async function handleCreate() {
     if (!state.tenantFormName.trim()) return;
     setCreateError("");
@@ -377,8 +413,8 @@ function TenantsTab({ state, actions }: Props) {
       setNewOpen(false);
       actions.setTenantFormName("");
       actions.setTenantFormID("");
-      actions.setTenantFormProviders("");
-      actions.setTenantFormModels("");
+      actions.setTenantFormProviders([]);
+      actions.setTenantFormModels([]);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create tenant.");
     }
@@ -394,8 +430,8 @@ function TenantsTab({ state, actions }: Props) {
           setCreateError("");
           actions.setTenantFormName("");
           actions.setTenantFormID("");
-          actions.setTenantFormProviders("");
-          actions.setTenantFormModels("");
+          actions.setTenantFormProviders([]);
+          actions.setTenantFormModels([]);
         }}>
           <Icon d={Icons.plus} size={13} /> New tenant
         </button>
@@ -422,7 +458,7 @@ function TenantsTab({ state, actions }: Props) {
                     </div>
                   </td>
                   <td className="mono" style={{ color: "var(--t2)" }}>{t.allowed_providers?.join(", ") || "all"}</td>
-                  <td className="mono" style={{ color: "var(--t2)" }}>{(t as Record<string, unknown>).allowed_models as string ?? "all"}</td>
+                  <td className="mono" style={{ color: "var(--t2)" }}>{t.allowed_models?.join(", ") || "all"}</td>
                   <td>
                     <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", padding: "3px 6px" }}
                       onClick={() => void actions.deleteTenant(t.id)}>
@@ -465,18 +501,418 @@ function TenantsTab({ state, actions }: Props) {
                 onChange={e => actions.setTenantFormID(e.target.value)}
                 style={{ fontFamily: "var(--font-mono)" }} />
             </Field>
-            <Field label="ALLOWED PROVIDERS (comma-separated, blank = all)">
-              <input className="input" placeholder="e.g. openai, anthropic"
-                value={state.tenantFormProviders}
-                onChange={e => actions.setTenantFormProviders(e.target.value)} />
+            <Field label="ALLOWED PROVIDERS (blank = all)">
+              <ChipInput
+                values={state.tenantFormProviders}
+                onChange={actions.setTenantFormProviders}
+                options={providerOptions}
+                placeholder="all providers"
+                ariaLabel="Allowed providers"
+              />
             </Field>
-            <Field label="ALLOWED MODELS (comma-separated, blank = all)">
-              <input className="input" placeholder="e.g. gpt-4o, claude-3-5-sonnet"
-                value={state.tenantFormModels}
-                onChange={e => actions.setTenantFormModels(e.target.value)} />
+            <Field label="ALLOWED MODELS (blank = all)">
+              <ChipInput
+                values={state.tenantFormModels}
+                onChange={actions.setTenantFormModels}
+                options={modelOptions}
+                placeholder="all models"
+                ariaLabel="Allowed models"
+              />
             </Field>
           </div>
         </SlideOver>
+      )}
+    </>
+  );
+}
+
+// ─── Policy tab ───────────────────────────────────────────────────────────────
+
+// Policy rules are evaluated in array order; each rule either denies
+// the request (with an optional reason surfaced in the 403 body) or
+// rewrites the requested model to a target. Match conditions are
+// AND'd within a rule; an empty list / zero-valued threshold matches
+// anything. The full evaluation logic lives in internal/policy/.
+//
+// PolicyTab is a thin layer over the existing /admin/control-plane
+// CRUD endpoints — the UI's job is to make the rule shape obvious
+// without forcing operators to memorize the wire field names.
+
+const PROVIDER_KIND_OPTIONS = [
+  { id: "cloud", label: "Cloud" },
+  { id: "local", label: "Local" },
+];
+
+const ROLE_OPTIONS = [
+  { id: "admin", label: "Admin" },
+  { id: "tenant", label: "Tenant" },
+  { id: "anonymous", label: "Anonymous" },
+];
+
+// Well-known route reasons the gateway emits — lets operators pick
+// from suggestions instead of guessing the exact wire string. We pass
+// freeText=true on the chip input so unknown reasons (e.g. from a
+// future gateway version) can still be matched as-is.
+const ROUTE_REASON_OPTIONS = [
+  { id: "requested_model", label: "requested_model" },
+  { id: "default_model", label: "default_model" },
+  { id: "fallback", label: "fallback" },
+  { id: "failover", label: "failover" },
+  { id: "tenant_default", label: "tenant_default" },
+];
+
+type PolicyFormState = {
+  id: string;
+  action: "deny" | "rewrite_model";
+  reason: string;
+  roles: string[];
+  tenants: string[];
+  providers: string[];
+  provider_kinds: string[];
+  models: string[];
+  route_reasons: string[];
+  min_prompt_tokens: string; // string for input control; parsed on save
+  min_estimated_cost_usd: string;
+  rewrite_model_to: string;
+};
+
+const EMPTY_FORM: PolicyFormState = {
+  id: "",
+  action: "deny",
+  reason: "",
+  roles: [],
+  tenants: [],
+  providers: [],
+  provider_kinds: [],
+  models: [],
+  route_reasons: [],
+  min_prompt_tokens: "",
+  min_estimated_cost_usd: "",
+  rewrite_model_to: "",
+};
+
+function ruleToForm(rule: ConfiguredPolicyRuleRecord): PolicyFormState {
+  return {
+    id: rule.id,
+    action: rule.action === "rewrite_model" ? "rewrite_model" : "deny",
+    reason: rule.reason ?? "",
+    roles: rule.roles ?? [],
+    tenants: rule.tenants ?? [],
+    providers: rule.providers ?? [],
+    provider_kinds: rule.provider_kinds ?? [],
+    models: rule.models ?? [],
+    route_reasons: rule.route_reasons ?? [],
+    min_prompt_tokens: rule.min_prompt_tokens ? String(rule.min_prompt_tokens) : "",
+    // Wire stores micros USD; the form shows dollars for legibility.
+    min_estimated_cost_usd: rule.min_estimated_cost_micros_usd
+      ? (rule.min_estimated_cost_micros_usd / 1_000_000).toString()
+      : "",
+    rewrite_model_to: rule.rewrite_model_to ?? "",
+  };
+}
+
+function formToPayload(form: PolicyFormState): PolicyRuleUpsertPayload {
+  // Drop empty optionals so the gateway sees the same shape it would
+  // get from a config-file rule. JSON.stringify will omit undefined.
+  const payload: PolicyRuleUpsertPayload = {
+    id: form.id.trim(),
+    action: form.action,
+  };
+  if (form.reason.trim()) payload.reason = form.reason.trim();
+  if (form.roles.length) payload.roles = form.roles;
+  if (form.tenants.length) payload.tenants = form.tenants;
+  if (form.providers.length) payload.providers = form.providers;
+  if (form.provider_kinds.length) payload.provider_kinds = form.provider_kinds;
+  if (form.models.length) payload.models = form.models;
+  if (form.route_reasons.length) payload.route_reasons = form.route_reasons;
+  const minTokens = parseInt(form.min_prompt_tokens, 10);
+  if (Number.isFinite(minTokens) && minTokens > 0) payload.min_prompt_tokens = minTokens;
+  const minDollars = parseFloat(form.min_estimated_cost_usd);
+  if (Number.isFinite(minDollars) && minDollars > 0) {
+    payload.min_estimated_cost_micros_usd = Math.round(minDollars * 1_000_000);
+  }
+  if (form.action === "rewrite_model" && form.rewrite_model_to.trim()) {
+    payload.rewrite_model_to = form.rewrite_model_to.trim();
+  }
+  return payload;
+}
+
+// describeMatches renders a compact summary of a rule's match
+// conditions for the table — "any" when nothing's set, otherwise a
+// dot-separated list of the populated dimensions. Keeps the table
+// scannable without dumping every field per row.
+function describeMatches(rule: ConfiguredPolicyRuleRecord): string {
+  const parts: string[] = [];
+  if (rule.roles?.length) parts.push(`role: ${rule.roles.join(", ")}`);
+  if (rule.tenants?.length) parts.push(`tenant: ${rule.tenants.join(", ")}`);
+  if (rule.providers?.length) parts.push(`provider: ${rule.providers.join(", ")}`);
+  if (rule.provider_kinds?.length) parts.push(`kind: ${rule.provider_kinds.join(", ")}`);
+  if (rule.models?.length) parts.push(`model: ${rule.models.join(", ")}`);
+  if (rule.route_reasons?.length) parts.push(`reason: ${rule.route_reasons.join(", ")}`);
+  if (rule.min_prompt_tokens) parts.push(`≥${rule.min_prompt_tokens} prompt tokens`);
+  if (rule.min_estimated_cost_micros_usd) {
+    parts.push(`≥$${(rule.min_estimated_cost_micros_usd / 1_000_000).toFixed(4)}`);
+  }
+  return parts.length ? parts.join(" · ") : "any";
+}
+
+function PolicyTab({ state, actions }: Props) {
+  const [editing, setEditing] = useState<PolicyFormState | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const [formError, setFormError] = useState("");
+
+  const rules: ConfiguredPolicyRuleRecord[] = state.adminConfig?.policy_rules ?? [];
+  const tenantOptions = (state.adminConfig?.tenants ?? []).map(t => ({ id: t.id, label: t.name }));
+  const providerOptions = (state.providerPresets ?? []).map(p => ({ id: p.id, label: p.name }));
+  const modelOptions = state.models.map(m => ({ id: m.id, label: m.id }));
+
+  function openNew() {
+    setEditing({ ...EMPTY_FORM });
+    setFormError("");
+  }
+
+  function openEdit(rule: ConfiguredPolicyRuleRecord) {
+    setEditing(ruleToForm(rule));
+    setFormError("");
+  }
+
+  async function handleSave() {
+    if (!editing) return;
+    if (!editing.id.trim()) {
+      setFormError("Rule ID is required.");
+      return;
+    }
+    if (editing.action === "rewrite_model" && !editing.rewrite_model_to.trim()) {
+      setFormError("Rewrite-model rules need a target model.");
+      return;
+    }
+    setFormError("");
+    try {
+      await actions.upsertPolicyRule(formToPayload(editing));
+      setEditing(null);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to save rule.");
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteCandidate) return;
+    await actions.deletePolicyRule(deleteCandidate);
+    setDeleteCandidate(null);
+  }
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Policy rules</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{rules.length} total</span>
+        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={openNew}>
+          <Icon d={Icons.plus} size={13} /> New rule
+        </button>
+      </div>
+
+      {rules.length > 0 ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Action</th>
+                <th>Matches</th>
+                <th>Effect</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map(rule => (
+                <tr key={rule.id} style={{ cursor: "pointer" }} onClick={() => openEdit(rule)}>
+                  <td className="mono" style={{ color: "var(--t0)", fontWeight: 500 }}>{rule.id}</td>
+                  <td>
+                    {rule.action === "rewrite_model" ? (
+                      <span className="badge badge-amber">rewrite</span>
+                    ) : (
+                      <span className="badge badge-red">deny</span>
+                    )}
+                  </td>
+                  <td className="mono" style={{ color: "var(--t2)", fontSize: 11 }}>{describeMatches(rule)}</td>
+                  <td className="mono" style={{ color: "var(--t1)", fontSize: 11 }}>
+                    {rule.action === "rewrite_model"
+                      ? <>→ <span style={{ color: "var(--t0)" }}>{rule.rewrite_model_to}</span></>
+                      : (rule.reason || <span style={{ color: "var(--t3)" }}>no reason</span>)}
+                  </td>
+                  <td onClick={e => e.stopPropagation()}>
+                    <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", padding: "3px 6px" }}
+                      aria-label={`Delete rule ${rule.id}`}
+                      onClick={() => setDeleteCandidate(rule.id)}>
+                      <Icon d={Icons.trash} size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
+          No policy rules. Click &quot;New rule&quot; to add a deny or model-rewrite rule.
+        </div>
+      )}
+
+      {editing && (
+        <SlideOver
+          title={state.adminConfig?.policy_rules?.find(r => r.id === editing.id) ? "Edit policy rule" : "New policy rule"}
+          onClose={() => setEditing(null)}
+          footer={
+            <>
+              {formError && <div style={{ marginBottom: 8 }}><InlineError message={formError} /></div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }}
+                  disabled={!editing.id.trim() || (editing.action === "rewrite_model" && !editing.rewrite_model_to.trim())}
+                  onClick={() => void handleSave()}>
+                  <Icon d={Icons.check} size={14} /> Save rule
+                </button>
+                <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+              </div>
+            </>
+          }>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Field label="RULE ID">
+              <input className="input" placeholder="e.g. deny-cloud-for-team-a" value={editing.id}
+                onChange={e => setEditing(s => s && ({ ...s, id: e.target.value }))}
+                style={{ fontFamily: "var(--font-mono)" }} />
+            </Field>
+            <Field label="ACTION">
+              <div style={{ display: "flex", gap: 8 }}>
+                {(["deny", "rewrite_model"] as const).map(a => (
+                  <label key={a} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "6px 10px", borderRadius: "var(--radius-sm)",
+                    border: `1px solid ${editing.action === a ? "var(--teal)" : "var(--border)"}`,
+                    color: editing.action === a ? "var(--teal)" : "var(--t1)",
+                    fontSize: 12, fontFamily: "var(--font-mono)", cursor: "pointer", flex: 1,
+                  }}>
+                    <input type="radio" checked={editing.action === a} onChange={() => setEditing(s => s && ({ ...s, action: a }))}
+                      style={{ accentColor: "var(--teal)" }} />
+                    {a}
+                  </label>
+                ))}
+              </div>
+            </Field>
+            {editing.action === "deny" ? (
+              <Field label="REASON (shown in the 403 response body)">
+                <input className="input" placeholder="e.g. team-a is local-only"
+                  value={editing.reason}
+                  onChange={e => setEditing(s => s && ({ ...s, reason: e.target.value }))} />
+              </Field>
+            ) : (
+              <Field label="REWRITE TO MODEL">
+                <input className="input" placeholder="e.g. gpt-4o-mini"
+                  value={editing.rewrite_model_to}
+                  onChange={e => setEditing(s => s && ({ ...s, rewrite_model_to: e.target.value }))}
+                  style={{ fontFamily: "var(--font-mono)" }}
+                  list="policy-model-suggestions" />
+                <datalist id="policy-model-suggestions">
+                  {modelOptions.map(o => <option key={o.id} value={o.id} />)}
+                </datalist>
+              </Field>
+            )}
+
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: "var(--t2)", marginBottom: 8, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Match conditions (any-blank = match anything)
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <Field label="ROLES">
+                  <ChipInput
+                    values={editing.roles}
+                    onChange={v => setEditing(s => s && ({ ...s, roles: v }))}
+                    options={ROLE_OPTIONS}
+                    placeholder="any role"
+                    ariaLabel="Roles"
+                  />
+                </Field>
+                <Field label="TENANTS">
+                  <ChipInput
+                    values={editing.tenants}
+                    onChange={v => setEditing(s => s && ({ ...s, tenants: v }))}
+                    options={tenantOptions}
+                    placeholder="any tenant"
+                    ariaLabel="Tenants"
+                  />
+                </Field>
+                <Field label="PROVIDERS">
+                  <ChipInput
+                    values={editing.providers}
+                    onChange={v => setEditing(s => s && ({ ...s, providers: v }))}
+                    options={providerOptions}
+                    placeholder="any provider"
+                    ariaLabel="Providers"
+                  />
+                </Field>
+                <Field label="PROVIDER KINDS">
+                  <ChipInput
+                    values={editing.provider_kinds}
+                    onChange={v => setEditing(s => s && ({ ...s, provider_kinds: v }))}
+                    options={PROVIDER_KIND_OPTIONS}
+                    placeholder="any kind"
+                    ariaLabel="Provider kinds"
+                  />
+                </Field>
+                <Field label="MODELS">
+                  <ChipInput
+                    values={editing.models}
+                    onChange={v => setEditing(s => s && ({ ...s, models: v }))}
+                    options={modelOptions}
+                    placeholder="any model"
+                    ariaLabel="Models"
+                  />
+                </Field>
+                <Field label="ROUTE REASONS">
+                  <ChipInput
+                    values={editing.route_reasons}
+                    onChange={v => setEditing(s => s && ({ ...s, route_reasons: v }))}
+                    options={ROUTE_REASON_OPTIONS}
+                    freeText
+                    placeholder="any reason"
+                    ariaLabel="Route reasons"
+                  />
+                </Field>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <Field label="MIN PROMPT TOKENS">
+                      <input className="input" type="number" placeholder="0 = any"
+                        value={editing.min_prompt_tokens}
+                        onChange={e => setEditing(s => s && ({ ...s, min_prompt_tokens: e.target.value }))} />
+                    </Field>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <Field label="MIN COST (USD)">
+                      <input className="input" type="number" step="0.0001" placeholder="0 = any"
+                        value={editing.min_estimated_cost_usd}
+                        onChange={e => setEditing(s => s && ({ ...s, min_estimated_cost_usd: e.target.value }))} />
+                    </Field>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </SlideOver>
+      )}
+
+      {deleteCandidate && (
+        <ConfirmModal
+          title="Delete policy rule"
+          message={
+            <>
+              Delete rule <code style={{ fontFamily: "var(--font-mono)", color: "var(--t0)" }}>{deleteCandidate}</code>?
+              The change is immediate — any in-flight request matching this rule will lose the policy effect.
+            </>
+          }
+          confirmLabel="Delete rule"
+          danger
+          onClose={() => setDeleteCandidate(null)}
+          onConfirm={() => void handleDelete()}
+        />
       )}
     </>
   );

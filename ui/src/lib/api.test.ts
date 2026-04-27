@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled } from "./api";
+import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled, upsertPolicyRule } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -225,6 +225,67 @@ describe("api client", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({ key: "" }),
+        }),
+      );
+    });
+  });
+
+  describe("policy rule REST API", () => {
+    it("POST /policy-rules sends the full payload through verbatim", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await upsertPolicyRule({
+        id: "deny-cloud-for-team-a",
+        action: "deny",
+        reason: "team-a is local-only",
+        roles: ["tenant"],
+        tenants: ["team-a"],
+        provider_kinds: ["cloud"],
+      }, "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/policy-rules",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            id: "deny-cloud-for-team-a",
+            action: "deny",
+            reason: "team-a is local-only",
+            roles: ["tenant"],
+            tenants: ["team-a"],
+            provider_kinds: ["cloud"],
+          }),
+        }),
+      );
+    });
+
+    it("POST /policy-rules with rewrite_model carries the target model", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await upsertPolicyRule({
+        id: "downgrade-team-b-to-mini",
+        action: "rewrite_model",
+        tenants: ["team-b"],
+        models: ["gpt-4o"],
+        rewrite_model_to: "gpt-4o-mini",
+      }, "admin-secret");
+
+      const call = fetchMock.mock.calls.at(-1);
+      const body = JSON.parse((call?.[1] as RequestInit | undefined)?.body as string);
+      expect(body.action).toBe("rewrite_model");
+      expect(body.rewrite_model_to).toBe("gpt-4o-mini");
+    });
+
+    it("POST /policy-rules/delete sends only the id", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({}));
+
+      await deletePolicyRule("deny-cloud-for-team-a", "admin-secret");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/control-plane/policy-rules/delete",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ id: "deny-cloud-for-team-a" }),
         }),
       );
     });

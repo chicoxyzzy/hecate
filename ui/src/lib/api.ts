@@ -84,6 +84,28 @@ export type DeletePayload = {
   id: string;
 };
 
+// PolicyRuleUpsertPayload mirrors the gateway's
+// ControlPlanePolicyRuleRecord wire shape exactly. Empty arrays /
+// zero-valued thresholds match anything; the action field gates
+// whether `rewrite_model_to` and `reason` are meaningful (rewrite vs
+// deny). The handler accepts arrays / numbers / strings as-is — no
+// normalization at the boundary, the operator is responsible for
+// well-formed inputs.
+export type PolicyRuleUpsertPayload = {
+  id: string;
+  action: "deny" | "rewrite_model";
+  reason?: string;
+  roles?: string[];
+  tenants?: string[];
+  providers?: string[];
+  provider_kinds?: string[];
+  models?: string[];
+  route_reasons?: string[];
+  min_prompt_tokens?: number;
+  min_estimated_cost_micros_usd?: number;
+  rewrite_model_to?: string;
+};
+
 export type RotateAPIKeyPayload = {
   id: string;
   key: string;
@@ -233,6 +255,14 @@ export async function rotateAPIKey(payload: RotateAPIKeyPayload, authToken?: str
 
 export async function deleteAPIKey(payload: DeletePayload, authToken?: string): Promise<unknown> {
   return fetchJSON("/admin/control-plane/api-keys/delete", { authToken, method: "POST", body: payload });
+}
+
+export async function upsertPolicyRule(payload: PolicyRuleUpsertPayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/policy-rules", { authToken, method: "POST", body: payload });
+}
+
+export async function deletePolicyRule(id: string, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/policy-rules/delete", { authToken, method: "POST", body: { id } });
 }
 
 export async function setProviderEnabled(id: string, enabled: boolean, authToken?: string): Promise<unknown> {

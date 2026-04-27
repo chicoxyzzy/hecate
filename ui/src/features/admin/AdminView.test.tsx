@@ -100,6 +100,145 @@ describe("AdminView retention tab", () => {
   });
 });
 
+describe("AdminView policy tab", () => {
+  function adminConfigWith(rules: unknown[]) {
+    return {
+      backend: "memory",
+      tenants: [
+        { id: "team-a", name: "team-a", enabled: true, allowed_providers: [], allowed_models: [] },
+      ],
+      api_keys: [],
+      providers: [],
+      pricebook: [],
+      policy_rules: rules,
+      events: [],
+    } as unknown as ReturnType<typeof createRuntimeConsoleFixture>["adminConfig"];
+  }
+
+  it("renders the empty state when no rules are configured", async () => {
+    const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    expect(await screen.findByText(/No policy rules/i)).toBeTruthy();
+  });
+
+  it("lists existing rules with action badge + match summary + effect", async () => {
+    const { state, actions, user } = setup({
+      adminConfig: adminConfigWith([
+        {
+          id: "deny-cloud",
+          action: "deny",
+          reason: "team-a is local-only",
+          tenants: ["team-a"],
+          provider_kinds: ["cloud"],
+        },
+        {
+          id: "downgrade-team-b",
+          action: "rewrite_model",
+          tenants: ["team-b"],
+          models: ["gpt-4o"],
+          rewrite_model_to: "gpt-4o-mini",
+        },
+      ]),
+    });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+
+    // Each row's id renders as mono.
+    expect(await screen.findByText("deny-cloud")).toBeTruthy();
+    expect(screen.getByText("downgrade-team-b")).toBeTruthy();
+
+    // Action badges (lowercase labels match the badge text).
+    expect(screen.getByText("deny")).toBeTruthy();
+    expect(screen.getByText("rewrite")).toBeTruthy();
+
+    // Match summary picks up the populated dimensions.
+    expect(screen.getByText(/tenant: team-a · kind: cloud/)).toBeTruthy();
+    expect(screen.getByText(/tenant: team-b · model: gpt-4o/)).toBeTruthy();
+
+    // Effect column shows the deny reason and the rewrite arrow.
+    expect(screen.getByText("team-a is local-only")).toBeTruthy();
+    expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
+  });
+
+  it("'New rule' opens the SlideOver with the empty form", async () => {
+    const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: /New rule/i }));
+    expect(await screen.findByRole("dialog", { name: /New policy rule/i })).toBeTruthy();
+    // The deny radio is selected by default — the reason field shows.
+    expect(screen.getByText(/REASON \(shown in the 403/i)).toBeTruthy();
+  });
+
+  it("switching to rewrite_model swaps the reason input for the target-model input", async () => {
+    const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: /New rule/i }));
+    // Click the rewrite_model radio.
+    await user.click(screen.getByLabelText("rewrite_model"));
+    expect(screen.getByText(/REWRITE TO MODEL/i)).toBeTruthy();
+    // Save is disabled while target model is empty even if id is set.
+    const id = screen.getByPlaceholderText(/deny-cloud-for-team-a/i);
+    await user.type(id, "downgrade-x");
+    expect((screen.getByRole("button", { name: /Save rule/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("Save calls upsertPolicyRule with the trimmed payload", async () => {
+    const upsertPolicyRule = vi.fn(async () => undefined);
+    const { state, actions, user } = setup(
+      { adminConfig: adminConfigWith([]) },
+      { upsertPolicyRule },
+    );
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: /New rule/i }));
+    await user.type(screen.getByPlaceholderText(/deny-cloud-for-team-a/i), "deny-test");
+    await user.type(screen.getByPlaceholderText(/team-a is local-only/i), "test reason");
+    await user.click(screen.getByRole("button", { name: /Save rule/i }));
+    expect(upsertPolicyRule).toHaveBeenCalledWith(expect.objectContaining({
+      id: "deny-test",
+      action: "deny",
+      reason: "test reason",
+    }));
+  });
+
+  it("clicking a row opens the edit form prefilled with that rule", async () => {
+    const { state, actions, user } = setup({
+      adminConfig: adminConfigWith([
+        { id: "deny-cloud", action: "deny", reason: "test", provider_kinds: ["cloud"] },
+      ]),
+    });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByText("deny-cloud"));
+    expect(await screen.findByRole("dialog", { name: /Edit policy rule/i })).toBeTruthy();
+    // The id field should have the existing id pre-filled.
+    const idInput = screen.getByPlaceholderText(/deny-cloud-for-team-a/i) as HTMLInputElement;
+    expect(idInput.value).toBe("deny-cloud");
+  });
+
+  it("Delete opens a confirm modal that calls deletePolicyRule with the id", async () => {
+    const deletePolicyRule = vi.fn(async () => undefined);
+    const { state, actions, user } = setup(
+      {
+        adminConfig: adminConfigWith([
+          { id: "deny-cloud", action: "deny" },
+        ]),
+      },
+      { deletePolicyRule },
+    );
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: /Delete rule deny-cloud/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Delete policy rule/i });
+    expect(dialog).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Delete rule$/i }));
+    expect(deletePolicyRule).toHaveBeenCalledWith("deny-cloud");
+  });
+});
+
 describe("AdminView usage tab", () => {
   it("shows empty state when ledger is empty", async () => {
     const { state, actions, user } = setup({ requestLedger: [] });

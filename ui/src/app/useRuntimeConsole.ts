@@ -10,6 +10,7 @@ import {
   deleteChatSession as deleteChatSessionRequest,
   updateChatSession as updateChatSessionRequest,
   deleteAPIKey as deleteAPIKeyRequest,
+  deletePolicyRule as deletePolicyRuleRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
   getBudget,
@@ -37,8 +38,10 @@ import {
   setTenantEnabled as setTenantEnabledRequest,
   topUpBudget as topUpBudgetRequest,
   upsertAPIKey as upsertAPIKeyRequest,
+  upsertPolicyRule as upsertPolicyRuleRequest,
   upsertTenant as upsertTenantRequest,
 } from "../lib/api";
+import type { PolicyRuleUpsertPayload } from "../lib/api";
 import type {
   BudgetStatusResponse,
   AccountSummaryResponse,
@@ -134,16 +137,20 @@ export function useRuntimeConsole() {
 
   const [tenantFormName, setTenantFormName] = useState("");
   const [tenantFormID, setTenantFormID] = useState("");
-  const [tenantFormProviders, setTenantFormProviders] = useState("");
-  const [tenantFormModels, setTenantFormModels] = useState("");
+  // The allowed_* form fields are arrays of ids — they were
+  // CSV-stringly-typed in an earlier iteration but are now backed by
+  // ChipInput multi-selects, so the wire shape (string[]) and the
+  // form shape match directly. parseCSV is no longer involved.
+  const [tenantFormProviders, setTenantFormProviders] = useState<string[]>([]);
+  const [tenantFormModels, setTenantFormModels] = useState<string[]>([]);
 
   const [apiKeyFormName, setAPIKeyFormName] = useState("");
   const [apiKeyFormID, setAPIKeyFormID] = useState("");
   const [apiKeyFormSecret, setAPIKeyFormSecret] = useState("");
   const [apiKeyFormTenant, setAPIKeyFormTenant] = useState("");
   const [apiKeyFormRole, setAPIKeyFormRole] = useState("tenant");
-  const [apiKeyFormProviders, setAPIKeyFormProviders] = useState("");
-  const [apiKeyFormModels, setAPIKeyFormModels] = useState("");
+  const [apiKeyFormProviders, setAPIKeyFormProviders] = useState<string[]>([]);
+  const [apiKeyFormModels, setAPIKeyFormModels] = useState<string[]>([]);
   const [rotateAPIKeyID, setRotateAPIKeyID] = useState("");
   const [rotateAPIKeySecret, setRotateAPIKeySecret] = useState("");
   const [retentionSubsystems, setRetentionSubsystems] = useState("");
@@ -372,8 +379,8 @@ export function useRuntimeConsole() {
   function resetTenantForm() {
     setTenantFormID("");
     setTenantFormName("");
-    setTenantFormProviders("");
-    setTenantFormModels("");
+    setTenantFormProviders([]);
+    setTenantFormModels([]);
   }
 
   function resetAPIKeyForm() {
@@ -381,8 +388,8 @@ export function useRuntimeConsole() {
     setAPIKeyFormName("");
     setAPIKeyFormSecret("");
     setAPIKeyFormTenant("");
-    setAPIKeyFormProviders("");
-    setAPIKeyFormModels("");
+    setAPIKeyFormProviders([]);
+    setAPIKeyFormModels([]);
   }
 
   function resetRotateAPIKeyForm() {
@@ -741,8 +748,8 @@ export function useRuntimeConsole() {
           {
             id: tenantFormID,
             name: tenantFormName,
-            allowed_providers: parseCSV(tenantFormProviders),
-            allowed_models: parseCSV(tenantFormModels),
+            allowed_providers: tenantFormProviders,
+            allowed_models: tenantFormModels,
             enabled: true,
           },
           authToken,
@@ -760,8 +767,8 @@ export function useRuntimeConsole() {
         key: apiKeyFormSecret,
         tenant: apiKeyFormTenant,
         role: apiKeyFormRole,
-        allowed_providers: parseCSV(apiKeyFormProviders),
-        allowed_models: parseCSV(apiKeyFormModels),
+        allowed_providers: apiKeyFormProviders,
+        allowed_models: apiKeyFormModels,
         enabled: true,
       },
       authToken,
@@ -816,6 +823,33 @@ export function useRuntimeConsole() {
       failureDetail: "failed to delete tenant",
       action: async () => {
         await deleteTenantRequest({ id }, authToken);
+      },
+    });
+  }
+
+  // Policy rule mutations follow the same runAdminMutation contract
+  // as the tenant / API key flows: success populates the toast notice
+  // + clears adminConfigError; failure populates BOTH inline banner
+  // and toast so an operator can't miss the error regardless of
+  // viewport focus.
+  async function upsertPolicyRule(payload: PolicyRuleUpsertPayload) {
+    await runAdminMutation({
+      successMessage: "Policy rule saved.",
+      errorMessage: "Failed to save policy rule.",
+      failureDetail: "failed to save policy rule",
+      action: async () => {
+        await upsertPolicyRuleRequest(payload, authToken);
+      },
+    });
+  }
+
+  async function deletePolicyRule(id: string) {
+    await runAdminMutation({
+      successMessage: "Policy rule deleted.",
+      errorMessage: "Failed to delete policy rule.",
+      failureDetail: "failed to delete policy rule",
+      action: async () => {
+        await deletePolicyRuleRequest(id, authToken);
       },
     });
   }
@@ -1081,6 +1115,7 @@ export function useRuntimeConsole() {
     actions: {
       copyCommand,
       deleteAPIKey,
+      deletePolicyRule,
       deleteTenant,
       createChatSession,
       deleteChatSession,
@@ -1124,6 +1159,7 @@ export function useRuntimeConsole() {
       updateToolResult,
       topUpBudget,
       upsertAPIKey,
+      upsertPolicyRule,
       setProviderAPIKey,
       upsertPricebookEntry,
       deletePricebookEntry,

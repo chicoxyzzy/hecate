@@ -855,6 +855,87 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.notice).toBeNull();
       expect(result.current.state.adminConfigError).toBe("");
     });
+
+    it("upsertPolicyRule POSTs the payload + fires success notice", async () => {
+      let postBody = "";
+      const baseMock = adminFetchMock({});
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/policy-rules" && init?.method === "POST") {
+          postBody = String(init.body ?? "");
+          return jsonResponse({ object: "control_plane_policy_rule", data: {} });
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.upsertPolicyRule({
+          id: "deny-cloud",
+          action: "deny",
+          tenants: ["team-a"],
+          provider_kinds: ["cloud"],
+          reason: "team-a is local-only",
+        });
+      });
+      await waitFor(() => expect(result.current.state.notice?.message).toBe("Policy rule saved."));
+      expect(JSON.parse(postBody)).toMatchObject({
+        id: "deny-cloud",
+        action: "deny",
+        tenants: ["team-a"],
+        provider_kinds: ["cloud"],
+        reason: "team-a is local-only",
+      });
+      expect(result.current.state.adminConfigError).toBe("");
+    });
+
+    it("deletePolicyRule POSTs to the delete endpoint with the id", async () => {
+      let postBody = "";
+      const baseMock = adminFetchMock({});
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/policy-rules/delete" && init?.method === "POST") {
+          postBody = String(init.body ?? "");
+          return jsonResponse({ object: "control_plane_policy_rule_deleted", data: {} });
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.deletePolicyRule("deny-cloud");
+      });
+      await waitFor(() => expect(result.current.state.notice?.message).toBe("Policy rule deleted."));
+      expect(JSON.parse(postBody)).toEqual({ id: "deny-cloud" });
+    });
+
+    it("upsertPolicyRule failure populates BOTH inline banner and toast", async () => {
+      const baseMock = adminFetchMock({});
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/policy-rules" && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({ error: { message: "rule id is required" } }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.upsertPolicyRule({ id: "", action: "deny" });
+      });
+      await waitFor(() => expect(result.current.state.notice?.kind).toBe("error"));
+      expect(result.current.state.notice?.message).toBe("Failed to save policy rule.");
+      expect(result.current.state.adminConfigError).toContain("rule id is required");
+    });
   });
 
   // Chat session ops mutate sidebar state and chatError differently

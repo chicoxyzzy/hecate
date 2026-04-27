@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   Badge,
+  ChipInput,
   CodeBlock,
   ConfirmModal,
   CopyBtn,
@@ -347,6 +348,130 @@ describe("ProviderPicker", () => {
 });
 
 // ─── CodeBlock ────────────────────────────────────────────────────────
+
+// ─── ChipInput ──────────────────────────────────────────────────────
+
+describe("ChipInput", () => {
+  const options = [
+    { id: "openai", label: "OpenAI" },
+    { id: "anthropic", label: "Anthropic" },
+    { id: "ollama", label: "Ollama" },
+  ];
+
+  it("renders chips for the current values and an empty placeholder when none selected", () => {
+    const { rerender } = render(
+      <ChipInput values={[]} onChange={() => {}} options={options} placeholder="all" />,
+    );
+    expect((screen.getByPlaceholderText("all") as HTMLInputElement).value).toBe("");
+    rerender(<ChipInput values={["openai"]} onChange={() => {}} options={options} />);
+    expect(screen.getByText("OpenAI")).toBeTruthy();
+  });
+
+  it("typing filters the suggestion dropdown; clicking a suggestion adds a chip", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ChipInput values={[]} onChange={onChange} options={options} ariaLabel="providers" />);
+    const input = screen.getByLabelText("providers");
+    await user.click(input);
+    await user.type(input, "anth");
+    // Only the matching option should be visible in the dropdown.
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    expect(within(menu).getByText("Anthropic")).toBeTruthy();
+    expect(within(menu).queryByText("OpenAI")).toBeNull();
+    // mousedown — not click — because the dropdown closes on the
+    // input's blur (which fires before click). The component uses
+    // onMouseDown for selection to dodge that race.
+    fireEvent.mouseDown(within(menu).getByText("Anthropic"));
+    expect(onChange).toHaveBeenCalledWith(["anthropic"]);
+  });
+
+  it("Enter on the highlighted suggestion adds a chip", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ChipInput values={[]} onChange={onChange} options={options} ariaLabel="providers" />);
+    const input = screen.getByLabelText("providers");
+    await user.click(input);
+    // First suggestion is highlighted by default — Enter commits it.
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenCalledWith(["openai"]);
+  });
+
+  it("Backspace on empty input removes the last chip", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChipInput
+        values={["openai", "anthropic"]}
+        onChange={onChange}
+        options={options}
+        ariaLabel="providers"
+      />,
+    );
+    const input = screen.getByLabelText("providers");
+    await user.click(input);
+    await user.keyboard("{Backspace}");
+    // Removes the last chip (anthropic), keeps openai.
+    expect(onChange).toHaveBeenCalledWith(["openai"]);
+  });
+
+  it("clicking the × on a chip removes that specific chip", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChipInput
+        values={["openai", "anthropic"]}
+        onChange={onChange}
+        options={options}
+        ariaLabel="providers"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Remove OpenAI" }));
+    expect(onChange).toHaveBeenCalledWith(["anthropic"]);
+  });
+
+  it("excludes already-chipped values from the suggestion list", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChipInput
+        values={["openai"]}
+        onChange={() => {}}
+        options={options}
+        ariaLabel="providers"
+      />,
+    );
+    const input = screen.getByLabelText("providers");
+    await user.click(input);
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    // openai is already chipped — shouldn't appear in the suggestion
+    // list (the dropdown should only show anthropic + ollama).
+    expect(within(menu).queryByText("OpenAI")).toBeNull();
+    expect(within(menu).getByText("Anthropic")).toBeTruthy();
+    expect(within(menu).getByText("Ollama")).toBeTruthy();
+  });
+
+  it("freeText mode commits a typed value not in options on Enter", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChipInput
+        values={[]}
+        onChange={onChange}
+        options={options}
+        freeText
+        ariaLabel="reasons"
+      />,
+    );
+    const input = screen.getByLabelText("reasons");
+    await user.click(input);
+    await user.type(input, "custom_reason");
+    // The dropdown shows an "add 'custom_reason'" hint — Enter commits.
+    // Highlight=0 points to the (no-match) freeText fallback row in
+    // this case; we look for the hint and mouse-down it.
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    fireEvent.mouseDown(within(menu).getByText(/add "custom_reason"/));
+    expect(onChange).toHaveBeenCalledWith(["custom_reason"]);
+  });
+});
 
 describe("CodeBlock", () => {
   it("renders the code text and the language tag", () => {
