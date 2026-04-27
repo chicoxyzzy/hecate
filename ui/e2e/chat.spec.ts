@@ -123,3 +123,56 @@ test("workspace selection persists across reload", async ({ page }) => {
   await page.waitForSelector(".hecate-activitybar");
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute("aria-label", /Providers/);
 });
+
+// A failing /v1/chat/completions surfaces in two places: the inline
+// error banner inside the chat view (next to the input), and a toast
+// at the page level so an operator with their attention on a sidebar
+// (admin, observe) doesn't miss it. The unit test in
+// useRuntimeConsole.test.tsx pins the state shape; this e2e proves
+// both surfaces actually render in a real DOM.
+test("chat error surfaces in toast and inline banner", async ({ page }) => {
+  await page.route("/v1/chat/sessions", r =>
+    r.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        object: "chat_session",
+        data: {
+          id: "chat_err_e2e",
+          title: "x",
+          turns: [],
+          created_at: "2026-04-21T00:00:00Z",
+          updated_at: "2026-04-21T00:00:00Z",
+        },
+      }),
+    }),
+  );
+  await page.route("/v1/chat/completions", r =>
+    r.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          type: "gateway_error",
+          message: "api key is required for cloud provider anthropic when stub mode is disabled",
+        },
+      }),
+    }),
+  );
+
+  await page.locator("textarea").first().fill("hello");
+  await page.locator("button[type='submit']").click();
+
+  // Toast: pinned visible with the error class so global notice surface
+  // works even when the user's eyes aren't on the chat pane.
+  const toast = page.locator(".toast.toast--error");
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText(/api key is required/i);
+  // No leaked classification prefix from the backend (UserFacingMessage
+  // strips this in the gateway). Locks in the contract on the wire.
+  await expect(toast).not.toContainText(/^client error: /i);
+
+  // Inline banner under the chat header carries the same message —
+  // belt-and-braces so chat-context users see it without scanning.
+  await expect(page.getByText(/api key is required/i).first()).toBeVisible();
+});
