@@ -1094,6 +1094,14 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	run.LastError = execution.LastError
 	run.OtelStatusCode = firstNonEmpty(execution.OtelStatusCode, "ok")
 	run.OtelStatusMessage = execution.OtelStatusMessage
+	if execution.CostMicrosUSD > 0 {
+		// Agent loop accumulates per-turn LLM cost and surfaces the
+		// total here. Other executors don't talk to the LLM and leave
+		// CostMicrosUSD zero — preserving an existing TotalCostMicrosUSD
+		// (e.g. set by an older execution kind not yet wired) rather
+		// than overwriting it with zero.
+		run.TotalCostMicrosUSD = execution.CostMicrosUSD
+	}
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}

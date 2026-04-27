@@ -940,6 +940,104 @@ func TestAgentLoop_SystemPromptNotReinjectedOnResume(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_CostAccumulatesAcrossTurns(t *testing.T) {
+	// Each LLM response carries Cost.TotalMicrosUSD; the loop must
+	// sum these across turns and surface the total on
+	// ExecutionResult.CostMicrosUSD. The runner reads this value to
+	// populate run.TotalCostMicrosUSD.
+	respWithCost := func(content string, cost int64) *types.ChatResponse {
+		r := makeChatResp(makeAssistantMsg(content))
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("", 100),              // turn 1: tool call
+			respWithCost("Final answer.", 250), // turn 2: final
+		},
+	}
+	llm.responses[0].Choices[0].Message.ToolCalls = []types.ToolCall{{
+		ID: "c1", Type: "function",
+		Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
+	}}
+
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.CostMicrosUSD != 350 {
+		t.Errorf("CostMicrosUSD = %d, want 350 (100 + 250)", res.CostMicrosUSD)
+	}
+}
+
+func TestAgentLoop_PerTaskCostCeilingTriggersFail(t *testing.T) {
+	// When BudgetMicrosUSD is set and cumulative cost crosses it,
+	// the loop fails with an actionable error. Subsequent turns
+	// don't fire — even if the LLM was about to give a final answer.
+	respWithCost := func(content string, cost int64, calls ...types.ToolCall) *types.ChatResponse {
+		msg := makeAssistantMsg(content, calls...)
+		r := makeChatResp(msg)
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("", 600, types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
+			}),
+			respWithCost("would be the answer", 0), // never fires
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.BudgetMicrosUSD = 500 // ceiling under the first turn's cost
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "failed" {
+		t.Errorf("Status = %q, want failed", res.Status)
+	}
+	if !strings.Contains(res.LastError, "cost ceiling") {
+		t.Errorf("LastError = %q, want mention of 'cost ceiling'", res.LastError)
+	}
+	if res.CostMicrosUSD != 600 {
+		t.Errorf("CostMicrosUSD = %d, want 600 (the spent amount that crossed the ceiling)", res.CostMicrosUSD)
+	}
+	// Only the first LLM call should have happened — the ceiling
+	// check fires before the second turn.
+	if got := llm.calls.Load(); got != 1 {
+		t.Errorf("LLM calls = %d, want 1 (loop bailed after first turn)", got)
+	}
+}
+
+func TestAgentLoop_NoCeilingMeansUnlimited(t *testing.T) {
+	// BudgetMicrosUSD == 0 (the default) disables the ceiling. The
+	// loop runs to completion regardless of cost.
+	respWithCost := func(content string, cost int64) *types.ChatResponse {
+		r := makeChatResp(makeAssistantMsg(content))
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("done", 1_000_000), // huge cost, no cap
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.BudgetMicrosUSD = 0
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Errorf("Status = %q, want completed (no ceiling)", res.Status)
+	}
+}
+
 func TestAgentLoop_ContextCancellation(t *testing.T) {
 	// If the run is cancelled mid-loop (operator hits Cancel, gateway
 	// shuts down), the loop must exit cleanly with cancelled status.

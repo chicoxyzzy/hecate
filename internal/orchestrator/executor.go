@@ -68,6 +68,12 @@ type ExecutionResult struct {
 	// (shell/git/file) don't use this; their approvals are created
 	// pre-execution by the runner itself.
 	PendingApprovals []types.TaskApproval
+	// CostMicrosUSD is the total LLM spend for this execution. The
+	// agent loop accumulates per-turn ChatResponse.Cost.TotalMicrosUSD
+	// and sets this on result; the runner writes it to
+	// TaskRun.TotalCostMicrosUSD. Other executors don't make LLM
+	// calls and leave this zero.
+	CostMicrosUSD int64
 }
 
 type StubExecutor struct{}

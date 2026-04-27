@@ -167,6 +167,16 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		Artifacts: allArtifacts,
 	}
 
+	// Per-task cost ceiling. spec.Task.BudgetMicrosUSD acts as a hard
+	// cap on the cumulative LLM spend for this run. Zero/negative
+	// disables the cap. We accumulate ChatResponse.Cost.TotalMicrosUSD
+	// after each turn and bail when it crosses the ceiling — the
+	// agent's last response is preserved, but no further turns happen.
+	// This is a per-run ceiling: a resumed run gets its own budget,
+	// not the remainder. Document this when we ship.
+	costCeiling := spec.Task.BudgetMicrosUSD
+	costSpent := int64(0)
+
 	// Resume detection: if the conversation tail is an assistant
 	// message with tool_calls and no following tool messages, we're
 	// resuming after operator approval. Dispatch the pending tool
@@ -181,6 +191,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			finalResult.OtelStatusMessage = "context cancelled mid-loop"
 			finalResult.Steps = allSteps
 			finalResult.Artifacts = allArtifacts
+			finalResult.CostMicrosUSD = costSpent
 			return finalResult, nil
 		}
 
@@ -214,14 +225,29 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			}
 			r, err := e.llm.Chat(ctx, req)
 			if err != nil {
-				return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
+				failed, ferr := e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
 					fmt.Sprintf("LLM call failed on turn %d: %v", turn, err))
+				if failed != nil {
+					failed.CostMicrosUSD = costSpent
+				}
+				return failed, ferr
 			}
 			if r == nil || len(r.Choices) == 0 {
-				return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
+				failed, ferr := e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
 					fmt.Sprintf("LLM returned empty response on turn %d", turn))
+				if failed != nil {
+					failed.CostMicrosUSD = costSpent
+				}
+				return failed, ferr
 			}
 			resp = r
+			// Accumulate the LLM cost for this turn. Even when the
+			// per-task ceiling is disabled we surface the running
+			// total via ExecutionResult so the runner can persist
+			// per-run cost telemetry. CachedInputMicrosUSD is folded
+			// into TotalMicrosUSD upstream (see CostBreakdown), so
+			// using Total directly accounts correctly for cache hits.
+			costSpent += resp.Cost.TotalMicrosUSD
 			assistantMsg = resp.Choices[0].Message
 
 			// 2. Record this turn's "thinking" step — captures the
@@ -253,6 +279,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 				finalResult.Steps = allSteps
 				finalResult.Artifacts = allArtifacts
 				finalResult.OtelStatusCode = "ok"
+				finalResult.CostMicrosUSD = costSpent
 				return finalResult, nil
 			}
 
@@ -279,6 +306,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 					Artifacts:        allArtifacts,
 					PendingApprovals: []types.TaskApproval{approval},
 					OtelStatusCode:   "ok",
+					CostMicrosUSD:    costSpent,
 				}, nil
 			}
 		}
@@ -314,6 +342,24 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		// Resume mode is a one-shot — clear so subsequent turns hit
 		// the LLM normally.
 		pendingToolCalls = nil
+
+		// Per-task cost ceiling check. We do this AFTER the turn is
+		// fully recorded (assistant message + tool results in the
+		// conversation snapshot) so the operator sees what was paid
+		// for. Crossing the ceiling marks the run failed with an
+		// actionable error; future turns don't fire. Operators can
+		// raise the ceiling and resume to continue.
+		if costCeiling > 0 && costSpent >= costCeiling {
+			msg := fmt.Sprintf("agent loop hit per-task cost ceiling: spent %d µUSD, ceiling %d µUSD", costSpent, costCeiling)
+			finalResult.Status = "failed"
+			finalResult.LastError = msg
+			finalResult.OtelStatusCode = "error"
+			finalResult.OtelStatusMessage = "cost_ceiling_exceeded"
+			finalResult.Steps = allSteps
+			finalResult.Artifacts = allArtifacts
+			finalResult.CostMicrosUSD = costSpent
+			return finalResult, nil
+		}
 	}
 
 	// Hit max turns without a final answer. Mark incomplete; the user
@@ -324,6 +370,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 	finalResult.OtelStatusMessage = "max_turns_exceeded"
 	finalResult.Steps = allSteps
 	finalResult.Artifacts = allArtifacts
+	finalResult.CostMicrosUSD = costSpent
 	return finalResult, nil
 }
 

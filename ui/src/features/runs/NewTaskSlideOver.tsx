@@ -46,6 +46,10 @@ export type CreateTaskPayload = {
   // Per-task agent_loop system prompt — narrowest layer (after
   // global / tenant / workspace CLAUDE.md|AGENTS.md).
   system_prompt?: string;
+  // Per-task cost ceiling in micro-USD. The agent loop sums LLM
+  // spend across turns and fails the run on overage. 0 / unset =
+  // no ceiling.
+  budget_micros_usd?: number;
 };
 
 type Props = {
@@ -70,6 +74,10 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
   // Per-task system prompt — only meaningful for agent_loop kind.
   // Empty value falls back to the tenant / workspace / global layers.
   const [taskSystemPrompt, setTaskSystemPrompt] = useState("");
+  // Per-task cost ceiling. UI takes a USD float for ergonomics
+  // ("$2.50") and converts to micro-USD (the wire shape) on submit.
+  // Empty / 0 = no ceiling.
+  const [taskBudgetUSD, setTaskBudgetUSD] = useState("");
 
   function formIsValid(): boolean {
     if (taskKind === "shell") return taskCommand.trim() !== "";
@@ -96,10 +104,14 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
       ...(taskWorkingDir.trim() ? { working_directory: taskWorkingDir.trim() } : {}),
       ...(taskModel ? { requested_model: taskModel } : {}),
       ...(taskKind === "agent_loop" && taskSystemPrompt.trim() ? { system_prompt: taskSystemPrompt.trim() } : {}),
+      ...(taskKind === "agent_loop" && parseFloat(taskBudgetUSD) > 0
+        ? { budget_micros_usd: Math.round(parseFloat(taskBudgetUSD) * 1_000_000) }
+        : {}),
     });
     setTaskPrompt(""); setTaskCommand(""); setTaskGitCommand(""); setTaskWorkingDir("");
     setTaskFilePath(""); setTaskFileContent(""); setTaskFileOp("write");
     setTaskSystemPrompt("");
+    setTaskBudgetUSD("");
   }
 
   if (!open) return null;
@@ -247,6 +259,23 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
                 style={{ resize: "vertical" }}
                 value={taskSystemPrompt}
                 onChange={e => setTaskSystemPrompt(e.target.value)}
+              />
+            </div>
+          )}
+
+          {taskKind === "agent_loop" && (
+            <div>
+              <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>
+                COST CEILING (USD) <span style={{ color: "var(--t3)" }}>(optional, fails the run on overage)</span>
+              </label>
+              <input
+                className="input"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="2.50"
+                value={taskBudgetUSD}
+                onChange={e => setTaskBudgetUSD(e.target.value)}
               />
             </div>
           )}
