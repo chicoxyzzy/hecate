@@ -177,3 +177,89 @@ describe("TaskDetail step drill-down", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 });
+
+describe("TaskDetail agent conversation viewer", () => {
+  const conversation = JSON.stringify([
+    { role: "user", content: "Summarize the README." },
+    {
+      role: "assistant",
+      content: "Let me read it.",
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"README.md"}' },
+      }],
+    },
+    {
+      role: "tool",
+      content: "path=README.md size=42 bytes=42\n--- content ---\nHecate is the gateway.",
+      tool_call_id: "call-1",
+    },
+    { role: "assistant", content: "It introduces Hecate as the gateway." },
+  ]);
+
+  function makeConvoArtifact(content = conversation) {
+    return {
+      id: "convo-run-1",
+      task_id: "task-1",
+      run_id: "run-1",
+      kind: "agent_conversation",
+      name: "agent-conversation.json",
+      content_text: content,
+      mime_type: "application/json",
+    } as any;
+  }
+
+  it("renders the conversation when an agent_conversation artifact is present", () => {
+    const { render } = setup({ artifacts: [makeConvoArtifact()] });
+    render();
+    expect(screen.getByText(/Agent conversation · 4 messages/)).toBeTruthy();
+    expect(screen.getByText("Summarize the README.")).toBeTruthy();
+    expect(screen.getByText("Let me read it.")).toBeTruthy();
+    expect(screen.getByText(/Hecate is the gateway/)).toBeTruthy();
+    expect(screen.getByText("It introduces Hecate as the gateway.")).toBeTruthy();
+  });
+
+  it("renders tool calls as chips with the function name", () => {
+    const { render } = setup({ artifacts: [makeConvoArtifact()] });
+    render();
+    // Tool-call chip uses an arrow + function name to read fluent —
+    // "→ read_file" — and includes the args inline.
+    expect(screen.getByText(/→ read_file/)).toBeTruthy();
+    expect(screen.getByText(/"path":"README\.md"/)).toBeTruthy();
+  });
+
+  it("does NOT render the agent_conversation as a bottom-strip badge (it's inline)", () => {
+    const { render } = setup({
+      artifacts: [
+        makeConvoArtifact(),
+        {
+          id: "art-2",
+          task_id: "task-1",
+          run_id: "run-1",
+          kind: "summary",
+          name: "agent-final-answer.txt",
+          content_text: "answer",
+        } as any,
+      ],
+    });
+    render();
+    // The summary artifact still shows as a chip in the bottom strip.
+    expect(screen.getByText("agent-final-answer.txt")).toBeTruthy();
+    // The conversation artifact's filename ("agent-conversation.json")
+    // must NOT appear in the bottom strip — it's already inline above.
+    expect(screen.queryByText("agent-conversation.json")).toBeNull();
+  });
+
+  it("falls back to an inline error on corrupt JSON instead of crashing", () => {
+    const { render } = setup({ artifacts: [makeConvoArtifact("not valid json {")] });
+    render();
+    expect(screen.getByText(/Could not parse agent conversation/i)).toBeTruthy();
+  });
+
+  it("renders nothing when no agent_conversation artifact exists", () => {
+    const { render } = setup({ artifacts: [] });
+    render();
+    expect(screen.queryByText(/Agent conversation/)).toBeNull();
+  });
+});

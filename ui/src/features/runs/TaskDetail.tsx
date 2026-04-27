@@ -57,6 +57,7 @@ export function TaskDetail({
   const [expandedStepID, setExpandedStepID] = useState<string>("");
   const stdoutArtifact = artifacts.find(a => a.kind === "stdout") ?? null;
   const stderrArtifact = artifacts.find(a => a.kind === "stderr") ?? null;
+  const conversationArtifact = artifacts.find(a => a.kind === "agent_conversation") ?? null;
   const pendingApprovals = approvals.filter(a => a.status === "pending");
 
   useEffect(() => {
@@ -240,6 +241,10 @@ export function TaskDetail({
           </div>
         )}
 
+        {conversationArtifact?.content_text && (
+          <AgentConversationView raw={conversationArtifact.content_text} />
+        )}
+
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 180 }}>
           <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--bg1)" }}>
             <Icon d={Icons.terminal} size={13} />
@@ -277,10 +282,13 @@ export function TaskDetail({
           </div>
         </div>
 
-        {artifacts.filter(a => a.kind !== "stdout" && a.kind !== "stderr").length > 0 && (
+        {/* Bottom artifacts strip — excludes stdout/stderr (rendered
+            in the terminal pane above) and agent_conversation
+            (rendered as the chat-bubble timeline). */}
+        {artifacts.filter(isVisibleArtifactBadge).length > 0 && (
           <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 6, background: "var(--bg1)" }}>
             <span className="kicker" style={{ alignSelf: "center", marginRight: 4 }}>artifacts</span>
-            {artifacts.filter(a => a.kind !== "stdout" && a.kind !== "stderr").map(a => (
+            {artifacts.filter(isVisibleArtifactBadge).map(a => (
               <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "3px 8px" }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t0)" }}>{a.name || a.kind}</span>
                 {a.size_bytes != null && a.size_bytes > 0 && <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--green)" }}>{a.size_bytes}b</span>}
@@ -338,6 +346,158 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
             {JSON.stringify(step.output_summary, null, 2)}
           </pre>
         </div>
+      )}
+    </div>
+  );
+}
+
+// isVisibleArtifactBadge filters which artifacts get a chip in the
+// bottom strip. stdout/stderr are rendered in the terminal pane;
+// agent_conversation is rendered as a chat-bubble timeline. Both
+// would be redundant as bare chips, so we hide them.
+function isVisibleArtifactBadge(a: TaskArtifactRecord): boolean {
+  return a.kind !== "stdout" && a.kind !== "stderr" && a.kind !== "agent_conversation";
+}
+
+// AgentConversationMessage mirrors pkg/types.Message (the shape the
+// agent loop persists). Only fields the viewer renders are typed —
+// extra fields on the wire (cache control, etc.) are ignored.
+type AgentConversationMessage = {
+  role: "user" | "assistant" | "tool" | string;
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+};
+
+// AgentConversationView renders the agent_loop conversation as a
+// chat-bubble timeline. User prompts on the right, assistant turns on
+// the left (with their tool calls expanded), tool results in muted
+// frames. The conversation is the agent's reasoning trail — operators
+// scan it to understand WHY the agent did what it did, not just WHAT
+// it did (the step timeline already covers that).
+//
+// Robustness: the artifact's content is JSON parsed inline. If the
+// JSON is corrupt we render an inline error and continue rendering
+// the rest of the run UI — losing the conversation viewer is much
+// better than crashing the whole page.
+function AgentConversationView({ raw }: { raw: string }) {
+  let messages: AgentConversationMessage[] = [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) messages = parsed as AgentConversationMessage[];
+  } catch {
+    return (
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--red)", fontFamily: "var(--font-mono)" }}>
+        Could not parse agent conversation artifact (invalid JSON).
+      </div>
+    );
+  }
+  if (messages.length === 0) return null;
+
+  return (
+    <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="kicker" style={{ marginBottom: 4 }}>
+        Agent conversation · {messages.length} message{messages.length === 1 ? "" : "s"}
+      </div>
+      {messages.map((m, i) => (
+        <ConversationBubble key={i} message={m} />
+      ))}
+    </div>
+  );
+}
+
+function ConversationBubble({ message }: { message: AgentConversationMessage }) {
+  if (message.role === "user") {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div style={{
+          maxWidth: "80%", padding: "8px 12px",
+          background: "var(--teal-bg)", border: "1px solid var(--teal-border)",
+          borderRadius: "var(--radius)", color: "var(--t0)", fontSize: 13, lineHeight: 1.5,
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>
+          {message.content || ""}
+        </div>
+      </div>
+    );
+  }
+  if (message.role === "tool") {
+    // Tool results are typically formatted "status=…\n--- stdout ---\n…"
+    // — render as a code block with monospace + scroll for long outputs.
+    const callRef = message.tool_call_id ? ` · ${message.tool_call_id.slice(0, 12)}` : "";
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-start" }}>
+        <div style={{
+          maxWidth: "90%", padding: "6px 10px",
+          background: "var(--bg2)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)", fontSize: 11,
+          fontFamily: "var(--font-mono)", color: "var(--t1)",
+        }}>
+          <div className="kicker" style={{ marginBottom: 4 }}>
+            tool result{callRef}
+          </div>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 200, overflowY: "auto", color: "var(--t1)" }}>
+            {message.content || ""}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+  // assistant — content + any tool calls
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-start", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
+      {message.content && (
+        <div style={{
+          alignSelf: "flex-start", maxWidth: "80%", padding: "8px 12px",
+          background: "var(--bg3)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius)", color: "var(--t0)", fontSize: 13, lineHeight: 1.5,
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>
+          {message.content}
+        </div>
+      )}
+      {message.tool_calls && message.tool_calls.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {message.tool_calls.map((tc, i) => (
+            <ToolCallChip key={tc.id || i} call={tc} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallChip({ call }: { call: NonNullable<AgentConversationMessage["tool_calls"]>[number] }) {
+  // Pretty-print the JSON arguments when possible — collapsed to a
+  // single line for compactness, with a click-to-expand affordance.
+  const argsText = (() => {
+    if (!call.function?.arguments) return "";
+    try {
+      const parsed = JSON.parse(call.function.arguments);
+      return JSON.stringify(parsed);
+    } catch {
+      return call.function.arguments;
+    }
+  })();
+  return (
+    <div style={{
+      alignSelf: "flex-start", maxWidth: "90%",
+      padding: "6px 10px", background: "var(--bg2)",
+      border: "1px solid var(--teal-border)", borderRadius: "var(--radius-sm)",
+      fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t1)",
+    }}>
+      <span style={{ color: "var(--teal)", fontWeight: 500 }}>→ {call.function?.name || "(unknown)"}</span>
+      {argsText && (
+        <>
+          <span style={{ color: "var(--t3)" }}> </span>
+          <span title={argsText} style={{ color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%", display: "inline-block", verticalAlign: "bottom" }}>
+            {argsText.length > 200 ? argsText.slice(0, 200) + "…" : argsText}
+          </span>
+        </>
       )}
     </div>
   );
