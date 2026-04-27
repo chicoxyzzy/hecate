@@ -21,8 +21,13 @@ One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffi
 - [Observability](#observability)
 - [Using Hecate With Codex And Claude Code](#using-hecate-with-codex-and-claude-code)
 - [Config Highlights](#config-highlights)
+  - [Auth and data](#auth-and-data)
+  - [Storage backends](#storage-backends)
+  - [Agent task runtime](#agent-task-runtime)
+  - [Telemetry](#telemetry)
 - [Docs](#docs)
 - [Roadmap](#roadmap)
+- [License](#license)
 
 ## Quick Start
 
@@ -188,24 +193,26 @@ The full env surface lives in `.env.example`; the table below covers the knobs o
 
 Three tiers, picked per subsystem:
 
-- **`memory`** (default) — in-process, ephemeral. Right for tests and local iteration.
+- **`memory`** — in-process, ephemeral. Right for tests and local iteration.
 - **`sqlite`** — single-file durable store, embedded (pure-Go driver, no CGO). Right for single-node production. One file at `GATEWAY_SQLITE_PATH` (default `.data/hecate.db`) is shared across every subsystem that opts in.
 - **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
 
-| Variable | Accepted values |
-|---|---|
-| `GATEWAY_CONTROL_PLANE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_RETENTION_HISTORY_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_CHAT_SESSIONS_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_TASKS_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_TASK_QUEUE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_CACHE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
-| `GATEWAY_SEMANTIC_CACHE_BACKEND` | `memory` \| `postgres` |
-| `GATEWAY_BUDGET_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| Subsystem | Env var | `memory` | `sqlite` | `postgres` |
+|---|---|:---:|:---:|:---:|
+| Control plane | `GATEWAY_CONTROL_PLANE_BACKEND` | ★ | ✓ | ✓ |
+| Retention history | `GATEWAY_RETENTION_HISTORY_BACKEND` | ★ | ✓ | ✓ |
+| Chat sessions | `GATEWAY_CHAT_SESSIONS_BACKEND` | ★ | ✓ | ✓ |
+| Tasks | `GATEWAY_TASKS_BACKEND` | ★ | ✓ | ✓ |
+| Task queue | `GATEWAY_TASK_QUEUE_BACKEND` | ★ | ✓ | ✓ |
+| Exact cache | `GATEWAY_CACHE_BACKEND` | ★ | ✓ | ✓ |
+| Semantic cache | `GATEWAY_SEMANTIC_CACHE_BACKEND` | ★ | —¹ | ✓ |
+| Budget | `GATEWAY_BUDGET_BACKEND` | ★ | ✓ | ✓ |
+
+★ = default · ✓ = supported · — = not supported
+
+¹ **Semantic cache on SQLite is intentionally unsupported.** Indexed vector similarity needs the [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension, which is C and only loads into native (CGO) or WASM (Wazero) SQLite drivers. The gateway uses [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — a pure-Go ccgo translation — to keep the single-static-binary story; modernc cannot load native extensions. Single-node deploys that need persistent semantic cache should run Postgres *for this subsystem only* — backends are picked per-subsystem, so the rest of state can still live in SQLite. The `memory` backend is fine for ≲10k cached prompts.
 
 `POSTGRES_DSN` configures the shared Postgres client. If any backend is set to `postgres`, the DSN must be reachable at startup or the gateway exits — there is no silent fallback to `memory`.
-
-The semantic cache has no SQLite backend: indexed vector similarity needs the sqlite-vec extension, which doesn't load into the pure-Go SQLite driver we use for the single-binary build. Single-node deploys that need persistent semantic cache should run Postgres for that subsystem only — the rest of state can still live in SQLite.
 
 ### Agent task runtime
 
