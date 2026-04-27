@@ -3,9 +3,8 @@ package api
 import (
 	"context"
 	"net/http"
-	"sort"
-	"time"
 
+	"github.com/hecate/agent-runtime/internal/billing"
 	"github.com/hecate/agent-runtime/internal/billing/litellm"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
@@ -13,8 +12,8 @@ import (
 
 // pricebookImportFetcher is the seam tests use to substitute a fixture
 // loader for the real LiteLLM HTTP fetch. Production code calls
-// `litellm.Fetch`, which talks to GitHub. Tests reassign this var to
-// return a hand-built slice without any network I/O.
+// `litellm.Fetch` via billing.NewPricebookImporter; tests reassign this
+// var so the same handler path can run against a fixture.
 var pricebookImportFetcher = func(ctx context.Context) ([]config.ModelPriceConfig, error) {
 	return litellm.Fetch(ctx, http.DefaultClient)
 }
@@ -36,7 +35,8 @@ func (h *Handler) HandleControlPlanePricebookImportPreview(w http.ResponseWriter
 		return
 	}
 
-	diff, err := h.computePricebookImportDiff(r.Context())
+	importer := h.newPricebookImporter()
+	summary, err := importer.Run(r.Context(), billing.PricebookImportOptions{Apply: false})
 	if err != nil {
 		WriteError(w, http.StatusBadGateway, errCodeGatewayError, err.Error())
 		return
@@ -44,7 +44,7 @@ func (h *Handler) HandleControlPlanePricebookImportPreview(w http.ResponseWriter
 
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"object": "control_plane_pricebook_import_diff",
-		"data":   diff,
+		"data":   pricebookImportDiffFromSummary(summary),
 	})
 }
 
@@ -69,211 +69,60 @@ func (h *Handler) HandleControlPlanePricebookImportApply(w http.ResponseWriter, 
 		}
 	}
 
-	diff, err := h.computePricebookImportDiff(r.Context())
+	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
+	importer := h.newPricebookImporter()
+	summary, err := importer.Run(ctx, billing.PricebookImportOptions{Apply: true, Keys: req.Keys})
 	if err != nil {
 		WriteError(w, http.StatusBadGateway, errCodeGatewayError, err.Error())
 		return
 	}
 
-	keyFilter := pricebookKeyFilter(req.Keys)
-	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
-
-	applied := make([]ControlPlanePricebookRecord, 0, len(diff.Added)+len(diff.Updated))
-	failed := make([]PricebookImportFailureRecord, 0)
-	// applyOne tries to persist a single proposal and routes the
-	// outcome to either `applied` or `failed`. Best-effort: a row's
-	// failure doesn't stop subsequent rows. Without this the apply
-	// loop bailed on the first error and left the operator with a
-	// partially-written state and no per-row visibility.
-	applyOne := func(entry ControlPlanePricebookRecord) {
-		saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(entry))
-		if upsertErr != nil {
-			failed = append(failed, PricebookImportFailureRecord{
-				Entry: entry,
-				Error: upsertErr.Error(),
-			})
-			return
-		}
-		applied = append(applied, renderControlPlanePricebookEntry(saved))
-	}
-
-	for _, entry := range diff.Added {
-		if !keyFilter.allows(entry.Provider, entry.Model) {
-			continue
-		}
-		applyOne(entry)
-	}
-	for _, update := range diff.Updated {
-		if !keyFilter.allows(update.Entry.Provider, update.Entry.Model) {
-			continue
-		}
-		applyOne(update.Entry)
-	}
-	// Manual rows (Skipped) are only applied when the operator named them
-	// explicitly. Blanket apply (empty filter) leaves them alone — that's
-	// the operator-protection contract that makes "manual" stick.
-	if keyFilter.explicit() {
-		for _, skip := range diff.Skipped {
-			if !keyFilter.allows(skip.Entry.Provider, skip.Entry.Model) {
-				continue
-			}
-			applyOne(skip.Entry)
-		}
-	}
-
-	out := PricebookImportDiff{
-		FetchedAt: diff.FetchedAt,
-		Applied:   applied,
-		Failed:    failed,
-		Unchanged: diff.Unchanged,
-		Skipped:   diff.Skipped,
-	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"object": "control_plane_pricebook_import_diff",
-		"data":   out,
+		"data":   pricebookImportDiffFromSummary(summary),
 	})
 }
 
-func (h *Handler) computePricebookImportDiff(ctx context.Context) (PricebookImportDiff, error) {
-	imported, err := pricebookImportFetcher(ctx)
-	if err != nil {
-		return PricebookImportDiff{}, err
-	}
+// newPricebookImporter constructs a billing.PricebookImporter wired to
+// the handler's control-plane store and the (test-overridable) fetcher.
+// The fetcher var keeps the existing test seam working — handler tests
+// reassign pricebookImportFetcher to inject fixture data.
+func (h *Handler) newPricebookImporter() *billing.PricebookImporter {
+	return billing.NewPricebookImporterWithFetcher(h.controlPlane, pricebookImportFetcher)
+}
 
-	state, err := h.controlPlane.Snapshot(ctx)
-	if err != nil {
-		return PricebookImportDiff{}, err
+// pricebookImportDiffFromSummary translates the importer's internal
+// representation (config.ModelPriceConfig everywhere) into the wire
+// shape the UI consumes. Wire shape predates the importer extraction,
+// so this is the one-way adapter.
+func pricebookImportDiffFromSummary(s billing.PricebookImportSummary) PricebookImportDiff {
+	out := PricebookImportDiff{
+		FetchedAt: s.FetchedAt,
+		Unchanged: s.Unchanged,
 	}
-
-	type currentRow struct {
-		entry  config.ModelPriceConfig
-		source string
+	for _, e := range s.Added {
+		out.Added = append(out.Added, renderControlPlanePricebookEntry(e))
 	}
-	current := make(map[string]currentRow, len(state.Pricebook))
-	for _, entry := range state.Pricebook {
-		key := pricebookKey(entry.Provider, entry.Model)
-		source := entry.Source
-		if source == "" {
-			source = config.PricebookSourceManual
-		}
-		current[key] = currentRow{entry: entry, source: source}
-	}
-
-	diff := PricebookImportDiff{FetchedAt: time.Now().UTC().Format(time.RFC3339)}
-	for _, entry := range imported {
-		key := pricebookKey(entry.Provider, entry.Model)
-		existing, ok := current[key]
-		if !ok {
-			diff.Added = append(diff.Added, renderControlPlanePricebookEntry(entry))
-			continue
-		}
-		// Manual rows are operator-protected: a blanket import never
-		// overwrites them. We still surface them in `Skipped` (paired
-		// with LiteLLM's proposed price) so the UI can offer an
-		// explicit "replace manual with LiteLLM" action — the operator
-		// opts in by including the row's key in an apply request.
-		// Manual rows that already match LiteLLM are silently counted
-		// in Unchanged; only differing manual rows show up here.
-		if existing.source == config.PricebookSourceManual {
-			if pricebookPricesEqual(existing.entry, entry) {
-				diff.Unchanged++
-				continue
-			}
-			diff.Skipped = append(diff.Skipped, PricebookImportUpdateRecord{
-				Entry:    renderControlPlanePricebookEntry(entry),
-				Previous: renderControlPlanePricebookEntry(existing.entry),
-			})
-			continue
-		}
-		// Imported row already in place — only counts as an update if a
-		// price actually changed. Otherwise it's a no-op.
-		if pricebookPricesEqual(existing.entry, entry) {
-			diff.Unchanged++
-			continue
-		}
-		diff.Updated = append(diff.Updated, PricebookImportUpdateRecord{
-			Entry:    renderControlPlanePricebookEntry(entry),
-			Previous: renderControlPlanePricebookEntry(existing.entry),
+	for _, u := range s.Updated {
+		out.Updated = append(out.Updated, PricebookImportUpdateRecord{
+			Entry:    renderControlPlanePricebookEntry(u.Entry),
+			Previous: renderControlPlanePricebookEntry(u.Previous),
 		})
 	}
-	// Sort each section by `provider/model` so the wire output is
-	// deterministic. Without this the order tracks Go map iteration
-	// (non-deterministic) and the import-preview modal jumps around
-	// between renders. Stable case-insensitive ordering matches what
-	// operators expect when scanning a long list.
-	sort.Slice(diff.Added, func(i, j int) bool {
-		return pricebookKey(diff.Added[i].Provider, diff.Added[i].Model) <
-			pricebookKey(diff.Added[j].Provider, diff.Added[j].Model)
-	})
-	sort.Slice(diff.Updated, func(i, j int) bool {
-		return pricebookKey(diff.Updated[i].Entry.Provider, diff.Updated[i].Entry.Model) <
-			pricebookKey(diff.Updated[j].Entry.Provider, diff.Updated[j].Entry.Model)
-	})
-	sort.Slice(diff.Skipped, func(i, j int) bool {
-		return pricebookKey(diff.Skipped[i].Entry.Provider, diff.Skipped[i].Entry.Model) <
-			pricebookKey(diff.Skipped[j].Entry.Provider, diff.Skipped[j].Entry.Model)
-	})
-	return diff, nil
-}
-
-func pricebookKey(provider, model string) string {
-	return provider + "/" + model
-}
-
-func pricebookPricesEqual(a, b config.ModelPriceConfig) bool {
-	return a.InputMicrosUSDPerMillionTokens == b.InputMicrosUSDPerMillionTokens &&
-		a.OutputMicrosUSDPerMillionTokens == b.OutputMicrosUSDPerMillionTokens &&
-		a.CachedInputMicrosUSDPerMillionTokens == b.CachedInputMicrosUSDPerMillionTokens
-}
-
-func modelPriceFromRecord(r ControlPlanePricebookRecord) config.ModelPriceConfig {
-	source := r.Source
-	if source == "" {
-		source = config.PricebookSourceImported
+	for _, sk := range s.Skipped {
+		out.Skipped = append(out.Skipped, PricebookImportUpdateRecord{
+			Entry:    renderControlPlanePricebookEntry(sk.Entry),
+			Previous: renderControlPlanePricebookEntry(sk.Previous),
+		})
 	}
-	return config.ModelPriceConfig{
-		Provider:                             r.Provider,
-		Model:                                r.Model,
-		InputMicrosUSDPerMillionTokens:       r.InputMicrosUSDPerMillionTokens,
-		OutputMicrosUSDPerMillionTokens:      r.OutputMicrosUSDPerMillionTokens,
-		CachedInputMicrosUSDPerMillionTokens: r.CachedInputMicrosUSDPerMillionTokens,
-		Source:                               source,
+	for _, a := range s.Applied {
+		out.Applied = append(out.Applied, renderControlPlanePricebookEntry(a))
 	}
-}
-
-// pricebookKeyFilterSet is a small helper so we don't have to special-case
-// "empty filter == everything" at every call site.
-type pricebookKeyFilterSet struct {
-	keys map[string]struct{}
-}
-
-func pricebookKeyFilter(keys []string) pricebookKeyFilterSet {
-	if len(keys) == 0 {
-		return pricebookKeyFilterSet{}
+	for _, f := range s.Failed {
+		out.Failed = append(out.Failed, PricebookImportFailureRecord{
+			Entry: renderControlPlanePricebookEntry(f.Entry),
+			Error: f.Error,
+		})
 	}
-	set := make(map[string]struct{}, len(keys))
-	for _, k := range keys {
-		if k == "" {
-			continue
-		}
-		set[k] = struct{}{}
-	}
-	return pricebookKeyFilterSet{keys: set}
-}
-
-func (f pricebookKeyFilterSet) allows(provider, model string) bool {
-	if f.keys == nil {
-		return true
-	}
-	_, ok := f.keys[pricebookKey(provider, model)]
-	return ok
-}
-
-// explicit reports whether the operator passed a specific key list. The
-// blanket apply (empty list) deliberately does NOT touch Skipped rows —
-// those carry manual prices we never overwrite without consent. With an
-// explicit list, the operator has already opted in by checking the
-// "replace manual" boxes in the consent dialog, so we apply them.
-func (f pricebookKeyFilterSet) explicit() bool {
-	return f.keys != nil
+	return out
 }

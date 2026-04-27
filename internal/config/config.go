@@ -210,6 +210,13 @@ type ProvidersConfig struct {
 type PricebookConfig struct {
 	UnknownModelPolicy string             `json:"unknown_model_policy"`
 	Entries            []ModelPriceConfig `json:"entries"`
+	// AutoImportInterval ticks the LiteLLM bulk-import on a schedule.
+	// Zero or negative disables it (the default — operators opt in by
+	// setting GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL to e.g. 24h). The
+	// scheduler runs once on start, then on every interval. It applies
+	// blanket (no key filter), which means manual rows are always
+	// preserved per the operator-protection contract.
+	AutoImportInterval time.Duration `json:"auto_import_interval,omitempty"`
 }
 
 type ModelPriceConfig struct {
@@ -426,6 +433,7 @@ func loadPricebookFromEnv() PricebookConfig {
 	if policy := strings.TrimSpace(getEnv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "")); policy != "" {
 		cfg.UnknownModelPolicy = policy
 	}
+	cfg.AutoImportInterval = getEnvDuration("GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL", 0)
 	return cfg
 }
 

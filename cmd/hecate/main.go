@@ -232,6 +232,22 @@ func main() {
 
 	taskStore := buildTaskStore(cfg, logger, postgresClient, sqliteClient)
 	taskQueue := buildTaskQueue(cfg, logger, postgresClient, sqliteClient)
+
+	// Pricebook auto-import scheduler. Enabled when the operator sets
+	// GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL to a positive duration —
+	// otherwise this returns immediately and the goroutine exits clean.
+	// Runs once on start (so a fresh deploy isn't stuck on stale prices)
+	// and then on every interval. Manual rows are always preserved per
+	// the operator-protection contract; only Added/Updated land.
+	pricebookImportCtx, pricebookImportCancel := context.WithCancel(context.Background())
+	defer pricebookImportCancel()
+	go billing.RunPricebookAutoImport(
+		pricebookImportCtx,
+		billing.NewPricebookImporter(controlPlaneStore, http.DefaultClient),
+		billing.PricebookAutoImportConfig{Interval: cfg.Pricebook.AutoImportInterval},
+		logger,
+	)
+
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, taskStore, taskQueue, providerRuntime)
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
@@ -294,6 +310,7 @@ func main() {
 
 	logger.Info("gateway shutting down")
 	retentionCancel()
+	pricebookImportCancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown failed", slog.Any("error", err))
 		os.Exit(1)

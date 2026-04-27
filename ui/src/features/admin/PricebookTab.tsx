@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type {
+  ConfiguredAuditEventRecord,
   ConfiguredPricebookRecord,
   PricebookImportDiff,
   PricebookImportFailureRecord,
@@ -163,6 +164,11 @@ export function PricebookTab({ state, actions }: Props) {
   // render a price-diff body without recomputing it.
   const [importingRow, setImportingRow] = useState<UnifiedRow | null>(null);
   const [importingPending, setImportingPending] = useState(false);
+  // Audit-history viewer. Click the row's clock icon → opens a modal
+  // listing every audit event whose target_id matches "provider/model".
+  // We filter client-side from adminConfig.events because that surface
+  // already streams the full event log; no separate endpoint needed.
+  const [historyRow, setHistoryRow] = useState<{ provider: string; model: string } | null>(null);
 
   // Refetch the LiteLLM diff whenever the pricebook changes.
   //
@@ -572,6 +578,7 @@ export function PricebookTab({ state, actions }: Props) {
                           onImport={() => setImportingRow(row)}
                           onEdit={() => setEditingKey(row.key)}
                           onDelete={() => row.entry && setClearingRow({ provider: row.entry.provider, model: row.entry.model })}
+                          onHistory={() => setHistoryRow({ provider: row.provider, model: row.model })}
                         />
                       );
                     })}
@@ -682,6 +689,15 @@ export function PricebookTab({ state, actions }: Props) {
           }}
         />
       )}
+
+      {historyRow && (
+        <PricebookHistoryModal
+          provider={historyRow.provider}
+          model={historyRow.model}
+          events={state.adminConfig?.events ?? []}
+          onClose={() => setHistoryRow(null)}
+        />
+      )}
     </>
   );
 }
@@ -695,6 +711,7 @@ function PricebookViewRow({
   onImport,
   onEdit,
   onDelete,
+  onHistory,
 }: {
   row: UnifiedRow;
   // True when LiteLLM has a proposal for this row that differs from
@@ -705,6 +722,7 @@ function PricebookViewRow({
   onImport: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onHistory: () => void;
 }) {
   const dim = row.status === "deprecated";
   const e = row.entry;
@@ -744,6 +762,14 @@ function PricebookViewRow({
           )}
           {(row.status === "priced" || row.status === "deprecated") && (
             <>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ padding: "3px 6px" }}
+                onClick={onHistory}
+                title="View price history"
+                aria-label={`History for ${row.provider}/${row.model}`}>
+                <Icon d={Icons.activity} size={12} />
+              </button>
               <button
                 className="btn btn-ghost btn-sm"
                 style={{ padding: "3px 6px" }}
@@ -1386,5 +1412,90 @@ function ConsentRow({
         {detail}
       </span>
     </label>
+  );
+}
+
+// PricebookHistoryModal renders the audit-event log filtered to a
+// single pricebook row. Events come from adminConfig.events (already
+// streamed by the dashboard load) — we filter client-side because the
+// existing surface is sufficient and adding a per-entry endpoint just
+// to filter the same data would be churn.
+//
+// Events are stored newest-last in the control-plane state; we reverse
+// for display so the most recent action is at the top, matching every
+// other reverse-chronological list in the UI.
+function PricebookHistoryModal({
+  provider,
+  model,
+  events,
+  onClose,
+}: {
+  provider: string;
+  model: string;
+  events: ConfiguredAuditEventRecord[];
+  onClose: () => void;
+}) {
+  const targetID = `${provider}/${model}`;
+  const filtered = useMemo(() => {
+    return events
+      .filter(e => e.target_type === "pricebook_entry" && e.target_id === targetID)
+      .slice()
+      .reverse();
+  }, [events, targetID]);
+
+  return (
+    <Modal
+      title={`Price history: ${targetID}`}
+      onClose={onClose}
+      width={520}
+      footer={
+        <button className="btn" onClick={onClose}>Close</button>
+      }>
+      {filtered.length === 0 ? (
+        <div style={{ padding: "20px 4px", textAlign: "center", color: "var(--t3)", fontSize: 13 }}>
+          No history yet. Audit events for this entry will appear here once
+          the price is changed, imported, or cleared.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {filtered.map((event, i) => (
+            <PricebookHistoryEvent key={`${event.timestamp}-${i}`} event={event} />
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function PricebookHistoryEvent({ event }: { event: ConfiguredAuditEventRecord }) {
+  // Action labels — translate the wire `action` strings into something
+  // an operator scanning the list will recognize at a glance.
+  const actionLabel = (() => {
+    switch (event.action) {
+      case "pricebook_entry.created":  return { text: "created", color: "var(--green)" };
+      case "pricebook_entry.updated":  return { text: "updated", color: "var(--teal)" };
+      case "pricebook_entry.deleted":  return { text: "cleared", color: "var(--red)" };
+      case "pricebook_entry.imported": return { text: "imported", color: "var(--teal)" };
+      default:                         return { text: event.action.replace("pricebook_entry.", ""), color: "var(--t2)" };
+    }
+  })();
+  return (
+    <div style={{ padding: "8px 10px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: actionLabel.color, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          {actionLabel.text}
+        </span>
+        <span style={{ flex: 1 }} />
+        {event.timestamp && (
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }} title={event.timestamp}>
+            {new Date(event.timestamp).toLocaleString()}
+          </span>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--t2)" }}>
+        <span>by <span style={{ color: "var(--t1)", fontFamily: "var(--font-mono)" }}>{event.actor || "—"}</span></span>
+        {event.detail && <span title={event.detail} style={{ color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{event.detail}</span>}
+      </div>
+    </div>
   );
 }
