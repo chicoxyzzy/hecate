@@ -130,3 +130,24 @@ describe("ChatView New session button", () => {
     expect(document.activeElement).toBe(textarea);
   });
 });
+
+describe("ChatView session focus", () => {
+  it("focuses the message textarea when activeChatSessionID changes (session switch)", async () => {
+    // Switching sessions via the sidebar drives activeChatSessionID
+    // change → useEffect → focus. Pinning here so a refactor of the
+    // mount/scroll effect doesn't accidentally drop the focus call.
+    const { state, actions } = setup({ activeChatSessionID: "" });
+    const { rerender } = render(<ChatView state={state} actions={actions} />);
+    // Move focus to a sibling control so we can detect the focus jump.
+    // The Close-sidebar button has a stable accessible name and is
+    // outside the textarea.
+    const closeBtn = screen.getByTitle("Close");
+    closeBtn.focus();
+    expect(document.activeElement).toBe(closeBtn);
+    // Now simulate the session switch via prop change.
+    const next = { ...state, activeChatSessionID: "s1" };
+    rerender(<ChatView state={next} actions={actions} />);
+    const textarea = screen.getByPlaceholderText(/^Message…/i);
+    expect(document.activeElement).toBe(textarea);
+  });
+});

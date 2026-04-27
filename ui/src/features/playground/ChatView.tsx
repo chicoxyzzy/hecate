@@ -44,6 +44,14 @@ export function ChatView({ state, actions }: Props) {
     userScrolledRef.current = false;
     setAtBottom(true);
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
+    // Focus the message textarea on every session change — including
+    // mount, since if ChatView is mounted the user is looking at the
+    // chat tab and is one keystroke away from typing. Switching to a
+    // session is almost always followed by a reply; auto-focus saves
+    // a click. The New-session button onClick also focuses directly,
+    // covering the case where activeChatSessionID is already "" and
+    // this effect would not re-fire.
+    textareaRef.current?.focus();
   }, [state.activeChatSessionID]);
 
   function handleScroll() {
