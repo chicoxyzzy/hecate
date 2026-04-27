@@ -288,8 +288,11 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			assistantMsg = resp.Choices[0].Message
 
 			// 2. Record this turn's "thinking" step — captures the
-			// assistant message content + which tools it asked for.
-			thinkingStep := buildThinkingStep(spec, nextIndex, turn, turnStartedAt, assistantMsg, resp)
+			// assistant message content + which tools it asked for,
+			// plus the per-turn LLM cost in OutputSummary so the run
+			// replay UI can render cost next to the turn label
+			// without joining against the events feed.
+			thinkingStep := buildThinkingStep(spec, nextIndex, turn, turnStartedAt, assistantMsg, resp, costSpent)
 			nextIndex++
 			if err := upsertTaskStep(spec, thinkingStep); err != nil {
 				return nil, err
@@ -799,14 +802,16 @@ type httpRequestArgs struct {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-func buildThinkingStep(spec ExecutionSpec, index, turn int, startedAt time.Time, msg types.Message, resp *types.ChatResponse) types.TaskStep {
+func buildThinkingStep(spec ExecutionSpec, index, turn int, startedAt time.Time, msg types.Message, resp *types.ChatResponse, runCumulativeMicrosUSD int64) types.TaskStep {
 	toolNames := make([]string, 0, len(msg.ToolCalls))
 	for _, tc := range msg.ToolCalls {
 		toolNames = append(toolNames, tc.Function.Name)
 	}
 	model := ""
+	turnCost := int64(0)
 	if resp != nil {
 		model = resp.Model
+		turnCost = resp.Cost.TotalMicrosUSD
 	}
 	return types.TaskStep{
 		ID:       spec.NewID("step"),
@@ -823,10 +828,21 @@ func buildThinkingStep(spec ExecutionSpec, index, turn int, startedAt time.Time,
 			"turn":  turn,
 			"model": model,
 		},
+		// cost_micros_usd is this turn's LLM spend; the UI renders
+		// it next to the turn label in the conversation viewer so
+		// operators see cost in context. run_cumulative_cost_micros_usd
+		// is the running total for this run only — task-level
+		// cumulative (including prior runs in the resume chain) lives
+		// on the run cost badge in the header. Both numbers serialize
+		// as JSON ints; clients should treat absent/zero as "no LLM
+		// cost was attributed" (e.g. resumed-after-approval steps
+		// emitted via buildResumeThinkingStep).
 		OutputSummary: map[string]any{
-			"content_chars": len(msg.Content),
-			"tool_calls":    toolNames,
-			"finish_reason": finishReason(resp),
+			"content_chars":                  len(msg.Content),
+			"tool_calls":                     toolNames,
+			"finish_reason":                  finishReason(resp),
+			"cost_micros_usd":                turnCost,
+			"run_cumulative_cost_micros_usd": runCumulativeMicrosUSD,
 		},
 		StartedAt:  startedAt,
 		FinishedAt: time.Now().UTC(),

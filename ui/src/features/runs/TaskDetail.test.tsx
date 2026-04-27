@@ -288,6 +288,44 @@ describe("TaskDetail agent conversation viewer", () => {
     expect(screen.queryAllByRole("button", { name: /retry from here/i })).toHaveLength(0);
   });
 
+  it("shows per-turn LLM cost next to the turn label when the model step has cost", () => {
+    // Two assistant turns in the conversation fixture map to two
+    // model-kind steps. We seed each step's OutputSummary with a
+    // cost; the bubble must surface that cost as $X.XXX next to
+    // "turn N". 1500 µUSD = $0.002 (rounded), 250000 = $0.250.
+    const modelSteps: TaskStepRecord[] = [
+      makeStep({ id: "s-m1", index: 1, kind: "model", title: "Agent turn 1", output_summary: { cost_micros_usd: 1500 } }),
+      makeStep({ id: "s-m2", index: 2, kind: "model", title: "Agent turn 2", output_summary: { cost_micros_usd: 250000 } }),
+    ];
+    const { render } = setup({
+      artifacts: [makeConvoArtifact()],
+      steps: modelSteps,
+    });
+    render();
+    expect(screen.getByText(/\$0\.002/)).toBeTruthy();
+    expect(screen.getByText(/\$0\.250/)).toBeTruthy();
+  });
+
+  it("hides the per-turn cost when the model step lacks a cost field", () => {
+    // Older runs (or resumed-after-approval steps that didn't
+    // re-call the LLM) won't carry cost in OutputSummary. The
+    // bubble must NOT render a misleading "$0.000" — the cost
+    // chip should be absent entirely.
+    const modelSteps: TaskStepRecord[] = [
+      makeStep({ id: "s-m1", index: 1, kind: "model", title: "Agent turn 1", output_summary: {} }),
+      makeStep({ id: "s-m2", index: 2, kind: "model", title: "Agent turn 2", output_summary: {} }),
+    ];
+    const { render } = setup({
+      artifacts: [makeConvoArtifact()],
+      steps: modelSteps,
+    });
+    render();
+    // No "$" amount rendered inside any conversation bubble.
+    // The header run-cost badge isn't present (run has no cost),
+    // so any "$" anywhere would be a regression.
+    expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
   it("disables 'retry from here' while another action is in flight", () => {
     const { render } = setup({
       artifacts: [makeConvoArtifact()],

@@ -1246,6 +1246,55 @@ func TestAgentLoop_TurnCostRecords_CapturedPerTurn(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_ThinkingStepCarriesPerTurnCost(t *testing.T) {
+	// The model-kind step's OutputSummary must surface this turn's
+	// LLM cost (cost_micros_usd) and the run-cumulative figure
+	// (run_cumulative_cost_micros_usd) so the run-replay UI can
+	// render cost next to each "turn N" without joining against
+	// the events feed.
+	respWithCost := func(content string, cost int64, calls ...types.ToolCall) *types.ChatResponse {
+		r := makeChatResp(makeAssistantMsg(content, calls...))
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("", 100, types.ToolCall{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}),
+			respWithCost("done", 250),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	modelSteps := make([]types.TaskStep, 0, 2)
+	for _, s := range res.Steps {
+		if s.Kind == "model" {
+			modelSteps = append(modelSteps, s)
+		}
+	}
+	if len(modelSteps) != 2 {
+		t.Fatalf("model steps = %d, want 2", len(modelSteps))
+	}
+
+	// Turn 1: cost=100, run cumulative=100.
+	if got := modelSteps[0].OutputSummary["cost_micros_usd"]; got != int64(100) {
+		t.Errorf("turn 1 cost_micros_usd = %v, want 100", got)
+	}
+	if got := modelSteps[0].OutputSummary["run_cumulative_cost_micros_usd"]; got != int64(100) {
+		t.Errorf("turn 1 run_cumulative_cost_micros_usd = %v, want 100", got)
+	}
+	// Turn 2: cost=250, run cumulative=350.
+	if got := modelSteps[1].OutputSummary["cost_micros_usd"]; got != int64(250) {
+		t.Errorf("turn 2 cost_micros_usd = %v, want 250", got)
+	}
+	if got := modelSteps[1].OutputSummary["run_cumulative_cost_micros_usd"]; got != int64(350) {
+		t.Errorf("turn 2 run_cumulative_cost_micros_usd = %v, want 350", got)
+	}
+}
+
 func TestAgentLoop_CumulativeCeilingAppliesPriorChainCost(t *testing.T) {
 	// Cumulative ceiling: a fresh run's spend looks small in
 	// isolation but, when combined with prior runs in the resume

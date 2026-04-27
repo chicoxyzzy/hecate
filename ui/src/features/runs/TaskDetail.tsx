@@ -301,6 +301,10 @@ export function TaskDetail({
             canRetryFromTurn={run ? (run.status === "completed" || run.status === "failed" || run.status === "cancelled") : false}
             busy={busyAction !== ""}
             onRetryFromTurn={onRetryFromTurn}
+            // Pass model-kind steps so each assistant bubble can show
+            // the LLM cost for its turn. Index N model step → turn N
+            // assistant message; the viewer joins them by ordinal.
+            steps={steps}
           />
         )}
 
@@ -448,11 +452,13 @@ function AgentConversationView({
   canRetryFromTurn = false,
   busy = false,
   onRetryFromTurn,
+  steps = [],
 }: {
   raw: string;
   canRetryFromTurn?: boolean;
   busy?: boolean;
   onRetryFromTurn?: (turn: number) => void;
+  steps?: TaskStepRecord[];
 }) {
   let messages: AgentConversationMessage[] = [];
   try {
@@ -481,6 +487,14 @@ function AgentConversationView({
     return 0;
   });
 
+  // Build turn → cost map by walking model-kind steps in step.index
+  // order. The Nth model step corresponds to the Nth assistant turn,
+  // so we just zip them. Steps whose OutputSummary lacks the cost
+  // field (older runs, or resumed-after-approval steps that didn't
+  // re-call the LLM) map to undefined; the bubble renders nothing
+  // in that case rather than a misleading "$0.000".
+  const costByTurn = buildTurnCostMap(steps);
+
   return (
     <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="kicker" style={{ marginBottom: 4 }}>
@@ -491,6 +505,7 @@ function AgentConversationView({
           key={i}
           message={m}
           turn={turnByIndex[i]}
+          turnCostMicros={turnByIndex[i] > 0 ? costByTurn.get(turnByIndex[i]) : undefined}
           canRetryFromTurn={canRetryFromTurn}
           busy={busy}
           onRetryFromTurn={onRetryFromTurn}
@@ -500,15 +515,41 @@ function AgentConversationView({
   );
 }
 
+// buildTurnCostMap walks `steps` in step.index order, picks out the
+// model-kind ones, and pairs them with their turn ordinal. The agent
+// loop emits exactly one model step per turn (resumed-after-approval
+// turns use a different ToolName but still count as model steps), so
+// "first model step" = turn 1, "second" = turn 2, etc. Returns a map
+// keyed by turn number with the cost in µUSD; turns whose step has no
+// cost in OutputSummary are simply absent from the map.
+function buildTurnCostMap(steps: TaskStepRecord[]): Map<number, number> {
+  const sorted = [...steps].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const out = new Map<number, number>();
+  let turn = 0;
+  for (const step of sorted) {
+    if (step.kind !== "model") continue;
+    turn++;
+    const summary = step.output_summary as Record<string, unknown> | undefined;
+    if (!summary) continue;
+    const raw = summary["cost_micros_usd"];
+    if (typeof raw === "number" && raw > 0) {
+      out.set(turn, raw);
+    }
+  }
+  return out;
+}
+
 function ConversationBubble({
   message,
   turn,
+  turnCostMicros,
   canRetryFromTurn = false,
   busy = false,
   onRetryFromTurn,
 }: {
   message: AgentConversationMessage;
   turn?: number;
+  turnCostMicros?: number;
   canRetryFromTurn?: boolean;
   busy?: boolean;
   onRetryFromTurn?: (turn: number) => void;
@@ -551,10 +592,19 @@ function ConversationBubble({
   }
   // assistant — content + any tool calls
   const showRetry = canRetryFromTurn && !!turn && turn > 0 && !!onRetryFromTurn;
+  const showCost = typeof turnCostMicros === "number" && turnCostMicros > 0;
   return (
     <div style={{ display: "flex", justifyContent: "flex-start", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
       <div className="kicker" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span>turn {turn || "?"}</span>
+        {showCost && (
+          <span
+            title={`LLM cost for turn ${turn}: ${formatMicrosUSD(turnCostMicros!)}`}
+            style={{ color: "var(--t3)", fontFamily: "var(--font-mono)" }}
+          >
+            · {formatMicrosUSD(turnCostMicros!)}
+          </span>
+        )}
         {showRetry && (
           <button
             type="button"
