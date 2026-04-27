@@ -229,6 +229,110 @@ describe("api client", () => {
       );
     });
   });
+
+  describe("buildRequestOptions edge cases", () => {
+    it("omits Authorization header when no auth token is supplied", () => {
+      const options = buildRequestOptions({ method: "GET" });
+      const headers = new Headers(options.headers);
+      // The dashboard token-gate path issues unauthenticated requests
+      // (GET /healthz, GET /v1/whoami) — sending a stray Authorization
+      // would land an empty bearer at the gateway and trip the
+      // invalid-token branch unnecessarily.
+      expect(headers.get("Authorization")).toBeNull();
+    });
+
+    it("omits Content-Type for body-less requests", () => {
+      const options = buildRequestOptions({ method: "DELETE", authToken: "x" });
+      const headers = new Headers(options.headers);
+      expect(headers.get("Content-Type")).toBeNull();
+      expect(options.body).toBeUndefined();
+    });
+
+    it("defaults method to GET when not specified", () => {
+      const options = buildRequestOptions({});
+      expect(options.method).toBe("GET");
+    });
+  });
+
+  describe("error-mapping edge cases", () => {
+    it("surfaces the gateway's error.message when the body is well-formed JSON", async () => {
+      // Most error paths route through fetchJSON's !response.ok branch,
+      // which extracts {error: {message}} from the body. A regression
+      // here turns every 4xx into the generic "request failed" string
+      // and operators lose actionable detail in their toasts.
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { type: "rate_limit_exceeded", message: "slow down" } }),
+          { status: 429, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await expect(
+        getBudget("?scope=global", "admin-secret"),
+      ).rejects.toThrow(/slow down/);
+    });
+
+    it("falls back to the static label when the error body is not valid JSON", async () => {
+      // Some gateway frontends (CDNs, legacy reverse proxies) return
+      // text/html error bodies. Without the try/catch in errorMessage
+      // the whole thing would crash with a JSON parse error instead of
+      // a clean "request failed" — leaving the operator with a stack
+      // trace toast.
+      fetchMock.mockResolvedValue(
+        new Response("<html>500</html>", {
+          status: 500,
+          headers: { "Content-Type": "text/html" },
+        }),
+      );
+      await expect(
+        getBudget("?scope=global", "admin-secret"),
+      ).rejects.toThrow(/request failed/);
+    });
+
+    it("returns undefined for a 204 No Content response", async () => {
+      // 204 is the contract for DELETE endpoints. fetchJSON must not
+      // call .json() on an empty body — that throws "Unexpected end of
+      // JSON input" and silently turns successful deletes into
+      // toast-error noise. The deleteChatSession test in
+      // useRuntimeConsole.test.tsx hits this real-world.
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+      // setProviderAPIKey returns Promise<void> — but it's the closest
+      // 204-eligible path here; the assertion is that we don't throw.
+      await expect(
+        setProviderAPIKey("anthropic", "", "admin-secret"),
+      ).resolves.not.toThrow();
+    });
+
+    it("rewrites 'Failed to fetch' network errors into actionable gateway URLs", async () => {
+      // Different browsers throw different strings for network-level
+      // failure: Chrome throws "Failed to fetch", Safari throws
+      // "Load failed". Both must produce the same actionable hint.
+      fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+      await expect(
+        getBudget("?scope=global", "admin-secret"),
+      ).rejects.toThrow(/Check that the gateway is running/);
+    });
+
+    it("rewrites 'NetworkError' substring matches the same way", async () => {
+      // Firefox uses NetworkError. The .includes() check covers
+      // arbitrary suffixes the browser may add; assert the rewrite
+      // still fires with a less-than-exact match.
+      fetchMock.mockRejectedValue(new TypeError("NetworkError when attempting to fetch resource."));
+      await expect(
+        getBudget("?scope=global", "admin-secret"),
+      ).rejects.toThrow(/Check that the gateway is running/);
+    });
+
+    it("preserves non-network error messages with the request URL prepended", async () => {
+      // A non-network error (e.g. AbortError or a custom one) goes
+      // through the fallback branch of networkErrorMessage and gets
+      // wrapped as "Gateway request failed (url): message" — the URL
+      // is the operator's only clue about which call broke.
+      fetchMock.mockRejectedValue(new Error("AbortError: aborted"));
+      await expect(
+        getBudget("?scope=global", "admin-secret"),
+      ).rejects.toThrow(/\/admin\/budget.*AbortError: aborted/);
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {
