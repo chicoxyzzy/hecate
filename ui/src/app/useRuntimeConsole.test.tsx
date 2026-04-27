@@ -759,7 +759,7 @@ describe("useRuntimeConsole", () => {
       let putCalls = 0;
       let putBody = "";
       const baseMock = adminFetchMock({});
-      fetchMock.mockImplementation((async (input, init) => {
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === "/admin/control-plane/providers/anthropic/api-key" && init?.method === "PUT") {
           putCalls++;
@@ -957,7 +957,7 @@ describe("useRuntimeConsole", () => {
         [{ id: "sess_a", title: "Keep" }, { id: "sess_b", title: "Delete me" }],
         {},
       );
-      fetchMock.mockImplementation((async (input, init) => {
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === "/v1/chat/sessions/sess_b" && init?.method === "DELETE") {
           deleteCalls++;
@@ -985,7 +985,7 @@ describe("useRuntimeConsole", () => {
         [{ id: "sess_a", title: "Old title" }],
         {},
       );
-      fetchMock.mockImplementation((async (input, init) => {
+      fetchMock.mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === "/v1/chat/sessions/sess_a" && init?.method === "PATCH") {
           return jsonResponse({
