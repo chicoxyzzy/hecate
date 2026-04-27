@@ -238,6 +238,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 - [Deployment](docs/deployment.md) — compose profiles, image pinning, lost-token recovery, resets, backend tier choice
 - [Providers](docs/providers.md) — built-in catalog, configuration, custom providers, health/circuit breaking
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md)
+- [MCP server](docs/mcp.md) — expose Hecate to Claude Desktop / Cursor / Zed via the `hecate mcp-server` subcommand
 - [Runtime API Notes](docs/runtime-api.md)
 - [Telemetry, OTLP, And Collector Recipes](docs/telemetry.md)
 - [Development](docs/development.md) — local build, UI hot reload, full make-target reference, screenshot tooling

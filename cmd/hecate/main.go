@@ -48,6 +48,9 @@ func main() {
 		case "--version", "-v", "version":
 			fmt.Println(version.Version)
 			return
+		case "mcp-server":
+			runMCPServer()
+			return
 		}
 	}
 
