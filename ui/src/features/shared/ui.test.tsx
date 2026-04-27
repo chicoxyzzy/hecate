@@ -1,8 +1,23 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { Badge, CopyBtn, Dot, Icon, Icons, InlineError, Toggle } from "./ui";
+import {
+  Badge,
+  CodeBlock,
+  ConfirmModal,
+  CopyBtn,
+  Dot,
+  Icon,
+  Icons,
+  InlineError,
+  Modal,
+  ModelPicker,
+  ProviderPicker,
+  SlideOver,
+  Toggle,
+} from "./ui";
+import type { ModelRecord } from "../../types/runtime";
 
 describe("Toggle", () => {
   it("renders with role=switch and aria-checked", () => {
@@ -96,5 +111,263 @@ describe("CopyBtn", () => {
     render(<CopyBtn text="hello" />);
     fireEvent.click(screen.getByRole("button"));
     expect(writeText).toHaveBeenCalledWith("hello");
+  });
+});
+
+// ─── Modal / SlideOver / ConfirmModal ──────────────────────────────────
+// Shared dialog primitives. The chrome contract — Escape closes, the
+// Close button closes, backdrop click closes, in-content click does NOT
+// close — is the same across all three. A regression here breaks every
+// admin form, every confirm dialog, and the pricebook consent flow.
+
+describe("Modal", () => {
+  function renderModal(onClose = vi.fn()) {
+    render(
+      <Modal title="Test modal" footer={<button>OK</button>} onClose={onClose}>
+        <div data-testid="content">body content</div>
+      </Modal>,
+    );
+    return { onClose };
+  }
+
+  it("renders title, body, and footer with role=dialog", () => {
+    renderModal();
+    const dialog = screen.getByRole("dialog", { name: "Test modal" });
+    expect(dialog).toBeTruthy();
+    expect(within(dialog).getByTestId("content")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "OK" })).toBeTruthy();
+  });
+
+  it("Escape key fires onClose", async () => {
+    const { onClose } = renderModal();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Close button fires onClose", async () => {
+    const { onClose } = renderModal();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking content does NOT close (stopPropagation guards body)", async () => {
+    const { onClose } = renderModal();
+    await userEvent.click(screen.getByTestId("content"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("SlideOver", () => {
+  // SlideOver shares chrome with Modal — only the surface positioning
+  // differs. One sanity test confirms the dialog role + Escape close.
+  it("renders as a dialog and closes on Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <SlideOver title="Side panel" footer={<span />} onClose={onClose}>
+        <div>panel body</div>
+      </SlideOver>,
+    );
+    expect(screen.getByRole("dialog", { name: "Side panel" })).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ConfirmModal", () => {
+  it("calls onConfirm when the confirm button is clicked", async () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmModal
+        title="Delete?"
+        message="This is irreversible."
+        confirmLabel="Delete"
+        danger
+        onConfirm={onConfirm}
+        onClose={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables confirm and shows 'Working…' while pending", () => {
+    render(
+      <ConfirmModal
+        title="Delete?"
+        message="x"
+        confirmLabel="Delete"
+        pending
+        onConfirm={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    // Pending replaces the label — operator can't accidentally
+    // double-fire the action while the request is in flight.
+    const btn = screen.getByRole("button", { name: /Working/i });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("uses btn-primary by default and btn-danger when danger=true", () => {
+    const { rerender } = render(
+      <ConfirmModal title="t" message="m" confirmLabel="OK" onConfirm={() => {}} onClose={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "OK" }).className).toContain("btn-primary");
+    rerender(
+      <ConfirmModal title="t" message="m" confirmLabel="OK" danger onConfirm={() => {}} onClose={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "OK" }).className).toContain("btn-danger");
+  });
+});
+
+// ─── ModelPicker ──────────────────────────────────────────────────────
+
+describe("ModelPicker", () => {
+  const models: ModelRecord[] = [
+    { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } },
+    { id: "gpt-4o", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: false } },
+    { id: "claude-sonnet-4-6", owned_by: "anthropic", metadata: { provider: "anthropic", provider_kind: "cloud", default: false } },
+  ];
+
+  it("opens on trigger click and shows models grouped by provider", async () => {
+    const user = userEvent.setup();
+    render(<ModelPicker value="gpt-4o-mini" onChange={() => {}} models={models} />);
+    // Trigger reads the selected model id.
+    expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
+    // No menu yet.
+    expect(document.querySelector(".dropdown-menu")).toBeNull();
+    await user.click(screen.getByRole("button"));
+    expect(document.querySelector(".dropdown-menu")).toBeTruthy();
+    // Both providers render as section headers.
+    expect(screen.getByText("openai")).toBeTruthy();
+    expect(screen.getByText("anthropic")).toBeTruthy();
+  });
+
+  it("calls onChange with the picked id and closes the menu", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ModelPicker value="gpt-4o-mini" onChange={onChange} models={models} />);
+    await user.click(screen.getByRole("button"));
+
+    const menu = document.querySelector(".dropdown-menu")!;
+    await user.click(within(menu as HTMLElement).getByText("claude-sonnet-4-6"));
+
+    expect(onChange).toHaveBeenCalledWith("claude-sonnet-4-6");
+    // Menu closes after selection.
+    expect(document.querySelector(".dropdown-menu")).toBeNull();
+  });
+
+  it("renders the empty state when no models are available", async () => {
+    const user = userEvent.setup();
+    render(<ModelPicker value="" onChange={() => {}} models={[]} />);
+    await user.click(screen.getByRole("button"));
+    expect(screen.getByText(/No models available/i)).toBeTruthy();
+  });
+
+  it("highlights the selected row with the 'selected' class", async () => {
+    const user = userEvent.setup();
+    render(<ModelPicker value="gpt-4o" onChange={() => {}} models={models} />);
+    await user.click(screen.getByRole("button"));
+    const selectedRow = document.querySelector(".dropdown-item.selected");
+    expect(selectedRow?.textContent).toContain("gpt-4o");
+  });
+
+  it("flags the model with metadata.default = true with a 'default' label", async () => {
+    const user = userEvent.setup();
+    render(<ModelPicker value="" onChange={() => {}} models={models} />);
+    await user.click(screen.getByRole("button"));
+    // gpt-4o-mini is metadata.default=true → has the 'default' marker.
+    const defaultMarker = screen.getByText("default");
+    expect(defaultMarker).toBeTruthy();
+  });
+});
+
+// ─── ProviderPicker ───────────────────────────────────────────────────
+
+describe("ProviderPicker", () => {
+  const options = [
+    { id: "openai", name: "OpenAI", configured: true, kind: "cloud" as const },
+    { id: "anthropic", name: "Anthropic", configured: false, kind: "cloud" as const },
+    { id: "ollama", name: "Ollama", configured: true, kind: "local" as const },
+  ];
+
+  it("shows the selected option's display name", () => {
+    // Auto-size mode renders the label twice — once visible, once
+    // hidden (aria-hidden) as the widest-label spacer that pins the
+    // trigger width across selections. So getAllByText finds 2 with
+    // matching content; we just verify the trigger button contains
+    // the label text.
+    render(<ProviderPicker value="anthropic" onChange={() => {}} options={options} />);
+    expect(screen.getByRole("button").textContent).toContain("Anthropic");
+  });
+
+  it("opens, shows All providers row when includeAuto, and emits the autoValue", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProviderPicker
+        value="openai"
+        onChange={onChange}
+        options={options}
+        includeAuto
+        autoValue=""
+        autoLabel="All providers"
+      />,
+    );
+    await user.click(screen.getByRole("button"));
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    expect(within(menu).getByText("All providers")).toBeTruthy();
+    await user.click(within(menu).getByText("All providers"));
+    // autoValue here is "" — pin the contract so a regression to "auto"
+    // surfaces clearly. Different callers configure the sentinel.
+    expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  it("emits the option id (not the display name) when a row is clicked", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ProviderPicker value="" onChange={onChange} options={options} />);
+    await user.click(screen.getByRole("button"));
+    // The trigger spacer also contains every option name (widest-label
+    // pin) — scope to the menu so we click the dropdown item, not the
+    // hidden trigger span.
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    await user.click(within(menu).getByText("Anthropic"));
+    expect(onChange).toHaveBeenCalledWith("anthropic");
+  });
+
+  it("closes the menu after a selection", async () => {
+    const user = userEvent.setup();
+    render(<ProviderPicker value="" onChange={() => {}} options={options} />);
+    await user.click(screen.getByRole("button"));
+    expect(document.querySelector(".dropdown-menu")).toBeTruthy();
+    const menu = document.querySelector(".dropdown-menu") as HTMLElement;
+    await user.click(within(menu).getByText("Anthropic"));
+    expect(document.querySelector(".dropdown-menu")).toBeNull();
+  });
+});
+
+// ─── CodeBlock ────────────────────────────────────────────────────────
+
+describe("CodeBlock", () => {
+  it("renders the code text and the language tag", () => {
+    render(<CodeBlock code="hecate --help" lang="bash" />);
+    // The header carries the lang label uppercased per CSS, but the DOM
+    // text is the raw lowercase. Match either via case-insensitive text.
+    expect(screen.getByText(/bash/i)).toBeTruthy();
+    expect(screen.getByText(/hecate --help/)).toBeTruthy();
+  });
+
+  it("Copy button copies the code to the clipboard", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    render(<CodeBlock code="echo hi" />);
+    // The copy button has no accessible label of its own — just an icon.
+    // Use the closest button and click it.
+    const btn = document.querySelector(".code-copy-btn") as HTMLButtonElement;
+    fireEvent.click(btn);
+    expect(writeText).toHaveBeenCalledWith("echo hi");
   });
 });
