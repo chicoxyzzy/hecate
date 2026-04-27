@@ -205,16 +205,16 @@ Three tiers, picked per subsystem:
 | Tasks | `GATEWAY_TASKS_BACKEND` | ☆ | ★ | ✓ |
 | Task queue | `GATEWAY_TASK_QUEUE_BACKEND` | ☆ | ★ | ✓ |
 | Exact cache | `GATEWAY_CACHE_BACKEND` | ☆ | ★ | ✓ |
-| Semantic cache² | `GATEWAY_SEMANTIC_CACHE_BACKEND` | ✓ | —¹ | ✓ |
+| Semantic cache¹ | `GATEWAY_SEMANTIC_CACHE_BACKEND` | ✓ | —² | ✓ |
 | Budget | `GATEWAY_BUDGET_BACKEND` | ☆ | ★ | ✓ |
 
 ☆ = default for the bare binary · ★ = default for the docker image · ✓ = supported · — = not supported
 
 The docker image picks SQLite for every durable subsystem so `docker compose up` persists tenants / keys / pricebook / tasks / chat sessions across restarts without extra config. Bare-binary runs default to memory across the board so tests and quick experiments don't accidentally write a `.data/hecate.db` file. To override either default, set the relevant `GATEWAY_*_BACKEND=…` env var.
 
-² **Semantic cache is disabled by default** (`GATEWAY_SEMANTIC_CACHE_ENABLED=false`) — when off, every chat completion bypasses it entirely regardless of the backend setting. Set `GATEWAY_SEMANTIC_CACHE_ENABLED=true` to turn it on; then `_BACKEND` chooses where to store vectors. The bare-binary memory store does cosine in Go (good for ≲10k entries); pgvector handles indexed search at scale.
+¹ **Semantic cache is disabled by default** (`GATEWAY_SEMANTIC_CACHE_ENABLED=false`) — when off, every chat completion bypasses it entirely regardless of the backend setting. Set `GATEWAY_SEMANTIC_CACHE_ENABLED=true` to turn it on; then `_BACKEND` chooses where to store vectors. The bare-binary memory store does cosine in Go (good for ≲10k entries); pgvector handles indexed search at scale.
 
-¹ **Semantic cache on SQLite is intentionally unsupported.** Indexed vector similarity needs the [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension, which is C and only loads into native (CGO) or WASM (Wazero) SQLite drivers. The gateway uses [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — a pure-Go ccgo translation — to keep the single-static-binary story; modernc cannot load native extensions. Single-node deploys that need persistent semantic cache should run Postgres *for this subsystem only* — backends are picked per-subsystem, so the rest of state can still live in SQLite. The `memory` backend is fine for ≲10k cached prompts.
+² **Semantic cache on SQLite is intentionally unsupported.** Indexed vector similarity needs the [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension, which is C and only loads into native (CGO) or WASM (Wazero) SQLite drivers. The gateway uses [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — a pure-Go ccgo translation — to keep the single-static-binary story; modernc cannot load native extensions. Single-node deploys that need persistent semantic cache should run Postgres *for this subsystem only* — backends are picked per-subsystem, so the rest of state can still live in SQLite. The `memory` backend is fine for ≲10k cached prompts.
 
 `POSTGRES_DSN` configures the shared Postgres client. If any backend is set to `postgres`, the DSN must be reachable at startup or the gateway exits — there is no silent fallback to `memory`.
 
