@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -380,6 +383,20 @@ func (e *AgentLoopExecutor) dispatchToolCall(ctx context.Context, spec Execution
 		taskCopy.FileOperation = op
 		return e.runSubExecutor(ctx, spec, e.file, taskCopy, stepIndex, startedAt, call.ID, call.Function.Name)
 
+	case "read_file":
+		var args readFileArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return fmt.Sprintf("invalid arguments for read_file: %v", err), nil, nil, nil
+		}
+		return readFileTool(spec, args, stepIndex, startedAt, call.Function.Name)
+
+	case "list_dir":
+		var args listDirArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return fmt.Sprintf("invalid arguments for list_dir: %v", err), nil, nil, nil
+		}
+		return listDirTool(spec, args, stepIndex, startedAt, call.Function.Name)
+
 	default:
 		return fmt.Sprintf("unknown tool: %s", call.Function.Name), nil, nil, nil
 	}
@@ -591,6 +608,34 @@ func agentToolDefinitions() []types.Tool {
 				}`),
 			},
 		},
+		{
+			Type: "function",
+			Function: types.ToolFunction{
+				Name:        "read_file",
+				Description: "Read the contents of a file in the task workspace. Use this instead of `shell_exec(cat ...)` — it's faster, doesn't need a shell, and isn't gated by approval.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"path": {"type": "string", "description": "Relative path under the workspace."},
+						"max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576, "default": 65536, "description": "Cap the read to this many bytes. Larger files are truncated; the truncation is reported in the result."}
+					},
+					"required": ["path"]
+				}`),
+			},
+		},
+		{
+			Type: "function",
+			Function: types.ToolFunction{
+				Name:        "list_dir",
+				Description: "List files and directories under a workspace path. Use this instead of `shell_exec(ls ...)` for a structured listing that includes file sizes and types.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"path": {"type": "string", "default": ".", "description": "Relative path under the workspace. '.' or empty = workspace root."}
+					}
+				}`),
+			},
+		},
 	}
 }
 
@@ -608,6 +653,15 @@ type fileWriteArgs struct {
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Operation string `json:"operation,omitempty"`
+}
+
+type readFileArgs struct {
+	Path     string `json:"path"`
+	MaxBytes int    `json:"max_bytes,omitempty"`
+}
+
+type listDirArgs struct {
+	Path string `json:"path,omitempty"`
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -708,6 +762,225 @@ func summarizeSubResult(r *ExecutionResult) string {
 		}
 	}
 	return b.String()
+}
+
+// ─── Inline read tools ──────────────────────────────────────────────
+//
+// `read_file` and `list_dir` are deliberately implemented inline here
+// rather than going through the FileExecutor. They're read-only,
+// don't need a sandbox, and the LLM hits them frequently — keeping
+// them off the executor path saves goroutine + sandbox overhead, and
+// makes them naturally exempt from the approval gate (read-only is
+// always safe).
+//
+// Path safety: every relative path is resolved against the workspace
+// root and rejected if the result would land outside. This is the
+// same protection a sandbox would provide; we do it explicitly here
+// because we're bypassing the sandbox.
+
+const (
+	readFileDefaultMaxBytes = 64 * 1024
+	readFileHardCapBytes    = 1024 * 1024
+	listDirEntryCap         = 500
+)
+
+// resolveWorkspacePath joins relPath onto the run's workspace root and
+// rejects the result if it escapes. Returns the absolute path (safe
+// to read) or an error message suitable for the tool result.
+func resolveWorkspacePath(spec ExecutionSpec, relPath string) (string, string) {
+	root := strings.TrimSpace(spec.Task.WorkingDirectory)
+	if root == "" {
+		// No workspace configured — operate from current dir as a
+		// permissive fallback for tests. In production runner sets
+		// this to the run's WorkspacePath before dispatching.
+		root, _ = os.Getwd()
+	}
+	rel := strings.TrimSpace(relPath)
+	if rel == "" || rel == "." {
+		return root, ""
+	}
+	// Reject absolute paths outright — agent must operate inside the
+	// workspace. Path-traversal via `..` is caught below by the prefix
+	// check on the cleaned absolute path.
+	if filepath.IsAbs(rel) {
+		return "", fmt.Sprintf("path must be relative to the workspace, got absolute: %q", rel)
+	}
+	abs := filepath.Clean(filepath.Join(root, rel))
+	rootClean := filepath.Clean(root)
+	if abs != rootClean && !strings.HasPrefix(abs, rootClean+string(filepath.Separator)) {
+		return "", fmt.Sprintf("path %q escapes the workspace root", rel)
+	}
+	return abs, ""
+}
+
+// readFileTool reads a workspace file and returns the content as the
+// tool result text. Bounded by max_bytes; binary files are reported
+// rather than dumped (to avoid pushing garbage into the conversation).
+func readFileTool(spec ExecutionSpec, args readFileArgs, stepIndex int, startedAt time.Time, toolName string) (string, *types.TaskStep, []types.TaskArtifact, error) {
+	abs, errMsg := resolveWorkspacePath(spec, args.Path)
+	if errMsg != "" {
+		return errMsg, nil, nil, nil
+	}
+	maxBytes := args.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = readFileDefaultMaxBytes
+	}
+	if maxBytes > readFileHardCapBytes {
+		maxBytes = readFileHardCapBytes
+	}
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Sprintf("read_file: %v", err), nil, nil, nil
+	}
+	if info.IsDir() {
+		return fmt.Sprintf("read_file: %q is a directory; use list_dir instead", args.Path), nil, nil, nil
+	}
+
+	f, err := os.Open(abs)
+	if err != nil {
+		return fmt.Sprintf("read_file: %v", err), nil, nil, nil
+	}
+	defer f.Close()
+
+	buf := make([]byte, maxBytes)
+	n, _ := f.Read(buf)
+	content := buf[:n]
+	truncated := info.Size() > int64(n)
+
+	// Crude but effective binary detection: if any of the first 512
+	// bytes is a NUL, treat as binary and don't return content. The
+	// LLM doesn't benefit from raw binary in its conversation.
+	probe := content
+	if len(probe) > 512 {
+		probe = probe[:512]
+	}
+	for _, b := range probe {
+		if b == 0 {
+			return fmt.Sprintf("read_file: %q is a binary file (%d bytes); skipped content. Use file_write to overwrite or shell_exec for inspection.", args.Path, info.Size()), nil, nil, nil
+		}
+	}
+
+	step := buildReadFileStep(spec, stepIndex, startedAt, toolName, args.Path, info.Size(), int64(n), truncated)
+	var b strings.Builder
+	fmt.Fprintf(&b, "path=%s size=%d bytes=%d", args.Path, info.Size(), n)
+	if truncated {
+		fmt.Fprintf(&b, " truncated=true")
+	}
+	b.WriteString("\n--- content ---\n")
+	b.Write(content)
+	if truncated {
+		b.WriteString("\n…(truncated)")
+	}
+	return b.String(), &step, nil, nil
+}
+
+// listDirTool lists a workspace directory. Returns one line per entry
+// with kind (file/dir/link) and size. Capped at listDirEntryCap so
+// huge directories don't bloat the conversation.
+func listDirTool(spec ExecutionSpec, args listDirArgs, stepIndex int, startedAt time.Time, toolName string) (string, *types.TaskStep, []types.TaskArtifact, error) {
+	abs, errMsg := resolveWorkspacePath(spec, args.Path)
+	if errMsg != "" {
+		return errMsg, nil, nil, nil
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Sprintf("list_dir: %v", err), nil, nil, nil
+	}
+	if !info.IsDir() {
+		return fmt.Sprintf("list_dir: %q is not a directory", args.Path), nil, nil, nil
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return fmt.Sprintf("list_dir: %v", err), nil, nil, nil
+	}
+	// Sort for deterministic output — saves token churn across
+	// equivalent calls in different turns.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+
+	relPath := args.Path
+	if relPath == "" {
+		relPath = "."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "path=%s entries=%d", relPath, len(entries))
+	if len(entries) > listDirEntryCap {
+		fmt.Fprintf(&b, " truncated=%d", listDirEntryCap)
+	}
+	b.WriteString("\n")
+	emitted := 0
+	for _, entry := range entries {
+		if emitted >= listDirEntryCap {
+			break
+		}
+		kind := "file"
+		size := int64(0)
+		if entry.IsDir() {
+			kind = "dir"
+		} else if entry.Type()&os.ModeSymlink != 0 {
+			kind = "link"
+		}
+		if fi, err := entry.Info(); err == nil && !fi.IsDir() {
+			size = fi.Size()
+		}
+		fmt.Fprintf(&b, "%-4s %10d  %s\n", kind, size, entry.Name())
+		emitted++
+	}
+
+	step := buildListDirStep(spec, stepIndex, startedAt, toolName, relPath, len(entries))
+	return b.String(), &step, nil, nil
+}
+
+func buildReadFileStep(spec ExecutionSpec, index int, startedAt time.Time, toolName, path string, fileSize, readBytes int64, truncated bool) types.TaskStep {
+	return types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    index,
+		Kind:     "tool",
+		Title:    fmt.Sprintf("read_file %s", path),
+		Status:   "completed",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: toolName,
+		Input: map[string]any{
+			"path":      path,
+			"size":      fileSize,
+			"truncated": truncated,
+		},
+		OutputSummary: map[string]any{
+			"bytes_read": readBytes,
+		},
+		StartedAt:  startedAt,
+		FinishedAt: time.Now().UTC(),
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+}
+
+func buildListDirStep(spec ExecutionSpec, index int, startedAt time.Time, toolName, path string, entryCount int) types.TaskStep {
+	return types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    index,
+		Kind:     "tool",
+		Title:    fmt.Sprintf("list_dir %s", path),
+		Status:   "completed",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: toolName,
+		Input: map[string]any{
+			"path": path,
+		},
+		OutputSummary: map[string]any{
+			"entry_count": entryCount,
+		},
+		StartedAt:  startedAt,
+		FinishedAt: time.Now().UTC(),
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
 }
 
 // pendingToolCallsForResume detects the resume-after-approval state:

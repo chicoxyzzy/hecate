@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -311,6 +313,196 @@ func TestAgentLoop_UnknownToolBecomesToolError(t *testing.T) {
 	}
 	if !hasUnknown {
 		t.Errorf("expected unknown-tool tool message; got: %+v", secondReq.Messages)
+	}
+}
+
+func TestAgentLoop_ReadFileTool(t *testing.T) {
+	// Happy path: agent calls read_file on a workspace file. Loop
+	// reads the file inline (no FileExecutor, no shell), surfaces
+	// the content as the tool result, and the next LLM turn answers.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "read_file", Arguments: `{"path":"hello.txt"}`},
+			})),
+			makeChatResp(makeAssistantMsg("It says: hello world.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = dir
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", res.Status)
+	}
+	// Second LLM request must have seen the file contents in a tool message.
+	secondReq := llm.lastReqs[1]
+	hasContent := false
+	for _, m := range secondReq.Messages {
+		if m.Role == "tool" && m.ToolCallID == "c1" && strings.Contains(m.Content, "hello world") {
+			hasContent = true
+		}
+	}
+	if !hasContent {
+		t.Errorf("read_file content didn't surface to next LLM turn: %+v", secondReq.Messages)
+	}
+}
+
+func TestAgentLoop_ReadFileRejectsTraversal(t *testing.T) {
+	// Path traversal must fail safely — the agent can't ../ out of
+	// its workspace. The tool returns an error string the LLM sees,
+	// and the file system isn't touched.
+	dir := t.TempDir()
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "read_file", Arguments: `{"path":"../../etc/passwd"}`},
+			})),
+			makeChatResp(makeAssistantMsg("Sorry, can't.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = dir
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", res.Status)
+	}
+	secondReq := llm.lastReqs[1]
+	hasEscape := false
+	for _, m := range secondReq.Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "escapes the workspace root") {
+			hasEscape = true
+		}
+	}
+	if !hasEscape {
+		t.Errorf("traversal not rejected with workspace-escape error: %+v", secondReq.Messages)
+	}
+}
+
+func TestAgentLoop_ReadFileBinaryDetection(t *testing.T) {
+	// A binary file (NUL bytes) must be reported, not dumped. Lets
+	// the LLM know the file exists without polluting the conversation
+	// with raw bytes that just waste tokens.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), []byte{0x00, 0x01, 0x02, 0xff, 0xfe}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "read_file", Arguments: `{"path":"blob.bin"}`},
+			})),
+			makeChatResp(makeAssistantMsg("It's binary.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = dir
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	hasBinary := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "binary file") {
+			hasBinary = true
+		}
+	}
+	if !hasBinary {
+		t.Errorf("binary file not flagged: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_ListDirTool(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.go", "c.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "list_dir", Arguments: `{"path":"."}`},
+			})),
+			makeChatResp(makeAssistantMsg("Done.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = dir
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// The tool result must list each entry with its kind.
+	var toolResult string
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" {
+			toolResult = m.Content
+		}
+	}
+	for _, want := range []string{"a.txt", "b.go", "c.md", "subdir", "dir ", "file"} {
+		if !strings.Contains(toolResult, want) {
+			t.Errorf("list_dir output missing %q: %s", want, toolResult)
+		}
+	}
+	// Sorted output: a.txt < b.go < c.md (alphabetical).
+	posA := strings.Index(toolResult, "a.txt")
+	posB := strings.Index(toolResult, "b.go")
+	posC := strings.Index(toolResult, "c.md")
+	if !(posA < posB && posB < posC) {
+		t.Errorf("entries not sorted: a=%d b=%d c=%d in %s", posA, posB, posC, toolResult)
+	}
+}
+
+func TestAgentLoop_ListDirOnFileFailsCleanly(t *testing.T) {
+	// list_dir on a regular file returns an error string, not a
+	// stack trace. Lets the LLM self-correct by switching to read_file.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{Name: "list_dir", Arguments: `{"path":"x.txt"}`},
+			})),
+			makeChatResp(makeAssistantMsg("OK.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = dir
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	hasNotDir := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "not a directory") {
+			hasNotDir = true
+		}
+	}
+	if !hasNotDir {
+		t.Errorf("list_dir on a file should report 'not a directory'")
 	}
 }
 
