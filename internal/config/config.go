@@ -17,12 +17,7 @@ type Config struct {
 	Governor  GovernorConfig
 	Cache     CacheConfig
 	Retention RetentionConfig
-	// Redis is the top-level Redis client configuration shared across the
-	// cache, budget store, control-plane store, and retention history. It
-	// used to be nested under Cache; that was misleading because four
-	// unrelated subsystems consume it.
-	Redis    RedisConfig
-	Postgres PostgresConfig
+	Postgres  PostgresConfig
 	// SQLite is the single-node-durable tier. Subsystems opt in via
 	// GATEWAY_*_BACKEND=sqlite; the client is opened lazily once any
 	// subsystem actually needs it. See storage.SQLiteClient for the
@@ -191,14 +186,6 @@ type SemanticCacheConfig struct {
 	PostgresVectorSearchProbes       int
 }
 
-type RedisConfig struct {
-	Address  string
-	Password string
-	DB       int
-	Prefix   string
-	Timeout  time.Duration
-}
-
 type PostgresConfig struct {
 	DSN          string
 	Schema       string
@@ -357,13 +344,6 @@ func LoadFromEnv() Config {
 			AllowedProviderKinds:    splitCSV(getEnv("GATEWAY_ALLOWED_PROVIDER_KINDS", "")),
 			BudgetWarningThresholds: parseEnvCSVInts(getEnv("GATEWAY_BUDGET_WARNING_THRESHOLDS", "50,80,95")),
 			BudgetHistoryLimit:      getEnvInt("GATEWAY_BUDGET_HISTORY_LIMIT", 20),
-		},
-		Redis: RedisConfig{
-			Address:  getEnv("REDIS_ADDRESS", "127.0.0.1:6379"),
-			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvInt("REDIS_DB", 0),
-			Prefix:   getEnv("REDIS_PREFIX", "agent-runtime"),
-			Timeout:  getEnvDuration("REDIS_TIMEOUT", 3*time.Second),
 		},
 		Cache: CacheConfig{
 			DefaultTTL: getEnvDuration("GATEWAY_CACHE_TTL", 5*time.Minute),

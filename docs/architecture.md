@@ -87,20 +87,26 @@ Key invariants:
 
 ## Storage tiers
 
-Every persistent component picks its own backend independently — there is no hard requirement to deploy Postgres for the gateway path, and there's no hard requirement to deploy Redis at all. The defaults give you a single-process gateway with no external dependencies; production deploys flip individual stores to Postgres for durability.
+Three tiers, picked per subsystem:
 
-| Component | `memory` | `redis` | `postgres` |
+- **`memory`** — in-process, ephemeral. Default. Right for tests and local iteration.
+- **`sqlite`** — single-file durable store via a pure-Go driver (modernc.org/sqlite, no CGO). Right for single-node production.
+- **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
+
+| Component | `memory` | `sqlite` | `postgres` |
 |---|---|---|---|
 | Control plane (tenants, keys, providers, policy, pricebook) | ✓ | ✓ | ✓ |
-| Chat sessions | ✓ | — | ✓ |
-| Tasks (runs, steps, artifacts, approvals, events) | ✓ | — | ✓ |
-| Task queue (leases) | ✓ | — | ✓ |
+| Chat sessions | ✓ | ✓ | ✓ |
+| Tasks (runs, steps, artifacts, approvals, events) | ✓ | ✓ | ✓ |
+| Task queue (leases) | ✓ | ✓ | ✓ |
 | Exact response cache | ✓ | ✓ | ✓ |
 | Semantic cache | ✓ | — | ✓ |
 | Budget accounts and history | ✓ | ✓ | ✓ |
 | Retention run history | ✓ | ✓ | ✓ |
 
-`memory` is in-process and ephemeral — perfect for tests and local iteration, useless across restarts. `redis` is fast but volatile (no run-event durability). `postgres` is the production target: durable across restarts, supports lease-based queue claims, supports semantic-cache vector indexes.
+The semantic cache has no SQLite backend: indexed vector similarity needs the sqlite-vec extension, and our pure-Go SQLite driver can't load native extensions. Single-node deploys that need persistent semantic search should run Postgres for that subsystem only — the rest of state can still live in SQLite.
+
+A single `GATEWAY_SQLITE_PATH` (default `.data/hecate.db`) and a single `POSTGRES_DSN` configure the shared clients. SQLite's task queue uses `BEGIN IMMEDIATE` plus `UPDATE … RETURNING` for atomic claim under WAL; Postgres uses `SELECT … FOR UPDATE SKIP LOCKED`. Both are race-tested.
 
 ## Why two flows in one binary
 

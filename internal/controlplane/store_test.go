@@ -3,67 +3,7 @@ package controlplane
 import (
 	"context"
 	"testing"
-
-	"github.com/hecate/agent-runtime/internal/storage"
 )
-
-func TestRedisStoreUpsertTenantAndAPIKeyPersists(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeRedisClient{}
-	store, err := NewRedisStoreFromClient(client, "hecate", "control-plane")
-	if err != nil {
-		t.Fatalf("NewRedisStoreFromClient() error = %v", err)
-	}
-
-	tenant, err := store.UpsertTenant(context.Background(), Tenant{
-		Name:             "Team A",
-		AllowedProviders: []string{"openai"},
-	})
-	if err != nil {
-		t.Fatalf("UpsertTenant() error = %v", err)
-	}
-
-	key, err := store.UpsertAPIKey(context.Background(), APIKey{
-		Name:   "Team A Dev",
-		Key:    "hecate-team-a-dev",
-		Tenant: tenant.ID,
-	})
-	if err != nil {
-		t.Fatalf("UpsertAPIKey() error = %v", err)
-	}
-	if key.ID != "team-a-dev" {
-		t.Fatalf("key.ID = %q, want team-a-dev", key.ID)
-	}
-
-	snapshot, err := store.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if len(snapshot.Tenants) != 1 {
-		t.Fatalf("tenant count = %d, want 1", len(snapshot.Tenants))
-	}
-	if len(snapshot.APIKeys) != 1 {
-		t.Fatalf("api key count = %d, want 1", len(snapshot.APIKeys))
-	}
-}
-
-func TestRedisStoreRejectsUnknownTenant(t *testing.T) {
-	t.Parallel()
-
-	store, err := NewRedisStoreFromClient(&fakeRedisClient{}, "hecate", "control-plane")
-	if err != nil {
-		t.Fatalf("NewRedisStoreFromClient() error = %v", err)
-	}
-
-	if _, err := store.UpsertAPIKey(context.Background(), APIKey{
-		Name:   "Unknown Tenant Key",
-		Key:    "secret",
-		Tenant: "missing-tenant",
-	}); err == nil {
-		t.Fatal("UpsertAPIKey() error = nil, want unknown tenant error")
-	}
-}
 
 func TestMemoryStoreAuditEventsCaptureActorAndMutationTrail(t *testing.T) {
 	t.Parallel()
@@ -158,27 +98,4 @@ func TestSetProviderEnabledDisablesConflictingProviders(t *testing.T) {
 			t.Fatalf("provider %q has empty BaseURL — placeholder must inherit from built-in preset", p.ID)
 		}
 	}
-}
-
-type fakeRedisClient struct {
-	data map[string][]byte
-}
-
-func (f *fakeRedisClient) Get(_ context.Context, key string) ([]byte, error) {
-	if f.data == nil {
-		return nil, storage.ErrNil
-	}
-	value, ok := f.data[key]
-	if !ok {
-		return nil, storage.ErrNil
-	}
-	return append([]byte(nil), value...), nil
-}
-
-func (f *fakeRedisClient) Set(_ context.Context, key string, value []byte) error {
-	if f.data == nil {
-		f.data = map[string][]byte{}
-	}
-	f.data[key] = append([]byte(nil), value...)
-	return nil
 }

@@ -392,19 +392,6 @@ func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClie
 	// through to the default branch and produce a MemoryStore — same
 	// lenient shape every other backend selector uses today.
 	switch cfg.Server.ControlPlaneBackend {
-	case "redis":
-		client := storage.NewRedisClient(storage.RedisConfig{
-			Address:  cfg.Redis.Address,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
-			Timeout:  cfg.Redis.Timeout,
-		})
-		store, err := controlplane.NewRedisStore(client, cfg.Redis.Prefix, cfg.Server.ControlPlaneKey)
-		if err != nil {
-			logger.Error("control plane store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
 	case "postgres":
 		store, err := controlplane.NewPostgresStore(context.Background(), postgresClient, cfg.Server.ControlPlaneKey)
 		if err != nil {
@@ -425,15 +412,6 @@ func buildControlPlaneStore(cfg config.Config, logger *slog.Logger, postgresClie
 }
 
 func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient, sqliteClient *storage.SQLiteClient) cache.Store {
-	if cfg.Cache.Backend == "redis" {
-		client := storage.NewRedisClient(storage.RedisConfig{
-			Address:  cfg.Redis.Address,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
-			Timeout:  cfg.Redis.Timeout,
-		})
-		return cache.NewRedisStore(client, cfg.Redis.Prefix, cfg.Cache.DefaultTTL)
-	}
 	if cfg.Cache.Backend == "postgres" {
 		store, err := cache.NewPostgresStore(context.Background(), postgresClient, cfg.Cache.DefaultTTL)
 		if err != nil {
@@ -455,19 +433,6 @@ func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *sto
 
 func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient, sqliteClient *storage.SQLiteClient) retention.HistoryStore {
 	switch strings.ToLower(strings.TrimSpace(cfg.Retention.HistoryBackend)) {
-	case "redis":
-		client := storage.NewRedisClient(storage.RedisConfig{
-			Address:  cfg.Redis.Address,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
-			Timeout:  cfg.Redis.Timeout,
-		})
-		store, err := retention.NewRedisHistoryStore(client, cfg.Redis.Prefix, retentionHistoryKey(cfg.Server.ControlPlaneKey))
-		if err != nil {
-			logger.Error("retention history store init failed", slog.Any("error", err))
-			os.Exit(1)
-		}
-		return store
 	case "postgres":
 		store, err := retention.NewPostgresHistoryStore(context.Background(), postgresClient, "retention_runs")
 		if err != nil {
@@ -629,15 +594,6 @@ func buildTaskQueue(cfg config.Config, logger *slog.Logger, postgresClient *stor
 }
 
 func buildBudgetStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient, sqliteClient *storage.SQLiteClient) governor.BudgetStore {
-	if cfg.Governor.BudgetBackend == "redis" {
-		client := storage.NewRedisClient(storage.RedisConfig{
-			Address:  cfg.Redis.Address,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
-			Timeout:  cfg.Redis.Timeout,
-		})
-		return governor.NewRedisBudgetStore(client, cfg.Redis.Prefix)
-	}
 	if cfg.Governor.BudgetBackend == "postgres" {
 		store, err := governor.NewPostgresBudgetStore(context.Background(), postgresClient)
 		if err != nil {

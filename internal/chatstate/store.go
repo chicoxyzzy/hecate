@@ -3,6 +3,7 @@ package chatstate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -207,7 +208,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session types.ChatSes
 func (s *PostgresStore) GetSession(ctx context.Context, id string) (types.ChatSession, bool, error) {
 	session, err := s.loadSession(ctx, id)
 	if err != nil {
-		if err == storage.ErrNil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return types.ChatSession{}, false, nil
 		}
 		return types.ChatSession{}, false, err
@@ -424,8 +425,8 @@ func (s *PostgresStore) loadSession(ctx context.Context, id string) (types.ChatS
 		id,
 	).Scan(&session.ID, &session.Title, &session.SystemPrompt, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return types.ChatSession{}, storage.ErrNil
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.ChatSession{}, sql.ErrNoRows
 		}
 		return types.ChatSession{}, fmt.Errorf("read postgres chat session: %w", err)
 	}

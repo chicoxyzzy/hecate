@@ -213,20 +213,26 @@ The full env surface lives in `.env.example`; the table below covers the knobs o
 
 ### Storage backends
 
-Every store accepts `memory` (in-process, ephemeral) by default. Switch to `postgres` (or `redis` where available) for persistence across restarts.
+Three tiers, picked per subsystem:
+
+- **`memory`** (default) — in-process, ephemeral. Right for tests and local iteration.
+- **`sqlite`** — single-file durable store, embedded (pure-Go driver, no CGO). Right for single-node production. One file at `GATEWAY_SQLITE_PATH` (default `.data/hecate.db`) is shared across every subsystem that opts in.
+- **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
 
 | Variable | Accepted values |
 |---|---|
-| `GATEWAY_CONTROL_PLANE_BACKEND` | `memory` \| `redis` \| `postgres` |
-| `GATEWAY_RETENTION_HISTORY_BACKEND` | `memory` \| `redis` \| `postgres` |
-| `GATEWAY_CHAT_SESSIONS_BACKEND` | `memory` \| `postgres` |
-| `GATEWAY_TASKS_BACKEND` | `memory` \| `postgres` |
-| `GATEWAY_TASK_QUEUE_BACKEND` | `memory` \| `postgres` |
-| `GATEWAY_CACHE_BACKEND` | `memory` \| `redis` \| `postgres` |
+| `GATEWAY_CONTROL_PLANE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| `GATEWAY_RETENTION_HISTORY_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| `GATEWAY_CHAT_SESSIONS_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| `GATEWAY_TASKS_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| `GATEWAY_TASK_QUEUE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
+| `GATEWAY_CACHE_BACKEND` | `memory` \| `sqlite` \| `postgres` |
 | `GATEWAY_SEMANTIC_CACHE_BACKEND` | `memory` \| `postgres` |
-| `GATEWAY_BUDGET_BACKEND` | `memory` \| `redis` \| `postgres` |
+| `GATEWAY_BUDGET_BACKEND` | `memory` \| `sqlite` \| `postgres` |
 
-A single `POSTGRES_DSN` and the top-level `REDIS_*` block configure the clients that any of the above can share. If any backend is set to `postgres`, `POSTGRES_DSN` must be reachable at startup or the gateway exits — there is no silent fallback to `memory`.
+`POSTGRES_DSN` configures the shared Postgres client. If any backend is set to `postgres`, the DSN must be reachable at startup or the gateway exits — there is no silent fallback to `memory`.
+
+The semantic cache has no SQLite backend: indexed vector similarity needs the sqlite-vec extension, which doesn't load into the pure-Go SQLite driver we use for the single-binary build. Single-node deploys that need persistent semantic cache should run Postgres for that subsystem only — the rest of state can still live in SQLite.
 
 ### Agent task runtime
 

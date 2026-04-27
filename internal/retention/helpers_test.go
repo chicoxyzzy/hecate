@@ -1,9 +1,6 @@
 package retention
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/hecate/agent-runtime/internal/config"
@@ -99,76 +96,5 @@ func TestLimitHistoryRecords(t *testing.T) {
 		if len(got) != tc.wantLen {
 			t.Errorf("limitHistoryRecords(limit=%d) len = %d, want %d", tc.limit, len(got), tc.wantLen)
 		}
-	}
-}
-
-// fakeRedisClient satisfies historyRedisClient without needing a real Redis.
-type fakeRedisClient struct {
-	data    []byte
-	getErr  error
-	setErr  error
-	gets    int
-	setKeys []string
-}
-
-func (f *fakeRedisClient) Get(_ context.Context, _ string) ([]byte, error) {
-	f.gets++
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	return f.data, nil
-}
-
-func (f *fakeRedisClient) Set(_ context.Context, key string, value []byte) error {
-	f.setKeys = append(f.setKeys, key)
-	if f.setErr != nil {
-		return f.setErr
-	}
-	f.data = append([]byte(nil), value...)
-	return nil
-}
-
-// errKeyMissing matches storage.ErrNil shape so RedisHistoryStore.readState
-// treats a missing key as empty state rather than a fatal error.
-var errKeyMissing = errors.New("redis: nil")
-
-func TestNewRedisHistoryStoreRequiresClient(t *testing.T) {
-	if _, err := NewRedisHistoryStoreFromClient(nil, "", "history"); err == nil {
-		t.Error("nil client → err = nil, want error")
-	}
-}
-
-func TestRedisHistoryStoreAppendAndList(t *testing.T) {
-	// Start with no data so readState returns an error that is not ErrNil —
-	// the store will surface it. That isn't what we want for this test, so
-	// pre-seed with valid empty state.
-	state := historyState{Runs: nil}
-	encoded, _ := json.Marshal(state)
-	client := &fakeRedisClient{data: encoded}
-
-	store, err := NewRedisHistoryStoreFromClient(client, "tenant", "retention")
-	if err != nil {
-		t.Fatalf("NewRedisHistoryStoreFromClient: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := store.AppendRun(ctx, HistoryRecord{Trigger: "manual", Actor: "alice"}); err != nil {
-		t.Fatalf("AppendRun: %v", err)
-	}
-	if err := store.AppendRun(ctx, HistoryRecord{Trigger: "scheduled"}); err != nil {
-		t.Fatalf("AppendRun: %v", err)
-	}
-
-	got, err := store.ListRuns(ctx, 0)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("ListRuns len = %d, want 2", len(got))
-	}
-
-	// Key prefix should be applied.
-	if len(client.setKeys) == 0 || client.setKeys[0] != "tenant:retention" {
-		t.Errorf("Set called with %v, want first key tenant:retention", client.setKeys)
 	}
 }

@@ -80,7 +80,8 @@ COPY --from=go-builder /out/hecate /usr/local/bin/hecate
 COPY --from=go-builder --chown=65532:65532 /out/data /data
 
 ENV GATEWAY_ADDRESS=:8080 \
-    GATEWAY_DATA_DIR=/data
+    GATEWAY_DATA_DIR=/data \
+    GATEWAY_SQLITE_PATH=/data/hecate.db
 VOLUME ["/data"]
 
 EXPOSE 8080

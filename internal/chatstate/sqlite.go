@@ -3,6 +3,7 @@ package chatstate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,7 +86,7 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, session types.ChatSessi
 func (s *SQLiteStore) GetSession(ctx context.Context, id string) (types.ChatSession, bool, error) {
 	session, err := s.loadSession(ctx, id)
 	if err != nil {
-		if err == storage.ErrNil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return types.ChatSession{}, false, nil
 		}
 		return types.ChatSession{}, false, err
@@ -355,8 +356,8 @@ func (s *SQLiteStore) loadSession(ctx context.Context, id string) (types.ChatSes
 		id,
 	).Scan(&session.ID, &session.Title, &session.SystemPrompt, &session.Tenant, &session.User, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return types.ChatSession{}, storage.ErrNil
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.ChatSession{}, sql.ErrNoRows
 		}
 		return types.ChatSession{}, fmt.Errorf("read sqlite chat session: %w", err)
 	}

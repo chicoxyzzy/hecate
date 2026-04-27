@@ -96,9 +96,9 @@ api                     # HTTP handlers — chat, messages, tasks, admin, contro
 auth                    # bearer + control-plane API-key authentication
 billing                 # pricebook + cost calculation
 bootstrap               # first-run admin token + AES-GCM control-plane key generation
-cache                   # exact + semantic response caches (memory / redis / postgres)
+cache                   # exact + semantic response caches (memory / sqlite / postgres; semantic = memory / postgres only)
 catalog                 # provider/model discovery and registration
-chatstate               # chat session storage (memory / postgres)
+chatstate               # chat session storage (memory / sqlite / postgres)
 config                  # env-driven config loading
 controlplane            # tenants, API keys, persisted providers, policy/pricebook CRUD
 gateway                 # request lifecycle: auth, policy, cache, router, retry/fallback
@@ -114,7 +114,7 @@ retention               # retention worker + history store
 router                  # provider/model routing engine (rules, failover)
 sandbox                 # sandbox-policy types used by orchestrator
 secrets                 # AES-GCM provider-credential encryption
-storage                 # shared Postgres / Redis client connectors
+storage                 # shared Postgres / SQLite client connectors
 taskstate               # task / run / step / artifact / approval persistence
 telemetry               # OTel attribute keys, metrics, structured logging
 version                 # build-time version metadata
