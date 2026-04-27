@@ -141,8 +141,22 @@ export async function mockGatewayAPIs(page: Page) {
 
 // ── Extended test fixture ─────────────────────────────────────────────────────
 
+// Seed a non-empty admin token in localStorage before any page script runs.
+// AppShell's ConsoleShell routes to TokenGate when authToken is empty, so
+// without this seed the workspace shell never renders and every spec that
+// asserts on `.hecate-activitybar` (shell, chat, providers, admin) hangs in
+// beforeEach. Tests that exercise the gate itself (auth.spec.ts) override
+// this with their own `addInitScript` — multiple init scripts run in
+// registration order, so a later `clear()` wins.
+async function seedAdminToken(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("hecate.authToken", "e2e-test-token");
+  });
+}
+
 export const test = base.extend<{ page: Page }>({
   page: async ({ page }, use) => {
+    await seedAdminToken(page);
     await mockGatewayAPIs(page);
     await use(page);
   },

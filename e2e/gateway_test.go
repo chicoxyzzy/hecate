@@ -20,6 +20,7 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -883,4 +885,136 @@ func fakeOpenAIServer(t *testing.T, path, body string, streaming bool) string {
 	go srv.Serve(ln) //nolint:errcheck
 	t.Cleanup(func() { srv.Close() })
 	return "http://" + ln.Addr().String()
+}
+
+// TestBootstrapAutoGenerationDefaultPath proves the no-env-overrides
+// first-run path: with neither GATEWAY_AUTH_TOKEN nor GATEWAY_DATA_DIR
+// set, the gateway must
+//   - create `.data/hecate.bootstrap.json` (the new default location)
+//     under its working directory, mode 0600,
+//   - persist a base64 control-plane secret + hex admin token in there,
+//   - accept that admin token on /v1/models while still 401-ing
+//     anonymous requests,
+//   - reuse the same file (and therefore the same token) on a second
+//     start so persisted credentials survive restarts.
+//
+// The standard gatewayServer() helper pins both env vars, so this is the
+// only test that exercises the auto-generation default-path code in the
+// binary-only suite. The Docker smoke covers the same contract through
+// the `/data` volume; this is the cheap counterpart.
+func TestBootstrapAutoGenerationDefaultPath(t *testing.T) {
+	t.Parallel()
+
+	bin := gatewayBinary(t)
+	workDir := t.TempDir()
+
+	// First start: no token / no data dir env. Cwd-rooted defaults apply,
+	// so the bootstrap file should land at <workDir>/.data/...
+	addr1 := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	cmd1 := exec.Command(bin)
+	cmd1.Dir = workDir
+	cmd1.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + workDir, // isolate any HOME-relative defaults
+		"GATEWAY_ADDRESS=" + addr1,
+	}
+	cmd1.Stdout = io.Discard
+	cmd1.Stderr = io.Discard
+	if err := cmd1.Start(); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	waitHealthy(t, "http://"+addr1, 10*time.Second)
+
+	bootstrapPath := filepath.Join(workDir, ".data", "hecate.bootstrap.json")
+	info, err := os.Stat(bootstrapPath)
+	if err != nil {
+		t.Fatalf("bootstrap file not at expected default path %q: %v", bootstrapPath, err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("bootstrap file mode = %v, want 0600", mode)
+	}
+
+	raw, err := os.ReadFile(bootstrapPath)
+	if err != nil {
+		t.Fatalf("read bootstrap file: %v", err)
+	}
+	var boot struct {
+		ControlPlaneSecretKey string `json:"control_plane_secret_key"`
+		AdminToken            string `json:"admin_token"`
+	}
+	if err := json.Unmarshal(raw, &boot); err != nil {
+		t.Fatalf("decode bootstrap json: %v", err)
+	}
+	if boot.AdminToken == "" {
+		t.Fatal("admin_token empty in bootstrap file")
+	}
+	if boot.ControlPlaneSecretKey == "" {
+		t.Fatal("control_plane_secret_key empty in bootstrap file")
+	}
+	// Token should be hex-encoded 32 bytes (64 hex chars). This catches
+	// regressions where we accidentally write base64 or random ASCII.
+	if len(boot.AdminToken) != 64 {
+		t.Fatalf("admin_token length = %d, want 64 hex chars", len(boot.AdminToken))
+	}
+	// Secret should base64-decode to exactly 32 bytes — secrets.NewAESGCMCipher
+	// rejects anything else, so a regression here would crash the runtime.
+	if decoded, err := base64.StdEncoding.DecodeString(boot.ControlPlaneSecretKey); err != nil {
+		t.Fatalf("control_plane_secret_key not valid base64: %v", err)
+	} else if len(decoded) != 32 {
+		t.Fatalf("control_plane_secret_key decoded length = %d, want 32 bytes", len(decoded))
+	}
+
+	// The generated token must authenticate /v1/models; anonymous still 401s.
+	req, _ := http.NewRequest(http.MethodGet, "http://"+addr1+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+boot.AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/models with bootstrap token: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/models with bootstrap token = %d, want 200", resp.StatusCode)
+	}
+	resp, err = http.Get("http://" + addr1 + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models anonymous: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /v1/models anonymous = %d, want 401", resp.StatusCode)
+	}
+
+	if err := cmd1.Process.Kill(); err != nil {
+		t.Fatalf("kill first run: %v", err)
+	}
+	_ = cmd1.Wait()
+
+	// Second start in the same workDir: the bootstrap file should be
+	// reused, not regenerated, so the same admin token still authenticates.
+	addr2 := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	cmd2 := exec.Command(bin)
+	cmd2.Dir = workDir
+	cmd2.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + workDir,
+		"GATEWAY_ADDRESS=" + addr2,
+	}
+	cmd2.Stdout = io.Discard
+	cmd2.Stderr = io.Discard
+	if err := cmd2.Start(); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd2.Process.Kill(); _ = cmd2.Wait() })
+	waitHealthy(t, "http://"+addr2, 10*time.Second)
+
+	req2, _ := http.NewRequest(http.MethodGet, "http://"+addr2+"/v1/models", nil)
+	req2.Header.Set("Authorization", "Bearer "+boot.AdminToken)
+	resp, err = http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /v1/models on second run: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin token from first run not honored on second run: status = %d", resp.StatusCode)
+	}
 }
