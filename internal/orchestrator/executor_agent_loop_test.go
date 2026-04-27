@@ -92,7 +92,7 @@ func TestAgentLoop_FinalAnswerOnFirstTurn(t *testing.T) {
 			makeChatResp(makeAssistantMsg("The working directory contains a README.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -144,7 +144,7 @@ func TestAgentLoop_ToolCallThenAnswer(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Two files: README.md and main.go.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -187,7 +187,7 @@ func TestAgentLoop_MaxTurnsHonored(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		llm.responses = append(llm.responses, loopingResponse)
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 3)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 3, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -208,7 +208,7 @@ func TestAgentLoop_LLMErrorBubbles(t *testing.T) {
 	// failed status. The error message must reach the run output so
 	// the operator can diagnose.
 	llm := &scriptedLLM{} // empty responses → returns error on first call
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute (should not return Go-level error): %v", err)
@@ -225,7 +225,7 @@ func TestAgentLoop_NoLLM_FailsWithActionableError(t *testing.T) {
 	// agent_loop without an LLM is a misconfiguration, not a use case.
 	// The loop must surface a clear error so the operator knows to
 	// wire a model rather than seeing a confusing silent success.
-	loop := NewAgentLoopExecutor(nil, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(nil, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -253,7 +253,7 @@ func TestAgentLoop_BadToolArgsBecomeToolError(t *testing.T) {
 		},
 	}
 	shell := &stubExecutor{}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -293,7 +293,7 @@ func TestAgentLoop_UnknownToolBecomesToolError(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Sorry, I can't.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -350,7 +350,7 @@ func TestAgentLoop_ConversationPersistsAcrossTurns(t *testing.T) {
 			},
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	spec := newAgentLoopSpec(t)
 	spec.UpsertArtifact = func(art types.TaskArtifact) error {
 		upserts = append(upserts, art)
@@ -409,7 +409,7 @@ func TestAgentLoop_HydratesFromResumeCheckpoint(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Resumed and answered.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	spec := newAgentLoopSpec(t)
 	spec.ResumeCheckpoint = &ResumeCheckpoint{
 		SourceRunID:       "run-prev",
@@ -446,7 +446,7 @@ func TestAgentLoop_HydrateGracefulFallbackOnCorruptCheckpoint(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Fresh start.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	spec := newAgentLoopSpec(t)
 	spec.ResumeCheckpoint = &ResumeCheckpoint{
 		SourceRunID:       "run-prev",
@@ -464,6 +464,193 @@ func TestAgentLoop_HydrateGracefulFallbackOnCorruptCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_GatedToolPausesAndEmitsApproval(t *testing.T) {
+	// LLM asks for shell_exec, which is gated. Loop must pause:
+	// status=awaiting_approval, one approval in PendingApprovals
+	// covering the turn, conversation persisted, shell NOT executed.
+	// On the runner side, this drives the run into awaiting_approval
+	// where the operator decides whether to allow the tool call.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("I need to inspect the workspace.", types.ToolCall{
+				ID: "call-1", Type: "function",
+				Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
+			})),
+		},
+	}
+	shell := &stubExecutor{}
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "awaiting_approval" {
+		t.Fatalf("Status = %q, want awaiting_approval", res.Status)
+	}
+	if len(shell.calls) != 0 {
+		t.Errorf("shell_exec ran without approval; calls=%+v", shell.calls)
+	}
+	if len(res.PendingApprovals) != 1 {
+		t.Fatalf("PendingApprovals = %d, want 1", len(res.PendingApprovals))
+	}
+	approval := res.PendingApprovals[0]
+	if approval.Status != "pending" || approval.Kind != "agent_loop_tool_call" {
+		t.Errorf("approval shape wrong: %+v", approval)
+	}
+	if !strings.Contains(approval.Reason, "shell_exec") {
+		t.Errorf("approval reason should name the gated tool: %q", approval.Reason)
+	}
+	// Conversation snapshot must be present so the resume path
+	// hydrates from it.
+	convo := findArtifactByKind(res.Artifacts, "agent_conversation")
+	if convo == nil {
+		t.Fatalf("conversation artifact missing on pause; got: %+v", res.Artifacts)
+	}
+	// Saved conversation must include the assistant's tool_call so
+	// the resume run can dispatch it.
+	if !strings.Contains(convo.ContentText, "shell_exec") {
+		t.Errorf("conversation snapshot lost tool call: %s", convo.ContentText)
+	}
+}
+
+func TestAgentLoop_NonGatedToolDispatchesNormally(t *testing.T) {
+	// file_write is NOT in the gated set; loop runs it inline and
+	// continues to the next turn. Verifies that gating is opt-in by
+	// tool name, not blanket.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "call-1", Type: "function",
+				Function: types.ToolCallFunction{Name: "file_write", Arguments: `{"path":"out.txt","content":"hi"}`},
+			})),
+			makeChatResp(makeAssistantMsg("Done.")),
+		},
+	}
+	file := &stubExecutor{result: &ExecutionResult{Status: "completed"}}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, file, &stubExecutor{}, 8, []string{"shell_exec"})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Errorf("Status = %q, want completed (file_write isn't gated)", res.Status)
+	}
+	if len(file.calls) != 1 {
+		t.Errorf("file_write should have run; calls=%+v", file.calls)
+	}
+	if len(res.PendingApprovals) != 0 {
+		t.Errorf("PendingApprovals = %d, want 0", len(res.PendingApprovals))
+	}
+}
+
+func TestAgentLoop_ResumeAfterApprovalDispatchesPendingCalls(t *testing.T) {
+	// On resume: the conversation has a trailing assistant message
+	// with tool_calls and no following tool result. The loop must
+	// detect this, skip the LLM call (which already happened in the
+	// previous run), dispatch the approved tool, and continue. Then
+	// the next turn's LLM call sees the tool result and produces a
+	// final answer.
+	saved := []types.Message{
+		{Role: "user", Content: "summarize the working directory"},
+		{Role: "assistant", Content: "I need to inspect.", ToolCalls: []types.ToolCall{{
+			ID: "call-1", Type: "function",
+			Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
+		}}},
+	}
+	savedJSON, _ := json.Marshal(saved)
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			// The resumed loop only calls the LLM AFTER dispatching
+			// the pending tool call — at which point it provides a
+			// final answer over the tool result.
+			makeChatResp(makeAssistantMsg("Two files: README.md and main.go.")),
+		},
+	}
+	shell := &stubExecutor{
+		result: &ExecutionResult{
+			Status: "completed",
+			Artifacts: []types.TaskArtifact{
+				{Kind: "stdout", Name: "stdout.txt", ContentText: "README.md\nmain.go\n"},
+			},
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"})
+	spec := newAgentLoopSpec(t)
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:       "run-1",
+		AgentConversation: savedJSON,
+		Reason:            "approved_mid_loop",
+	}
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Fatalf("Status = %q, want completed; LastError=%q", res.Status, res.LastError)
+	}
+	if len(shell.calls) != 1 {
+		t.Errorf("shell_exec should have run on resume; got %+v", shell.calls)
+	}
+	// Exactly one LLM call (the post-dispatch reasoning turn). The
+	// resumed turn does NOT call the LLM since the assistant message
+	// is already in the saved conversation.
+	if got := llm.calls.Load(); got != 1 {
+		t.Errorf("LLM calls = %d, want 1 (resume skips the first LLM round-trip)", got)
+	}
+	// The single LLM request must have seen the tool result.
+	if len(llm.lastReqs) != 1 {
+		t.Fatalf("LLM request count = %d, want 1", len(llm.lastReqs))
+	}
+	hasToolResult := false
+	for _, m := range llm.lastReqs[0].Messages {
+		if m.Role == "tool" && m.ToolCallID == "call-1" && strings.Contains(m.Content, "README.md") {
+			hasToolResult = true
+		}
+	}
+	if !hasToolResult {
+		t.Errorf("post-resume LLM request missing tool result: %+v", llm.lastReqs[0].Messages)
+	}
+}
+
+func TestAgentLoop_GatedToolListedWithMultipleToolsInTurn(t *testing.T) {
+	// LLM asks for both a gated and a non-gated tool in one turn.
+	// We pause for approval (any gated tool gates the whole turn);
+	// the approval reason mentions only the gated tool name to match
+	// what the operator must consent to. No tools dispatched yet.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("",
+				types.ToolCall{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}},
+				types.ToolCall{ID: "c2", Type: "function", Function: types.ToolCallFunction{Name: "file_write", Arguments: `{"path":"x","content":"y"}`}},
+			)),
+		},
+	}
+	shell := &stubExecutor{}
+	file := &stubExecutor{}
+	loop := NewAgentLoopExecutor(llm, shell, file, &stubExecutor{}, 8, []string{"shell_exec"})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "awaiting_approval" {
+		t.Fatalf("Status = %q, want awaiting_approval", res.Status)
+	}
+	if len(shell.calls) != 0 || len(file.calls) != 0 {
+		t.Errorf("no tools should run before approval; shell=%d file=%d", len(shell.calls), len(file.calls))
+	}
+	if len(res.PendingApprovals) != 1 {
+		t.Fatalf("PendingApprovals = %d, want 1 (one approval covers the whole turn)", len(res.PendingApprovals))
+	}
+	reason := res.PendingApprovals[0].Reason
+	if !strings.Contains(reason, "shell_exec") {
+		t.Errorf("reason missing gated tool name: %q", reason)
+	}
+	if strings.Contains(reason, "file_write") {
+		t.Errorf("reason should not mention non-gated tool: %q", reason)
+	}
+}
+
 func TestAgentLoop_ContextCancellation(t *testing.T) {
 	// If the run is cancelled mid-loop (operator hits Cancel, gateway
 	// shuts down), the loop must exit cleanly with cancelled status.
@@ -475,7 +662,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 			})),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 	res, err := loop.Execute(ctx, newAgentLoopSpec(t))

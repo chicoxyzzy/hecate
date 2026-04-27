@@ -52,11 +52,12 @@ func (f AgentLLMClientFunc) Chat(ctx context.Context, req types.ChatRequest) (*t
 // is a v0.2 feature; it needs persisted conversation state and
 // explicit resume semantics.
 type AgentLoopExecutor struct {
-	llm      AgentLLMClient
-	shell    Executor
-	file     Executor
-	git      Executor
-	maxTurns int
+	llm        AgentLLMClient
+	shell      Executor
+	file       Executor
+	git        Executor
+	maxTurns   int
+	gatedTools map[string]struct{}
 }
 
 // NewAgentLoopExecutor constructs the loop. A nil LLM client is
@@ -70,17 +71,44 @@ type AgentLoopExecutor struct {
 // negative) defaults to 8 — generous enough for typical multi-step
 // tasks but tight enough that a runaway loop costs <$0.10 even on
 // expensive models.
-func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git Executor, maxTurns int) *AgentLoopExecutor {
+//
+// gatedTools is the set of tool names that require operator approval
+// before execution (e.g. {"shell_exec", "git_exec"}). When the LLM
+// asks for any tool in this set, the loop pauses, emits an approval
+// record, and returns awaiting_approval. The runner persists the
+// approval; when the operator approves, the same run is re-queued
+// and the loop hydrates from the saved conversation, dispatches the
+// previously-pending tool calls, and continues. Empty/nil = no gating
+// (every tool runs immediately).
+func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git Executor, maxTurns int, gatedTools []string) *AgentLoopExecutor {
 	if maxTurns <= 0 {
 		maxTurns = 8
 	}
-	return &AgentLoopExecutor{
-		llm:      llm,
-		shell:    shell,
-		file:     file,
-		git:      git,
-		maxTurns: maxTurns,
+	gated := make(map[string]struct{}, len(gatedTools))
+	for _, name := range gatedTools {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		gated[name] = struct{}{}
 	}
+	return &AgentLoopExecutor{
+		llm:        llm,
+		shell:      shell,
+		file:       file,
+		git:        git,
+		maxTurns:   maxTurns,
+		gatedTools: gated,
+	}
+}
+
+// isGated reports whether a tool call requires operator approval.
+func (e *AgentLoopExecutor) isGated(toolName string) bool {
+	if len(e.gatedTools) == 0 {
+		return false
+	}
+	_, ok := e.gatedTools[toolName]
+	return ok
 }
 
 // Execute runs the loop. Steps and artifacts produced by each turn
@@ -136,6 +164,12 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		Artifacts: allArtifacts,
 	}
 
+	// Resume detection: if the conversation tail is an assistant
+	// message with tool_calls and no following tool messages, we're
+	// resuming after operator approval. Dispatch the pending tool
+	// calls before doing the next LLM turn — they were just approved.
+	pendingToolCalls := pendingToolCallsForResume(messages)
+
 	for turn := 1; turn <= e.maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
 			finalResult.Status = "cancelled"
@@ -147,76 +181,108 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			return finalResult, nil
 		}
 
-		// 1. LLM round-trip.
-		req := types.ChatRequest{
-			RequestID: spec.RequestID,
-			Model:     spec.Run.Model,
-			Messages:  messages,
-			Tools:     tools,
-			Scope: types.RequestScope{
-				Tenant: spec.Task.Tenant,
-				User:   spec.Task.User,
-			},
-		}
+		var assistantMsg types.Message
+		var resp *types.ChatResponse
 		turnStartedAt := time.Now().UTC()
-		resp, err := e.llm.Chat(ctx, req)
-		if err != nil {
-			return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
-				fmt.Sprintf("LLM call failed on turn %d: %v", turn, err))
-		}
-		if resp == nil || len(resp.Choices) == 0 {
-			return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
-				fmt.Sprintf("LLM returned empty response on turn %d", turn))
-		}
-		assistantMsg := resp.Choices[0].Message
 
-		// 2. Record this turn's "thinking" step — captures the
-		// assistant message content + which tools it asked for. Even
-		// when the assistant only emits tool_calls (no text), we
-		// still produce a step so the run timeline shows the agent's
-		// decision points.
-		thinkingStep := buildThinkingStep(spec, nextIndex, turn, turnStartedAt, assistantMsg, resp)
-		nextIndex++
-		if err := upsertTaskStep(spec, thinkingStep); err != nil {
-			return nil, err
-		}
-		allSteps = append(allSteps, thinkingStep)
-
-		// 3. Append the assistant message to the running conversation
-		// regardless — even an answer-only turn must be in history if
-		// we somehow re-enter the loop later.
-		messages = append(messages, assistantMsg)
-		// Persist a conversation snapshot here so a crash between the
-		// LLM response and the tool dispatch still leaves a recoverable
-		// state (the tool calls are in messages, the resume can re-run
-		// them).
-		if art, err := upsertConversationArtifact(spec, conversationArtifactID, messages, turn, turnStartedAt); err != nil {
-			return nil, err
-		} else if art != nil && len(allArtifacts) == 0 {
-			// First write — also surface in the returned artifacts.
-			allArtifacts = append(allArtifacts, *art)
-		}
-
-		// 4. If no tool calls, the assistant gave a final answer.
-		// Save the final-answer artifact and exit.
-		if len(assistantMsg.ToolCalls) == 0 {
-			finalArtifact := buildFinalAnswerArtifact(spec, thinkingStep.ID, turnStartedAt, assistantMsg.Content)
-			if err := upsertTaskArtifact(spec, finalArtifact); err != nil {
+		if len(pendingToolCalls) > 0 {
+			// Skip the LLM call this turn — the assistant message is
+			// already at the tail of `messages` (saved by the previous
+			// run). Dispatch the approved tool calls and let the next
+			// turn's LLM call reason over the results.
+			assistantMsg = messages[len(messages)-1]
+			thinkingStep := buildResumeThinkingStep(spec, nextIndex, turn, turnStartedAt, assistantMsg)
+			nextIndex++
+			if err := upsertTaskStep(spec, thinkingStep); err != nil {
 				return nil, err
 			}
-			allArtifacts = append(allArtifacts, finalArtifact)
-			finalResult.Steps = allSteps
-			finalResult.Artifacts = allArtifacts
-			finalResult.OtelStatusCode = "ok"
-			return finalResult, nil
+			allSteps = append(allSteps, thinkingStep)
+		} else {
+			// 1. LLM round-trip.
+			req := types.ChatRequest{
+				RequestID: spec.RequestID,
+				Model:     spec.Run.Model,
+				Messages:  messages,
+				Tools:     tools,
+				Scope: types.RequestScope{
+					Tenant: spec.Task.Tenant,
+					User:   spec.Task.User,
+				},
+			}
+			r, err := e.llm.Chat(ctx, req)
+			if err != nil {
+				return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
+					fmt.Sprintf("LLM call failed on turn %d: %v", turn, err))
+			}
+			if r == nil || len(r.Choices) == 0 {
+				return e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
+					fmt.Sprintf("LLM returned empty response on turn %d", turn))
+			}
+			resp = r
+			assistantMsg = resp.Choices[0].Message
+
+			// 2. Record this turn's "thinking" step — captures the
+			// assistant message content + which tools it asked for.
+			thinkingStep := buildThinkingStep(spec, nextIndex, turn, turnStartedAt, assistantMsg, resp)
+			nextIndex++
+			if err := upsertTaskStep(spec, thinkingStep); err != nil {
+				return nil, err
+			}
+			allSteps = append(allSteps, thinkingStep)
+
+			// 3. Append the assistant message to the running conversation.
+			messages = append(messages, assistantMsg)
+			// Persist snapshot — crash between LLM response and tool
+			// dispatch still leaves a recoverable state.
+			if art, err := upsertConversationArtifact(spec, conversationArtifactID, messages, turn, turnStartedAt); err != nil {
+				return nil, err
+			} else if art != nil && len(allArtifacts) == 0 {
+				allArtifacts = append(allArtifacts, *art)
+			}
+
+			// 4. If no tool calls, assistant gave a final answer.
+			if len(assistantMsg.ToolCalls) == 0 {
+				finalArtifact := buildFinalAnswerArtifact(spec, thinkingStep.ID, turnStartedAt, assistantMsg.Content)
+				if err := upsertTaskArtifact(spec, finalArtifact); err != nil {
+					return nil, err
+				}
+				allArtifacts = append(allArtifacts, finalArtifact)
+				finalResult.Steps = allSteps
+				finalResult.Artifacts = allArtifacts
+				finalResult.OtelStatusCode = "ok"
+				return finalResult, nil
+			}
+
+			// 4b. Approval gate. If any tool in this turn is gated,
+			// pause the loop: persist conversation (already done),
+			// emit an approval record covering all pending tool
+			// calls, return awaiting_approval. The runner persists
+			// the approval and stops the run; on operator approve,
+			// the same run is re-queued and we re-enter the loop
+			// with the same conversation tail — this branch is
+			// short-circuited by the resume-detection above.
+			gatedNames := e.gatedToolsInTurn(assistantMsg.ToolCalls)
+			if len(gatedNames) > 0 {
+				approval := buildApprovalForTurn(spec, turn, gatedNames, turnStartedAt)
+				awaitingStep := buildAwaitingApprovalStep(spec, nextIndex, turn, turnStartedAt, approval)
+				nextIndex++
+				if err := upsertTaskStep(spec, awaitingStep); err != nil {
+					return nil, err
+				}
+				allSteps = append(allSteps, awaitingStep)
+				return &ExecutionResult{
+					Status:           "awaiting_approval",
+					Steps:            allSteps,
+					Artifacts:        allArtifacts,
+					PendingApprovals: []types.TaskApproval{approval},
+					OtelStatusCode:   "ok",
+				}, nil
+			}
 		}
 
-		// 5. Dispatch each tool call in order. Failures append a tool
-		// result with the error text — the LLM can decide how to
-		// recover. We don't stop the loop on tool failure; the agent
-		// might intend to handle it. The max-turns cap is the
-		// universal safety net.
-		for _, toolCall := range assistantMsg.ToolCalls {
+		// 5. Dispatch each tool call in order.
+		callsToRun := assistantMsg.ToolCalls
+		for _, toolCall := range callsToRun {
 			toolResultText, toolStep, toolArtifacts, dispatchErr := e.dispatchToolCall(ctx, spec, toolCall, nextIndex)
 			if toolStep != nil {
 				if err := upsertTaskStep(spec, *toolStep); err != nil {
@@ -231,25 +297,20 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 				}
 				allArtifacts = append(allArtifacts, art)
 			}
-			// Append the tool-result message to the conversation so
-			// the next LLM turn can see what happened.
 			messages = append(messages, types.Message{
 				Role:       "tool",
 				Content:    toolResultText,
 				ToolCallID: toolCall.ID,
 			})
-			// dispatchErr is non-nil only on internal errors (unknown
-			// tool, malformed args). Real tool failures are captured
-			// in toolResultText.
 			_ = dispatchErr
 		}
-		// Snapshot conversation after the full set of tool results is
-		// appended. A crash before the next LLM turn still leaves a
-		// recoverable state — the resumed run sees the tool results
-		// and asks the LLM what to do next.
+		// Snapshot after tool results.
 		if _, err := upsertConversationArtifact(spec, conversationArtifactID, messages, turn, turnStartedAt); err != nil {
 			return nil, err
 		}
+		// Resume mode is a one-shot — clear so subsequent turns hit
+		// the LLM normally.
+		pendingToolCalls = nil
 	}
 
 	// Hit max turns without a final answer. Mark incomplete; the user
@@ -647,6 +708,126 @@ func summarizeSubResult(r *ExecutionResult) string {
 		}
 	}
 	return b.String()
+}
+
+// pendingToolCallsForResume detects the resume-after-approval state:
+// the conversation tail is an assistant message with tool_calls and
+// no subsequent tool-role results. Returns the list of tool calls
+// that need dispatching. Empty slice = fresh turn (LLM call needed).
+func pendingToolCallsForResume(messages []types.Message) []types.ToolCall {
+	if len(messages) == 0 {
+		return nil
+	}
+	last := messages[len(messages)-1]
+	if last.Role != "assistant" || len(last.ToolCalls) == 0 {
+		return nil
+	}
+	// Tool calls in the trailing assistant message exist; check that
+	// none of them have already been resolved by a later tool message.
+	// Since we just confirmed `last` is the tail, if tool messages
+	// for these calls existed they'd be after `last` — they don't,
+	// so all calls are pending.
+	return last.ToolCalls
+}
+
+// gatedToolsInTurn returns the names of gated tools that appear in
+// this turn's tool calls. Empty if no gating applies.
+func (e *AgentLoopExecutor) gatedToolsInTurn(calls []types.ToolCall) []string {
+	if len(e.gatedTools) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(calls))
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if !e.isGated(c.Function.Name) {
+			continue
+		}
+		if _, dup := seen[c.Function.Name]; dup {
+			continue
+		}
+		seen[c.Function.Name] = struct{}{}
+		out = append(out, c.Function.Name)
+	}
+	return out
+}
+
+// buildApprovalForTurn constructs the approval record covering one
+// or more gated tool calls in a turn. The reason text lists the tool
+// names so the operator UI can render a clear "approve agent's use of
+// shell_exec, git_exec" prompt without parsing the conversation.
+func buildApprovalForTurn(spec ExecutionSpec, turn int, gatedNames []string, when time.Time) types.TaskApproval {
+	return types.TaskApproval{
+		ID:        spec.NewID("approval"),
+		TaskID:    spec.Task.ID,
+		RunID:     spec.Run.ID,
+		Kind:      "agent_loop_tool_call",
+		Status:    "pending",
+		Reason:    fmt.Sprintf("Agent requested tools that require approval: %s", strings.Join(gatedNames, ", ")),
+		CreatedAt: when,
+		RequestID: spec.RequestID,
+		TraceID:   spec.TraceID,
+	}
+}
+
+// buildAwaitingApprovalStep is the timeline step the run UI shows
+// while paused. Carries the approval id so the operator UI can link
+// the step to the approval action.
+func buildAwaitingApprovalStep(spec ExecutionSpec, index, turn int, when time.Time, approval types.TaskApproval) types.TaskStep {
+	return types.TaskStep{
+		ID:         spec.NewID("step"),
+		TaskID:     spec.Task.ID,
+		RunID:      spec.Run.ID,
+		Index:      index,
+		Kind:       "approval",
+		Title:      fmt.Sprintf("Awaiting approval — turn %d", turn),
+		Status:     "awaiting_approval",
+		Phase:      "approval",
+		Result:     telemetry.ResultSuccess,
+		ToolName:   "builtin.agent_loop_approval",
+		ApprovalID: approval.ID,
+		Input: map[string]any{
+			"turn":   turn,
+			"reason": approval.Reason,
+		},
+		StartedAt:  when,
+		FinishedAt: when,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+}
+
+// buildResumeThinkingStep marks the timeline entry for a resumed turn
+// (where we skip the LLM call because the assistant message was
+// produced by the previous run). Lets the operator see in the run
+// history that the agent didn't re-think — it just dispatched the
+// approved calls.
+func buildResumeThinkingStep(spec ExecutionSpec, index, turn int, when time.Time, msg types.Message) types.TaskStep {
+	toolNames := make([]string, 0, len(msg.ToolCalls))
+	for _, tc := range msg.ToolCalls {
+		toolNames = append(toolNames, tc.Function.Name)
+	}
+	return types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    index,
+		Kind:     "model",
+		Title:    fmt.Sprintf("Agent turn %d (resumed after approval)", turn),
+		Status:   "completed",
+		Phase:    "thinking",
+		Result:   telemetry.ResultSuccess,
+		ToolName: "builtin.agent_loop_resume",
+		Input: map[string]any{
+			"turn":           turn,
+			"resumed":        true,
+			"tool_calls":     toolNames,
+			"approved_tools": toolNames,
+		},
+		StartedAt:  when,
+		FinishedAt: when,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
 }
 
 // hydrateConversation returns the conversation history for this run.

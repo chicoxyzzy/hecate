@@ -116,7 +116,10 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 	// SetAgentLLMClient — main.go injects the gateway.Service after
 	// it's built. nil here means the loop falls back to a pass-through
 	// step until configured (see executor_agent_loop.go runWithoutLLM).
-	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns)
+	// Gated tools come from the same approval policies as
+	// task-level gating, so an operator who approves shell at the
+	// task layer also approves it inside agent_loop tool calls.
+	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies))
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
 		if policy == "" {
@@ -168,10 +171,25 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 // SetAgentLLMClient wires the LLM seam into the agent_loop executor.
 // Safe to call after NewRunner — main.go invokes this once the gateway
 // service is constructed, since the chat path needs its own deps that
-// the runner doesn't otherwise know about. Nil unwires the loop back
-// to its no-LLM fallback (deterministic pass-through).
+// the runner doesn't otherwise know about. Nil unwires the loop.
 func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
-	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns)
+	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies))
+}
+
+// agentLoopGatedTools translates the runner's task-level approval
+// policy set into the agent-loop tool gating set. The mapping:
+// task policy "shell_exec" gates the agent's shell_exec tool, etc.
+// Network egress and any non-tool policies are dropped — they apply
+// at the task envelope, not per-tool.
+func agentLoopGatedTools(policies map[string]struct{}) []string {
+	out := make([]string, 0, len(policies))
+	for p := range policies {
+		switch p {
+		case "shell_exec", "git_exec", "file_write":
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // SetMetrics wires in an OrchestratorMetrics instance. Safe to call after
@@ -988,6 +1006,24 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		persistedArtifacts = append(persistedArtifacts, artifact)
 	}
 
+	// Persist mid-loop approvals the executor emitted (agent_loop
+	// pauses on gated tool calls). The runner owns the store
+	// touch-points, so executors return the approvals via
+	// ExecutionResult and we write them here. Skipped on non-paused
+	// executions — PendingApprovals is empty.
+	for _, approval := range execution.PendingApprovals {
+		if approval.SpanID == "" {
+			approval.SpanID = trace.RootSpanID()
+		}
+		if _, err := r.store.CreateApproval(ctx, approval); err != nil {
+			return nil, err
+		}
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "approval.requested", requestID, trace.TraceID, map[string]any{
+			"approval_id":   approval.ID,
+			"approval_kind": approval.Kind,
+		})
+	}
+
 	resultKind := telemetry.ResultSuccess
 	if execution.Status == "failed" || execution.Status == "cancelled" {
 		resultKind = telemetry.ResultError
@@ -1166,7 +1202,25 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 		}
 		break
 	}
+	// If no separate source run, the caller might still be resuming
+	// the SAME run after a mid-loop approval pause. The agent loop
+	// persists conversation as an artifact on its own run; pull that
+	// into a checkpoint so the loop can hydrate state and pick up
+	// from the trailing tool_calls.
 	if sourceRunID == "" {
+		ownArtifacts, err := r.store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: taskID, RunID: runID})
+		if err != nil {
+			return nil, err
+		}
+		for _, art := range ownArtifacts {
+			if art.Kind == "agent_conversation" && len(art.ContentText) > 0 {
+				return &ResumeCheckpoint{
+					SourceRunID:       runID,
+					Reason:            "approved_mid_loop",
+					AgentConversation: []byte(art.ContentText),
+				}, nil
+			}
+		}
 		return nil, nil
 	}
 	steps, err := r.store.ListSteps(ctx, sourceRunID)

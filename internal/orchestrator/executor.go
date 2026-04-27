@@ -54,6 +54,14 @@ type ExecutionResult struct {
 	LastError         string
 	OtelStatusCode    string
 	OtelStatusMessage string
+	// PendingApprovals are approval records the executor produced
+	// during this run that the runner should persist. The agent loop
+	// emits these mid-loop when it pauses on a gated tool call —
+	// Status will be "awaiting_approval" and the runner persists the
+	// approvals as part of the run-finalization path. Other executors
+	// (shell/git/file) don't use this; their approvals are created
+	// pre-execution by the runner itself.
+	PendingApprovals []types.TaskApproval
 }
 
 type StubExecutor struct{}
