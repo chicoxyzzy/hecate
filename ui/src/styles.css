@@ -87,7 +87,7 @@ button, input, select, textarea { font: inherit; }
 .dot-muted { background: var(--t3); }
 
 /* ─── Toggle ─── */
-.toggle-wrap { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.toggle-wrap { display: flex; align-items: center; gap: 8px; cursor: pointer; -webkit-user-select: none; user-select: none; }
 .toggle { width: 32px; height: 18px; background: var(--bg4); border-radius: 9px; position: relative; transition: background 0.15s; flex-shrink: 0; border: 1px solid var(--border); }
 .toggle.on { background: var(--teal); border-color: var(--teal); }
 .toggle::after { content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; background: var(--t2); border-radius: 50%; transition: left 0.15s, background 0.15s; }

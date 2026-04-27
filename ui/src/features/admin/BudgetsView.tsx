@@ -90,11 +90,11 @@ export function BudgetsView({ state, actions }: Props) {
               <div style={{ display: "flex", gap: 10, marginBottom: 10, padding: 10, background: "var(--bg3)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>CREDIT AMOUNT ($)</label>
-                  <input className="input" type="number" value={editLimit} onChange={e => { setEditLimit(e.target.value); void actions.setBudgetAmountUsd(e.target.value); }} style={{ fontFamily: "var(--font-mono)" }} />
+                  <input className="input" type="number" aria-label="Credit amount in USD" value={editLimit} onChange={e => { setEditLimit(e.target.value); void actions.setBudgetAmountUsd(e.target.value); }} style={{ fontFamily: "var(--font-mono)" }} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>LIMIT ($)</label>
-                  <input className="input" type="number" value={editWarn} onChange={e => { setEditWarn(e.target.value); void actions.setBudgetLimitUsd(e.target.value); }} style={{ fontFamily: "var(--font-mono)" }} />
+                  <input className="input" type="number" aria-label="Limit in USD" value={editWarn} onChange={e => { setEditWarn(e.target.value); void actions.setBudgetLimitUsd(e.target.value); }} style={{ fontFamily: "var(--font-mono)" }} />
                 </div>
               </div>
             )}

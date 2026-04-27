@@ -195,7 +195,12 @@ export function ProvidersView({ state, actions }: Props) {
                 </div>
               )}
             </div>
-            <button className="btn btn-ghost btn-sm" style={{ padding: "3px 6px" }} onClick={() => setSelectedID(null)}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ padding: "3px 6px" }}
+              onClick={() => setSelectedID(null)}
+              aria-label="Close provider details"
+              title="Close">
               <Icon d={Icons.x} size={13} />
             </button>
           </div>
