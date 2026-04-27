@@ -28,14 +28,9 @@ One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffi
 
 ```bash
 docker compose up
-open http://127.0.0.1:8080
 ```
 
-Zero toolchain prerequisites — Docker pulls a multi-arch image and the gateway boots itself, generates an admin token, and serves the UI on port 8080. Building from source instead? See [`docs/development.md`](docs/development.md).
-
-`docker-compose.yml` references `ghcr.io/chicoxyzzy/hecate:latest`, a multi-arch (`linux/amd64`, `linux/arm64`) image published from this repo on every `v*` tag — `docker compose pull` is enough on a fresh host. To pin to a specific release, replace `:latest` with `:vX.Y.Z`. If you've checked out the source, `docker compose up` will rebuild locally from the bundled `Dockerfile` instead.
-
-On the first run the gateway auto-generates an admin bearer token and prints it to the container logs inside a banner like:
+The gateway boots on `http://127.0.0.1:8080`, generates an admin bearer token, and prints it to the container logs inside a banner:
 
 ```
 ============================================================
@@ -47,35 +42,13 @@ On the first run the gateway auto-generates an admin bearer token and prints it 
 ============================================================
 ```
 
-Open the UI in a browser. The first-run wizard walks you through pasting the token, picking a backend tier, and connecting a provider:
+Open the UI, paste the token, and the first-run wizard walks you through connecting a provider:
 
 ![First-run onboarding wizard](docs/screenshots/onboard-wizard.png)
 
-Copy the token from the logs (`docker compose logs hecate`) and paste it into the prompt. The browser remembers it in `localStorage`; subsequent visits go straight to the dashboard. If you've scrolled past the banner, the token also lives in the bootstrap file on the `hecate-data` volume — the gateway image is distroless, so use `docker compose cp` to copy it out without a shell:
+The browser remembers the token in `localStorage`; subsequent visits go straight to the dashboard. To pre-seed providers, drop a `.env` next to `docker-compose.yml` before booting — see [`docs/providers.md`](docs/providers.md) for the catalog.
 
-```bash
-docker compose cp hecate:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_token
-```
-
-(`docker compose cp ... -` emits a tar archive, hence the `tar -xO`.)
-
-Once you're in, configure providers from the Providers tab — or pre-seed them with a `.env` file before `docker compose up` (the compose stack picks it up automatically). See [`docs/providers.md`](docs/providers.md) for the full provider catalog and configuration options.
-
-Optional services live behind profiles:
-
-```bash
-docker compose --profile postgres up    # adds Postgres for state persistence
-docker compose --profile ollama up      # adds Ollama on :11434 for local models
-docker compose --profile full up        # everything
-```
-
-To wipe the stack back to first-run (removes the `hecate-data`, `postgres-data`, and `ollama-models` volumes; regenerates the admin token on the next `docker compose up`):
-
-```bash
-make reset-docker
-```
-
-The next page load detects the rejected stale token and re-prompts for the regenerated one — no manual `localStorage` cleanup needed.
+For Postgres/Ollama compose profiles, image pinning, lost-token recovery, and reset commands, see [`docs/deployment.md`](docs/deployment.md). Building from source: [`docs/development.md`](docs/development.md).
 
 ## Architecture
 
@@ -251,6 +224,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 ## Docs
 
 - [Architecture](docs/architecture.md) — request flow, lease semantics, storage tier matrix
+- [Deployment](docs/deployment.md) — compose profiles, image pinning, lost-token recovery, resets, backend tier choice
 - [Providers](docs/providers.md) — built-in catalog, configuration, custom providers, health/circuit breaking
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md)
 - [Runtime API Notes](docs/runtime-api.md)
