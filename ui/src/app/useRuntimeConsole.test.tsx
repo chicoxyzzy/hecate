@@ -59,6 +59,24 @@ describe("useRuntimeConsole", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not fire any fetches when there is no auth token", async () => {
+    // Override the beforeEach seed so we land on the empty-token branch.
+    // TokenGate is what renders in this case; firing the dashboard would
+    // 401-spam the eight admin/auth-required endpoints in the console.
+    window.localStorage.removeItem("hecate.authToken");
+
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    // Give the empty-token effect a tick to settle before asserting; it
+    // should flip `loading` to false synchronously since there's nothing
+    // to load. We assert via waitFor for resilience to scheduling.
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Health stays at its initial null because /healthz never fired.
+    expect(result.current.state.health).toBeNull();
+  });
+
   it("loads dashboard data and tolerates unauthorized admin endpoints", async () => {
     const { result } = renderHook(() => useRuntimeConsole());
 

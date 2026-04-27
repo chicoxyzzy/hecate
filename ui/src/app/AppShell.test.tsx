@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConsoleShell } from "./AppShell";
 import { createRuntimeConsoleActions, createRuntimeConsoleFixture } from "../test/runtime-console-fixture";
@@ -167,3 +167,80 @@ describe("TokenGate (rejected token)", () => {
     expect(setAuthToken).not.toHaveBeenCalled();
   });
 });
+
+// Status bar version render — guards the conditional that hides the
+// version chip when /healthz didn't include one (older gateway, or the
+// field genuinely missing). The workspace branch renders the embedded
+// views, which fan out fetches on mount; we stub fetch globally here so
+// those calls don't blow up under jsdom.
+describe("status bar version chip", () => {
+  const adminSession = {
+    kind: "admin" as const,
+    label: "Admin",
+    role: "admin",
+    isAdmin: true,
+    isAuthenticated: true,
+    capabilities: [],
+    name: "",
+    tenant: "",
+    source: "",
+    keyID: "",
+    allowedProviders: [],
+    allowedModels: [],
+  };
+
+  function renderWorkspace(healthOverrides: Record<string, unknown> | null) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const state = createRuntimeConsoleFixture({
+      authToken: "tok",
+      session: adminSession,
+      // null clears the fixture's default { status: "ok", time: ... };
+      // anything else replaces the whole object so the render branch
+      // sees the version we feed it (or its absence).
+      health: healthOverrides as never,
+    });
+    render(
+      <ConsoleShell
+        activeWorkspace="overview"
+        onSelectWorkspace={() => {}}
+        state={state}
+        actions={createRuntimeConsoleActions()}
+      />,
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the version when /healthz returned one", () => {
+    renderWorkspace({ status: "ok", time: "2026-04-25T00:00:00Z", version: "v0.1.0" });
+
+    // Version sits inside the status bar; scope the query so a stray
+    // "v0.1.0" elsewhere on screen wouldn't false-positive the test.
+    const statusbar = document.querySelector(".hecate-statusbar");
+    expect(statusbar).not.toBeNull();
+    expect(statusbar!.textContent).toContain("v0.1.0");
+  });
+
+  it("hides the version chip when /healthz did not include one", () => {
+    renderWorkspace({ status: "ok", time: "2026-04-25T00:00:00Z" });
+
+    const statusbar = document.querySelector(".hecate-statusbar");
+    expect(statusbar).not.toBeNull();
+    // Status bar still renders (brand, session, providers, models) but
+    // the version chip stays out — assert by counting the separators.
+    // Three "|" instead of four means no version chip squeezed in.
+    const sepCount = statusbar!.querySelectorAll(".hecate-statusbar__sep").length;
+    expect(sepCount).toBe(3);
+  });
+});
+

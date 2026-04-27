@@ -1018,3 +1018,51 @@ func TestBootstrapAutoGenerationDefaultPath(t *testing.T) {
 		t.Fatalf("admin token from first run not honored on second run: status = %d", resp.StatusCode)
 	}
 }
+
+// TestGatewayVersionFlag verifies the `--version` short-circuit prints
+// the build version to stdout and exits 0 without binding a port. This
+// is the path the README points at and what `goreleaser`'s ldflag
+// injection feeds into; if the flag handling regresses or the variable
+// isn't wired, downstream "which build is this prod box running?"
+// debugging breaks silently.
+//
+// The default test build doesn't pass an -X ldflag, so we expect "dev".
+// goreleaser releases will see whatever git tag triggered the build.
+func TestGatewayVersionFlag(t *testing.T) {
+	t.Parallel()
+
+	bin := gatewayBinary(t)
+	for _, flag := range []string{"--version", "-v", "version"} {
+		flag := flag
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bin, flag)
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("gateway %s: %v (stderr: %s)", flag, err, errOutput(err))
+			}
+			got := strings.TrimSpace(string(out))
+			if got == "" {
+				t.Fatalf("gateway %s printed empty stdout", flag)
+			}
+			// We don't assert exact equality with "dev" because tooling
+			// might inject a version even in test builds; the contract
+			// is "prints something non-empty and exits 0".
+			if strings.Contains(got, "\n") {
+				t.Fatalf("gateway %s should print a single line, got %q", flag, got)
+			}
+		})
+	}
+}
+
+// errOutput pulls stderr out of an *exec.ExitError if available, so test
+// failure messages include why the binary refused to print its version.
+func errOutput(err error) string {
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return string(exitErr.Stderr)
+	}
+	return ""
+}

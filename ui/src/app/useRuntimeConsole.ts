@@ -197,8 +197,13 @@ export function useRuntimeConsole() {
   useEffect(() => {
     // TokenGate renders when authToken is empty; firing the dashboard
     // anyway would 401-spam the eight admin/auth-required endpoints in
-    // the console for no benefit. Skip until we have something to send.
-    if (!authToken) return;
+    // the console for no benefit. Flip loading to false since there's
+    // nothing to load — anything observing `state.loading` (TokenGate's
+    // gate, the AuthLoadingShell splash) needs an authoritative answer.
+    if (!authToken) {
+      setLoading(false);
+      return;
+    }
     void loadDashboard();
   }, [authToken]);
 
