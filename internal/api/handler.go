@@ -81,6 +81,12 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		EnableAgentExecutor:    cfg.Server.TaskEnableAgentExecutor,
 		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
 		AgentLoopMaxTurns:      cfg.Server.TaskAgentLoopMaxTurns,
+		HTTPPolicy: orchestrator.HTTPRequestPolicy{
+			Timeout:          cfg.Server.TaskHTTPTimeout,
+			MaxResponseBytes: cfg.Server.TaskHTTPMaxResponseBytes,
+			AllowPrivateIPs:  cfg.Server.TaskHTTPAllowPrivateIPs,
+			AllowedHosts:     cfg.Server.TaskHTTPAllowedHosts,
+		},
 	})
 	if taskQueue != nil {
 		runner.SetQueue(taskQueue)

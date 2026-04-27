@@ -54,6 +54,17 @@ type ServerConfig struct {
 	// → workspace CLAUDE.md/AGENTS.md → per-task). Empty disables
 	// the global layer; tenant / workspace / task prompts still apply.
 	TaskAgentSystemPrompt string
+	// TaskHTTP* knobs govern the agent_loop `http_request` tool —
+	// the only outbound-network surface the agent has by default.
+	// Defaults are set conservatively: no private-IP access, 30s
+	// timeout, 256 KiB response cap. Operators broaden via env.
+	TaskHTTPTimeout          time.Duration
+	TaskHTTPMaxResponseBytes int
+	TaskHTTPAllowPrivateIPs  bool
+	// TaskHTTPAllowedHosts, when non-empty, is the only set of hosts
+	// the agent can reach. Empty = all public hosts allowed (still
+	// blocks private IPs unless TaskHTTPAllowPrivateIPs is true).
+	TaskHTTPAllowedHosts []string
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
 	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
@@ -294,6 +305,10 @@ func LoadFromEnv() Config {
 			TaskEnableAgentExecutor:    getEnvBool("GATEWAY_TASK_ENABLE_AGENT_EXECUTOR", false),
 			TaskAgentLoopMaxTurns:      getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
 			TaskAgentSystemPrompt:      getEnv("GATEWAY_TASK_AGENT_SYSTEM_PROMPT", ""),
+			TaskHTTPTimeout:            getEnvDuration("GATEWAY_TASK_HTTP_TIMEOUT", 30*time.Second),
+			TaskHTTPMaxResponseBytes:   getEnvInt("GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES", 256*1024),
+			TaskHTTPAllowPrivateIPs:    getEnvBool("GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS", false),
+			TaskHTTPAllowedHosts:       splitCSV(getEnv("GATEWAY_TASK_HTTP_ALLOWED_HOSTS", "")),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),

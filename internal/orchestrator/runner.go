@@ -30,6 +30,26 @@ type Config struct {
 	// agent_loop run can make. Default 8 (set in NewAgentLoopExecutor
 	// when zero or negative). Acts as a runaway-cost safety net.
 	AgentLoopMaxTurns int
+	// HTTPPolicy bounds the agent_loop `http_request` tool: timeout,
+	// response size cap, SSRF guards, optional host allowlist. Zero
+	// values fall back to safe defaults inside the executor (30s,
+	// 256 KiB, private-IPs blocked, all public hosts allowed).
+	HTTPPolicy HTTPRequestPolicy
+}
+
+// HTTPRequestPolicy is the agent-runtime-side projection of the
+// gateway's `GATEWAY_TASK_HTTP_*` env knobs. Lives here (not in
+// config) because the orchestrator package shouldn't import config —
+// the API handler translates env into this struct at startup.
+type HTTPRequestPolicy struct {
+	Timeout          time.Duration
+	MaxResponseBytes int
+	AllowPrivateIPs  bool
+	// AllowedHosts is the hostname allowlist. Non-empty means "only
+	// these hosts"; empty means "all public hosts". Subdomain matches
+	// are NOT inferred — entries must be exact (e.g. "api.openai.com",
+	// not "openai.com" wildcarded).
+	AllowedHosts []string
 }
 
 // SystemPromptResolver composes the four-layer agent_loop system
@@ -137,7 +157,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 	// Gated tools come from the same approval policies as
 	// task-level gating, so an operator who approves shell at the
 	// task layer also approves it inside agent_loop tool calls.
-	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies))
+	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies), cfg.HTTPPolicy)
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
 		if policy == "" {
@@ -198,7 +218,7 @@ func (r *Runner) SetSystemPromptResolver(resolver SystemPromptResolver) {
 // service is constructed, since the chat path needs its own deps that
 // the runner doesn't otherwise know about. Nil unwires the loop.
 func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
-	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies))
+	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies), r.config.HTTPPolicy)
 }
 
 // agentLoopGatedTools translates the runner's task-level approval
@@ -212,6 +232,13 @@ func agentLoopGatedTools(policies map[string]struct{}) []string {
 		switch p {
 		case "shell_exec", "git_exec", "file_write":
 			out = append(out, p)
+		case "network_egress":
+			// `network_egress` is the historical name for the
+			// outbound-network policy applied to shell tasks. We
+			// reuse it here so an operator who already gates
+			// network on shell automatically gates the agent's
+			// HTTP tool too — no second toggle to remember.
+			out = append(out, "http_request")
 		}
 	}
 	return out

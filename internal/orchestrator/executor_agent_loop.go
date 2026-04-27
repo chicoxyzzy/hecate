@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -61,6 +65,8 @@ type AgentLoopExecutor struct {
 	git        Executor
 	maxTurns   int
 	gatedTools map[string]struct{}
+	httpPolicy HTTPRequestPolicy
+	httpClient *http.Client
 }
 
 // NewAgentLoopExecutor constructs the loop. A nil LLM client is
@@ -83,7 +89,7 @@ type AgentLoopExecutor struct {
 // and the loop hydrates from the saved conversation, dispatches the
 // previously-pending tool calls, and continues. Empty/nil = no gating
 // (every tool runs immediately).
-func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git Executor, maxTurns int, gatedTools []string) *AgentLoopExecutor {
+func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git Executor, maxTurns int, gatedTools []string, httpPolicy HTTPRequestPolicy) *AgentLoopExecutor {
 	if maxTurns <= 0 {
 		maxTurns = 8
 	}
@@ -95,6 +101,20 @@ func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git
 		}
 		gated[name] = struct{}{}
 	}
+	// Apply safe defaults to the HTTP policy. Operators who don't
+	// configure GATEWAY_TASK_HTTP_* still get sensible bounds.
+	if httpPolicy.Timeout <= 0 {
+		httpPolicy.Timeout = 30 * time.Second
+	}
+	if httpPolicy.MaxResponseBytes <= 0 {
+		httpPolicy.MaxResponseBytes = 256 * 1024
+	}
+	// Dedicated client per executor so the timeout is enforced and
+	// connections are pooled. We don't enable redirects-following
+	// past 10 (Go's default) — agents that get stuck redirect-looping
+	// blow through their max-turns cap before causing damage.
+	httpClient := &http.Client{Timeout: httpPolicy.Timeout}
+
 	return &AgentLoopExecutor{
 		llm:        llm,
 		shell:      shell,
@@ -102,6 +122,8 @@ func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git
 		git:        git,
 		maxTurns:   maxTurns,
 		gatedTools: gated,
+		httpPolicy: httpPolicy,
+		httpClient: httpClient,
 	}
 }
 
@@ -444,6 +466,13 @@ func (e *AgentLoopExecutor) dispatchToolCall(ctx context.Context, spec Execution
 		}
 		return listDirTool(spec, args, stepIndex, startedAt, call.Function.Name)
 
+	case "http_request":
+		var args httpRequestArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return fmt.Sprintf("invalid arguments for http_request: %v", err), nil, nil, nil
+		}
+		return e.httpRequestTool(ctx, spec, args, stepIndex, startedAt, call.Function.Name)
+
 	default:
 		return fmt.Sprintf("unknown tool: %s", call.Function.Name), nil, nil, nil
 	}
@@ -683,6 +712,23 @@ func agentToolDefinitions() []types.Tool {
 				}`),
 			},
 		},
+		{
+			Type: "function",
+			Function: types.ToolFunction{
+				Name:        "http_request",
+				Description: "Make an outbound HTTP(S) request. Use for fetching URLs, calling external APIs, or posting to webhooks. Response body is capped to keep prompts cheap; private IPs and unsafe schemes are blocked unless the operator opts in.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"url": {"type": "string", "description": "Absolute http:// or https:// URL."},
+						"method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"], "default": "GET"},
+						"headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Optional request headers as a flat object."},
+						"body": {"type": "string", "description": "Optional request body. For JSON APIs, set Content-Type explicitly via headers."}
+					},
+					"required": ["url"]
+				}`),
+			},
+		},
 	}
 }
 
@@ -709,6 +755,13 @@ type readFileArgs struct {
 
 type listDirArgs struct {
 	Path string `json:"path,omitempty"`
+}
+
+type httpRequestArgs struct {
+	URL     string            `json:"url"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -1022,6 +1075,186 @@ func buildListDirStep(spec ExecutionSpec, index int, startedAt time.Time, toolNa
 		},
 		OutputSummary: map[string]any{
 			"entry_count": entryCount,
+		},
+		StartedAt:  startedAt,
+		FinishedAt: time.Now().UTC(),
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+}
+
+// ─── http_request tool ──────────────────────────────────────────────
+//
+// The HTTP tool is the agent's only outbound-network surface. It runs
+// through e.httpClient (constructed once at executor init with the
+// configured timeout) and applies three layers of safety:
+//
+//   1. Scheme allowlist — only http/https. file://, ftp://, gopher://
+//      etc. are rejected outright.
+//   2. SSRF guard — by default any host that resolves to a loopback,
+//      private, or link-local IP is blocked (cf. RFC 1918 / 4193 /
+//      6890). Operators flip GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS=true
+//      to permit this; useful for agents that hit the gateway's own
+//      admin API or a sidecar service.
+//   3. Hostname allowlist — when GATEWAY_TASK_HTTP_ALLOWED_HOSTS is
+//      set, only those exact host names are reachable. Subdomains are
+//      NOT inferred (api.openai.com vs openai.com) — operators write
+//      what they mean.
+//
+// Response body is capped to MaxResponseBytes to keep prompts cheap.
+// Truncation is reported in the tool result so the agent can ask for
+// more if needed (e.g. via a follow-up call with a Range header).
+
+func (e *AgentLoopExecutor) httpRequestTool(ctx context.Context, spec ExecutionSpec, args httpRequestArgs, stepIndex int, startedAt time.Time, toolName string) (string, *types.TaskStep, []types.TaskArtifact, error) {
+	method := strings.ToUpper(strings.TrimSpace(args.Method))
+	if method == "" {
+		method = "GET"
+	}
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD":
+	default:
+		return fmt.Sprintf("http_request: unsupported method %q", method), nil, nil, nil
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(args.URL))
+	if err != nil {
+		return fmt.Sprintf("http_request: invalid URL: %v", err), nil, nil, nil
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Sprintf("http_request: scheme %q is not allowed; use http or https", parsed.Scheme), nil, nil, nil
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "http_request: URL has no host", nil, nil, nil
+	}
+
+	// Hostname allowlist — exact match only.
+	if len(e.httpPolicy.AllowedHosts) > 0 {
+		ok := false
+		for _, h := range e.httpPolicy.AllowedHosts {
+			if strings.EqualFold(strings.TrimSpace(h), host) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Sprintf("http_request: host %q is not in the configured allowlist", host), nil, nil, nil
+		}
+	}
+
+	// SSRF guard. Block loopback / private / link-local unless the
+	// operator opted in. We resolve the host and check every address
+	// — a hostname like `internal.example.com` could legitimately
+	// resolve to 10.0.0.5, and we want to catch that, not just
+	// literal IPs in the URL.
+	if !e.httpPolicy.AllowPrivateIPs {
+		if msg := checkPublicHost(ctx, host); msg != "" {
+			return msg, nil, nil, nil
+		}
+	}
+
+	var body io.Reader
+	if args.Body != "" {
+		body = strings.NewReader(args.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, parsed.String(), body)
+	if err != nil {
+		return fmt.Sprintf("http_request: build request: %v", err), nil, nil, nil
+	}
+	for k, v := range args.Headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := e.httpClient.Do(req)
+	if err != nil {
+		return fmt.Sprintf("http_request: %v", err), nil, nil, nil
+	}
+	defer resp.Body.Close()
+
+	max := e.httpPolicy.MaxResponseBytes
+	limited := io.LimitReader(resp.Body, int64(max)+1) // +1 to detect overflow
+	raw, _ := io.ReadAll(limited)
+	truncated := false
+	if len(raw) > max {
+		raw = raw[:max]
+		truncated = true
+	}
+
+	step := buildHTTPRequestStep(spec, stepIndex, startedAt, toolName, method, parsed.String(), resp.StatusCode, len(raw), truncated)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "status=%d url=%s bytes=%d", resp.StatusCode, parsed.String(), len(raw))
+	if truncated {
+		fmt.Fprintf(&b, " truncated=true")
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		fmt.Fprintf(&b, " content_type=%s", ct)
+	}
+	b.WriteString("\n--- body ---\n")
+	b.Write(raw)
+	if truncated {
+		fmt.Fprintf(&b, "\n…(truncated at %d bytes; configure GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES to widen)", max)
+	}
+	return b.String(), &step, nil, nil
+}
+
+// checkPublicHost returns an error message string if any of the
+// host's resolved IPs falls in a blocked range. Empty string = safe.
+//
+// We resolve via net.DefaultResolver (DNS) explicitly here rather
+// than relying on the http client's transport, because we want to
+// inspect the IPs BEFORE the connection happens. A cleaner long-term
+// solution wraps net.Dialer.Control with the same check (which also
+// catches DNS rebinding). For v0.1 this is enough.
+func checkPublicHost(ctx context.Context, host string) string {
+	// Literal IP shortcut.
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Sprintf("http_request: target IP %s is private/loopback/link-local; set GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS=true to permit", ip)
+		}
+		return ""
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Sprintf("http_request: dns lookup failed: %v", err)
+	}
+	for _, a := range addrs {
+		if isBlockedIP(a.IP) {
+			return fmt.Sprintf("http_request: host %s resolves to a private/loopback/link-local address (%s); set GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS=true to permit", host, a.IP)
+		}
+	}
+	return ""
+}
+
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsMulticast()
+}
+
+func buildHTTPRequestStep(spec ExecutionSpec, index int, startedAt time.Time, toolName, method, urlStr string, status, bytesRead int, truncated bool) types.TaskStep {
+	return types.TaskStep{
+		ID:       spec.NewID("step"),
+		TaskID:   spec.Task.ID,
+		RunID:    spec.Run.ID,
+		Index:    index,
+		Kind:     "tool",
+		Title:    fmt.Sprintf("%s %s", method, urlStr),
+		Status:   "completed",
+		Phase:    "execution",
+		Result:   telemetry.ResultSuccess,
+		ToolName: toolName,
+		Input: map[string]any{
+			"method": method,
+			"url":    urlStr,
+		},
+		OutputSummary: map[string]any{
+			"status":     status,
+			"bytes_read": bytesRead,
+			"truncated":  truncated,
 		},
 		StartedAt:  startedAt,
 		FinishedAt: time.Now().UTC(),

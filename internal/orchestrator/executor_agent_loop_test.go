@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +97,7 @@ func TestAgentLoop_FinalAnswerOnFirstTurn(t *testing.T) {
 			makeChatResp(makeAssistantMsg("The working directory contains a README.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -146,7 +149,7 @@ func TestAgentLoop_ToolCallThenAnswer(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Two files: README.md and main.go.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -189,7 +192,7 @@ func TestAgentLoop_MaxTurnsHonored(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		llm.responses = append(llm.responses, loopingResponse)
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 3, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 3, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -210,7 +213,7 @@ func TestAgentLoop_LLMErrorBubbles(t *testing.T) {
 	// failed status. The error message must reach the run output so
 	// the operator can diagnose.
 	llm := &scriptedLLM{} // empty responses → returns error on first call
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute (should not return Go-level error): %v", err)
@@ -227,7 +230,7 @@ func TestAgentLoop_NoLLM_FailsWithActionableError(t *testing.T) {
 	// agent_loop without an LLM is a misconfiguration, not a use case.
 	// The loop must surface a clear error so the operator knows to
 	// wire a model rather than seeing a confusing silent success.
-	loop := NewAgentLoopExecutor(nil, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(nil, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -255,7 +258,7 @@ func TestAgentLoop_BadToolArgsBecomeToolError(t *testing.T) {
 		},
 	}
 	shell := &stubExecutor{}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -295,7 +298,7 @@ func TestAgentLoop_UnknownToolBecomesToolError(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Sorry, I can't.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -333,7 +336,7 @@ func TestAgentLoop_ReadFileTool(t *testing.T) {
 			makeChatResp(makeAssistantMsg("It says: hello world.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.WorkingDirectory = dir
 	res, err := loop.Execute(context.Background(), spec)
@@ -370,7 +373,7 @@ func TestAgentLoop_ReadFileRejectsTraversal(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Sorry, can't.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.WorkingDirectory = dir
 	res, err := loop.Execute(context.Background(), spec)
@@ -409,7 +412,7 @@ func TestAgentLoop_ReadFileBinaryDetection(t *testing.T) {
 			makeChatResp(makeAssistantMsg("It's binary.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.WorkingDirectory = dir
 	if _, err := loop.Execute(context.Background(), spec); err != nil {
@@ -446,7 +449,7 @@ func TestAgentLoop_ListDirTool(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Done.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.WorkingDirectory = dir
 	if _, err := loop.Execute(context.Background(), spec); err != nil {
@@ -489,7 +492,7 @@ func TestAgentLoop_ListDirOnFileFailsCleanly(t *testing.T) {
 			makeChatResp(makeAssistantMsg("OK.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.WorkingDirectory = dir
 	if _, err := loop.Execute(context.Background(), spec); err != nil {
@@ -542,7 +545,7 @@ func TestAgentLoop_ConversationPersistsAcrossTurns(t *testing.T) {
 			},
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.UpsertArtifact = func(art types.TaskArtifact) error {
 		upserts = append(upserts, art)
@@ -601,7 +604,7 @@ func TestAgentLoop_HydratesFromResumeCheckpoint(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Resumed and answered.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.ResumeCheckpoint = &ResumeCheckpoint{
 		SourceRunID:       "run-prev",
@@ -638,7 +641,7 @@ func TestAgentLoop_HydrateGracefulFallbackOnCorruptCheckpoint(t *testing.T) {
 			makeChatResp(makeAssistantMsg("Fresh start.")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.ResumeCheckpoint = &ResumeCheckpoint{
 		SourceRunID:       "run-prev",
@@ -671,7 +674,7 @@ func TestAgentLoop_GatedToolPausesAndEmitsApproval(t *testing.T) {
 		},
 	}
 	shell := &stubExecutor{}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"})
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"}, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -719,7 +722,7 @@ func TestAgentLoop_NonGatedToolDispatchesNormally(t *testing.T) {
 		},
 	}
 	file := &stubExecutor{result: &ExecutionResult{Status: "completed"}}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, file, &stubExecutor{}, 8, []string{"shell_exec"})
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, file, &stubExecutor{}, 8, []string{"shell_exec"}, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -767,7 +770,7 @@ func TestAgentLoop_ResumeAfterApprovalDispatchesPendingCalls(t *testing.T) {
 			},
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"})
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8, []string{"shell_exec"}, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.ResumeCheckpoint = &ResumeCheckpoint{
 		SourceRunID:       "run-1",
@@ -820,7 +823,7 @@ func TestAgentLoop_GatedToolListedWithMultipleToolsInTurn(t *testing.T) {
 	}
 	shell := &stubExecutor{}
 	file := &stubExecutor{}
-	loop := NewAgentLoopExecutor(llm, shell, file, &stubExecutor{}, 8, []string{"shell_exec"})
+	loop := NewAgentLoopExecutor(llm, shell, file, &stubExecutor{}, 8, []string{"shell_exec"}, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -853,7 +856,7 @@ func TestAgentLoop_SystemPromptPrependedOnFreshRuns(t *testing.T) {
 			makeChatResp(makeAssistantMsg("answered")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.SystemPrompt = "You are a careful agent. Always cite sources."
 	if _, err := loop.Execute(context.Background(), spec); err != nil {
@@ -882,7 +885,7 @@ func TestAgentLoop_NoSystemPromptWhenEmpty(t *testing.T) {
 			makeChatResp(makeAssistantMsg("ok")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.SystemPrompt = ""
 	if _, err := loop.Execute(context.Background(), spec); err != nil {
@@ -909,7 +912,7 @@ func TestAgentLoop_SystemPromptNotReinjectedOnResume(t *testing.T) {
 			makeChatResp(makeAssistantMsg("done")),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	// Different SystemPrompt would normally apply — but on resume
 	// the saved one wins. Lets us assert that we don't blend layers.
@@ -961,7 +964,7 @@ func TestAgentLoop_CostAccumulatesAcrossTurns(t *testing.T) {
 		Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
 	}}
 
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -990,7 +993,7 @@ func TestAgentLoop_PerTaskCostCeilingTriggersFail(t *testing.T) {
 			respWithCost("would be the answer", 0), // never fires
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.BudgetMicrosUSD = 500 // ceiling under the first turn's cost
 	res, err := loop.Execute(context.Background(), spec)
@@ -1026,7 +1029,7 @@ func TestAgentLoop_NoCeilingMeansUnlimited(t *testing.T) {
 			respWithCost("done", 1_000_000), // huge cost, no cap
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	spec := newAgentLoopSpec(t)
 	spec.Task.BudgetMicrosUSD = 0
 	res, err := loop.Execute(context.Background(), spec)
@@ -1035,6 +1038,207 @@ func TestAgentLoop_NoCeilingMeansUnlimited(t *testing.T) {
 	}
 	if res.Status != "completed" {
 		t.Errorf("Status = %q, want completed (no ceiling)", res.Status)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_HappyPath(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello from upstream"))
+	}))
+	defer upstream.Close()
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: fmt.Sprintf(`{"url":"%s"}`, upstream.URL),
+				},
+			})),
+			makeChatResp(makeAssistantMsg("got it")),
+		},
+	}
+	// httptest binds 127.0.0.1 — loopback, blocked by default.
+	// Allow private IPs for the test scope so the request fires.
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{AllowPrivateIPs: true})
+	if _, err := loop.Execute(context.Background(), newAgentLoopSpec(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	hasUpstream := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "hello from upstream") {
+			hasUpstream = true
+		}
+	}
+	if !hasUpstream {
+		t.Errorf("upstream body didn't reach next LLM turn: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_BlocksPrivateIPByDefault(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should NOT be called when private IPs are blocked")
+	}))
+	defer upstream.Close()
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: fmt.Sprintf(`{"url":"%s"}`, upstream.URL),
+				},
+			})),
+			makeChatResp(makeAssistantMsg("got blocked")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	if _, err := loop.Execute(context.Background(), newAgentLoopSpec(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	blocked := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "private/loopback/link-local") {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Errorf("private IP not blocked: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_BlocksUnsafeScheme(t *testing.T) {
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: `{"url":"file:///etc/passwd"}`,
+				},
+			})),
+			makeChatResp(makeAssistantMsg("ok")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{AllowPrivateIPs: true})
+	if _, err := loop.Execute(context.Background(), newAgentLoopSpec(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	rejected := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "scheme") {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Errorf("file:// not rejected: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_HostAllowlistEnforced(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called when not in allowlist")
+	}))
+	defer upstream.Close()
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: fmt.Sprintf(`{"url":"%s"}`, upstream.URL),
+				},
+			})),
+			makeChatResp(makeAssistantMsg("ok")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{
+		AllowPrivateIPs: true,
+		AllowedHosts:    []string{"example.com"},
+	})
+	if _, err := loop.Execute(context.Background(), newAgentLoopSpec(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	hasAllowlist := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "allowlist") {
+			hasAllowlist = true
+		}
+	}
+	if !hasAllowlist {
+		t.Errorf("host allowlist not enforced: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_TruncatesOversizeBody(t *testing.T) {
+	big := strings.Repeat("x", 2000)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, big)
+	}))
+	defer upstream.Close()
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: fmt.Sprintf(`{"url":"%s"}`, upstream.URL),
+				},
+			})),
+			makeChatResp(makeAssistantMsg("ok")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{
+		AllowPrivateIPs:  true,
+		MaxResponseBytes: 500,
+	})
+	if _, err := loop.Execute(context.Background(), newAgentLoopSpec(t)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	truncated := false
+	for _, m := range llm.lastReqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "truncated=true") {
+			truncated = true
+		}
+	}
+	if !truncated {
+		t.Errorf("oversize body not truncated: %+v", llm.lastReqs[1].Messages)
+	}
+}
+
+func TestAgentLoop_HTTPRequest_GatedPausesRun(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called pre-approval")
+	}))
+	defer upstream.Close()
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "c1", Type: "function",
+				Function: types.ToolCallFunction{
+					Name:      "http_request",
+					Arguments: fmt.Sprintf(`{"url":"%s"}`, upstream.URL),
+				},
+			})),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8,
+		[]string{"http_request"},
+		HTTPRequestPolicy{AllowPrivateIPs: true})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "awaiting_approval" {
+		t.Errorf("Status = %q, want awaiting_approval", res.Status)
+	}
+	if len(res.PendingApprovals) != 1 {
+		t.Errorf("PendingApprovals = %d, want 1", len(res.PendingApprovals))
 	}
 }
 
@@ -1049,7 +1253,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 			})),
 		},
 	}
-	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 	res, err := loop.Execute(ctx, newAgentLoopSpec(t))
