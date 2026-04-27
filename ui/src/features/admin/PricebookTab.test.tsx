@@ -971,6 +971,78 @@ describe("PricebookTab Import all → consent SlideOver", () => {
     expect(within(dialog).getByRole("button", { name: /Apply 1 change/i })).toBeTruthy();
   });
 
+  it("Apply that throws surfaces an InlineError in the dialog and keeps it open", async () => {
+    // The `catch` branch of confirm() is the network/server-error path —
+    // not a partial-success diff but a thrown exception. The dialog
+    // should NOT auto-close (the operator hasn't seen the error yet)
+    // and the message should appear inline at the dialog footer.
+    const applyPricebookImport = vi.fn(async () => {
+      throw new Error("apply request failed: 503 service unavailable");
+    });
+    const { state, actions, user } = setupForConsent({
+      models: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } }],
+      diff: { fetched_at: "2026", added: [sampleAdded], updated: [], skipped: [], unchanged: 0 },
+      applyPricebookImport,
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Update pricebook/i });
+
+    await user.click(within(dialog).getByRole("button", { name: /Apply 1 change/i }));
+
+    // Inline error visible in the dialog footer with the verbatim message.
+    expect(await within(dialog).findByText(/apply request failed: 503/i)).toBeTruthy();
+    // Dialog still in the DOM — operator gets to read the error.
+    expect(screen.queryByRole("dialog", { name: /Update pricebook/i })).toBeTruthy();
+    // Apply button is back to its label (not stuck on "Applying…") so
+    // the operator can retry or cancel.
+    expect(within(dialog).getByRole("button", { name: /Apply 1 change/i })).toBeTruthy();
+  });
+
+  it("Apply button shows 'Applying…' while the request is in flight", async () => {
+    // Locks in the loading-state UX: the button must reflect that the
+    // request is pending (and disable itself) so the operator doesn't
+    // re-fire the apply by double-clicking.
+    let resolve!: (d: PricebookImportDiff) => void;
+    const pending = new Promise<PricebookImportDiff>(r => { resolve = r; });
+    const applyPricebookImport = vi.fn(() => pending);
+    const { state, actions, user } = setupForConsent({
+      models: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } }],
+      diff: { fetched_at: "2026", added: [sampleAdded], updated: [], skipped: [], unchanged: 0 },
+      applyPricebookImport,
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Update pricebook/i });
+
+    // Click Apply without awaiting — the request stays in-flight.
+    await user.click(within(dialog).getByRole("button", { name: /Apply 1 change/i }));
+
+    const applying = within(dialog).getByRole("button", { name: /Applying/i });
+    expect((applying as HTMLButtonElement).disabled).toBe(true);
+
+    // Resolve so the test cleans up cleanly; the dialog will close
+    // (no failed entries → auto-close branch in the parent).
+    resolve(emptyDiff);
+  });
+
+  it("Escape key closes the consent dialog (cancel path)", async () => {
+    const applyPricebookImport = vi.fn(async () => emptyDiff);
+    const { state, actions, user } = setupForConsent({
+      models: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } }],
+      diff: { fetched_at: "2026", added: [sampleAdded], updated: [], skipped: [], unchanged: 0 },
+      applyPricebookImport,
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    expect(await screen.findByRole("dialog", { name: /Update pricebook/i })).toBeTruthy();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: /Update pricebook/i })).toBeNull();
+    expect(applyPricebookImport).not.toHaveBeenCalled();
+  });
+
   it("excludes local-provider entries from the consent dialog even if LiteLLM proposes them", async () => {
     // ollama is local. A LiteLLM "added" entry for ollama/* shouldn't
     // surface in the dialog because the table doesn't show local rows.
