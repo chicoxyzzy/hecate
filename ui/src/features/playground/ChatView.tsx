@@ -205,21 +205,67 @@ export function ChatView({ state, actions }: Props) {
               return state.providers
                 .filter(p => {
                   if (!p.healthy) return false;
-                  const cfg = state.adminConfig?.providers.find(c => c.name === p.name);
-                  if (cfg && !cfg.enabled) return false;
                   if (allowed.length > 0 && !allowed.includes(p.name)) return false;
                   return true;
                 })
                 .filter(p => p.name)
-                .map(p => ({
-                  id: p.name,
-                  name: state.providerPresets.find(pr => pr.id === p.name)?.name || p.name,
-                  healthy: p.healthy,
-                }));
+                .map(p => {
+                  const cfg = state.adminConfig?.providers.find(c => c.name === p.name);
+                  // Three "disabled" reasons we surface to the operator
+                  // via a key icon + tooltip rather than hiding the row:
+                  //   * cloud provider with no credentials → "needs key"
+                  //   * any provider explicitly disabled in admin config
+                  // For tenant-key sessions (no adminConfig), `cfg` is
+                  // undefined, so neither flag fires — the picker
+                  // behaves as before for non-admin users.
+                  const cloudUnconfigured = !!cfg && cfg.kind === "cloud" && !cfg.credential_configured;
+                  const adminDisabled = !!cfg && !cfg.enabled;
+                  let disabledReason: string | undefined;
+                  if (cloudUnconfigured) {
+                    disabledReason = `Configure ${cfg!.id.toUpperCase()} credentials in Admin → Providers`;
+                  } else if (adminDisabled) {
+                    disabledReason = "Disabled in Admin → Providers";
+                  }
+                  return {
+                    id: p.name,
+                    name: state.providerPresets.find(pr => pr.id === p.name)?.name || p.name,
+                    healthy: p.healthy,
+                    // `kind` drives whether we show a key indicator at
+                    // all — local providers don't have an API-key
+                    // concept, so they get no key icon regardless of
+                    // their config state.
+                    kind: cfg?.kind ?? state.providerPresets.find(pr => pr.id === p.name)?.kind,
+                    configured: cfg ? cfg.credential_configured : undefined,
+                    disabledReason,
+                  };
+                });
             })()}
             includeAuto
           />
-          <ModelPicker value={state.model} onChange={actions.setModel} models={state.providerScopedModels} presets={state.providerPresets} />
+          <ModelPicker
+            value={state.model}
+            onChange={actions.setModel}
+            models={state.providerScopedModels}
+            presets={state.providerPresets}
+            // Show the provider suffix only when "All providers" is
+            // selected — when a specific provider is filtered, the
+            // suffix is redundant on every row.
+            showProvider={state.providerFilter === "auto"}
+            // Provider ids whose models should render as disabled rows
+            // (with a key indicator). Same rules as the provider
+            // picker: cloud + no credentials, or admin-disabled.
+            disabledProviders={(() => {
+              const out = new Map<string, string>();
+              for (const cfg of state.adminConfig?.providers ?? []) {
+                if (cfg.kind === "cloud" && !cfg.credential_configured) {
+                  out.set(cfg.id, `Configure ${cfg.id.toUpperCase()} credentials in Admin → Providers`);
+                } else if (!cfg.enabled) {
+                  out.set(cfg.id, "Disabled in Admin → Providers");
+                }
+              }
+              return out;
+            })()}
+          />
           <button className="btn btn-ghost btn-sm" onClick={() => setSyspromptOpen(o => !o)}
             style={{ color: syspromptOpen ? "var(--teal)" : "var(--t2)" }} title="System prompt">
             <Icon d={Icons.edit} size={13} />
@@ -411,11 +457,20 @@ export function ChatView({ state, actions }: Props) {
   );
 }
 
-function ModelPicker({ value, onChange, models, presets }: {
+function ModelPicker({ value, onChange, models, presets, disabledProviders, showProvider }: {
   value: string;
   onChange: (v: string) => void;
   models: ModelRecord[];
   presets: import("../../types/runtime").ProviderPresetRecord[];
+  // Provider ids whose models render as disabled (greyed, not
+  // clickable, with a key indicator). Map value is the tooltip
+  // explaining why ("Configure X credentials in Admin → Providers"
+  // or "Disabled in Admin → Providers").
+  disabledProviders?: Map<string, string>;
+  // Render the per-row "(provider name)" suffix. False when the
+  // outer provider filter is already pinned to a single provider —
+  // every row would carry the same suffix, which is just noise.
+  showProvider?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -436,15 +491,42 @@ function ModelPicker({ value, onChange, models, presets }: {
   }, [open]);
 
   const providerName = (id: string) => presets.find(p => p.id === id)?.name || id;
-  const filtered = filter ? models.filter(m => m.id.toLowerCase().includes(filter.toLowerCase())) : models;
+  const matchedFilter = filter ? models.filter(m => m.id.toLowerCase().includes(filter.toLowerCase())) : models;
+  // Sort usable models above disabled ones — within each bucket the
+  // source order is preserved (provider-grouped, alphabetical-ish).
+  // Stable partition via two passes is simpler than a comparator and
+  // avoids accidentally reordering rows whose disabled state is the
+  // same. Without this, the operator scrolls past 8 disabled claude/
+  // gpt rows before finding a llama they can actually use.
+  const filtered = (() => {
+    const usable: ModelRecord[] = [];
+    const disabled: ModelRecord[] = [];
+    for (const m of matchedFilter) {
+      const provider = m.metadata?.provider;
+      if (provider && disabledProviders?.has(provider)) {
+        disabled.push(m);
+      } else {
+        usable.push(m);
+      }
+    }
+    return [...usable, ...disabled];
+  })();
   const label = value || (models[0]?.id ?? "model");
 
   return (
     <div className="dropdown-wrap" ref={ref}>
+      {/* Fixed width matches the provider picker trigger so the two
+          dropdowns next to each other read as a stable pair, not a
+          ragged set. Long model ids truncate via text-overflow:ellipsis
+          on the inner span (flex truncation needs an inner box with
+          min-width:0 — the .btn flex container alone won't ellipsize
+          a bare string child). */}
       <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", width: 220 }}>
         <Icon d={Icons.model} size={13} />
-        {label}
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }} title={label}>
+          {label}
+        </span>
         <Icon d={Icons.chevD} size={11} />
       </button>
       {open && (
@@ -464,17 +546,62 @@ function ModelPicker({ value, onChange, models, presets }: {
             {filtered.length === 0 && (
               <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--t3)" }}>No models match</div>
             )}
-            {filtered.map(m => (
-              <div key={m.id} className={`dropdown-item ${m.id === value ? "selected" : ""}`}
-                onClick={() => { onChange(m.id); setOpen(false); }}>
-                <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.id}</span>
-                {m.metadata?.provider && (
-                  <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", flexShrink: 0, marginLeft: 6 }}>
-                    {providerName(m.metadata.provider)}
+            {filtered.map(m => {
+              const provider = m.metadata?.provider;
+              const reason = provider ? disabledProviders?.get(provider) : undefined;
+              const disabled = !!reason;
+              return (
+                <div
+                  key={m.id}
+                  className={`dropdown-item ${m.id === value ? "selected" : ""}`}
+                  title={reason}
+                  style={disabled ? { cursor: "not-allowed" } : undefined}
+                  onClick={() => {
+                    if (disabled) return;
+                    onChange(m.id);
+                    setOpen(false);
+                  }}>
+                  {/* Only the model id dims when disabled. Provider
+                      name keeps its t3 color so the right column
+                      reads consistently across enabled + disabled
+                      rows (CSS opacity inheritance would otherwise
+                      drag the muted text into something unreadable
+                      against the dark background). */}
+                  <span
+                    style={{
+                      flex: 1,
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      opacity: disabled ? 0.5 : 1,
+                    }}>
+                    {m.id}
                   </span>
-                )}
-              </div>
-            ))}
+                  {/* Model row order: id → provider-name → key (last).
+                      Hide the provider suffix when the outer filter
+                      pinned a single provider (every row would carry
+                      the same suffix). */}
+                  {showProvider && provider && (
+                    <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", flexShrink: 0, marginLeft: 6 }}>
+                      {providerName(provider)}
+                    </span>
+                  )}
+                  {/* Reserve a fixed slot whether or not a key icon
+                      renders — keeps the right edge aligned across
+                      rows so the model-id and provider-name columns
+                      stay coherent. */}
+                  <span style={{ display: "inline-flex", flexShrink: 0, marginLeft: 6, width: 11, justifyContent: "center" }}>
+                    {disabled && (
+                      <span aria-label="credentials missing" style={{ color: "var(--red)", display: "inline-flex" }}>
+                        <Icon d={Icons.keys} size={11} />
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -80,7 +80,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		WriteError(w, statusCode, errCodeGatewayError, err.Error())
+		WriteError(w, statusCode, errCodeGatewayError, gateway.UserFacingMessage(err))
 		return
 	}
 
@@ -155,7 +155,7 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 		if gateway.IsDeniedError(err) {
 			statusCode = http.StatusForbidden
 		}
-		errMsg := err.Error()
+		errMsg := gateway.UserFacingMessage(err)
 		var upstreamErr *providers.UpstreamError
 		if errors.As(err, &upstreamErr) {
 			statusCode = mapUpstreamStatus(upstreamErr.StatusCode)

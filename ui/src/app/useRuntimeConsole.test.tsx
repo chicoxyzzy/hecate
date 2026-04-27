@@ -78,6 +78,43 @@ describe("useRuntimeConsole", () => {
   });
 
   it("loads dashboard data and tolerates unauthorized admin endpoints", async () => {
+    // Use a tenant-authenticated session: the dashboard fires the
+    // tenant-level fetches (models, providers, presets, sessions) but
+    // gates admin-only fetches (budget, retention, accountSummary,
+    // adminConfig, requestLedger) behind role=admin. With this gating
+    // an anonymous bearer no longer fires those admin endpoints at
+    // all (the previous "401 storm"), so this test simulates a
+    // tenant whose admin endpoints are unauthorized — still tolerated
+    // because they get skipped before the request goes out.
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: { authenticated: true, invalid_token: false, role: "tenant", tenant: "acme", source: "bearer" },
+        });
+      }
+      if (url === "/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }],
+        });
+      }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }],
+        });
+      }
+      // Tenant-level: providers + sessions return ok-but-empty.
+      if (url.startsWith("/v1/providers")) return jsonResponse({ object: "list", data: [] });
+      if (url.startsWith("/v1/chat/sessions")) return jsonResponse({ object: "chat_sessions", data: [] });
+      // Admin-only paths: skipped before they fire, but mock 401 in
+      // case they ever do — the resolvers fall back to defaults.
+      return unauthorizedResponse();
+    });
+
     const { result } = renderHook(() => useRuntimeConsole());
 
     await waitFor(() => expect(result.current.state.loading).toBe(false));
@@ -346,6 +383,54 @@ describe("useRuntimeConsole", () => {
     });
   });
 
+  it("surfaces a chat error in the toaster (not just inline) so it's consistent with other admin notices", async () => {
+    // Without the toast wiring, a chat failure only shows in the
+    // inline chat banner — easy to miss if the operator's eyes are on
+    // the sidebar/admin panel. This test pins the toast surface so a
+    // refactor doesn't silently drop it.
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: { authenticated: false, invalid_token: false, role: "anonymous", source: "no_token" },
+        });
+      }
+      if (url === "/v1/models") return jsonResponse({ object: "list", data: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } }] });
+      if (url === "/v1/provider-presets") return jsonResponse({ object: "provider_presets", data: [{ id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" }] });
+      if (url === "/v1/chat/sessions") {
+        return jsonResponse({ object: "chat_session", data: { id: "chat_err", title: "x", turns: [], created_at: "2026-04-21T00:00:00Z", updated_at: "2026-04-21T00:00:00Z" } });
+      }
+      if (url === "/v1/chat/completions") {
+        // Backend now strips "client error: " before serializing —
+        // simulate the cleaned shape we expect on the wire.
+        return new Response(
+          JSON.stringify({ error: { message: "api key is required for cloud provider anthropic when stub mode is disabled" } }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.actions.submitChat({ preventDefault() {} } as never);
+    });
+
+    // Inline error stays for chat-context.
+    await waitFor(() => expect(result.current.state.chatError).toContain("api key is required"));
+    // Toast mirrors it so chat failures are visible from anywhere on
+    // the page. Same kind ("error") as budget/retention/pricebook errors.
+    expect(result.current.state.notice?.kind).toBe("error");
+    expect(result.current.state.notice?.message).toContain("api key is required");
+    // Critically: no leaked classification prefix from the backend.
+    expect(result.current.state.notice?.message).not.toMatch(/^client error: /i);
+    expect(result.current.state.chatError).not.toMatch(/^client error: /i);
+  });
+
   it("loads persisted retention history for admin sessions", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);
@@ -477,13 +562,17 @@ describe("useRuntimeConsole", () => {
         return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
       }
       if (url === "/v1/whoami") {
+        // Authenticated tenant — needed because dashboard now gates
+        // /v1/models, /v1/provider-presets, /admin/providers behind
+        // an authenticated session (the 401-storm fix).
         return jsonResponse({
           object: "session",
           data: {
-            authenticated: false,
+            authenticated: true,
             invalid_token: false,
-            role: "anonymous",
-            source: "no_token",
+            role: "tenant",
+            tenant: "acme",
+            source: "bearer",
           },
         });
       }
@@ -507,7 +596,7 @@ describe("useRuntimeConsole", () => {
           ],
         });
       }
-      if (url === "/admin/providers") {
+      if (url === "/v1/providers" || url === "/admin/providers") {
         return jsonResponse({
           object: "provider_status",
           data: [{ name: "ollama", kind: "local", healthy: true, status: "healthy", default_model: "llama3.1:8b", models: ["llama3.1:8b"] }],

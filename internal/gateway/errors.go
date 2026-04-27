@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/hecate/agent-runtime/internal/governor"
 	"github.com/hecate/agent-runtime/internal/ratelimit"
@@ -18,6 +19,29 @@ func IsDeniedError(err error) bool {
 
 func IsClientError(err error) bool {
 	return errors.Is(err, errClient)
+}
+
+// UserFacingMessage returns err's message stripped of the internal
+// "client error" / "request denied" classification prefixes that
+// IsClientError / IsDeniedError add by wrapping.
+//
+// The classifications drive HTTP status routing — they shouldn't leak
+// into the body the UI renders. Without this helper, the chat would
+// show strings like "client error: api key is required for cloud
+// provider anthropic …" where only the part after the colon is
+// useful to the operator. The HTTP status (400/403/etc.) already
+// conveys which class of error this is.
+func UserFacingMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	for _, prefix := range []string{errClient.Error() + ": ", errDenied.Error() + ": "} {
+		if strings.HasPrefix(msg, prefix) {
+			return strings.TrimPrefix(msg, prefix)
+		}
+	}
+	return msg
 }
 
 // IsBudgetExceededError returns true when err is (or wraps) a

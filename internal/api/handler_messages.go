@@ -229,7 +229,7 @@ func writeMessagesError(w http.ResponseWriter, err error) {
 	if gateway.IsDeniedError(err) {
 		statusCode = http.StatusForbidden
 	}
-	errMsg := err.Error()
+	errMsg := gateway.UserFacingMessage(err)
 	errType := "api_error"
 	var upstreamErr *providers.UpstreamError
 	if errors.As(err, &upstreamErr) {

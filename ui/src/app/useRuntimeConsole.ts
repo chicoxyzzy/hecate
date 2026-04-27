@@ -522,7 +522,13 @@ export function useRuntimeConsole() {
       setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (submitError) {
-      setChatError(submitError instanceof Error ? submitError.message : "unknown request error");
+      const msg = submitError instanceof Error ? submitError.message : "unknown request error";
+      setChatError(msg);
+      // Toaster mirrors the inline error so chat failures are
+      // surfaced through the same channel as other admin errors
+      // (budget, retention, pricebook). Without this the operator
+      // can miss a failure if their attention is elsewhere on the page.
+      setNoticeMessage("error", msg);
     } finally {
       setChatLoading(false);
     }
@@ -557,7 +563,9 @@ export function useRuntimeConsole() {
       setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (err) {
-      setChatError(err instanceof Error ? err.message : "unknown error");
+      const msg = err instanceof Error ? err.message : "unknown error";
+      setChatError(msg);
+      setNoticeMessage("error", msg);
     } finally {
       setChatLoading(false);
     }
@@ -951,7 +959,9 @@ export function useRuntimeConsole() {
       const payload = await getChatSession(id, authToken);
       setActiveChatSession(payload.data);
     } catch (error) {
-      setChatError(error instanceof Error ? error.message : "failed to load chat session");
+      const msg = error instanceof Error ? error.message : "failed to load chat session";
+      setChatError(msg);
+      setNoticeMessage("error", msg);
     }
   }
 
@@ -1341,31 +1351,66 @@ async function resolveDashboardSnapshot(args: {
 }
 
 async function loadDashboardResults(authToken: string): Promise<DashboardResults> {
-  const [
-    health,
-    session,
-    models,
-    providers,
-    providerPresets,
-    budget,
-    accountSummary,
-    chatSessions,
-    requestLedger,
-    adminConfig,
-    retentionRuns,
-  ] = await Promise.allSettled([
+  // Two-phase load to avoid the "401 storm" — every admin endpoint
+  // would fail for a tenant or anonymous bearer, and the browser
+  // network panel logs each as a console error. Phase 1 establishes
+  // identity (open /healthz + bearer-only /v1/whoami); Phase 2 only
+  // fires the endpoints the resolved role can actually reach.
+  const [health, session] = await Promise.allSettled([
     getHealth(),
     getSession(authToken),
-    getModels(authToken),
-    getProviders(authToken),
-    getProviderPresets(authToken),
-    getBudget("", authToken),
-    getAccountSummary("", authToken),
-    getChatSessions(authToken, 20),
-    getRequestLedger(authToken, 20),
-    getAdminConfig(authToken),
-    getRetentionRuns(authToken, 10),
   ]);
+
+  // Identity gate: an invalid bearer means /v1/* will also 401, so we
+  // skip everything else and let TokenGate take over via the
+  // `invalid_token` branch in deriveSessionState.
+  const sessionData = session.status === "fulfilled" ? session.value.data : null;
+  const invalidToken = sessionData?.invalid_token === true;
+  const role = sessionData?.role ?? "anonymous";
+  const isAdmin = role === "admin" || sessionData?.source === "auth_disabled";
+  const isAuthenticated = sessionData?.authenticated === true;
+
+  // Default each result to a fresh "rejected without firing" so the
+  // existing resolveAuthorizedDashboardResult path treats it as a
+  // 401-equivalent fallback. We only overwrite below for endpoints
+  // the role is allowed to call.
+  // A "skipped" fetch presents the same shape as a 401 from the
+  // existing per-resolver helpers — so they fall back to the
+  // unauthorized default (empty list / null) rather than throwing
+  // "failed to load runtime console data". Reusing
+  // invalidBearerTokenMessage keeps the resolvers single-branched.
+  const skipped = <T,>(): PromiseSettledResult<T> => ({ status: "rejected", reason: new Error(invalidBearerTokenMessage) });
+
+  let models: PromiseSettledResult<ModelResponse> = skipped();
+  let providers: PromiseSettledResult<ProviderStatusResponse> = skipped();
+  let providerPresets: PromiseSettledResult<{ object: string; data: ProviderPresetRecord[] }> = skipped();
+  let budget: PromiseSettledResult<BudgetStatusResponse> = skipped();
+  let accountSummary: PromiseSettledResult<AccountSummaryResponse> = skipped();
+  let chatSessions: PromiseSettledResult<ChatSessionsResponse> = skipped();
+  let requestLedger: PromiseSettledResult<RequestLedgerResponse> = skipped();
+  let adminConfig: PromiseSettledResult<ConfiguredStateResponse> = skipped();
+  let retentionRuns: PromiseSettledResult<{ object: string; data: RetentionRunData[] }> = skipped();
+
+  if (!invalidToken && isAuthenticated) {
+    // Tenant-or-better: chat surface is reachable.
+    const tenantFetches: Array<Promise<unknown>> = [
+      getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
+      getProviders(authToken).then(r => { providers = { status: "fulfilled", value: r }; }, e => { providers = { status: "rejected", reason: e }; }),
+      getProviderPresets(authToken).then(r => { providerPresets = { status: "fulfilled", value: r }; }, e => { providerPresets = { status: "rejected", reason: e }; }),
+      getChatSessions(authToken, 20).then(r => { chatSessions = { status: "fulfilled", value: r }; }, e => { chatSessions = { status: "rejected", reason: e }; }),
+    ];
+    if (isAdmin) {
+      // Admin-only endpoints: skipped for tenant bearers.
+      tenantFetches.push(
+        getBudget("", authToken).then(r => { budget = { status: "fulfilled", value: r }; }, e => { budget = { status: "rejected", reason: e }; }),
+        getAccountSummary("", authToken).then(r => { accountSummary = { status: "fulfilled", value: r }; }, e => { accountSummary = { status: "rejected", reason: e }; }),
+        getRequestLedger(authToken, 20).then(r => { requestLedger = { status: "fulfilled", value: r }; }, e => { requestLedger = { status: "rejected", reason: e }; }),
+        getAdminConfig(authToken).then(r => { adminConfig = { status: "fulfilled", value: r }; }, e => { adminConfig = { status: "rejected", reason: e }; }),
+        getRetentionRuns(authToken, 10).then(r => { retentionRuns = { status: "fulfilled", value: r }; }, e => { retentionRuns = { status: "rejected", reason: e }; }),
+      );
+    }
+    await Promise.all(tenantFetches);
+  }
 
   return {
     health,

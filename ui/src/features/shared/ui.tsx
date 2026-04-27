@@ -398,10 +398,20 @@ export function ModelPicker({ value, onChange, models }: {
 // `onChange` emits (and what `value` matches against). `healthy` drives
 // the small green dot on cloud providers in the chat view; pricebook
 // callers leave it undefined.
+//
+// `kind` + `configured` together drive the key-icon indicator: cloud
+// providers show a green key when configured, a red key when not.
+// Local providers don't surface a key icon (they don't have keys).
+// `disabledReason`, when present, makes the option non-selectable and
+// renders a tooltip explaining why — the operator sees that the
+// provider exists but understands the gap.
 export type ProviderOption = {
   id: string;
   name: string;
   healthy?: boolean;
+  kind?: string;
+  configured?: boolean;
+  disabledReason?: string;
 };
 
 // ProviderPicker is the styled dropdown both the chat view (filter
@@ -423,6 +433,7 @@ export function ProviderPicker({
   autoValue = "auto",
   autoLabel = "All providers",
   emptyLabel = "select provider",
+  triggerWidth,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -434,6 +445,11 @@ export function ProviderPicker({
   autoValue?: string;
   autoLabel?: string;
   emptyLabel?: string;
+  // Pin the trigger button to a fixed pixel width — used in the
+  // chat view to align with a sibling dropdown of the same width.
+  // When unset (pricebook etc.), the auto-sized inline-grid trigger
+  // sizes to the widest option label.
+  triggerWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -465,12 +481,26 @@ export function ProviderPicker({
         type="button"
         className="btn btn-ghost btn-sm"
         onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)" }}>
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", width: triggerWidth }}>
         <Icon d={Icons.providers} size={13} />
-        <span style={{ display: "inline-grid" }}>
-          <span aria-hidden style={{ gridColumn: 1, gridRow: 1, visibility: "hidden", whiteSpace: "nowrap", pointerEvents: "none" }}>{widestLabel}</span>
-          <span style={{ gridColumn: 1, gridRow: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
-        </span>
+        {triggerWidth !== undefined ? (
+          // Fixed-width mode: ellipsize within the available flex slot.
+          <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" }} title={label}>
+            {label}
+          </span>
+        ) : (
+          // Auto-size mode: inline-grid reserves space for the widest
+          // option so the trigger doesn't shift width when selection
+          // changes. The visible label needs `display: block` +
+          // `width: 100%` so `text-align: left` actually applies —
+          // an inline span shrinks to its content and text-align
+          // becomes a no-op, which made shorter labels look centered
+          // inside the wider grid cell.
+          <span style={{ display: "inline-grid" }}>
+            <span aria-hidden style={{ gridColumn: 1, gridRow: 1, visibility: "hidden", whiteSpace: "nowrap", pointerEvents: "none" }}>{widestLabel}</span>
+            <span style={{ gridColumn: 1, gridRow: 1, display: "block", width: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" }}>{label}</span>
+          </span>
+        )}
         <Icon d={Icons.chevD} size={11} />
       </button>
       {open && (
@@ -480,21 +510,70 @@ export function ProviderPicker({
               <div
                 className={`dropdown-item ${value === autoValue ? "selected" : ""}`}
                 onClick={() => { onChange(autoValue); setOpen(false); }}>
-                <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12 }}>{autoLabel}</span>
-                {value === autoValue && <Icon d={Icons.check} size={12} />}
+                {/* Reserve the same 6px status-dot slot the option
+                    rows use so the auto-row label aligns with them
+                    on the left. No dot rendered (no provider). No
+                    check mark either — the selected highlight is
+                    sufficient signal. */}
+                <span style={{ display: "inline-flex", width: 6, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12, textAlign: "left" }}>{autoLabel}</span>
               </div>
               {options.length > 0 && <div className="dropdown-divider" />}
             </>
           )}
-          {options.map(o => (
-            <div key={o.id}
-              className={`dropdown-item ${value === o.id ? "selected" : ""}`}
-              onClick={() => { onChange(o.id); setOpen(false); }}>
-              <span style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.name}</span>
-              {o.healthy && value !== o.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flexShrink: 0, display: "inline-block" }} />}
-              {value === o.id && <Icon d={Icons.check} size={12} />}
-            </div>
-          ))}
+          {options.map(o => {
+            const disabled = !!o.disabledReason;
+            // Key indicator only for cloud providers — local providers
+            // don't authenticate via keys, so no icon there.
+            const showKey = o.kind === "cloud" && o.configured !== undefined;
+            const keyColor = o.configured ? "var(--green)" : "var(--red)";
+            return (
+              <div
+                key={o.id}
+                className={`dropdown-item ${value === o.id ? "selected" : ""}`}
+                title={o.disabledReason}
+                style={disabled ? { cursor: "not-allowed" } : undefined}
+                onClick={() => {
+                  if (disabled) return;
+                  onChange(o.id);
+                  setOpen(false);
+                }}>
+                {/* Provider row order: status → name → key. Status
+                    leads (gateway-side reachability is the leftmost
+                    primary signal); key trails on the right. The dot
+                    renders even on the selected row — the row's
+                    selected highlight already conveys selection, so
+                    a separate check mark would just be noise. */}
+                <span style={{ display: "inline-flex", width: 6, justifyContent: "center", flexShrink: 0 }}>
+                  {o.healthy && (
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", display: "inline-block" }} />
+                  )}
+                </span>
+                {/* Only the name dims when disabled — the key icon
+                    keeps its red color, so the operator's eye lands
+                    on it as the reason for the disabled state. */}
+                <span
+                  style={{
+                    flex: 1,
+                    fontSize: 12,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "left",
+                    opacity: disabled ? 0.5 : 1,
+                  }}>
+                  {o.name}
+                </span>
+                {showKey && (
+                  <span
+                    aria-label={o.configured ? "credentials configured" : "credentials missing"}
+                    style={{ color: keyColor, display: "inline-flex", flexShrink: 0 }}>
+                    <Icon d={Icons.keys} size={11} />
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
