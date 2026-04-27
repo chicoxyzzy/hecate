@@ -300,3 +300,36 @@ describe("TaskDetail agent conversation viewer", () => {
     retryButtons.forEach(b => expect((b as HTMLButtonElement).disabled).toBe(true));
   });
 });
+
+describe("TaskDetail run cost badge", () => {
+  it("shows just this run's cost when there's no prior chain", () => {
+    const { render } = setup({
+      run: makeRun({ total_cost_micros_usd: 12_345 }),
+    });
+    render();
+    // 12_345 µUSD ≈ $0.012; toFixed(3) = $0.012
+    expect(screen.getByText(/\$0\.012/)).toBeTruthy();
+    // No "/ task" suffix when prior chain is empty.
+    expect(screen.queryByText(/task/)).toBeNull();
+  });
+
+  it("shows cumulative task cost when prior chain has spend", () => {
+    const { render } = setup({
+      run: makeRun({ total_cost_micros_usd: 250_000, prior_cost_micros_usd: 750_000 }),
+    });
+    render();
+    // This run = $0.250, total = $1.000, with " / $1.000 task" suffix.
+    expect(screen.getByText(/\$0\.250/)).toBeTruthy();
+    expect(screen.getByText(/\$1\.000 task/)).toBeTruthy();
+  });
+
+  it("hides the badge entirely when both costs are zero", () => {
+    const { render } = setup({
+      run: makeRun({ total_cost_micros_usd: 0, prior_cost_micros_usd: 0 }),
+    });
+    render();
+    // No "$" character anywhere from the badge — guards against an
+    // empty $0.000 stub being rendered as visual noise.
+    expect(screen.queryByText(/\$0\.000/)).toBeNull();
+  });
+});

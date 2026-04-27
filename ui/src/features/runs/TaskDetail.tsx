@@ -19,6 +19,46 @@ function taskBadgeStatus(status: string): string {
   return status;
 }
 
+// formatMicrosUSD renders a µUSD amount as a $-prefixed number.
+// Hecate stores LLM cost in millionths of a dollar (µUSD) for
+// integer math precision; the UI swaps to fractional dollars for
+// display. Three decimal places lets sub-cent amounts (common for a
+// few-token call) render meaningfully without exploding to scientific
+// notation.
+function formatMicrosUSD(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(3)}`;
+}
+
+// RunCostBadge shows this run's cost — and, when prior runs exist
+// in the resume chain, the task-cumulative figure too. Operators
+// scan it to spot runaway spend across a chain of resumes/retries.
+function RunCostBadge({ run }: { run: TaskRunRecord }) {
+  const total = run.total_cost_micros_usd ?? 0;
+  const prior = run.prior_cost_micros_usd ?? 0;
+  const cumulative = total + prior;
+  // Whole-task figure only adds value when prior > 0; otherwise
+  // it's identical to total and would just be visual noise.
+  const showCumulative = prior > 0;
+  const tooltip = showCumulative
+    ? `This run: ${formatMicrosUSD(total)} · Prior runs in resume chain: ${formatMicrosUSD(prior)} · Task total: ${formatMicrosUSD(cumulative)}`
+    : `LLM spend for this run: ${formatMicrosUSD(total)}`;
+  return (
+    <span
+      title={tooltip}
+      style={{
+        fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)",
+        background: "var(--bg2)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)", padding: "1px 6px",
+      }}
+    >
+      {formatMicrosUSD(total)}
+      {showCumulative && (
+        <span style={{ color: "var(--t3)" }}> / {formatMicrosUSD(cumulative)} task</span>
+      )}
+    </span>
+  );
+}
+
 function formatDuration(start?: string, end?: string): string {
   if (!start) return "";
   const startMs = new Date(start).getTime();
@@ -139,6 +179,9 @@ export function TaskDetail({
           </div>
         )}
         {run?.model && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)" }}>{run.model}</span>}
+        {run && (run.total_cost_micros_usd || run.prior_cost_micros_usd) ? (
+          <RunCostBadge run={run} />
+        ) : null}
         <div style={{ display: "flex", gap: 6 }}>
           {(run?.status === "queued" || run?.status === "running" || run?.status === "awaiting_approval") && (
             <button className="btn btn-danger btn-sm" disabled={busyAction === "cancel"} onClick={onCancelRun}>Cancel</button>

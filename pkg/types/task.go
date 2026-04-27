@@ -59,6 +59,14 @@ type TaskRun struct {
 	ApprovalCount      int
 	ArtifactCount      int
 	TotalCostMicrosUSD int64
+	// PriorCostMicrosUSD is the cumulative LLM spend of every prior
+	// run in this run's resume chain (excluding this run itself).
+	// Fresh runs are zero; resumed/retry-from-turn runs inherit the
+	// source's PriorCost + Total. The per-task cost ceiling check
+	// uses (PriorCost + this run's running spend) so a chain of
+	// resumes can't escape the ceiling — without this a $5 ceiling
+	// could be exceeded by the operator simply re-resuming N times.
+	PriorCostMicrosUSD int64
 	LastError          string
 	StartedAt          time.Time
 	FinishedAt         time.Time

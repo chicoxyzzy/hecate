@@ -179,6 +179,10 @@ type TaskRunItem struct {
 	ApprovalCount      int    `json:"approval_count,omitempty"`
 	ArtifactCount      int    `json:"artifact_count,omitempty"`
 	TotalCostMicrosUSD int64  `json:"total_cost_micros_usd,omitempty"`
+	// PriorCostMicrosUSD is the cumulative LLM spend of every prior
+	// run in this run's resume chain (zero for fresh runs). Add it
+	// to TotalCostMicrosUSD to get the task-level cumulative spend.
+	PriorCostMicrosUSD int64  `json:"prior_cost_micros_usd,omitempty"`
 	LastError          string `json:"last_error,omitempty"`
 	StartedAt          string `json:"started_at,omitempty"`
 	FinishedAt         string `json:"finished_at,omitempty"`

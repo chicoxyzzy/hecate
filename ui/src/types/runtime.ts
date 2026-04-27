@@ -612,6 +612,10 @@ export type TaskRunRecord = {
   approval_count?: number;
   artifact_count?: number;
   total_cost_micros_usd?: number;
+  // prior_cost_micros_usd is the cumulative LLM spend of earlier
+  // runs in this run's resume chain. Cumulative = total + prior;
+  // useful when a task has been resumed/retried multiple times.
+  prior_cost_micros_usd?: number;
   last_error?: string;
   started_at?: string;
   finished_at?: string;

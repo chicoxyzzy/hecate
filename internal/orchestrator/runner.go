@@ -504,6 +504,11 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 			run.WorkspacePath = prior.WorkspacePath
 			run.WorkspaceID = firstNonEmpty(prior.WorkspaceID, run.WorkspaceID)
 		}
+		// Inherit cumulative cost from the source run so the per-task
+		// cost ceiling holds across the entire resume chain. Source's
+		// PriorCost (chain so far excluding source) + Total (source's
+		// own spend) gives the new run its accurate prior accumulator.
+		run.PriorCostMicrosUSD = prior.PriorCostMicrosUSD + prior.TotalCostMicrosUSD
 	}
 	if strings.TrimSpace(run.WorkspacePath) == "" {
 		run.WorkspacePath, err = r.workspaces.Provision(ctx, task, run)
@@ -1129,6 +1134,23 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		persistedArtifacts = append(persistedArtifacts, artifact)
 	}
 
+	// Per-turn cost telemetry. The agent loop reports TurnCosts —
+	// one entry per LLM round-trip — and we emit a `agent.turn.completed`
+	// event for each. Operators replay these via the events feed to
+	// see how spend evolved across the run; the cumulative figure
+	// includes prior runs in the resume chain so a long chain shows
+	// total task spend, not just per-run.
+	for _, tc := range execution.TurnCosts {
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "agent.turn.completed", requestID, trace.TraceID, map[string]any{
+			"turn":                            tc.Turn,
+			"step_id":                         tc.StepID,
+			"cost_micros_usd":                 tc.CostMicrosUSD,
+			"run_cumulative_cost_micros_usd":  tc.CumulativeMicrosUSD,
+			"task_cumulative_cost_micros_usd": run.PriorCostMicrosUSD + tc.CumulativeMicrosUSD,
+			"tool_call_count":                 tc.ToolCallCount,
+		})
+	}
+
 	// Persist mid-loop approvals the executor emitted (agent_loop
 	// pauses on gated tool calls). The runner owns the store
 	// touch-points, so executors return the approvals via
@@ -1360,11 +1382,23 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 		}
 		for _, art := range ownArtifacts {
 			if art.Kind == "agent_conversation" && len(art.ContentText) > 0 {
-				return &ResumeCheckpoint{
+				cp := &ResumeCheckpoint{
 					SourceRunID:       runID,
 					Reason:            "approved_mid_loop",
 					AgentConversation: []byte(art.ContentText),
-				}, nil
+				}
+				// Same-run mid-approval resume: surface BOTH the
+				// chain-prior cost (so the ceiling holds across the
+				// task lifecycle) AND this run's pre-pause spend
+				// (so the loop seeds costSpent with it instead of
+				// resetting to 0). Without ThisRunCostMicrosUSD the
+				// pre-pause LLM spend would be lost when the runner
+				// overwrites Total on finalization.
+				if currentRun, found, err := r.store.GetRun(ctx, taskID, runID); err == nil && found {
+					cp.PriorCostMicrosUSD = currentRun.PriorCostMicrosUSD
+					cp.ThisRunCostMicrosUSD = currentRun.TotalCostMicrosUSD
+				}
+				return cp, nil
 			}
 		}
 		return nil, nil
@@ -1387,6 +1421,17 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 		LastStepIndex: 0,
 		ArtifactCount: len(artifacts),
 		RetryFromTurn: retryFromTurn,
+	}
+	// Surface the new run's PriorCostMicrosUSD so the agent loop can
+	// apply the per-task cost ceiling against the cumulative spend
+	// across the entire resume chain. We populated this on the run
+	// at create time (startTaskWithOptions) by summing the source's
+	// prior + total. Re-reading from the store here keeps that
+	// value the single source of truth. ThisRunCostMicrosUSD is
+	// always 0 for a cross-run resume (the new run hasn't run yet).
+	if currentRun, found, lookupErr := r.store.GetRun(ctx, taskID, runID); lookupErr == nil && found {
+		checkpoint.PriorCostMicrosUSD = currentRun.PriorCostMicrosUSD
+		checkpoint.ThisRunCostMicrosUSD = currentRun.TotalCostMicrosUSD
 	}
 	// Pull the agent-conversation artifact (if any) so the agent loop
 	// can hydrate state on resume. We use a stable kind + ID

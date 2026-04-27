@@ -1205,6 +1205,141 @@ func TestAgentLoop_NoCeilingMeansUnlimited(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_TurnCostRecords_CapturedPerTurn(t *testing.T) {
+	// Per-turn cost telemetry: the loop must surface a TurnCostRecord
+	// for each LLM round-trip, including the assistant step ID and
+	// the running cumulative for this run. The runner consumes these
+	// to emit `agent.turn.completed` events.
+	respWithCost := func(content string, cost int64, calls ...types.ToolCall) *types.ChatResponse {
+		msg := makeAssistantMsg(content, calls...)
+		r := makeChatResp(msg)
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("", 100, types.ToolCall{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}),
+			respWithCost("done", 250),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	res, err := loop.Execute(context.Background(), newAgentLoopSpec(t))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(res.TurnCosts) != 2 {
+		t.Fatalf("TurnCosts = %d, want 2 (one per LLM call)", len(res.TurnCosts))
+	}
+	if res.TurnCosts[0].Turn != 1 || res.TurnCosts[0].CostMicrosUSD != 100 || res.TurnCosts[0].CumulativeMicrosUSD != 100 {
+		t.Errorf("TurnCosts[0] = %+v, want {Turn:1 Cost:100 Cumulative:100}", res.TurnCosts[0])
+	}
+	if res.TurnCosts[0].ToolCallCount != 1 {
+		t.Errorf("TurnCosts[0].ToolCallCount = %d, want 1", res.TurnCosts[0].ToolCallCount)
+	}
+	if res.TurnCosts[1].Turn != 2 || res.TurnCosts[1].CostMicrosUSD != 250 || res.TurnCosts[1].CumulativeMicrosUSD != 350 {
+		t.Errorf("TurnCosts[1] = %+v, want {Turn:2 Cost:250 Cumulative:350}", res.TurnCosts[1])
+	}
+	// StepID on each entry should match the corresponding thinking
+	// step so consumers can join the cost back to the assistant turn.
+	if res.TurnCosts[0].StepID == "" || res.TurnCosts[1].StepID == "" {
+		t.Errorf("TurnCosts entries missing StepID: %+v", res.TurnCosts)
+	}
+}
+
+func TestAgentLoop_CumulativeCeilingAppliesPriorChainCost(t *testing.T) {
+	// Cumulative ceiling: a fresh run's spend looks small in
+	// isolation but, when combined with prior runs in the resume
+	// chain (PriorCostMicrosUSD), can already exceed the ceiling.
+	// The loop must bail at the first turn that crosses the cap,
+	// not run unbounded.
+	respWithCost := func(content string, cost int64, calls ...types.ToolCall) *types.ChatResponse {
+		r := makeChatResp(makeAssistantMsg(content, calls...))
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("", 200, types.ToolCall{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}),
+			respWithCost("would-have-answered", 0),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.Task.BudgetMicrosUSD = 500
+	// Prior chain already spent 400 µUSD. This run can spend at most
+	// 100 before hitting the ceiling. Turn 1 spends 200 — so the
+	// ceiling fires after turn 1.
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:        "run-prev",
+		PriorCostMicrosUSD: 400,
+	}
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "failed" {
+		t.Errorf("Status = %q, want failed (cumulative ceiling)", res.Status)
+	}
+	if !strings.Contains(res.LastError, "ceiling") {
+		t.Errorf("LastError = %q, want mention of ceiling", res.LastError)
+	}
+	if res.CostMicrosUSD != 200 {
+		t.Errorf("CostMicrosUSD = %d, want 200 (this run only)", res.CostMicrosUSD)
+	}
+	// LLM call 1 happened; call 2 did not — ceiling check is between turns.
+	if got := llm.calls.Load(); got != 1 {
+		t.Errorf("LLM calls = %d, want 1 (bail before turn 2)", got)
+	}
+}
+
+func TestAgentLoop_SameRunResumeSeedsCostSpentFromPrePauseTotal(t *testing.T) {
+	// Same-run mid-approval resume: the run paused with
+	// TotalCostMicrosUSD=X. On resume we don't get a fresh cost
+	// counter — costSpent must seed from X so the persisted total
+	// after this resume reflects the entire run's spend, not just
+	// the post-resume turns.
+	saved := []types.Message{
+		{Role: "user", Content: "do work"},
+		// Pretend turn 1 happened pre-pause and incurred cost X.
+		// The conversation tail is an assistant msg with tool_calls
+		// that triggers the resume-after-approval dispatch path.
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}}},
+	}
+	savedJSON, _ := json.Marshal(saved)
+
+	respWithCost := func(content string, cost int64) *types.ChatResponse {
+		r := makeChatResp(makeAssistantMsg(content))
+		r.Cost.TotalMicrosUSD = cost
+		return r
+	}
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			respWithCost("done", 50),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{result: &ExecutionResult{Status: "completed"}}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:          spec.Run.ID,
+		Reason:               "approved_mid_loop",
+		AgentConversation:    savedJSON,
+		ThisRunCostMicrosUSD: 100, // pre-pause spend on THIS run
+	}
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Errorf("Status = %q, want completed", res.Status)
+	}
+	// Pre-pause 100 + post-resume 50 = 150. Without seeding,
+	// CostMicrosUSD would be just 50 and the runner would lose the
+	// pre-pause portion when overwriting Total.
+	if res.CostMicrosUSD != 150 {
+		t.Errorf("CostMicrosUSD = %d, want 150 (100 pre-pause + 50 post-resume)", res.CostMicrosUSD)
+	}
+}
+
 func TestAgentLoop_HTTPRequest_HappyPath(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("hello from upstream"))

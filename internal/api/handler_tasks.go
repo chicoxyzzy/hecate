@@ -1299,6 +1299,7 @@ func renderTaskRun(run types.TaskRun) TaskRunItem {
 		ApprovalCount:      run.ApprovalCount,
 		ArtifactCount:      run.ArtifactCount,
 		TotalCostMicrosUSD: run.TotalCostMicrosUSD,
+		PriorCostMicrosUSD: run.PriorCostMicrosUSD,
 		LastError:          run.LastError,
 		RequestID:          run.RequestID,
 		TraceID:            run.TraceID,

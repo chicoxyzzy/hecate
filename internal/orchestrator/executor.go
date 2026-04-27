@@ -61,6 +61,23 @@ type ResumeCheckpoint struct {
 	// LastStepIndex/LastCompletedStepID for retry-from-turn so the new
 	// run's step indices start at 1 rather than continuing the source's.
 	RetryFromTurn int
+	// PriorCostMicrosUSD is the cumulative LLM spend of every prior
+	// run in the resume chain. Fresh runs see zero; resumed runs see
+	// source.PriorCostMicrosUSD + source.TotalCostMicrosUSD. The agent
+	// loop applies the per-task cost ceiling against
+	// (PriorCostMicrosUSD + this run's spend) so the ceiling holds
+	// across the full chain — without it, repeatedly resuming a run
+	// would silently bypass the ceiling.
+	PriorCostMicrosUSD int64
+	// ThisRunCostMicrosUSD is the cost already attributed to the
+	// current run (run.TotalCostMicrosUSD at claim time). Cross-run
+	// resumes see zero — the new run hasn't spent anything yet.
+	// Same-run mid-approval resumes see the pre-pause spend, which
+	// the agent loop seeds into costSpent so the ceiling check and
+	// the persisted run.TotalCostMicrosUSD both account for it
+	// rather than losing the pre-pause portion when the runner
+	// overwrites Total on finalization.
+	ThisRunCostMicrosUSD int64
 }
 
 type ExecutionResult struct {
@@ -84,6 +101,30 @@ type ExecutionResult struct {
 	// TaskRun.TotalCostMicrosUSD. Other executors don't make LLM
 	// calls and leave this zero.
 	CostMicrosUSD int64
+	// TurnCosts is the per-turn LLM-spend breakdown the agent loop
+	// produced. Each entry pairs a turn number with the LLM cost for
+	// that turn, the cumulative spend through it (this run only —
+	// PriorCostMicrosUSD is added by the runner before emitting the
+	// event), the assistant step ID, and the tool-call count. The
+	// runner emits one `agent.turn.completed` event per entry so
+	// operators can replay cost evolution from the events feed.
+	TurnCosts []TurnCostRecord
+}
+
+// TurnCostRecord captures a single agent_loop turn's LLM-cost
+// telemetry. Built by the agent loop after each turn's LLM
+// round-trip; the runner consumes the slice on result and emits one
+// event per entry.
+type TurnCostRecord struct {
+	Turn          int
+	StepID        string
+	CostMicrosUSD int64
+	// CumulativeMicrosUSD is the running spend through this turn,
+	// counting only this run's turns. The runner adds the source
+	// chain's PriorCostMicrosUSD before persisting, giving operators
+	// a "spend so far including prior resumes" figure in the event.
+	CumulativeMicrosUSD int64
+	ToolCallCount       int
 }
 
 type StubExecutor struct{}

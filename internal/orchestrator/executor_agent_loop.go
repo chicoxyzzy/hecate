@@ -190,14 +190,25 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 	}
 
 	// Per-task cost ceiling. spec.Task.BudgetMicrosUSD acts as a hard
-	// cap on the cumulative LLM spend for this run. Zero/negative
-	// disables the cap. We accumulate ChatResponse.Cost.TotalMicrosUSD
-	// after each turn and bail when it crosses the ceiling — the
-	// agent's last response is preserved, but no further turns happen.
-	// This is a per-run ceiling: a resumed run gets its own budget,
-	// not the remainder. Document this when we ship.
+	// cap on the cumulative LLM spend for this *task* (across the
+	// entire resume chain), not just this run. Zero/negative disables
+	// the cap. We accumulate ChatResponse.Cost.TotalMicrosUSD after
+	// each turn and bail when (priorCost + costSpent) crosses the
+	// ceiling. Without priorCost the operator could escape the
+	// ceiling by repeatedly resuming a maxed-out run; including it
+	// here keeps the ceiling meaningful across the chain.
 	costCeiling := spec.Task.BudgetMicrosUSD
 	costSpent := int64(0)
+	priorCost := int64(0)
+	if spec.ResumeCheckpoint != nil {
+		priorCost = spec.ResumeCheckpoint.PriorCostMicrosUSD
+		// Same-run mid-approval resume: seed costSpent with the
+		// pre-pause spend so ceiling checks and the persisted Total
+		// account for it. Cross-run resumes see zero here (new run
+		// hasn't spent anything yet).
+		costSpent = spec.ResumeCheckpoint.ThisRunCostMicrosUSD
+	}
+	turnCosts := make([]TurnCostRecord, 0, e.maxTurns)
 
 	// Resume detection: if the conversation tail is an assistant
 	// message with tool_calls and no following tool messages, we're
@@ -214,6 +225,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			finalResult.Steps = allSteps
 			finalResult.Artifacts = allArtifacts
 			finalResult.CostMicrosUSD = costSpent
+			finalResult.TurnCosts = turnCosts
 			return finalResult, nil
 		}
 
@@ -251,6 +263,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 					fmt.Sprintf("LLM call failed on turn %d: %v", turn, err))
 				if failed != nil {
 					failed.CostMicrosUSD = costSpent
+					failed.TurnCosts = turnCosts
 				}
 				return failed, ferr
 			}
@@ -259,6 +272,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 					fmt.Sprintf("LLM returned empty response on turn %d", turn))
 				if failed != nil {
 					failed.CostMicrosUSD = costSpent
+					failed.TurnCosts = turnCosts
 				}
 				return failed, ferr
 			}
@@ -269,7 +283,8 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			// per-run cost telemetry. CachedInputMicrosUSD is folded
 			// into TotalMicrosUSD upstream (see CostBreakdown), so
 			// using Total directly accounts correctly for cache hits.
-			costSpent += resp.Cost.TotalMicrosUSD
+			turnCost := resp.Cost.TotalMicrosUSD
+			costSpent += turnCost
 			assistantMsg = resp.Choices[0].Message
 
 			// 2. Record this turn's "thinking" step — captures the
@@ -280,6 +295,18 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 				return nil, err
 			}
 			allSteps = append(allSteps, thinkingStep)
+
+			// Per-turn cost record. We surface this on ExecutionResult
+			// so the runner can emit one `agent.turn.completed` event
+			// per turn for replay/operator UIs. CumulativeMicrosUSD is
+			// this-run-only; the runner adds priorCost when emitting.
+			turnCosts = append(turnCosts, TurnCostRecord{
+				Turn:                turn,
+				StepID:              thinkingStep.ID,
+				CostMicrosUSD:       turnCost,
+				CumulativeMicrosUSD: costSpent,
+				ToolCallCount:       len(assistantMsg.ToolCalls),
+			})
 
 			// 3. Append the assistant message to the running conversation.
 			messages = append(messages, assistantMsg)
@@ -302,6 +329,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 				finalResult.Artifacts = allArtifacts
 				finalResult.OtelStatusCode = "ok"
 				finalResult.CostMicrosUSD = costSpent
+				finalResult.TurnCosts = turnCosts
 				return finalResult, nil
 			}
 
@@ -329,6 +357,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 					PendingApprovals: []types.TaskApproval{approval},
 					OtelStatusCode:   "ok",
 					CostMicrosUSD:    costSpent,
+					TurnCosts:        turnCosts,
 				}, nil
 			}
 		}
@@ -368,11 +397,13 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		// Per-task cost ceiling check. We do this AFTER the turn is
 		// fully recorded (assistant message + tool results in the
 		// conversation snapshot) so the operator sees what was paid
-		// for. Crossing the ceiling marks the run failed with an
+		// for. The ceiling is task-cumulative — priorCost (spend in
+		// earlier runs of the resume chain) plus costSpent (this
+		// run). Crossing the ceiling marks the run failed with an
 		// actionable error; future turns don't fire. Operators can
 		// raise the ceiling and resume to continue.
-		if costCeiling > 0 && costSpent >= costCeiling {
-			msg := fmt.Sprintf("agent loop hit per-task cost ceiling: spent %d µUSD, ceiling %d µUSD", costSpent, costCeiling)
+		if costCeiling > 0 && (priorCost+costSpent) >= costCeiling {
+			msg := fmt.Sprintf("agent loop hit per-task cost ceiling: spent %d µUSD this run + %d µUSD prior = %d µUSD, ceiling %d µUSD", costSpent, priorCost, priorCost+costSpent, costCeiling)
 			finalResult.Status = "failed"
 			finalResult.LastError = msg
 			finalResult.OtelStatusCode = "error"
@@ -380,6 +411,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			finalResult.Steps = allSteps
 			finalResult.Artifacts = allArtifacts
 			finalResult.CostMicrosUSD = costSpent
+			finalResult.TurnCosts = turnCosts
 			return finalResult, nil
 		}
 	}
@@ -393,6 +425,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 	finalResult.Steps = allSteps
 	finalResult.Artifacts = allArtifacts
 	finalResult.CostMicrosUSD = costSpent
+	finalResult.TurnCosts = turnCosts
 	return finalResult, nil
 }
 
