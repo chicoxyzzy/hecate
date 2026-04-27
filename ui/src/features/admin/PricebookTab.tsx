@@ -3,6 +3,7 @@ import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type {
   ConfiguredPricebookRecord,
   PricebookImportDiff,
+  PricebookImportFailureRecord,
 } from "../../types/runtime";
 import { Badge, ConfirmModal, Icon, Icons, InlineError, Modal, ProviderPicker } from "../shared/ui";
 import type { ProviderOption } from "../shared/ui";
@@ -80,6 +81,38 @@ export function describeUpdatedDetail(prev: ConfiguredPricebookRecord, next: Con
 
 function pricebookKey(provider: string, model: string): string {
   return `${provider}/${model}`;
+}
+
+// formatRelativeTime renders an RFC3339 timestamp as a coarse relative
+// hint ("2m ago", "3h ago", "yesterday", "5d ago"). The consent dialog
+// uses this to tell the operator how stale the proposal set is at a
+// glance — exact timestamps go in the title attribute for hover.
+//
+// Exported so unit tests can pin down the boundary cases.
+export function formatRelativeTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diffSec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86_400) return `${Math.floor(diffSec / 3600)}h ago`;
+  if (diffSec < 86_400 * 2) return "yesterday";
+  return `${Math.floor(diffSec / 86_400)}d ago`;
+}
+
+// formatAbsoluteTime renders an RFC3339 timestamp as a short local
+// time string suitable for inline display. Used alongside the relative
+// hint so the operator can see both the "how long ago" and the exact
+// wall-clock time without hovering.
+//
+// Exported alongside formatRelativeTime for symmetry.
+export function formatAbsoluteTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toLocaleString(undefined, {
+    month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
 }
 
 // UnifiedRow is the central data structure: every row in the table is
@@ -417,12 +450,22 @@ export function PricebookTab({ state, actions }: Props) {
           aria-label="Search models"
           style={{ flex: 1, minWidth: 160, maxWidth: 280 }}
         />
+        {/* Fetched-at hint sits just before the Import all button so
+            the operator can see at a glance how stale the proposal
+            set is. Hover for the exact timestamp. */}
+        {litellmDiff?.fetched_at && (
+          <span
+            title={`Fetched at ${litellmDiff.fetched_at}`}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", marginLeft: "auto", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            fetched {formatRelativeTime(litellmDiff.fetched_at)}
+          </span>
+        )}
         <button
           className="btn btn-primary btn-sm"
           // Fixed width matches the per-row Apply button so the
           // "Import all" stack at the right edge reads as one column
           // of buttons, not a ragged set of differently-sized chips.
-          style={{ marginLeft: "auto", width: 130, justifyContent: "center" }}
+          style={{ marginLeft: litellmDiff?.fetched_at ? 0 : "auto", width: 130, justifyContent: "center" }}
           disabled={!litellmDiff || bulkImportable === 0}
           title={
             !litellmDiff ? "Loading LiteLLM data…" :
@@ -556,8 +599,15 @@ export function PricebookTab({ state, actions }: Props) {
           providerName={providerName}
           onClose={() => setConsentOpen(false)}
           onConfirm={async keys => {
-            await actions.applyPricebookImport(keys);
-            setConsentOpen(false);
+            // applyPricebookImport returns the diff — including any
+            // per-row failures. If everything landed cleanly we close
+            // the dialog; if anything failed, hand the failures back
+            // so the dialog can render them inline and stay open.
+            const result = await actions.applyPricebookImport(keys);
+            if (!result.failed || result.failed.length === 0) {
+              setConsentOpen(false);
+            }
+            return result;
           }}
         />
       )}
@@ -884,7 +934,10 @@ function PricebookImportConsent({
   // labels the main table uses (Anthropic, OpenAI, …).
   providerName: (id: string) => string;
   onClose: () => void;
-  onConfirm: (keys: string[]) => Promise<void>;
+  // onConfirm returns the apply result so the dialog can read
+  // `result.failed` and surface per-row failures inline. Returning
+  // void would hide partial-success outcomes from the operator.
+  onConfirm: (keys: string[]) => Promise<PricebookImportDiff>;
 }) {
   // Set of (provider, model) keys present in the table — the universe
   // of changes the operator can consent to. Built once on dialog open.
@@ -936,6 +989,10 @@ function PricebookImportConsent({
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // Per-row failures from the most recent apply attempt. The dialog
+  // stays open while this is non-empty so the operator can see what
+  // didn't land — closing too eagerly hid the failure detail.
+  const [failed, setFailed] = useState<PricebookImportFailureRecord[]>([]);
 
   function toggle(key: string) {
     setSelected(prev => {
@@ -954,8 +1011,18 @@ function PricebookImportConsent({
     if (selected.size === 0) return;
     setSubmitting(true);
     setError("");
+    setFailed([]);
     try {
-      await onConfirm([...selected]);
+      const result = await onConfirm([...selected]);
+      // Per-row failures: keep the dialog open so the operator can
+      // see exactly which rows didn't land. Successful rows have
+      // already been removed from state.adminConfig.pricebook by the
+      // parent's loadDashboard call, so the next render of `changes`
+      // will only show remaining work — including the failed ones,
+      // which the operator can re-attempt or uncheck.
+      if (result.failed && result.failed.length > 0) {
+        setFailed(result.failed);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply import.");
     } finally {
@@ -996,6 +1063,35 @@ function PricebookImportConsent({
         </div>
       ) : (
         <>
+          {/* Provenance — when this proposal set was fetched from the
+              upstream catalog. Helps the operator decide whether the
+              data is stale (e.g. open a new dialog after a long pause). */}
+          {diff.fetched_at && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Fetched {formatRelativeTime(diff.fetched_at)} · <span title={diff.fetched_at}>{formatAbsoluteTime(diff.fetched_at)}</span>
+            </div>
+          )}
+
+          {/* Per-row failures from the most recent apply attempt. The
+              dialog stays open while these are present so the operator
+              can re-try or uncheck the rows that didn't land. */}
+          {failed.length > 0 && (
+            <div style={{ marginBottom: 12, padding: "10px 12px", background: "var(--red-bg)", border: "1px solid var(--red-border)", borderRadius: "var(--radius-sm)" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--red)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+                {failed.length} failed
+              </div>
+              {failed.map((f, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "3px 0", fontSize: 11, color: "var(--t1)" }}>
+                  <code style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", flexShrink: 0 }}>
+                    {f.entry.provider}/{f.entry.model}
+                  </code>
+                  <span style={{ color: "var(--t3)" }}>—</span>
+                  <span style={{ color: "var(--red)" }}>{f.error}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Summary chip strip — at-a-glance counts in the same
               chip-of-numbers style as the status tabs. Replaces a
               wordy lead paragraph; the section bodies tell the story

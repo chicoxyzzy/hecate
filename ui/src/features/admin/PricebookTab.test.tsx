@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   PricebookTab,
@@ -8,6 +8,8 @@ import {
   dollarsToMicros,
   describeAddedDetail,
   describeUpdatedDetail,
+  formatRelativeTime,
+  formatAbsoluteTime,
 } from "./PricebookTab";
 import type {
   ConfiguredPricebookRecord,
@@ -146,6 +148,81 @@ describe("PricebookTab helpers", () => {
       cached_input_micros_usd_per_million_tokens: 1_250_000,
     };
     expect(describeUpdatedDetail(prev, next)).toBe("in $2.500 → $2.000  cache — → $1.250");
+  });
+});
+
+// ─── Time formatters ─────────────────────────────────────────────────────────
+
+describe("formatRelativeTime", () => {
+  // Pin the wall clock so the boundaries are deterministic. Each case
+  // computes its iso input from "now − Δ" so the assertion text reads
+  // independently of when the test actually runs.
+  const NOW = Date.parse("2026-04-27T12:00:00Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function ago(seconds: number): string {
+    return new Date(NOW - seconds * 1000).toISOString();
+  }
+
+  it("returns 'just now' for sub-minute distances", () => {
+    expect(formatRelativeTime(ago(0))).toBe("just now");
+    expect(formatRelativeTime(ago(30))).toBe("just now");
+    expect(formatRelativeTime(ago(59))).toBe("just now");
+  });
+
+  it("returns minutes for sub-hour distances", () => {
+    expect(formatRelativeTime(ago(60))).toBe("1m ago");
+    expect(formatRelativeTime(ago(120))).toBe("2m ago");
+    expect(formatRelativeTime(ago(3599))).toBe("59m ago");
+  });
+
+  it("returns hours for sub-day distances", () => {
+    expect(formatRelativeTime(ago(3600))).toBe("1h ago");
+    expect(formatRelativeTime(ago(2 * 3600))).toBe("2h ago");
+    expect(formatRelativeTime(ago(24 * 3600 - 1))).toBe("23h ago");
+  });
+
+  it("returns 'yesterday' for the day-1 bucket", () => {
+    expect(formatRelativeTime(ago(24 * 3600))).toBe("yesterday");
+    expect(formatRelativeTime(ago(36 * 3600))).toBe("yesterday");
+    expect(formatRelativeTime(ago(2 * 24 * 3600 - 1))).toBe("yesterday");
+  });
+
+  it("returns days for older distances", () => {
+    expect(formatRelativeTime(ago(2 * 24 * 3600))).toBe("2d ago");
+    expect(formatRelativeTime(ago(7 * 24 * 3600))).toBe("7d ago");
+  });
+
+  it("clamps future timestamps to 'just now' rather than emitting a negative", () => {
+    // Defensive: clock skew between gateway and browser can yield a
+    // fetched_at slightly in the future. We don't want "-3m ago".
+    expect(formatRelativeTime(new Date(NOW + 5 * 1000).toISOString())).toBe("just now");
+  });
+
+  it("returns empty string on unparseable input", () => {
+    expect(formatRelativeTime("")).toBe("");
+    expect(formatRelativeTime("not-a-date")).toBe("");
+  });
+});
+
+describe("formatAbsoluteTime", () => {
+  it("formats a valid timestamp as a short local string", () => {
+    const out = formatAbsoluteTime("2026-04-27T12:00:00Z");
+    // Output is locale-dependent; assert it contains the month
+    // abbreviation and the day number rather than an exact match.
+    expect(out).toMatch(/Apr/);
+    expect(out).toMatch(/27/);
+  });
+
+  it("returns the input string unchanged on unparseable input", () => {
+    expect(formatAbsoluteTime("not-a-date")).toBe("not-a-date");
   });
 });
 
@@ -685,6 +762,121 @@ describe("PricebookTab Import all → consent SlideOver", () => {
     await user.click(within(dialog).getByRole("checkbox", { name: "gpt-4o-mini" }));
     await user.click(within(dialog).getByRole("button", { name: /Apply 1 change/i }));
     expect(applyPricebookImport).toHaveBeenCalledWith(["anthropic/claude-opus-4-7"]);
+  });
+
+  it("renders per-row failures and keeps the dialog open when apply returns failed entries", async () => {
+    // Apply returns a partial-success diff: one row succeeded, one
+    // failed with a normalize error. The dialog should NOT auto-close
+    // and should surface the failure with provider/model + reason.
+    const failedRow: ConfiguredPricebookRecord = {
+      provider: "anthropic", model: "claude-bad",
+      input_micros_usd_per_million_tokens: 100_000,
+      output_micros_usd_per_million_tokens: 200_000,
+      cached_input_micros_usd_per_million_tokens: 0,
+      source: "imported",
+    };
+    const partialResult: PricebookImportDiff = {
+      fetched_at: "2026", unchanged: 0,
+      applied: [sampleAdded],
+      failed: [{ entry: failedRow, error: "pricebook values must be zero or greater" }],
+    };
+    const applyPricebookImport = vi.fn(async () => partialResult);
+    const { state, actions, user } = setupForConsent({
+      models: [
+        { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } },
+        { id: "claude-bad", owned_by: "anthropic", metadata: { provider: "anthropic", provider_kind: "cloud", default: false } },
+      ],
+      diff: { fetched_at: "2026", added: [sampleAdded, failedRow], updated: [], skipped: [], unchanged: 0 },
+      applyPricebookImport,
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Update pricebook/i });
+
+    await user.click(within(dialog).getByRole("button", { name: /Apply 2 changes/i }));
+
+    // Dialog stays open with failure surface.
+    expect(await within(dialog).findByText(/1 failed/i)).toBeTruthy();
+    expect(within(dialog).getByText("anthropic/claude-bad")).toBeTruthy();
+    expect(within(dialog).getByText(/pricebook values must be zero or greater/i)).toBeTruthy();
+    // Dialog itself should still be in the DOM.
+    expect(screen.queryByRole("dialog", { name: /Update pricebook/i })).toBeTruthy();
+  });
+
+  it("displays the fetched_at timestamp in the consent dialog", async () => {
+    // Anything in the recent past renders as "Xm ago" (or "just now")
+    // — assert the leading "Fetched" label so we don't couple to the
+    // exact relative output, which depends on test wall clock.
+    const fetchedAt = new Date(Date.now() - 60_000).toISOString();
+    const { state, actions, user } = setupForConsent({
+      models: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } }],
+      diff: { fetched_at: fetchedAt, added: [sampleAdded], updated: [], skipped: [], unchanged: 0 },
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Update pricebook/i });
+    expect(within(dialog).getByText(/Fetched .* ago/i)).toBeTruthy();
+  });
+
+  it("shows fetched-at hint in the filter row alongside Import all", async () => {
+    // The compact "fetched X ago" chip lives in the filter bar, not
+    // the dialog — operator can see freshness at a glance without
+    // opening anything. Hovering reveals the absolute timestamp.
+    const fetchedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const { state, actions } = setupForConsent({
+      models: [{ id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } }],
+      diff: { fetched_at: fetchedAt, added: [sampleAdded], updated: [], skipped: [], unchanged: 0 },
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    // The diff is fetched async on mount → wait for the chip to land.
+    expect(await screen.findByText(/^fetched/i)).toBeTruthy();
+    // Title attribute carries the exact RFC3339 stamp for hover.
+    const chip = await screen.findByText(/^fetched/i);
+    expect(chip.getAttribute("title")).toContain("Fetched at");
+    expect(chip.getAttribute("title")).toContain(fetchedAt);
+  });
+
+  it("keeps the dialog open with full failure list when every row failed", async () => {
+    // All-failed branch: applied is empty, failed has every row. The
+    // dialog should not close, and the partial-success chip should
+    // show every row in the failure block.
+    const failA: ConfiguredPricebookRecord = {
+      provider: "openai", model: "bad-1",
+      input_micros_usd_per_million_tokens: 100,
+      output_micros_usd_per_million_tokens: 200,
+      cached_input_micros_usd_per_million_tokens: 0,
+      source: "imported",
+    };
+    const failB: ConfiguredPricebookRecord = { ...failA, model: "bad-2" };
+    const allFailed: PricebookImportDiff = {
+      fetched_at: "2026", unchanged: 0,
+      applied: [],
+      failed: [
+        { entry: failA, error: "boom A" },
+        { entry: failB, error: "boom B" },
+      ],
+    };
+    const applyPricebookImport = vi.fn(async () => allFailed);
+    const { state, actions, user } = setupForConsent({
+      models: [
+        { id: "bad-1", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: false } },
+        { id: "bad-2", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: false } },
+      ],
+      diff: { fetched_at: "2026", added: [failA, failB], updated: [], skipped: [], unchanged: 0 },
+      applyPricebookImport,
+    });
+    render(<PricebookTab state={state} actions={actions} />);
+    await user.click(await screen.findByRole("button", { name: /Import all/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Update pricebook/i });
+    await user.click(within(dialog).getByRole("button", { name: /Apply 2 changes/i }));
+
+    expect(await within(dialog).findByText(/2 failed/i)).toBeTruthy();
+    expect(within(dialog).getByText("openai/bad-1")).toBeTruthy();
+    expect(within(dialog).getByText("openai/bad-2")).toBeTruthy();
+    expect(within(dialog).getByText(/boom A/)).toBeTruthy();
+    expect(within(dialog).getByText(/boom B/)).toBeTruthy();
+    // Dialog still open.
+    expect(screen.queryByRole("dialog", { name: /Update pricebook/i })).toBeTruthy();
   });
 
   it("'select all' / 'deselect all' header toggle flips every row at once", async () => {

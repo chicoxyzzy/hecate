@@ -54,7 +54,7 @@ test("selecting a model closes the picker and updates the button label", async (
 
 test("provider picker shows healthy providers", async ({ page }) => {
   const healthyProviders = MOCK_PROVIDERS.filter(p => p.healthy);
-  const providerBtn = page.locator("button", { hasText: /any provider/i });
+  const providerBtn = page.locator("button", { hasText: /all providers/i });
   await providerBtn.click();
 
   const menu = page.locator(".dropdown-menu").first();
@@ -65,7 +65,7 @@ test("provider picker shows healthy providers", async ({ page }) => {
 
 test("provider picker does not show unhealthy providers", async ({ page }) => {
   const unhealthyProviders = MOCK_PROVIDERS.filter(p => !p.healthy);
-  const providerBtn = page.locator("button", { hasText: /any provider/i });
+  const providerBtn = page.locator("button", { hasText: /all providers/i });
   await providerBtn.click();
 
   const menu = page.locator(".dropdown-menu").first();

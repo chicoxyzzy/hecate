@@ -534,9 +534,22 @@ type PricebookImportUpdateRecord struct {
 	Previous ControlPlanePricebookRecord `json:"previous"`
 }
 
+// PricebookImportFailureRecord pairs an entry the apply endpoint tried
+// to persist with the storage error it hit. The apply loop is best-
+// effort: a failure on one row doesn't stop the others, so a single
+// 4xx with no per-row reporting would leave the operator unable to
+// tell what landed and what didn't. Each failure carries the
+// ControlPlanePricebookRecord we attempted to write plus the raw error
+// message — the UI can show them as a follow-up in the consent dialog.
+type PricebookImportFailureRecord struct {
+	Entry ControlPlanePricebookRecord `json:"entry"`
+	Error string                      `json:"error"`
+}
+
 // PricebookImportDiff is the response payload for both the preview and apply
 // endpoints. On preview, `Added`, `Updated`, and `Skipped` are populated; on
-// apply, the rows that were persisted move into `Applied`.
+// apply, the rows that were persisted move into `Applied` and rows that hit
+// a storage error during the loop move into `Failed`.
 //
 // `Skipped` lists currently-manual rows where LiteLLM has a *different* price.
 // We never touch them in a blanket apply (manual is operator-protected), but
@@ -546,12 +559,13 @@ type PricebookImportUpdateRecord struct {
 // (`Entry`) with the current manual row (`Previous`), the same shape as
 // `Updated`, so the UI can render a price diff identically.
 type PricebookImportDiff struct {
-	FetchedAt string                        `json:"fetched_at"`
-	Added     []ControlPlanePricebookRecord `json:"added,omitempty"`
-	Updated   []PricebookImportUpdateRecord `json:"updated,omitempty"`
-	Applied   []ControlPlanePricebookRecord `json:"applied,omitempty"`
-	Unchanged int                           `json:"unchanged"`
-	Skipped   []PricebookImportUpdateRecord `json:"skipped,omitempty"`
+	FetchedAt string                         `json:"fetched_at"`
+	Added     []ControlPlanePricebookRecord  `json:"added,omitempty"`
+	Updated   []PricebookImportUpdateRecord  `json:"updated,omitempty"`
+	Applied   []ControlPlanePricebookRecord  `json:"applied,omitempty"`
+	Failed    []PricebookImportFailureRecord `json:"failed,omitempty"`
+	Unchanged int                            `json:"unchanged"`
+	Skipped   []PricebookImportUpdateRecord  `json:"skipped,omitempty"`
 }
 
 // PricebookImportApplyRequest narrows the apply call to a subset of rows.

@@ -887,8 +887,20 @@ export function useRuntimeConsole() {
   async function applyPricebookImport(keys: string[]): Promise<PricebookImportDiff> {
     const response = await applyPricebookImportRequest(keys, authToken);
     await loadDashboard();
-    setNoticeMessage("success", "Pricebook import applied.");
-    return response.data;
+    // Notice text varies with the partial-success outcome so the
+    // operator sees the exact tally — silent "import applied" was
+    // misleading when one or more rows actually failed.
+    const data = response.data;
+    const appliedCount = data.applied?.length ?? 0;
+    const failedCount = data.failed?.length ?? 0;
+    if (failedCount > 0 && appliedCount > 0) {
+      setNoticeMessage("error", `Imported ${appliedCount}, ${failedCount} failed.`);
+    } else if (failedCount > 0) {
+      setNoticeMessage("error", `Import failed for ${failedCount} ${failedCount === 1 ? "row" : "rows"}.`);
+    } else {
+      setNoticeMessage("success", `Imported ${appliedCount} ${appliedCount === 1 ? "row" : "rows"}.`);
+    }
+    return data;
   }
 
   async function copyCommand(command: string) {

@@ -79,27 +79,35 @@ func (h *Handler) HandleControlPlanePricebookImportApply(w http.ResponseWriter, 
 	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
 
 	applied := make([]ControlPlanePricebookRecord, 0, len(diff.Added)+len(diff.Updated))
+	failed := make([]PricebookImportFailureRecord, 0)
+	// applyOne tries to persist a single proposal and routes the
+	// outcome to either `applied` or `failed`. Best-effort: a row's
+	// failure doesn't stop subsequent rows. Without this the apply
+	// loop bailed on the first error and left the operator with a
+	// partially-written state and no per-row visibility.
+	applyOne := func(entry ControlPlanePricebookRecord) {
+		saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(entry))
+		if upsertErr != nil {
+			failed = append(failed, PricebookImportFailureRecord{
+				Entry: entry,
+				Error: upsertErr.Error(),
+			})
+			return
+		}
+		applied = append(applied, renderControlPlanePricebookEntry(saved))
+	}
+
 	for _, entry := range diff.Added {
 		if !keyFilter.allows(entry.Provider, entry.Model) {
 			continue
 		}
-		saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(entry))
-		if upsertErr != nil {
-			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, upsertErr.Error())
-			return
-		}
-		applied = append(applied, renderControlPlanePricebookEntry(saved))
+		applyOne(entry)
 	}
 	for _, update := range diff.Updated {
 		if !keyFilter.allows(update.Entry.Provider, update.Entry.Model) {
 			continue
 		}
-		saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(update.Entry))
-		if upsertErr != nil {
-			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, upsertErr.Error())
-			return
-		}
-		applied = append(applied, renderControlPlanePricebookEntry(saved))
+		applyOne(update.Entry)
 	}
 	// Manual rows (Skipped) are only applied when the operator named them
 	// explicitly. Blanket apply (empty filter) leaves them alone — that's
@@ -109,18 +117,14 @@ func (h *Handler) HandleControlPlanePricebookImportApply(w http.ResponseWriter, 
 			if !keyFilter.allows(skip.Entry.Provider, skip.Entry.Model) {
 				continue
 			}
-			saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(skip.Entry))
-			if upsertErr != nil {
-				WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, upsertErr.Error())
-				return
-			}
-			applied = append(applied, renderControlPlanePricebookEntry(saved))
+			applyOne(skip.Entry)
 		}
 	}
 
 	out := PricebookImportDiff{
 		FetchedAt: diff.FetchedAt,
 		Applied:   applied,
+		Failed:    failed,
 		Unchanged: diff.Unchanged,
 		Skipped:   diff.Skipped,
 	}

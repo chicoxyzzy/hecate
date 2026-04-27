@@ -541,6 +541,95 @@ describe("useRuntimeConsole", () => {
 
     await waitFor(() => expect(result.current.state.model).toBe("llama3.1:8b"));
   });
+  // ─── applyPricebookImport: notice text per outcome ────────────────────────
+  //
+  // The toast wording on the dashboard's notice banner is the
+  // operator's primary feedback for a bulk import. Three branches:
+  //   * all rows succeeded → "Imported N rows."
+  //   * mixed              → "Imported N, M failed."
+  //   * all rows failed    → "Import failed for N rows."
+  // These tests pin the wording so a refactor doesn't accidentally
+  // collapse mixed/failed into a generic "applied" success notice.
+  describe("applyPricebookImport notice variants", () => {
+    function mockApplyResponse(data: Record<string, unknown>) {
+      fetchMock.mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/pricebook/import/apply") {
+          return jsonResponse({ object: "control_plane_pricebook_import_diff", data });
+        }
+        if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+        if (url === "/v1/whoami") {
+          return jsonResponse({
+            object: "session",
+            data: { authenticated: true, invalid_token: false, role: "admin", source: "bearer" },
+          });
+        }
+        if (url === "/v1/models") return jsonResponse({ object: "list", data: [] });
+        if (url === "/v1/provider-presets") return jsonResponse({ object: "provider_presets", data: [] });
+        return unauthorizedResponse();
+      });
+    }
+
+    it("success-only: notice reads 'Imported N rows.'", async () => {
+      mockApplyResponse({
+        fetched_at: "2026", unchanged: 0,
+        applied: [
+          { provider: "openai", model: "a", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" },
+          { provider: "openai", model: "b", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" },
+        ],
+      });
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.applyPricebookImport(["openai/a", "openai/b"]);
+      });
+      await waitFor(() => expect(result.current.state.notice).not.toBeNull());
+      expect(result.current.state.notice?.kind).toBe("success");
+      expect(result.current.state.notice?.message).toBe("Imported 2 rows.");
+    });
+
+    it("mixed: notice reads 'Imported N, M failed.' and is an error notice", async () => {
+      mockApplyResponse({
+        fetched_at: "2026", unchanged: 0,
+        applied: [
+          { provider: "openai", model: "good", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" },
+        ],
+        failed: [
+          { entry: { provider: "openai", model: "bad", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" }, error: "boom" },
+        ],
+      });
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.applyPricebookImport(["openai/good", "openai/bad"]);
+      });
+      await waitFor(() => expect(result.current.state.notice).not.toBeNull());
+      expect(result.current.state.notice?.kind).toBe("error");
+      expect(result.current.state.notice?.message).toBe("Imported 1, 1 failed.");
+    });
+
+    it("all-failed: notice reads 'Import failed for N rows.'", async () => {
+      mockApplyResponse({
+        fetched_at: "2026", unchanged: 0,
+        applied: [],
+        failed: [
+          { entry: { provider: "openai", model: "x", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" }, error: "e1" },
+          { entry: { provider: "openai", model: "y", input_micros_usd_per_million_tokens: 1, output_micros_usd_per_million_tokens: 2, cached_input_micros_usd_per_million_tokens: 0, source: "imported" }, error: "e2" },
+        ],
+      });
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.applyPricebookImport(["openai/x", "openai/y"]);
+      });
+      await waitFor(() => expect(result.current.state.notice).not.toBeNull());
+      expect(result.current.state.notice?.kind).toBe("error");
+      expect(result.current.state.notice?.message).toBe("Import failed for 2 rows.");
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {

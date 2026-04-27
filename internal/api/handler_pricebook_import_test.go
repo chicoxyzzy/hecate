@@ -363,6 +363,144 @@ func TestPricebookImportApplyOverwritesManualWhenKeyExplicit(t *testing.T) {
 	}
 }
 
+// TestPricebookImportApplyContinuesPastPerEntryFailures locks in the
+// best-effort apply contract: when one row fails validation/storage,
+// the loop keeps going and surfaces both the successes and the
+// failures in the response. Before this change, the handler bailed on
+// the first error and left the operator with a partially-written
+// pricebook and no per-row visibility into what landed.
+func TestPricebookImportApplyContinuesPastPerEntryFailures(t *testing.T) {
+	admin, store := newPricebookImportTestHandler(t, nil)
+
+	// Fetcher returns one valid entry and one with a negative cached
+	// price — normalize() in the controlplane store rejects negatives,
+	// so the bad entry triggers a per-row failure on apply.
+	fakePricebookFetch(t, []config.ModelPriceConfig{
+		{Provider: "openai", Model: "gpt-4o-mini",
+			InputMicrosUSDPerMillionTokens:  150_000,
+			OutputMicrosUSDPerMillionTokens: 600_000,
+			Source:                          config.PricebookSourceImported},
+		{Provider: "anthropic", Model: "claude-bad",
+			InputMicrosUSDPerMillionTokens:       100_000,
+			OutputMicrosUSDPerMillionTokens:      200_000,
+			CachedInputMicrosUSDPerMillionTokens: -1, // rejected by normalize
+			Source:                               config.PricebookSourceImported},
+	}, nil)
+
+	recorder := admin.mustRequest("POST", "/admin/control-plane/pricebook/import/apply", "")
+	var resp struct {
+		Object string              `json:"object"`
+		Data   PricebookImportDiff `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode apply body: %v", err)
+	}
+
+	// Good entry persisted.
+	if len(resp.Data.Applied) != 1 {
+		t.Fatalf("applied = %+v, want one entry", resp.Data.Applied)
+	}
+	if resp.Data.Applied[0].Provider != "openai" || resp.Data.Applied[0].Model != "gpt-4o-mini" {
+		t.Errorf("applied[0] = %+v, want openai/gpt-4o-mini", resp.Data.Applied[0])
+	}
+	// Bad entry surfaces in `failed` with the underlying error.
+	if len(resp.Data.Failed) != 1 {
+		t.Fatalf("failed = %+v, want one failure", resp.Data.Failed)
+	}
+	fail := resp.Data.Failed[0]
+	if fail.Entry.Provider != "anthropic" || fail.Entry.Model != "claude-bad" {
+		t.Errorf("failed[0].Entry = %+v, want anthropic/claude-bad", fail.Entry)
+	}
+	if fail.Error == "" {
+		t.Errorf("failed[0].Error is empty; want a non-empty error message")
+	}
+
+	// Storage check: only the good entry landed; the failure didn't
+	// stop the loop and didn't write a partial bad row.
+	state, _ := store.Snapshot(context.Background())
+	count := 0
+	for _, entry := range state.Pricebook {
+		if entry.Provider == "openai" && entry.Model == "gpt-4o-mini" {
+			count++
+		}
+		if entry.Provider == "anthropic" && entry.Model == "claude-bad" {
+			t.Errorf("bad entry was persisted: %+v", entry)
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected gpt-4o-mini in store; got %d matching rows", count)
+	}
+}
+
+// TestPricebookImportApplySkippedFailureIsCollected exercises the
+// Skipped branch of the apply loop: when the operator explicitly
+// opts in to overriding a manual row but the proposed value fails
+// validation, the error must surface in `Failed` rather than aborting
+// the entire request. Symmetry with the Added/Updated coverage in
+// TestPricebookImportApplyContinuesPastPerEntryFailures.
+func TestPricebookImportApplySkippedFailureIsCollected(t *testing.T) {
+	admin, store := newPricebookImportTestHandler(t, nil)
+	ctx := context.Background()
+
+	// Seed a manual row so the fetched proposal lands in Skipped.
+	if _, err := store.UpsertPricebookEntry(ctx, config.ModelPriceConfig{
+		Provider: "openai", Model: "gpt-4o-mini",
+		InputMicrosUSDPerMillionTokens:  80_000,
+		OutputMicrosUSDPerMillionTokens: 200_000,
+		Source:                          config.PricebookSourceManual,
+	}); err != nil {
+		t.Fatalf("seed manual row: %v", err)
+	}
+
+	// Fetched proposal differs (puts the row in Skipped) and uses a
+	// negative cached price (rejected by normalize on apply).
+	fakePricebookFetch(t, []config.ModelPriceConfig{
+		{Provider: "openai", Model: "gpt-4o-mini",
+			InputMicrosUSDPerMillionTokens:       150_000,
+			OutputMicrosUSDPerMillionTokens:      600_000,
+			CachedInputMicrosUSDPerMillionTokens: -1,
+			Source:                               config.PricebookSourceImported},
+	}, nil)
+
+	// Operator explicitly opts in to overriding the manual row.
+	body := `{"keys":["openai/gpt-4o-mini"]}`
+	recorder := admin.mustRequest("POST", "/admin/control-plane/pricebook/import/apply", body)
+	var resp struct {
+		Object string              `json:"object"`
+		Data   PricebookImportDiff `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode apply body: %v", err)
+	}
+
+	if len(resp.Data.Applied) != 0 {
+		t.Errorf("applied = %+v, want zero — proposal should fail validation", resp.Data.Applied)
+	}
+	if len(resp.Data.Failed) != 1 {
+		t.Fatalf("failed = %+v, want one failure on the Skipped path", resp.Data.Failed)
+	}
+	fail := resp.Data.Failed[0]
+	if fail.Entry.Provider != "openai" || fail.Entry.Model != "gpt-4o-mini" {
+		t.Errorf("failed[0].Entry = %+v, want openai/gpt-4o-mini", fail.Entry)
+	}
+	if fail.Error == "" {
+		t.Errorf("failed[0].Error empty; want a non-empty validation error")
+	}
+
+	// Storage check: manual row stays untouched at the negotiated price.
+	state, _ := store.Snapshot(ctx)
+	for _, entry := range state.Pricebook {
+		if entry.Provider == "openai" && entry.Model == "gpt-4o-mini" {
+			if entry.InputMicrosUSDPerMillionTokens != 80_000 {
+				t.Errorf("manual row clobbered: input = %d, want 80000", entry.InputMicrosUSDPerMillionTokens)
+			}
+			if entry.Source != config.PricebookSourceManual {
+				t.Errorf("source = %q, want manual (proposal failed; row should be unchanged)", entry.Source)
+			}
+		}
+	}
+}
+
 // TestPricebookImportPreviewSortsAlphabetically guards the wire-level
 // sort: each section (Added, Updated, Skipped) must come back ordered
 // by `provider/model` so the import-preview modal renders a stable,

@@ -415,9 +415,20 @@ export type PricebookImportUpdateRecord = {
   previous: ConfiguredPricebookRecord;
 };
 
+// PricebookImportFailureRecord pairs an entry the apply endpoint tried
+// to persist with the storage error message. Apply is best-effort: a
+// row's failure doesn't stop subsequent rows. The UI shows these in
+// the consent dialog so the operator can see exactly which rows
+// landed and which didn't.
+export type PricebookImportFailureRecord = {
+  entry: ConfiguredPricebookRecord;
+  error: string;
+};
+
 // PricebookImportDiff is the response payload from both the preview and
 // apply endpoints. Preview populates `added` + `updated` + `skipped`;
-// apply replaces added+updated with `applied` (the rows it persisted).
+// apply replaces added+updated with `applied` (rows persisted) and
+// surfaces any per-row failures in `failed`.
 //
 // `skipped` lists current manual rows where LiteLLM has a *different*
 // price. The UI uses these to surface a "Replace manual" affordance —
@@ -430,6 +441,7 @@ export type PricebookImportDiff = {
   added?: ConfiguredPricebookRecord[];
   updated?: PricebookImportUpdateRecord[];
   applied?: ConfiguredPricebookRecord[];
+  failed?: PricebookImportFailureRecord[];
   unchanged: number;
   skipped?: PricebookImportUpdateRecord[];
 };
