@@ -1283,6 +1283,57 @@ func pendingToolCallsForResume(messages []types.Message) []types.ToolCall {
 	return last.ToolCalls
 }
 
+// countAssistantTurns returns the number of assistant messages in the
+// saved conversation. Each agent_loop turn produces exactly one
+// assistant message (with tool_calls or a final answer), so the count
+// equals the number of completed turns. Used by the retry-from-turn-N
+// codepath to validate the requested turn lies within range.
+func countAssistantTurns(messages []types.Message) int {
+	n := 0
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			n++
+		}
+	}
+	return n
+}
+
+// truncateConversationToTurn drops the Nth assistant message and
+// everything that follows it, so the next LLM call re-issues turn N
+// against the same prior context. The system message (if present) and
+// the user prompt are preserved, as are any prior assistant turns and
+// their tool results — the operator gets to explore an alternative
+// path from turn N forward.
+//
+// turn must be >= 1 and <= countAssistantTurns(messages). turn=1
+// truncates back to just the prelude (system + user); turn=N for the
+// final turn drops only that turn's assistant message.
+//
+// Returns a fresh slice; the input is not modified.
+func truncateConversationToTurn(messages []types.Message, turn int) ([]types.Message, error) {
+	if turn < 1 {
+		return nil, fmt.Errorf("turn must be >= 1, got %d", turn)
+	}
+	assistantSeen := 0
+	cutIndex := -1
+	for i, m := range messages {
+		if m.Role != "assistant" {
+			continue
+		}
+		assistantSeen++
+		if assistantSeen == turn {
+			cutIndex = i
+			break
+		}
+	}
+	if cutIndex == -1 {
+		return nil, fmt.Errorf("turn %d not found: conversation has %d assistant turn(s)", turn, assistantSeen)
+	}
+	out := make([]types.Message, cutIndex)
+	copy(out, messages[:cutIndex])
+	return out, nil
+}
+
 // gatedToolsInTurn returns the names of gated tools that appear in
 // this turn's tool calls. Empty if no gating applies.
 func (e *AgentLoopExecutor) gatedToolsInTurn(calls []types.ToolCall) []string {

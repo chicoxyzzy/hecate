@@ -1096,6 +1096,57 @@ func (h *Handler) HandleResumeTaskRun(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, TaskRunResponse{Object: "task_run", Data: renderTaskRun(result.Run)})
 }
 
+// HandleRetryTaskRunFromTurn re-runs an agent_loop run from turn N,
+// preserving the source conversation up to (but not including) that
+// turn's assistant message. The new run is a sibling of the source
+// (not a child) — it gets its own run number and step indices. Only
+// terminal runs are eligible; the source must have produced an
+// agent_conversation artifact, and the requested turn must lie within
+// the source's completed assistant-turn count.
+func (h *Handler) HandleRetryTaskRunFromTurn(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	task, ok := h.loadAuthorizedTask(ctx, w, r, principal)
+	if !ok {
+		return
+	}
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
+	if !ok {
+		return
+	}
+	var req RetryFromTurnRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !types.IsTerminalTaskRunStatus(run.Status) {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run is not retryable from a turn (must be terminal)")
+		return
+	}
+	if req.Turn < 1 {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "turn must be >= 1")
+		return
+	}
+	result, err := h.taskRunner.RetryTaskFromTurn(ctx, task, run, req.Turn, strings.TrimSpace(req.Reason), newOpaqueTaskResourceID)
+	if err != nil {
+		// Validation failures (missing conversation, turn out of
+		// range, malformed artifact) are user errors — return 400 so
+		// the UI can render an actionable message rather than a 500.
+		msg := err.Error()
+		if strings.Contains(msg, "no agent_conversation") ||
+			strings.Contains(msg, "turn") ||
+			strings.Contains(msg, "malformed agent_conversation") {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, msg)
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, msg)
+		return
+	}
+	WriteJSON(w, http.StatusOK, TaskRunResponse{Object: "task_run", Data: renderTaskRun(result.Run)})
+}
+
 func parseAfterSequence(r *http.Request) int64 {
 	raw := strings.TrimSpace(r.URL.Query().Get("after_sequence"))
 	if raw == "" {

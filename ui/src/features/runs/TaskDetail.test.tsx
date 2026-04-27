@@ -67,6 +67,7 @@ function setup(propOverrides: Partial<React.ComponentProps<typeof TaskDetail>> =
     onCancelRun: vi.fn(),
     onRetryRun: vi.fn(),
     onResumeRun: vi.fn(),
+    onRetryFromTurn: vi.fn(),
     ...propOverrides,
   };
   const user = userEvent.setup();
@@ -261,5 +262,41 @@ describe("TaskDetail agent conversation viewer", () => {
     const { render } = setup({ artifacts: [] });
     render();
     expect(screen.queryByText(/Agent conversation/)).toBeNull();
+  });
+
+  it("shows a 'retry from here' button on each assistant turn for terminal runs", async () => {
+    const { props, user, render } = setup({
+      artifacts: [makeConvoArtifact()],
+      run: makeRun({ status: "completed" }),
+    });
+    render();
+    // Two assistant turns in the fixture — both should show the
+    // retry control. Click the first one and verify the callback
+    // fires with turn=1.
+    const retryButtons = screen.getAllByRole("button", { name: /retry from here/i });
+    expect(retryButtons.length).toBe(2);
+    await user.click(retryButtons[0]);
+    expect(props.onRetryFromTurn).toHaveBeenCalledWith(1);
+  });
+
+  it("hides the 'retry from here' button while the run is still active", () => {
+    const { render } = setup({
+      artifacts: [makeConvoArtifact()],
+      run: makeRun({ status: "running" }),
+    });
+    render();
+    expect(screen.queryAllByRole("button", { name: /retry from here/i })).toHaveLength(0);
+  });
+
+  it("disables 'retry from here' while another action is in flight", () => {
+    const { render } = setup({
+      artifacts: [makeConvoArtifact()],
+      run: makeRun({ status: "completed" }),
+      busyAction: "cancel",
+    });
+    render();
+    const retryButtons = screen.getAllByRole("button", { name: /retry from here/i });
+    expect(retryButtons.length).toBe(2);
+    retryButtons.forEach(b => expect((b as HTMLButtonElement).disabled).toBe(true));
   });
 });

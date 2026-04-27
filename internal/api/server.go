@@ -24,6 +24,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/events", handler.HandleTaskRunEvents)
 	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/events", handler.HandleAppendTaskRunEvent)
 	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/retry", handler.HandleRetryTaskRun)
+	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/retry-from-turn", handler.HandleRetryTaskRunFromTurn)
 	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/resume", handler.HandleResumeTaskRun)
 	mux.HandleFunc("POST /v1/tasks/{id}/runs/{run_id}/cancel", handler.HandleCancelTaskRun)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/steps", handler.HandleTaskRunSteps)

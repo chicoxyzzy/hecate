@@ -45,6 +45,17 @@ type ResumeTaskRunRequest struct {
 	Reason string `json:"reason"`
 }
 
+// RetryFromTurnRequest is the body for
+// POST /v1/tasks/{id}/runs/{run_id}/retry-from-turn — re-run an
+// agent_loop run starting at turn N with the prior conversation
+// context preserved up to (but not including) that turn's assistant
+// message. Turn must be >= 1 and <= the source run's completed
+// assistant-turn count.
+type RetryFromTurnRequest struct {
+	Turn   int    `json:"turn"`
+	Reason string `json:"reason"`
+}
+
 type AppendTaskRunEventRequest struct {
 	EventType string         `json:"event_type"`
 	StepID    string         `json:"step_id"`

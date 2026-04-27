@@ -51,6 +51,16 @@ type ResumeCheckpoint struct {
 	// scratch — that's what lets the loop survive crashes and
 	// approval-gating mid-conversation.
 	AgentConversation []byte
+	// RetryFromTurn, when > 0, signals that AgentConversation has been
+	// truncated to right before the Nth assistant turn — the source
+	// run's tool results and reasoning prior to turn N are preserved,
+	// but turn N's assistant message and everything after it has been
+	// dropped. The agent loop's next LLM call re-issues turn N from
+	// the same starting context, letting operators explore alternative
+	// paths from a known prior state. The runner zeroes
+	// LastStepIndex/LastCompletedStepID for retry-from-turn so the new
+	// run's step indices start at 1 rather than continuing the source's.
+	RetryFromTurn int
 }
 
 type ExecutionResult struct {

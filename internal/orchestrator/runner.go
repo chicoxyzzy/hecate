@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -103,6 +104,13 @@ type StartTaskResult struct {
 type startTaskOptions struct {
 	ResumeFromRun *types.TaskRun
 	ResumeReason  string
+	// RetryFromTurn, when > 0, signals the new run should resume from
+	// the source run's conversation truncated to right before turn N.
+	// Used by the retry-from-turn-N code path; ignored when
+	// ResumeFromRun is nil. The runner persists this on the new run's
+	// `run.created` event so the worker that later claims the run can
+	// rebuild the truncated checkpoint without keeping in-memory state.
+	RetryFromTurn int
 }
 
 type RuntimeStats struct {
@@ -381,6 +389,55 @@ func (r *Runner) ResumeTask(ctx context.Context, task types.Task, run types.Task
 	})
 }
 
+// RetryTaskFromTurn creates a new run that re-issues turn N of the
+// source run with the prior conversation context preserved. Validates
+// the source is a terminal agent_loop run with at least N completed
+// assistant turns, then enqueues a new run whose checkpoint will carry
+// the truncated conversation. The actual truncation happens later in
+// resumeCheckpointForRun (worker side) so failures during truncation
+// surface as run-level errors with full event context, not as
+// pre-create API errors that lose tracing.
+func (r *Runner) RetryTaskFromTurn(ctx context.Context, task types.Task, run types.TaskRun, turn int, reason string, idgen func(prefix string) string) (*StartTaskResult, error) {
+	if !types.IsTerminalTaskRunStatus(run.Status) {
+		return nil, fmt.Errorf("task run %q is not retryable", run.ID)
+	}
+	if turn < 1 {
+		return nil, fmt.Errorf("turn must be >= 1, got %d", turn)
+	}
+	// Validate the source has a conversation we can truncate. We do
+	// this up-front so the API returns a clean 4xx rather than the
+	// run failing post-enqueue with a confusing error in the timeline.
+	if r.store != nil {
+		artifacts, err := r.store.ListArtifacts(ctx, taskstate.ArtifactFilter{TaskID: task.ID, RunID: run.ID})
+		if err != nil {
+			return nil, err
+		}
+		var convo []byte
+		for _, art := range artifacts {
+			if art.Kind == "agent_conversation" && len(art.ContentText) > 0 {
+				convo = []byte(art.ContentText)
+				break
+			}
+		}
+		if len(convo) == 0 {
+			return nil, fmt.Errorf("task run %q has no agent_conversation artifact to truncate", run.ID)
+		}
+		var saved []types.Message
+		if err := json.Unmarshal(convo, &saved); err != nil {
+			return nil, fmt.Errorf("task run %q has malformed agent_conversation artifact: %w", run.ID, err)
+		}
+		turns := countAssistantTurns(saved)
+		if turn > turns {
+			return nil, fmt.Errorf("turn %d not found: source run has %d assistant turn(s)", turn, turns)
+		}
+	}
+	return r.startTaskWithOptions(ctx, task, idgen, startTaskOptions{
+		ResumeFromRun: &run,
+		ResumeReason:  strings.TrimSpace(reason),
+		RetryFromTurn: turn,
+	})
+}
+
 func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idgen func(prefix string) string, options startTaskOptions) (*StartTaskResult, error) {
 	if r.store == nil {
 		return nil, fmt.Errorf("task store is not configured")
@@ -464,17 +521,26 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	if options.ResumeFromRun != nil {
 		createEvent["resumed_from_run_id"] = options.ResumeFromRun.ID
 		createEvent["resume_reason"] = options.ResumeReason
+		if options.RetryFromTurn > 0 {
+			createEvent["retry_from_turn"] = options.RetryFromTurn
+		}
 	}
 	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.created", requestID, trace.TraceID, createEvent)
 	if options.ResumeFromRun != nil {
-		_, _ = r.emitRunEvent(ctx, task.ID, options.ResumeFromRun.ID, "run.resume_requested", requestID, trace.TraceID, map[string]any{
+		resumeRequestedData := map[string]any{
 			"new_run_id": run.ID,
 			"reason":     options.ResumeReason,
-		})
-		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.resumed", requestID, trace.TraceID, map[string]any{
+		}
+		resumedData := map[string]any{
 			"resumed_from_run_id": options.ResumeFromRun.ID,
 			"reason":              options.ResumeReason,
-		})
+		}
+		if options.RetryFromTurn > 0 {
+			resumeRequestedData["retry_from_turn"] = options.RetryFromTurn
+			resumedData["retry_from_turn"] = options.RetryFromTurn
+		}
+		_, _ = r.emitRunEvent(ctx, task.ID, options.ResumeFromRun.ID, "run.resume_requested", requestID, trace.TraceID, resumeRequestedData)
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run.resumed", requestID, trace.TraceID, resumedData)
 	}
 
 	recordOrchestratorRunStarted(trace, task.ID, run)
@@ -1248,6 +1314,7 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 	}
 	sourceRunID := ""
 	reason := ""
+	retryFromTurn := 0
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
 		value, ok := event.Data["resumed_from_run_id"]
@@ -1264,6 +1331,20 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 			reason, _ = rawReason.(string)
 		} else if rawReason, ok := event.Data["resume_reason"]; ok {
 			reason, _ = rawReason.(string)
+		}
+		// retry_from_turn is event-data JSON-decoded — depending on
+		// the store it may come back as float64 (JSON-roundtripped)
+		// or int. Accept both. Zero/missing means a regular resume,
+		// not a retry-from-turn.
+		if raw, ok := event.Data["retry_from_turn"]; ok {
+			switch v := raw.(type) {
+			case int:
+				retryFromTurn = v
+			case int64:
+				retryFromTurn = int(v)
+			case float64:
+				retryFromTurn = int(v)
+			}
 		}
 		break
 	}
@@ -1305,6 +1386,7 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 		Reason:        strings.TrimSpace(reason),
 		LastStepIndex: 0,
 		ArtifactCount: len(artifacts),
+		RetryFromTurn: retryFromTurn,
 	}
 	// Pull the agent-conversation artifact (if any) so the agent loop
 	// can hydrate state on resume. We use a stable kind + ID
@@ -1335,6 +1417,30 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 				checkpoint.LastCompletedStepID = step.ID
 			}
 		}
+	}
+	// Retry-from-turn-N: truncate the saved conversation to right
+	// before turn N's assistant message and reset step-index
+	// continuity. The new run's step indices start at 1 instead of
+	// continuing the source's count — semantically this is a fresh
+	// run that happens to share prior conversation context, not a
+	// continuation.
+	if retryFromTurn > 0 && len(checkpoint.AgentConversation) > 0 {
+		var saved []types.Message
+		if err := json.Unmarshal(checkpoint.AgentConversation, &saved); err != nil {
+			return nil, fmt.Errorf("decode source conversation for retry: %w", err)
+		}
+		truncated, err := truncateConversationToTurn(saved, retryFromTurn)
+		if err != nil {
+			return nil, fmt.Errorf("retry-from-turn truncation: %w", err)
+		}
+		payload, err := json.Marshal(truncated)
+		if err != nil {
+			return nil, fmt.Errorf("encode truncated conversation: %w", err)
+		}
+		checkpoint.AgentConversation = payload
+		checkpoint.LastStepIndex = 0
+		checkpoint.LastCompletedStepID = ""
+		checkpoint.CompletedStepCount = 0
 	}
 	return checkpoint, nil
 }

@@ -659,6 +659,170 @@ func TestAgentLoop_HydrateGracefulFallbackOnCorruptCheckpoint(t *testing.T) {
 	}
 }
 
+func TestTruncateConversationToTurn(t *testing.T) {
+	// Build a 3-turn conversation: system + user, then turns 1/2/3,
+	// each with a tool call + result, plus a final answer in turn 3.
+	conv := []types.Message{
+		{Role: "system", Content: "be concise"},
+		{Role: "user", Content: "list /etc"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{ID: "c1", Function: types.ToolCallFunction{Name: "shell_exec"}}}},
+		{Role: "tool", Content: "result1", ToolCallID: "c1"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{ID: "c2", Function: types.ToolCallFunction{Name: "shell_exec"}}}},
+		{Role: "tool", Content: "result2", ToolCallID: "c2"},
+		{Role: "assistant", Content: "done."},
+	}
+
+	t.Run("turn 1 keeps prelude only", func(t *testing.T) {
+		got, err := truncateConversationToTurn(conv, 1)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2 (system+user)", len(got))
+		}
+		if got[0].Role != "system" || got[1].Role != "user" {
+			t.Errorf("prelude shape wrong: %+v", got)
+		}
+	})
+
+	t.Run("turn 2 keeps turn 1's tool result", func(t *testing.T) {
+		got, err := truncateConversationToTurn(conv, 2)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		// Should be: system, user, assistant_1, tool_1
+		if len(got) != 4 {
+			t.Fatalf("len = %d, want 4", len(got))
+		}
+		if got[3].Role != "tool" || got[3].ToolCallID != "c1" {
+			t.Errorf("tail expected to be tool result for c1, got %+v", got[3])
+		}
+	})
+
+	t.Run("final turn drops only that assistant message", func(t *testing.T) {
+		got, err := truncateConversationToTurn(conv, 3)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if len(got) != 6 {
+			t.Fatalf("len = %d, want 6", len(got))
+		}
+		// Tail is the second tool result; assistant_3 (final) and
+		// nothing else have been dropped.
+		if got[len(got)-1].Role != "tool" || got[len(got)-1].ToolCallID != "c2" {
+			t.Errorf("tail wrong: %+v", got[len(got)-1])
+		}
+	})
+
+	t.Run("out-of-range turn fails", func(t *testing.T) {
+		if _, err := truncateConversationToTurn(conv, 4); err == nil {
+			t.Errorf("turn 4 of 3-turn conv should fail")
+		}
+		if _, err := truncateConversationToTurn(conv, 0); err == nil {
+			t.Errorf("turn 0 should fail")
+		}
+		if _, err := truncateConversationToTurn(conv, -1); err == nil {
+			t.Errorf("negative turn should fail")
+		}
+	})
+
+	t.Run("does not mutate input", func(t *testing.T) {
+		before := len(conv)
+		_, _ = truncateConversationToTurn(conv, 2)
+		if len(conv) != before {
+			t.Errorf("input mutated: len changed from %d to %d", before, len(conv))
+		}
+	})
+}
+
+func TestCountAssistantTurns(t *testing.T) {
+	cases := []struct {
+		name string
+		msgs []types.Message
+		want int
+	}{
+		{"empty", nil, 0},
+		{"user only", []types.Message{{Role: "user", Content: "hi"}}, 0},
+		{"three turns", []types.Message{
+			{Role: "user"},
+			{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "c1"}}},
+			{Role: "tool", ToolCallID: "c1"},
+			{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "c2"}}},
+			{Role: "tool", ToolCallID: "c2"},
+			{Role: "assistant", Content: "done"},
+		}, 3},
+		{"system message ignored", []types.Message{
+			{Role: "system"},
+			{Role: "user"},
+			{Role: "assistant", Content: "answer"},
+		}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := countAssistantTurns(tc.msgs); got != tc.want {
+				t.Errorf("countAssistantTurns = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentLoop_RetryFromTurn_TruncatedConversationDrivesNextLLMCall(t *testing.T) {
+	// Simulate a retry-from-turn where the runner has already
+	// truncated the conversation (e.g. operator clicked "retry from
+	// turn 2"). The loop should see the truncated history, call the
+	// LLM again at that point, and run normally from there. We
+	// pre-truncate to turn 2 (drops assistant_2 onwards), leaving
+	// system+user+assistant_1+tool_1 — the next LLM call happens at
+	// turn 2 with that context.
+	saved := []types.Message{
+		{Role: "user", Content: "list things"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}}},
+		{Role: "tool", Content: "result1", ToolCallID: "c1"},
+		// turn 2's assistant message + everything after has been
+		// dropped by the runner before we get here.
+	}
+	savedJSON, _ := json.Marshal(saved)
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("retried answer")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:       "run-prev",
+		AgentConversation: savedJSON,
+		LastStepIndex:     0, // runner zeroes this for retry-from-turn so step indices restart at 1
+		RetryFromTurn:     2,
+	}
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", res.Status)
+	}
+	if len(llm.lastReqs) != 1 {
+		t.Fatalf("LLM calls = %d, want 1 (retry runs the truncated turn once)", len(llm.lastReqs))
+	}
+	// Critical: the LLM saw the prior context (3 messages), not the
+	// dropped assistant_2. This is what lets the LLM produce a
+	// different answer than the original turn 2.
+	got := llm.lastReqs[0].Messages
+	if len(got) != 3 {
+		t.Fatalf("LLM saw %d messages, want 3 (the truncated context)", len(got))
+	}
+	if got[2].Role != "tool" || got[2].ToolCallID != "c1" {
+		t.Errorf("last message before retry should be tool result for c1, got %+v", got[2])
+	}
+	// And the retry produced an assistant final answer, so the loop
+	// completed (no further turns).
+	if res.Steps[0].Index != 1 {
+		t.Errorf("first step index = %d, want 1 (fresh-numbered for retry-from-turn)", res.Steps[0].Index)
+	}
+}
+
 func TestAgentLoop_GatedToolPausesAndEmitsApproval(t *testing.T) {
 	// LLM asks for shell_exec, which is gated. Loop must pause:
 	// status=awaiting_approval, one approval in PendingApprovals

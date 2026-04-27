@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelTaskRun, createTask, deleteTask, getModels, getTaskApprovals, getTaskRunArtifacts,
   getTaskRuns, getTaskRunSteps, getTasks, resolveTaskApproval,
-  retryTaskRun, resumeTaskRun, startTask, streamTaskRun,
+  retryTaskRun, retryTaskRunFromTurn, resumeTaskRun, startTask, streamTaskRun,
 } from "../../lib/api";
 import type { ModelRecord, TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
 import { TaskList } from "./TaskList";
@@ -183,6 +183,23 @@ export function TasksView({ authToken, session }: Props) {
     finally { setBusyAction(""); }
   }
 
+  // Retry-from-turn-N: re-issue the LLM call at turn N with the prior
+  // conversation preserved. Server-side validation rejects out-of-range
+  // turns and non-agent_loop runs with a 4xx — we surface the message
+  // in the run-level notice so the operator can correct and try again
+  // rather than silently failing.
+  async function handleRetryFromTurn(turn: number) {
+    if (!selectedTaskID || !selectedRunID) return;
+    setBusyAction("retry-from-turn");
+    try {
+      const res = await retryTaskRunFromTurn(selectedTaskID, selectedRunID, turn, authToken);
+      setNotice({ tone: "success", message: `Retrying from turn ${turn} (run #${res.data.number}).` });
+      await loadTasks(selectedTaskID, res.data.id);
+    } catch (err) {
+      setNotice({ tone: "error", message: err instanceof Error ? err.message : "retry-from-turn failed" });
+    } finally { setBusyAction(""); }
+  }
+
   async function handleDeleteTask(taskID: string) {
     setBusyAction("delete:" + taskID);
     try {
@@ -253,6 +270,7 @@ export function TasksView({ authToken, session }: Props) {
           onCancelRun={() => void handleCancelRun()}
           onRetryRun={() => void handleRetryRun()}
           onResumeRun={() => void handleResumeRun()}
+          onRetryFromTurn={(turn) => void handleRetryFromTurn(turn)}
         />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>

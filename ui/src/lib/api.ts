@@ -376,6 +376,17 @@ export async function resumeTaskRun(taskID: string, runID: string, authToken?: s
   });
 }
 
+// retryTaskRunFromTurn re-runs an agent_loop run starting at turn N
+// with the prior conversation preserved up to (but not including)
+// that turn's assistant message. Returns the newly-created run.
+export async function retryTaskRunFromTurn(taskID: string, runID: string, turn: number, authToken?: string): Promise<TaskRunResponse> {
+  return fetchJSON<TaskRunResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/retry-from-turn`, {
+    authToken,
+    method: "POST",
+    body: { turn },
+  });
+}
+
 export async function appendTaskRunEvent(taskID: string, runID: string, payload: AppendTaskRunEventPayload, authToken?: string): Promise<void> {
   await fetchJSON(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/events`, {
     authToken,

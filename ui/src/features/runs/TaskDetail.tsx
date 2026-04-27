@@ -45,12 +45,19 @@ type Props = {
   onCancelRun: () => void;
   onRetryRun: () => void;
   onResumeRun: () => void;
+  // onRetryFromTurn re-runs the agent_loop from turn N (1-indexed),
+  // preserving the conversation up to that turn's assistant message.
+  // The button appears next to each assistant bubble in the
+  // conversation viewer. Only meaningful for terminal agent_loop runs;
+  // the conversation viewer itself only renders for those, so we don't
+  // need to gate the button further at the bubble level.
+  onRetryFromTurn: (turn: number) => void;
 };
 
 export function TaskDetail({
   task, run, runs, selectedRunID, steps, artifacts, approvals,
   streamState, busyAction, notice,
-  onSelectRun, onResolveApproval, onCancelRun, onRetryRun, onResumeRun,
+  onSelectRun, onResolveApproval, onCancelRun, onRetryRun, onResumeRun, onRetryFromTurn,
 }: Props) {
   const termRef = useRef<HTMLDivElement>(null);
   const [runPickerOpen, setRunPickerOpen] = useState(false);
@@ -242,7 +249,16 @@ export function TaskDetail({
         )}
 
         {conversationArtifact?.content_text && (
-          <AgentConversationView raw={conversationArtifact.content_text} />
+          <AgentConversationView
+            raw={conversationArtifact.content_text}
+            // Only show the per-turn retry control once the run is
+            // terminal — retrying mid-flight would race the running
+            // worker. The button is also disabled while another
+            // action is in flight (e.g. cancel) to avoid stacking.
+            canRetryFromTurn={run ? (run.status === "completed" || run.status === "failed" || run.status === "cancelled") : false}
+            busy={busyAction !== ""}
+            onRetryFromTurn={onRetryFromTurn}
+          />
         )}
 
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 180 }}>
@@ -384,7 +400,17 @@ type AgentConversationMessage = {
 // JSON is corrupt we render an inline error and continue rendering
 // the rest of the run UI — losing the conversation viewer is much
 // better than crashing the whole page.
-function AgentConversationView({ raw }: { raw: string }) {
+function AgentConversationView({
+  raw,
+  canRetryFromTurn = false,
+  busy = false,
+  onRetryFromTurn,
+}: {
+  raw: string;
+  canRetryFromTurn?: boolean;
+  busy?: boolean;
+  onRetryFromTurn?: (turn: number) => void;
+}) {
   let messages: AgentConversationMessage[] = [];
   try {
     const parsed = JSON.parse(raw);
@@ -398,19 +424,52 @@ function AgentConversationView({ raw }: { raw: string }) {
   }
   if (messages.length === 0) return null;
 
+  // Compute per-message turn numbers up-front so each bubble can render
+  // its own "↻ retry from turn N" affordance. Only assistant messages
+  // get a turn number — user/tool/system messages get 0 and won't show
+  // the button. Counting in a single pass here keeps the bubble itself
+  // O(1) at render time.
+  let assistantSeen = 0;
+  const turnByIndex: number[] = messages.map(m => {
+    if (m.role === "assistant") {
+      assistantSeen++;
+      return assistantSeen;
+    }
+    return 0;
+  });
+
   return (
     <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="kicker" style={{ marginBottom: 4 }}>
         Agent conversation · {messages.length} message{messages.length === 1 ? "" : "s"}
       </div>
       {messages.map((m, i) => (
-        <ConversationBubble key={i} message={m} />
+        <ConversationBubble
+          key={i}
+          message={m}
+          turn={turnByIndex[i]}
+          canRetryFromTurn={canRetryFromTurn}
+          busy={busy}
+          onRetryFromTurn={onRetryFromTurn}
+        />
       ))}
     </div>
   );
 }
 
-function ConversationBubble({ message }: { message: AgentConversationMessage }) {
+function ConversationBubble({
+  message,
+  turn,
+  canRetryFromTurn = false,
+  busy = false,
+  onRetryFromTurn,
+}: {
+  message: AgentConversationMessage;
+  turn?: number;
+  canRetryFromTurn?: boolean;
+  busy?: boolean;
+  onRetryFromTurn?: (turn: number) => void;
+}) {
   if (message.role === "user") {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -448,8 +507,24 @@ function ConversationBubble({ message }: { message: AgentConversationMessage }) 
     );
   }
   // assistant — content + any tool calls
+  const showRetry = canRetryFromTurn && !!turn && turn > 0 && !!onRetryFromTurn;
   return (
     <div style={{ display: "flex", justifyContent: "flex-start", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
+      <div className="kicker" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span>turn {turn || "?"}</span>
+        {showRetry && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={busy}
+            onClick={() => onRetryFromTurn?.(turn!)}
+            title={`Re-run from turn ${turn} with the prior conversation preserved`}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 10, padding: "2px 6px" }}
+          >
+            ↻ retry from here
+          </button>
+        )}
+      </div>
       {message.content && (
         <div style={{
           alignSelf: "flex-start", maxWidth: "80%", padding: "8px 12px",
