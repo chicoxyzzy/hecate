@@ -569,6 +569,67 @@ func (s *SQLiteStore) ListRunEvents(ctx context.Context, taskID, runID string, a
 	return items, rows.Err()
 }
 
+func (s *SQLiteStore) ListEvents(ctx context.Context, filter EventFilter) ([]types.TaskRunEvent, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	args := []any{filter.AfterSequence}
+	query := fmt.Sprintf(`
+		SELECT sequence, task_id, run_id, event_type, event_data, created_at, request_id, trace_id
+		FROM %s
+		WHERE sequence > ?
+	`, s.eventsTable)
+	if len(filter.EventTypes) > 0 {
+		query += " AND event_type IN (" + sqlitePlaceholders(len(filter.EventTypes)) + ")"
+		for _, t := range filter.EventTypes {
+			args = append(args, t)
+		}
+	}
+	if len(filter.TaskIDs) > 0 {
+		query += " AND task_id IN (" + sqlitePlaceholders(len(filter.TaskIDs)) + ")"
+		for _, id := range filter.TaskIDs {
+			args = append(args, id)
+		}
+	}
+	args = append(args, limit)
+	query += " ORDER BY sequence ASC LIMIT ?"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]types.TaskRunEvent, 0)
+	for rows.Next() {
+		var event types.TaskRunEvent
+		var payload sql.NullString
+		var createdAt sql.NullString
+		if err := rows.Scan(&event.Sequence, &event.TaskID, &event.RunID, &event.EventType, &payload, &createdAt, &event.RequestID, &event.TraceID); err != nil {
+			return nil, err
+		}
+		if payload.Valid && payload.String != "" {
+			_ = json.Unmarshal([]byte(payload.String), &event.Data)
+		}
+		if createdAt.Valid && createdAt.String != "" {
+			event.CreatedAt = parseSQLiteTime(createdAt.String)
+		}
+		event.ID = fmt.Sprintf("%d", event.Sequence)
+		items = append(items, event)
+	}
+	return items, rows.Err()
+}
+
+// sqlitePlaceholders returns "?, ?, ?" for n placeholders. Keeps the
+// query builder concise without pulling in a third-party SQL helper.
+func sqlitePlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	out := strings.Repeat("?, ", n)
+	return out[:len(out)-2]
+}
+
 // parseSQLiteTime accepts the timestamp shapes that database/sql can
 // produce when round-tripping a time.Time through a TEXT column on
 // modernc.org/sqlite. The default driver writes RFC3339Nano-ish; we also

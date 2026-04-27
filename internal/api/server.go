@@ -32,6 +32,8 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/artifacts/{artifact_id}", handler.HandleTaskRunArtifact)
 	mux.HandleFunc("GET /v1/tasks/{id}/runs/{run_id}/artifacts", handler.HandleTaskRunArtifacts)
 	mux.HandleFunc("GET /v1/tasks/{id}/artifacts", handler.HandleTaskArtifacts)
+	mux.HandleFunc("GET /v1/events", handler.HandleEvents)
+	mux.HandleFunc("GET /v1/events/stream", handler.HandleEventsStream)
 	mux.HandleFunc("GET /v1/chat/sessions", handler.HandleChatSessions)
 	mux.HandleFunc("POST /v1/chat/sessions", handler.HandleCreateChatSession)
 	mux.HandleFunc("GET /v1/chat/sessions/{id}", handler.HandleChatSession)

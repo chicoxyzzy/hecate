@@ -26,6 +26,26 @@ type RunFilter struct {
 	Limit    int
 }
 
+// EventFilter scopes a cross-run event query for the public events
+// stream. All fields are AND-combined (an event must satisfy every
+// non-empty filter); within a slice field the match is OR.
+//
+// AfterSequence is strictly-greater (so a client passes the last
+// sequence they've seen and receives only newer events). Sequence is
+// global across runs, so this acts as a single resumable cursor — no
+// (task_id, sequence) tuple bookkeeping needed by callers.
+//
+// TaskIDs lets the handler pre-scope by tenant (looking up the
+// tenant's tasks once, then constraining events to those IDs).
+// Stores translate this to `task_id IN (...)` in their native
+// query language; an empty slice means no constraint.
+type EventFilter struct {
+	EventTypes    []string
+	TaskIDs       []string
+	AfterSequence int64
+	Limit         int
+}
+
 type Store interface {
 	Backend() string
 	CreateTask(ctx context.Context, task types.Task) (types.Task, error)
@@ -57,4 +77,10 @@ type Store interface {
 
 	AppendRunEvent(ctx context.Context, event types.TaskRunEvent) (types.TaskRunEvent, error)
 	ListRunEvents(ctx context.Context, taskID, runID string, afterSequence int64, limit int) ([]types.TaskRunEvent, error)
+	// ListEvents returns events across runs/tasks ordered by ascending
+	// global sequence. Used by the public events stream so external
+	// dashboards can subscribe to a single feed instead of polling
+	// per-run. The handler enforces tenant scoping via filter.TaskIDs
+	// — passing an empty slice means "no task constraint" (admin).
+	ListEvents(ctx context.Context, filter EventFilter) ([]types.TaskRunEvent, error)
 }

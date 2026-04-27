@@ -407,3 +407,58 @@ func (s *MemoryStore) ListRunEvents(_ context.Context, taskID, runID string, aft
 	}
 	return result, nil
 }
+
+func (s *MemoryStore) ListEvents(_ context.Context, filter EventFilter) ([]types.TaskRunEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var typeSet map[string]struct{}
+	if len(filter.EventTypes) > 0 {
+		typeSet = make(map[string]struct{}, len(filter.EventTypes))
+		for _, t := range filter.EventTypes {
+			typeSet[t] = struct{}{}
+		}
+	}
+	var taskSet map[string]struct{}
+	if len(filter.TaskIDs) > 0 {
+		taskSet = make(map[string]struct{}, len(filter.TaskIDs))
+		for _, id := range filter.TaskIDs {
+			taskSet[id] = struct{}{}
+		}
+	}
+
+	// MemoryStore keys events by run; flatten into a single slice and
+	// filter+sort. Cheap relative to typical run counts; if it ever
+	// becomes a bottleneck we'd switch to a per-store global event
+	// log. Until then this is the simplest correct implementation.
+	result := make([]types.TaskRunEvent, 0)
+	for _, list := range s.events {
+		for _, event := range list {
+			if filter.AfterSequence > 0 && event.Sequence <= filter.AfterSequence {
+				continue
+			}
+			if typeSet != nil {
+				if _, ok := typeSet[event.EventType]; !ok {
+					continue
+				}
+			}
+			if taskSet != nil {
+				if _, ok := taskSet[event.TaskID]; !ok {
+					continue
+				}
+			}
+			result = append(result, event)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Sequence < result[j].Sequence
+	})
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}

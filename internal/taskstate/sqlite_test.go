@@ -326,6 +326,116 @@ func TestSQLiteStore_RunEventsAppendAndList(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_ListEventsCrossRunFilters(t *testing.T) {
+	t.Parallel()
+	store := newSQLiteTestStore(t)
+	ctx := context.Background()
+
+	// Three tasks/runs producing four events of varying types.
+	// We want to confirm: (1) cross-run listing returns everything,
+	// (2) event_type filter narrows correctly, (3) task_ids filter
+	// narrows correctly, (4) afterSequence cursor works the same as
+	// the per-run lister.
+	mustAppend := func(taskID, runID, eventType string) types.TaskRunEvent {
+		evt, err := store.AppendRunEvent(ctx, types.TaskRunEvent{
+			TaskID: taskID, RunID: runID, EventType: eventType,
+		})
+		if err != nil {
+			t.Fatalf("AppendRunEvent: %v", err)
+		}
+		return evt
+	}
+	e1 := mustAppend("t-A", "r-A", "agent.turn.completed")
+	e2 := mustAppend("t-A", "r-A", "run.finished")
+	e3 := mustAppend("t-B", "r-B", "agent.turn.completed")
+	e4 := mustAppend("t-C", "r-C", "approval.requested")
+	_ = e1
+	_ = e2
+	_ = e3
+	_ = e4
+
+	t.Run("no filter returns all events globally ordered", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 4 {
+			t.Fatalf("len = %d, want 4", len(events))
+		}
+		for i := 1; i < len(events); i++ {
+			if events[i].Sequence <= events[i-1].Sequence {
+				t.Errorf("not sequence-ascending at %d: %+v", i, events)
+			}
+		}
+	})
+
+	t.Run("event_type filter matches OR semantics", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{EventTypes: []string{"agent.turn.completed"}})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("len = %d, want 2 (two agent.turn.completed)", len(events))
+		}
+		for _, e := range events {
+			if e.EventType != "agent.turn.completed" {
+				t.Errorf("unexpected type %q", e.EventType)
+			}
+		}
+	})
+
+	t.Run("task_ids filter restricts to listed tasks", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{TaskIDs: []string{"t-A", "t-C"}})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 3 {
+			t.Fatalf("len = %d, want 3 (t-A: 2, t-C: 1)", len(events))
+		}
+		for _, e := range events {
+			if e.TaskID != "t-A" && e.TaskID != "t-C" {
+				t.Errorf("unexpected task %q in result", e.TaskID)
+			}
+		}
+	})
+
+	t.Run("after_sequence cursor skips older rows", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{AfterSequence: e2.Sequence})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("len = %d, want 2 (e3, e4)", len(events))
+		}
+		if events[0].Sequence != e3.Sequence {
+			t.Errorf("first sequence = %d, want %d", events[0].Sequence, e3.Sequence)
+		}
+	})
+
+	t.Run("combined filters AND together", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{
+			EventTypes: []string{"agent.turn.completed"},
+			TaskIDs:    []string{"t-B"},
+		})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 1 || events[0].TaskID != "t-B" {
+			t.Errorf("expected one event from t-B, got %+v", events)
+		}
+	})
+
+	t.Run("limit caps the response size", func(t *testing.T) {
+		events, err := store.ListEvents(ctx, EventFilter{Limit: 2})
+		if err != nil {
+			t.Fatalf("ListEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("len = %d, want 2 (limit honored)", len(events))
+		}
+	})
+}
+
 func TestSQLiteStore_ListRunsByFilterStatusSet(t *testing.T) {
 	t.Parallel()
 	store := newSQLiteTestStore(t)

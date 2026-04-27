@@ -124,6 +124,19 @@ type TaskRunEventsResponse struct {
 	Data   []TaskRunEventItem `json:"data"`
 }
 
+// EventsResponse is the body of GET /v1/events — a paginated cross-run
+// event feed. Same item shape as TaskRunEventsResponse but typed
+// distinctly so downstream changes (e.g. adding tenant to the item)
+// can evolve independently.
+type EventsResponse struct {
+	Object string             `json:"object"`
+	Data   []TaskRunEventItem `json:"data"`
+	// NextAfterSequence is the sequence to pass back as
+	// `after_sequence` to fetch the next page. Equals the highest
+	// sequence in Data; zero when Data is empty.
+	NextAfterSequence int64 `json:"next_after_sequence,omitempty"`
+}
+
 type TaskItem struct {
 	ID                   string `json:"id"`
 	Title                string `json:"title"`

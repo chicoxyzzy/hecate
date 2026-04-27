@@ -538,6 +538,55 @@ func (s *PostgresStore) ListRunEvents(ctx context.Context, taskID, runID string,
 	return items, rows.Err()
 }
 
+func (s *PostgresStore) ListEvents(ctx context.Context, filter EventFilter) ([]types.TaskRunEvent, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	args := []any{filter.AfterSequence}
+	query := fmt.Sprintf(`
+		SELECT sequence, task_id, run_id, event_type, event_data, created_at, request_id, trace_id
+		FROM %s
+		WHERE sequence > $1
+	`, s.eventsTable)
+	if len(filter.EventTypes) > 0 {
+		placeholders := make([]string, 0, len(filter.EventTypes))
+		for _, t := range filter.EventTypes {
+			args = append(args, t)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		query += " AND event_type IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	if len(filter.TaskIDs) > 0 {
+		placeholders := make([]string, 0, len(filter.TaskIDs))
+		for _, id := range filter.TaskIDs {
+			args = append(args, id)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		query += " AND task_id IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY sequence ASC LIMIT $%d", len(args))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]types.TaskRunEvent, 0)
+	for rows.Next() {
+		var event types.TaskRunEvent
+		var payload []byte
+		if err := rows.Scan(&event.Sequence, &event.TaskID, &event.RunID, &event.EventType, &payload, &event.CreatedAt, &event.RequestID, &event.TraceID); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(payload, &event.Data)
+		event.ID = fmt.Sprintf("%d", event.Sequence)
+		items = append(items, event)
+	}
+	return items, rows.Err()
+}
+
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	statements := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id TEXT PRIMARY KEY, tenant TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), payload JSONB NOT NULL)`, s.tasksTable),
