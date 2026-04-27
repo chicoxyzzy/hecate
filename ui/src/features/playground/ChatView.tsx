@@ -111,7 +111,14 @@ export function ChatView({ state, actions }: Props) {
       {sidebarOpen && (
         <div style={{ width: 220, borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", flexShrink: 0, background: "var(--bg1)" }}>
           <div style={{ padding: 8, borderBottom: "1px solid var(--border)", display: "flex", gap: 6 }}>
-            <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: "center" }} onClick={() => actions.createChatSession()}>
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 1, justifyContent: "center" }}
+              onClick={() => {
+                actions.createChatSession();
+                textareaRef.current?.focus();
+              }}
+            >
               <Icon d={Icons.plus} size={13} /> New session
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => setSidebarOpen(false)} title="Close">

@@ -114,3 +114,19 @@ describe("ChatView session title", () => {
     expect(screen.getByText("Hello world")).toBeTruthy();
   });
 });
+
+describe("ChatView New session button", () => {
+  it("focuses the message textarea after clicking New session", async () => {
+    // The button starts a fresh conversation; the operator's next move
+    // is almost always to type. Auto-focusing the textarea saves a
+    // click and matches the muscle-memory pattern from chat clients.
+    const createChatSession = vi.fn();
+    const { state, actions } = setup({}, { createChatSession });
+    const user = userEvent.setup();
+    render(<ChatView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: /new session/i }));
+    expect(createChatSession).toHaveBeenCalled();
+    const textarea = screen.getByPlaceholderText(/^Message…/i);
+    expect(document.activeElement).toBe(textarea);
+  });
+});
