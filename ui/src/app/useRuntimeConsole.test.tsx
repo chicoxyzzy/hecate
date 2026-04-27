@@ -719,6 +719,299 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.notice?.message).toBe("Import failed for 2 rows.");
     });
   });
+
+  // Admin mutations route through runAdminMutation, which on success
+  // fires a follow-up loadDashboard() and sets a success notice — and on
+  // failure populates BOTH adminConfigError (the inline banner) AND
+  // notice (the toast). These tests pin both ends so a refactor that
+  // drops one of the surfaces is caught.
+  describe("admin mutations", () => {
+    function adminFetchMock(routes: Record<string, () => Response>) {
+      return async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+        if (url === "/v1/whoami") {
+          return jsonResponse({
+            object: "session",
+            data: { authenticated: true, invalid_token: false, role: "admin", name: "admin", source: "admin_token" },
+          });
+        }
+        if (url === "/v1/models") return jsonResponse({ object: "list", data: [] });
+        if (url === "/v1/provider-presets") return jsonResponse({ object: "provider_presets", data: [] });
+        if (url === "/admin/providers") return jsonResponse({ object: "provider_status", data: [] });
+        if (url === "/admin/control-plane") return jsonResponse({ object: "control_plane", data: { backend: "memory", tenants: [], api_keys: [], events: [], providers: [], pricebook: [], policy_rules: [] } });
+        if (url.startsWith("/admin/budget")) return jsonResponse({ object: "budget_status", data: null });
+        if (url.startsWith("/admin/accounts/summary")) return jsonResponse({ object: "account_summary", data: null });
+        if (url.startsWith("/v1/chat/sessions")) return jsonResponse({ object: "chat_sessions", data: [] });
+        if (url.startsWith("/admin/retention/runs")) return jsonResponse({ object: "retention_runs", data: [] });
+        if (url.startsWith("/admin/requests")) return jsonResponse({ object: "requests", data: [] });
+        const handler = routes[url];
+        if (handler) return handler();
+        return unauthorizedResponse();
+      };
+    }
+
+    beforeEach(() => {
+      window.localStorage.setItem("hecate.authToken", "admin-secret");
+    });
+
+    it("setProviderAPIKey rotate sends PUT, fires loadDashboard, surfaces success notice", async () => {
+      let putCalls = 0;
+      let putBody = "";
+      const baseMock = adminFetchMock({});
+      fetchMock.mockImplementation((async (input, init) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/providers/anthropic/api-key" && init?.method === "PUT") {
+          putCalls++;
+          putBody = String(init.body ?? "");
+          return jsonResponse({ object: "control_plane_provider_api_key", data: { id: "anthropic" } });
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.setProviderAPIKey("anthropic", "sk-new");
+      });
+      await waitFor(() => expect(result.current.state.notice?.message).toBe("API key saved."));
+      expect(putCalls).toBe(1);
+      expect(JSON.parse(putBody)).toEqual({ key: "sk-new" });
+      expect(result.current.state.notice?.kind).toBe("success");
+      // No adminConfigError on success.
+      expect(result.current.state.adminConfigError).toBe("");
+    });
+
+    it("setProviderAPIKey clear (empty key) sends PUT and reads 'API key cleared.'", async () => {
+      let putBody = "";
+      fetchMock.mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/providers/openai/api-key" && init?.method === "PUT") {
+          putBody = String(init.body ?? "");
+          return jsonResponse({ object: "control_plane_provider_api_key", data: { id: "openai", status: "cleared" } });
+        }
+        return adminFetchMock({})(input);
+      });
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.setProviderAPIKey("openai", "");
+      });
+      await waitFor(() => expect(result.current.state.notice?.message).toBe("API key cleared."));
+      expect(JSON.parse(putBody)).toEqual({ key: "" });
+    });
+
+    it("setProviderAPIKey failure surfaces both adminConfigError and an error notice", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/providers/anthropic/api-key" && init?.method === "PUT") {
+          return new Response(
+            JSON.stringify({ error: { message: "secret store is read-only" } }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return adminFetchMock({})(input);
+      });
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.setProviderAPIKey("anthropic", "sk-new");
+      });
+      await waitFor(() => expect(result.current.state.notice?.kind).toBe("error"));
+      // Inline banner: the failureDetail string lives in adminConfigError.
+      // Toaster: the user-facing errorMessage lives in notice.message.
+      // Both must be populated — operators can be looking at either.
+      expect(result.current.state.notice?.message).toBe("Failed to save API key.");
+      expect(result.current.state.adminConfigError).toContain("secret store is read-only");
+    });
+
+    it("setProviderEnabled produces no success notice (silent toggle)", async () => {
+      // Toggling a provider in the cards UI must not pop a toast every
+      // click — it would spam the operator. The action keeps notice
+      // null on success while still firing the PATCH and refresh.
+      let patchHits = 0;
+      fetchMock.mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url === "/admin/control-plane/providers/anthropic" && init?.method === "PATCH") {
+          patchHits++;
+          return jsonResponse({ object: "control_plane_provider", data: { id: "anthropic", enabled: false } });
+        }
+        return adminFetchMock({})(input);
+      });
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.setProviderEnabled("anthropic", false);
+      });
+      // The dashboard reload fires after the PATCH, so wait for it to settle.
+      await waitFor(() => expect(patchHits).toBe(1));
+      expect(result.current.state.notice).toBeNull();
+      expect(result.current.state.adminConfigError).toBe("");
+    });
+  });
+
+  // Chat session ops mutate sidebar state and chatError differently
+  // from the chat submission flow. These tests pin the side effects so
+  // a refactor of useRuntimeConsole's session reducer is caught.
+  describe("chat session actions", () => {
+    function adminFetchMockWithSessions(sessions: Array<{ id: string; title: string }>, routes: Record<string, () => Response> = {}) {
+      return async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+        if (url === "/v1/whoami") {
+          return jsonResponse({
+            object: "session",
+            data: { authenticated: true, invalid_token: false, role: "admin", name: "admin", source: "admin_token" },
+          });
+        }
+        if (url === "/v1/models") return jsonResponse({ object: "list", data: [] });
+        if (url === "/v1/provider-presets") return jsonResponse({ object: "provider_presets", data: [] });
+        if (url === "/admin/providers") return jsonResponse({ object: "provider_status", data: [] });
+        if (url === "/admin/control-plane") return jsonResponse({ object: "control_plane", data: { backend: "memory", tenants: [], api_keys: [], events: [], providers: [], pricebook: [], policy_rules: [] } });
+        if (url.startsWith("/admin/budget")) return jsonResponse({ object: "budget_status", data: null });
+        if (url.startsWith("/admin/accounts/summary")) return jsonResponse({ object: "account_summary", data: null });
+        if (url === "/v1/chat/sessions?limit=20") {
+          const data = sessions.map(s => ({
+            ...s, turns: [], created_at: "2026-04-20T00:00:00Z", updated_at: "2026-04-20T00:00:00Z",
+          }));
+          return jsonResponse({ object: "chat_sessions", data, has_more: false });
+        }
+        if (url.startsWith("/admin/retention/runs")) return jsonResponse({ object: "retention_runs", data: [] });
+        if (url.startsWith("/admin/requests")) return jsonResponse({ object: "requests", data: [] });
+        const handler = routes[url];
+        if (handler) return handler();
+        return unauthorizedResponse();
+      };
+    }
+
+    beforeEach(() => {
+      window.localStorage.setItem("hecate.authToken", "admin-secret");
+    });
+
+    it("selectChatSession populates activeChatSession on success", async () => {
+      fetchMock.mockImplementation(adminFetchMockWithSessions([{ id: "sess_42", title: "Existing" }], {
+        "/v1/chat/sessions/sess_42": () => jsonResponse({
+          object: "chat_session",
+          data: {
+            id: "sess_42",
+            title: "Existing",
+            turns: [{
+              id: "turn_1",
+              request_id: "req_1",
+              user_message: { role: "user", content: "hi" },
+              assistant_message: { role: "assistant", content: "hello" },
+              provider: "openai", model: "gpt-4o-mini",
+              cost_micros_usd: 0, cost_usd: "0",
+              prompt_tokens: 1, completion_tokens: 1, total_tokens: 2,
+              created_at: "2026-04-20T00:00:00Z",
+            }],
+            created_at: "2026-04-20T00:00:00Z", updated_at: "2026-04-20T00:00:00Z",
+          },
+        }),
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.selectChatSession("sess_42");
+      });
+      await waitFor(() => expect(result.current.state.activeChatSession?.id).toBe("sess_42"));
+      expect(result.current.state.activeChatSessionID).toBe("sess_42");
+      expect(result.current.state.activeChatSession?.turns).toHaveLength(1);
+      expect(result.current.state.chatError).toBe("");
+    });
+
+    it("selectChatSession 404 sets chatError + error notice but still updates activeChatSessionID", async () => {
+      fetchMock.mockImplementation(adminFetchMockWithSessions([{ id: "sess_gone", title: "Gone" }], {
+        "/v1/chat/sessions/sess_gone": () => new Response(
+          JSON.stringify({ error: { message: "session not found" } }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.actions.selectChatSession("sess_gone");
+      });
+      // The ID flips first (optimistic) — the error path runs after the
+      // GET fails. Inline + toast both populated so the operator can
+      // see the failure regardless of viewport focus.
+      expect(result.current.state.activeChatSessionID).toBe("sess_gone");
+      await waitFor(() => expect(result.current.state.chatError).toContain("session not found"));
+      expect(result.current.state.notice?.kind).toBe("error");
+    });
+
+    it("deleteChatSession removes the session from the sidebar and notices", async () => {
+      let deleteCalls = 0;
+      const baseMock = adminFetchMockWithSessions(
+        [{ id: "sess_a", title: "Keep" }, { id: "sess_b", title: "Delete me" }],
+        {},
+      );
+      fetchMock.mockImplementation((async (input, init) => {
+        const url = String(input);
+        if (url === "/v1/chat/sessions/sess_b" && init?.method === "DELETE") {
+          deleteCalls++;
+          // 204 must have a null body per the Response constructor spec.
+          return new Response(null, { status: 204 });
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.chatSessions).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.actions.deleteChatSession("sess_b");
+      });
+
+      expect(deleteCalls).toBe(1);
+      await waitFor(() => expect(result.current.state.chatSessions.map(s => s.id)).toEqual(["sess_a"]));
+      expect(result.current.state.notice?.kind).toBe("success");
+      expect(result.current.state.notice?.message).toBe("Session deleted.");
+    });
+
+    it("renameChatSession patches the title in the sidebar", async () => {
+      const baseMock = adminFetchMockWithSessions(
+        [{ id: "sess_a", title: "Old title" }],
+        {},
+      );
+      fetchMock.mockImplementation((async (input, init) => {
+        const url = String(input);
+        if (url === "/v1/chat/sessions/sess_a" && init?.method === "PATCH") {
+          return jsonResponse({
+            object: "chat_session",
+            data: {
+              id: "sess_a",
+              title: "Renamed",
+              turns: [],
+              created_at: "2026-04-20T00:00:00Z",
+              updated_at: "2026-04-20T00:01:00Z",
+            },
+          });
+        }
+        return baseMock(input);
+      }) as never);
+
+      const { result } = renderHook(() => useRuntimeConsole());
+      await waitFor(() => expect(result.current.state.chatSessions).toHaveLength(1));
+
+      await act(async () => {
+        await result.current.actions.renameChatSession("sess_a", "Renamed");
+      });
+
+      await waitFor(() => expect(result.current.state.chatSessions[0].title).toBe("Renamed"));
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {
