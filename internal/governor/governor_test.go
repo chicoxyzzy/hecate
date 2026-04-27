@@ -342,3 +342,169 @@ func TestControlPlaneGovernorReflectsLivePolicyUpdatesAndKeepsConfiguredRules(t 
 		t.Fatalf("CheckRoute(after delete) error = %v, want nil", err)
 	}
 }
+
+// ─── Money-math defenses ─────────────────────────────────────────────────────
+//
+// Three invariants worth pinning so a refactor of the budget path can't
+// silently overcharge or fail-open:
+//
+//   1. CheckRoute returns nil when budget enforcement is disabled —
+//      neither MaxTotalBudgetMicros set NOR an explicit credit in the
+//      store. This is the "anonymous developer with no budget config"
+//      flow and must never block requests.
+//
+//   2. CheckRoute is read-not-reservation: two concurrent requests both
+//      observing a balance that covers each individually but not their
+//      sum will both pass. This is by design — the alternative
+//      (locking-then-reserving the estimated cost) blocks routing on a
+//      DB write per request and requires unwinding on partial failure.
+//      RecordUsage debits actual cost after the request completes, so
+//      the budget can briefly go negative under contention. Pin the
+//      design so a "fix" doesn't accidentally introduce a lock
+//      contention bottleneck.
+//
+//   3. Concurrent RecordUsage from multiple goroutines doesn't lose
+//      updates at the governor level. The store-level concurrency test
+//      proves the bucket is atomic; this proves the governor wraps it
+//      correctly (no read-modify-write outside the store's lock).
+
+func TestStaticGovernor_CheckRouteAllowsWhenBudgetDisabled(t *testing.T) {
+	t.Parallel()
+	// No MaxTotalBudgetMicros, no SetBalance — enforcement fully off.
+	store := NewMemoryBudgetStore()
+	gov := NewStaticGovernor(config.GovernorConfig{
+		BudgetKey: "global",
+	}, store, store)
+
+	// Even a wildly expensive estimate must not block when no budget is
+	// configured. A regression that defaults to "always enforce with
+	// max=0" would deny every request.
+	err := gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
+		Provider: "openai",
+		Model:    "gpt-4o-mini",
+	}, "cloud", 1_000_000_000)
+	if err != nil {
+		t.Errorf("CheckRoute() error = %v, want nil (budget enforcement is off)", err)
+	}
+}
+
+func TestStaticGovernor_CheckRouteIsReadNotReservation(t *testing.T) {
+	t.Parallel()
+	// Pin the design contract: CheckRoute does NOT reserve the estimated
+	// cost. Two concurrent CheckRoutes both pass when balance covers
+	// each individually, even if cost(A)+cost(B) > balance. RecordUsage
+	// debits the actual cost later, so budget can briefly go negative —
+	// that's intentional vs. blocking routing on a write.
+	store := NewMemoryBudgetStore()
+	gov := NewStaticGovernor(config.GovernorConfig{
+		MaxTotalBudgetMicros: 100,
+		BudgetKey:            "global",
+	}, store, store)
+
+	decision := types.RouteDecision{Provider: "openai", Model: "gpt-4o-mini"}
+	if err := gov.CheckRoute(context.Background(), types.ChatRequest{}, decision, "cloud", 60); err != nil {
+		t.Fatalf("first CheckRoute: %v", err)
+	}
+	if err := gov.CheckRoute(context.Background(), types.ChatRequest{}, decision, "cloud", 60); err != nil {
+		t.Errorf("second CheckRoute: %v, want nil (no reservation between Check and RecordUsage)", err)
+	}
+}
+
+func TestStaticGovernor_RecordUsageNoLostUpdatesUnderConcurrency(t *testing.T) {
+	t.Parallel()
+	// Wraps the store's atomicity guarantee at the governor level.
+	// 50 concurrent debits of 1k from a 1M starting budget → 1M-50k=950k.
+	// A regression that read-modify-writes outside the store's lock
+	// would lose updates and leave the operator with underbilling
+	// proportional to the concurrency level.
+	store := NewMemoryBudgetStore()
+	gov := NewStaticGovernor(config.GovernorConfig{
+		BudgetKey: "global",
+	}, store, store)
+	ctx := context.Background()
+
+	if err := gov.TopUpBudget(ctx, BudgetFilter{Scope: "global"}, 1_000_000); err != nil {
+		t.Fatalf("TopUpBudget: %v", err)
+	}
+
+	const goroutines = 50
+	done := make(chan struct{}, goroutines)
+	decision := types.RouteDecision{Provider: "openai", Model: "gpt-4o-mini"}
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			_ = gov.RecordUsage(ctx, types.ChatRequest{}, decision,
+				types.Usage{TotalTokens: 1}, 1_000)
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+
+	status, err := gov.BudgetStatus(ctx, BudgetFilter{Scope: "global"})
+	if err != nil {
+		t.Fatalf("BudgetStatus: %v", err)
+	}
+	const want = 1_000_000 - goroutines*1_000
+	if status.BalanceMicrosUSD != want {
+		t.Errorf("balance = %d, want %d (%d goroutines, no lost updates)",
+			status.BalanceMicrosUSD, want, goroutines)
+	}
+}
+
+// TestStaticGovernor_TenantImpersonationDebitsBoundTenant verifies the
+// budget filter resolution for a tenant-bound request: the resolved key
+// uses scope.Tenant (set by the handler from principal.Tenant), not the
+// wire `User` field. Defends against a regression that reads tenant from
+// the wire payload — letting a key bound to "team-a" silently debit
+// "team-b"'s budget by passing user="team-b" in the request.
+func TestStaticGovernor_TenantImpersonationDebitsBoundTenant(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryBudgetStore()
+	gov := NewStaticGovernor(config.GovernorConfig{
+		BudgetKey:            "global",
+		BudgetScope:          "tenant",
+		BudgetTenantFallback: "anonymous",
+	}, store, store)
+	ctx := context.Background()
+
+	// Seed both accounts so RecordUsage doesn't take the
+	// "no budget configured → skip debit" early-return branch.
+	if err := gov.TopUpBudget(ctx, BudgetFilter{Scope: "tenant", Tenant: "team-a"}, 1_000); err != nil {
+		t.Fatalf("seed team-a: %v", err)
+	}
+	if err := gov.TopUpBudget(ctx, BudgetFilter{Scope: "tenant", Tenant: "team-b"}, 1_000); err != nil {
+		t.Fatalf("seed team-b: %v", err)
+	}
+
+	// Request scope claims User=team-b (the wire tenant), but the
+	// principal is bound to team-a. The handler-level tenant check
+	// would reject this in production; here we exercise the budget
+	// path directly to prove that even if a malformed request slipped
+	// through, the resolved budget key uses Tenant (which the handler
+	// sets from principal.Tenant), not User.
+	req := types.ChatRequest{
+		Scope: types.RequestScope{
+			Tenant: "team-a", // set by the handler from principal.Tenant
+			User:   "team-b", // wire user — must NOT win
+			Principal: types.PrincipalContext{
+				Tenant: "team-a",
+			},
+		},
+	}
+	decision := types.RouteDecision{Provider: "openai", Model: "gpt-4o-mini"}
+
+	if err := gov.RecordUsage(ctx, req, decision, types.Usage{TotalTokens: 1}, 100); err != nil {
+		t.Fatalf("RecordUsage: %v", err)
+	}
+
+	statusA, _ := gov.BudgetStatus(ctx, BudgetFilter{Scope: "tenant", Tenant: "team-a"})
+	if statusA.DebitedMicrosUSD != 100 {
+		t.Errorf("team-a debited = %d, want 100 (the principal-bound tenant)", statusA.DebitedMicrosUSD)
+	}
+
+	statusB, _ := gov.BudgetStatus(ctx, BudgetFilter{Scope: "tenant", Tenant: "team-b"})
+	if statusB.DebitedMicrosUSD != 0 {
+		t.Errorf("team-b debited = %d, want 0 (tenant impersonation must not leak)", statusB.DebitedMicrosUSD)
+	}
+}
