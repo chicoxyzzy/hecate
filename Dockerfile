@@ -81,7 +81,23 @@ COPY --from=go-builder --chown=65532:65532 /out/data /data
 
 ENV GATEWAY_ADDRESS=:8080 \
     GATEWAY_DATA_DIR=/data \
-    GATEWAY_SQLITE_PATH=/data/hecate.db
+    GATEWAY_SQLITE_PATH=/data/hecate.db \
+    # Default the durable subsystems to SQLite in the docker image so
+    # `docker compose up` persists tenants / keys / pricebook / tasks /
+    # chat sessions across restarts without extra config. The .db lives
+    # on the /data volume and is wiped by `make reset-docker` along
+    # with the rest of the stack. Operators can still override any of
+    # these via .env / compose env (set to `memory` for ephemeral, or
+    # `postgres` with the postgres profile). The semantic cache stays
+    # on memory because it has no SQLite backend (modernc + sqlite-vec
+    # mismatch — see internal/cache/semantic.go).
+    GATEWAY_CONTROL_PLANE_BACKEND=sqlite \
+    GATEWAY_RETENTION_HISTORY_BACKEND=sqlite \
+    GATEWAY_CHAT_SESSIONS_BACKEND=sqlite \
+    GATEWAY_TASKS_BACKEND=sqlite \
+    GATEWAY_TASK_QUEUE_BACKEND=sqlite \
+    GATEWAY_CACHE_BACKEND=sqlite \
+    GATEWAY_BUDGET_BACKEND=sqlite
 VOLUME ["/data"]
 
 EXPOSE 8080

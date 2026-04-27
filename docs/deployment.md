@@ -39,11 +39,11 @@ docker compose cp hecate:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_
 
 (`docker compose cp ... -` emits a tar archive, hence the `tar -xO`.)
 
-The bootstrap file persists across container restarts as long as the `hecate-data` volume sticks around — only `docker compose down -v` (or `make reset-docker`) wipes it.
+The bootstrap file (and the SQLite database, see below) persist across container restarts as long as the `hecate-data` volume sticks around — only `docker compose down -v` (or `make reset-docker`) wipes them.
 
 ## Resetting state
 
-To wipe the stack back to first-run — removes the `hecate-data`, `postgres-data`, and `ollama-models` volumes and regenerates the admin token on the next `docker compose up`:
+To wipe the stack back to first-run — removes the `hecate-data` (admin token + SQLite db), `postgres-data`, and `ollama-models` volumes and regenerates the admin token on the next `docker compose up`:
 
 ```bash
 make reset-docker
@@ -57,8 +57,10 @@ For local (non-Docker) development resets, see [`development.md`](development.md
 
 Three tiers, picked per subsystem via `GATEWAY_*_BACKEND` env vars:
 
-- **`memory`** (default) — in-process, ephemeral. Fine for evaluation and tests; loses everything on restart.
-- **`sqlite`** — single-file durable store at `GATEWAY_SQLITE_PATH` (default `/data/hecate.db` in the docker image). Right for single-node production.
+- **`memory`** — in-process, ephemeral. Right for tests and local iteration via the bare binary.
+- **`sqlite`** — single-file durable store at `GATEWAY_SQLITE_PATH` (default `/data/hecate.db` in the docker image). **Default for the docker image** so `docker compose up` persists tenants / keys / pricebook / tasks / chat sessions across restarts without extra config. Right for single-node production.
 - **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
 
-The semantic cache has no SQLite backend — see the README's Storage backends section for the full matrix and the rationale.
+The semantic cache has no SQLite backend and stays on `memory` in the docker image — see the README's Storage backends section for the full matrix and the rationale.
+
+To opt out of SQLite persistence in docker (e.g. ephemeral test stack), set `GATEWAY_*_BACKEND=memory` for the subsystems you want ephemeral, either in `.env` or via compose env overrides.
