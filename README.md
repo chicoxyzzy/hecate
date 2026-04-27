@@ -126,6 +126,7 @@ make reset-dev
 Hecate splits into two concurrent surfaces in one binary: a gateway for OpenAI- and Anthropic-shaped client traffic, and a task runtime for queued agent work. Both share auth, budgets, and observability — but the request paths are independent, so you can use either in isolation.
 
 ```mermaid
+flowchart LR
     Client["Client"]
     Client -->|"chat / messages"| Gateway["Gateway pipeline"]
     Client -->|"task control"| Runtime["Task runtime"]
