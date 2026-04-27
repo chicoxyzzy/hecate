@@ -92,6 +92,30 @@ html, body, #root { height: 100%; overflow: hidden; }
 body { margin: 0; background: var(--bg0); color: var(--t0); font-family: var(--font-sans); font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
 
+/* ─── Kicker ───
+ * Small uppercase mono labels above lists, sections, and detail panels.
+ * The pattern was repeated ~15 times inline as
+ *   { fontFamily: "var(--font-mono)", fontSize: 10|11, color: "var(--t3)",
+ *     textTransform: "uppercase", letterSpacing: "0.04em|0.05em|0.06em" }
+ * with drift on letter-spacing. Standardized at 0.06em. Layout
+ * properties (margin, display: flex, etc.) stay inline at the call
+ * site since they vary; color too — most use --t3 but a few use --t2
+ * or --red and that's intentional. */
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.kicker-lg {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* ─── Badge ─── */
 .badge {
   display: inline-flex; align-items: center; padding: 2px 7px;

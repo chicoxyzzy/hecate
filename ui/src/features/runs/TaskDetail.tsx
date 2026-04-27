@@ -183,7 +183,7 @@ export function TaskDetail({
 
         {steps.length > 0 && (
           <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>Steps</div>
+            <div className="kicker" style={{ marginBottom: 8 }}>Steps</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
               {steps.map((step, i) => {
                 const expanded = expandedStepID === step.id;
@@ -279,7 +279,7 @@ export function TaskDetail({
 
         {artifacts.filter(a => a.kind !== "stdout" && a.kind !== "stderr").length > 0 && (
           <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 6, background: "var(--bg1)" }}>
-            <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", alignSelf: "center", marginRight: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>artifacts</span>
+            <span className="kicker" style={{ alignSelf: "center", marginRight: 4 }}>artifacts</span>
             {artifacts.filter(a => a.kind !== "stdout" && a.kind !== "stderr").map(a => (
               <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "3px 8px" }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t0)" }}>{a.name || a.kind}</span>
@@ -317,7 +317,7 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
       </div>
       {step.error && (
         <div>
-          <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>Error</div>
+          <div className="kicker" style={{ marginBottom: 4 }}>Error</div>
           <pre style={{ margin: 0, padding: "6px 8px", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--red)", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {step.error}
           </pre>
@@ -325,7 +325,7 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
       )}
       {step.input && Object.keys(step.input).length > 0 && (
         <div>
-          <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>Input</div>
+          <div className="kicker" style={{ marginBottom: 4 }}>Input</div>
           <pre style={{ margin: 0, padding: "6px 8px", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t1)", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", overflowX: "auto", maxHeight: 200 }}>
             {JSON.stringify(step.input, null, 2)}
           </pre>
@@ -333,7 +333,7 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
       )}
       {step.output_summary && Object.keys(step.output_summary).length > 0 && (
         <div>
-          <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>Output</div>
+          <div className="kicker" style={{ marginBottom: 4 }}>Output</div>
           <pre style={{ margin: 0, padding: "6px 8px", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t1)", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", overflowX: "auto", maxHeight: 200 }}>
             {JSON.stringify(step.output_summary, null, 2)}
           </pre>

@@ -818,7 +818,7 @@ function PolicyTab({ state, actions }: Props) {
             )}
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-              <div style={{ fontSize: 11, color: "var(--t2)", marginBottom: 8, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 8 }}>
                 Match conditions (any-blank = match anything)
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1298,21 +1298,21 @@ export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
 
       <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <div>
-          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
             Codex / OpenAI-compatible
           </div>
           <CodeBlock code={openaiSnippet} lang="bash" />
         </div>
 
         <div>
-          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
             Claude Code / Anthropic Messages
           </div>
           <CodeBlock code={anthropicSnippet} lang="bash" />
         </div>
 
         <div>
-          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
             Smoke test (curl)
           </div>
           <CodeBlock code={curlSnippet} lang="bash" />

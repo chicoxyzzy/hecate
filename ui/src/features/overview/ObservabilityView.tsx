@@ -56,7 +56,7 @@ type StatCardProps = { label: string; value: string | number; sub?: string; high
 function StatCard({ label, value, sub, highlight }: StatCardProps) {
   return (
     <div className="card" style={{ padding: "12px 14px", minWidth: 110 }}>
-      <div style={{ fontSize: 10, color: "var(--t2)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>{label}</div>
+      <div className="kicker" style={{ color: "var(--t2)", marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: highlight ? "var(--amber)" : "var(--t0)", lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>{sub}</div>}
     </div>
@@ -163,7 +163,7 @@ export function ObservabilityView({ state }: Props) {
       {/* Runtime stats */}
       {stats && (
         <div>
-          <div style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>Runtime</div>
+          <div className="kicker-lg" style={{ marginBottom: 8 }}>Runtime</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <StatCard label="queue depth" value={stats.queue_depth} sub={stats.queue_capacity ? `cap ${stats.queue_capacity}` : undefined} highlight={stats.queue_depth > 0} />
             <StatCard label="workers" value={stats.worker_count} />
@@ -181,7 +181,7 @@ export function ObservabilityView({ state }: Props) {
 
         {/* Left: trace list */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="kicker-lg" style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
             <span>Recent requests</span>
             <button
               onClick={() => setLiveMode(m => !m)}
@@ -257,7 +257,7 @@ export function ObservabilityView({ state }: Props) {
         {/* Right: trace detail */}
         {selectedReqId && (
           <div style={{ width: 380, flexShrink: 0 }}>
-            <div style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>Trace</div>
+            <div className="kicker-lg" style={{ marginBottom: 8 }}>Trace</div>
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
 
               {/* Header */}
@@ -291,7 +291,7 @@ export function ObservabilityView({ state }: Props) {
               {/* Span waterfall — always available from in-memory tracer */}
               {traceDetail?.spans && traceDetail.spans.length > 0 && (
                 <div style={{ padding: "10px 14px", borderBottom: traceDetail.route?.candidates?.length ? "1px solid var(--border)" : undefined }}>
-                  <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  <div className="kicker" style={{ marginBottom: 8 }}>
                     Spans — {computedSpans.length} · {totalMs}ms total
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -326,7 +326,7 @@ export function ObservabilityView({ state }: Props) {
                     const attrEntries = Object.entries(attrs).filter(([, v]) => v != null && v !== "");
                     return (
                       <div style={{ marginTop: 10, padding: "8px 10px", background: "var(--bg3)", borderRadius: "var(--radius-sm)" }}>
-                        <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{selectedSpan}</div>
+                        <div className="kicker" style={{ marginBottom: 6 }}>{selectedSpan}</div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                           {[
                             ["span_id",  span.raw.span_id],
@@ -362,7 +362,7 @@ export function ObservabilityView({ state }: Props) {
                 const candidates: Candidate[] = traceDetail?.route?.candidates ?? selectedTrace?.route?.candidates ?? [];
                 return candidates.length > 0 && (
                 <div style={{ padding: "10px 14px" }}>
-                  <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Route candidates</div>
+                  <div className="kicker" style={{ marginBottom: 6 }}>Route candidates</div>
                   {candidates.map((c, i) => (
                     <div key={i} style={{ display: "flex", gap: 6, padding: "4px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
                       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: c.outcome === "selected" || c.outcome === "completed" ? "var(--teal)" : "var(--t3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

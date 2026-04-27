@@ -455,8 +455,9 @@ export function PricebookTab({ state, actions }: Props) {
             set is. Hover for the exact timestamp. */}
         {litellmDiff?.fetched_at && (
           <span
+            className="kicker"
             title={`Fetched at ${litellmDiff.fetched_at}`}
-            style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", marginLeft: "auto", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            style={{ marginLeft: "auto" }}>
             fetched {formatRelativeTime(litellmDiff.fetched_at)}
           </span>
         )}
@@ -1067,7 +1068,7 @@ function PricebookImportConsent({
               upstream catalog. Helps the operator decide whether the
               data is stale (e.g. open a new dialog after a long pause). */}
           {diff.fetched_at && (
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            <div className="kicker" style={{ marginBottom: 8 }}>
               Fetched {formatRelativeTime(diff.fetched_at)} · <span title={diff.fetched_at}>{formatAbsoluteTime(diff.fetched_at)}</span>
             </div>
           )}
@@ -1077,7 +1078,7 @@ function PricebookImportConsent({
               can re-try or uncheck the rows that didn't land. */}
           {failed.length > 0 && (
             <div style={{ marginBottom: 12, padding: "10px 12px", background: "var(--red-bg)", border: "1px solid var(--red-border)", borderRadius: "var(--radius-sm)" }}>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--red)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+              <div className="kicker" style={{ color: "var(--red)", marginBottom: 6 }}>
                 {failed.length} failed
               </div>
               {failed.map((f, i) => (
@@ -1108,7 +1109,7 @@ function PricebookImportConsent({
                 onChange={toggleAll}
                 aria-label="Toggle all"
               />
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              <span className="kicker" style={{ color: "var(--t2)" }}>
                 {allChecked ? "deselect all" : "select all"}
               </span>
             </label>

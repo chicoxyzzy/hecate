@@ -221,7 +221,7 @@ export function ProvidersView({ state, actions }: Props) {
               ["Default model", selectedConfig.default_model || "—"],
             ] as [string, string | number][]).map(([label, val]) => (
               <div key={label}>
-                <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 2, letterSpacing: "0.05em", textTransform: "uppercase" }}>{label}</div>
+                <div className="kicker" style={{ marginBottom: 2 }}>{label}</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: "var(--t0)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{val}</div>
               </div>
             ))}
@@ -231,7 +231,7 @@ export function ProvidersView({ state, actions }: Props) {
           {selectedConfig.kind !== "local" && (
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
               <>
-                <label style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", gap: 6 }}>
+                <label className="kicker-lg" style={{ display: "flex", gap: 6 }}>
                   API Key
                   {selectedConfig.credential_source === "env" && !pendingKey && (
                     <span style={{ color: "var(--teal)", fontWeight: 400, textTransform: "none" }}>from env</span>
@@ -265,7 +265,7 @@ export function ProvidersView({ state, actions }: Props) {
           {/* Model list */}
           {selectedStatus?.models && selectedStatus.models.length > 0 && (
             <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
-              <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>Models</div>
+              <div className="kicker" style={{ marginBottom: 6 }}>Models</div>
               {selectedStatus.models.map(m => (
                 <div key={m} style={{ display: "flex", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--t0)", flex: 1 }}>{m}</span>
