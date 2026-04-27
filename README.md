@@ -76,7 +76,7 @@ To wipe the stack back to first-run (removes the `hecate-data`, `postgres-data`,
 make reset-docker
 ```
 
-After resetting, also clear the `hecate.*` keys from your browser's `localStorage` so the UI re-prompts for the new token.
+The next page load detects the rejected stale token and re-prompts for the regenerated one — no manual `localStorage` cleanup needed.
 
 ### Option B — Local build (Go + Bun)
 
@@ -326,7 +326,7 @@ make reset-dev        # wipe local dev state — stops :8080, removes .data/
 make reset-docker     # wipe docker stack — `docker compose --profile full down -v`
 ```
 
-After either reset, also clear the `hecate.*` keys from your browser's `localStorage` so the UI re-prompts for the regenerated admin token.
+After either reset, the next page load detects the rejected stale token and re-prompts for the regenerated one automatically.
 
 ## Docs
 

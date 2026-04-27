@@ -107,7 +107,7 @@ reset-dev:
 	rm -rf .data
 	rm -f hecate.bootstrap.json
 	@echo "Local dev state reset. Next 'make run'/'make serve' regenerates the admin token."
-	@echo "Clear hecate.* keys from your browser's localStorage to re-prompt the UI."
+	@echo "On next page load, the UI auto-detects the rejected stale token and re-prompts."
 
 # reset-docker wipes the docker compose stack: stops + removes containers
 # and removes the hecate-data, postgres-data, and ollama-models named
@@ -117,4 +117,4 @@ reset-dev:
 reset-docker:
 	docker compose --profile full down -v --remove-orphans
 	@echo "Docker stack reset. Next 'docker compose up' regenerates the admin token."
-	@echo "Clear hecate.* keys from your browser's localStorage to re-prompt the UI."
+	@echo "On next page load, the UI auto-detects the rejected stale token and re-prompts."
