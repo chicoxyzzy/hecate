@@ -1,5 +1,27 @@
 package cache
 
+// SemanticStore backend coverage:
+//
+//   - memory   → in-RAM cosine similarity. Fine for ≲10k entries;
+//                rebuilds on restart.
+//   - postgres → pgvector with HNSW or IVFFlat for indexed search at
+//                >100k entries.
+//   - sqlite   → INTENTIONALLY UNSUPPORTED. Indexed vector search in
+//                SQLite needs the sqlite-vec extension, which is C and
+//                only loads into native (mattn, CGO) or WASM (ncruces,
+//                Wazero) SQLite drivers. The gateway uses
+//                modernc.org/sqlite — a pure-Go ccgo translation — to
+//                keep the single-static-binary story; modernc cannot
+//                load native extensions. To change this either (a)
+//                accept Wazero by switching to ncruces, or (b) accept
+//                CGO by switching to mattn. Until then, deploys that
+//                need persistent semantic cache should run Postgres
+//                for THIS subsystem only — backends are selected
+//                per-subsystem, so the rest of the state can still
+//                live in SQLite. Bare-bones single-node deploys
+//                default to memory and that's the right call for
+//                small entry counts.
+
 import (
 	"context"
 	"regexp"
