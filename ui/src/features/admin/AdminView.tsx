@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord } from "../../types/runtime";
-import { Badge, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
+import { Badge, CodeBlock, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
 import { PricebookTab } from "./PricebookTab";
 
 type Props = {
@@ -9,10 +9,14 @@ type Props = {
   actions: RuntimeConsoleViewModel["actions"];
 };
 
-type Tab = "keys" | "tenants" | "budget" | "usage" | "pricebook" | "retention";
+// TABS is the single source of truth for the admin sub-tab order.
+// Adding a new tab means: add the id here, add a body conditional in
+// the render, and add a content component. Don't duplicate the list
+// — both the tab bar and the localStorage validator read from this.
+const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "integrations", "retention"] as const;
+type Tab = (typeof TABS)[number];
 
 const TAB_STORAGE_KEY = "hecate.adminTab";
-const VALID_TABS: readonly Tab[] = ["keys", "tenants", "budget", "usage", "pricebook", "retention"];
 
 export function AdminView({ state, actions }: Props) {
   // Persist the admin sub-tab so refreshing while on (say) Pricebook
@@ -22,7 +26,7 @@ export function AdminView({ state, actions }: Props) {
   // (e.g. a tab id that no longer exists).
   const [tab, setTabRaw] = useState<Tab>(() => {
     const saved = localStorage.getItem(TAB_STORAGE_KEY);
-    return saved && (VALID_TABS as readonly string[]).includes(saved) ? (saved as Tab) : "keys";
+    return saved && (TABS as readonly string[]).includes(saved) ? (saved as Tab) : "keys";
   });
   const setTab = (next: Tab) => {
     localStorage.setItem(TAB_STORAGE_KEY, next);
@@ -36,7 +40,7 @@ export function AdminView({ state, actions }: Props) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        {(["keys", "tenants", "budget", "usage", "pricebook", "retention"] as Tab[]).map(t => (
+        {TABS.map(t => (
           <button key={t} type="button"
             onClick={() => setTab(t)}
             style={{
@@ -59,12 +63,13 @@ export function AdminView({ state, actions }: Props) {
 
       {/* Tab content */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        {tab === "keys"      && <KeysTab state={state} actions={actions} />}
-        {tab === "tenants"   && <TenantsTab state={state} actions={actions} />}
-        {tab === "budget"    && <BudgetTab state={state} actions={actions} />}
-        {tab === "usage"     && <UsageTab state={state} />}
-        {tab === "pricebook" && <PricebookTab state={state} actions={actions} />}
-        {tab === "retention" && <RetentionTab state={state} actions={actions} />}
+        {tab === "keys"         && <KeysTab state={state} actions={actions} />}
+        {tab === "tenants"      && <TenantsTab state={state} actions={actions} />}
+        {tab === "budget"       && <BudgetTab state={state} actions={actions} />}
+        {tab === "usage"        && <UsageTab state={state} />}
+        {tab === "pricebook"    && <PricebookTab state={state} actions={actions} />}
+        {tab === "integrations" && <IntegrationsTab />}
+        {tab === "retention"    && <RetentionTab state={state} actions={actions} />}
       </div>
     </div>
   );
@@ -809,6 +814,81 @@ function RetentionTab({ state, actions }: Props) {
           No retention runs yet.
         </div>
       )}
+    </>
+  );
+}
+
+// ─── Integrations tab ─────────────────────────────────────────────────────────
+
+// IntegrationsTab is the copy-paste landing page for pointing third-party
+// coding clients (Codex, Claude Code, anything OpenAI- or Anthropic-shaped)
+// at this gateway. The base URL is auto-derived from the current
+// browser location so the snippets work as-is in any environment —
+// localhost, internal hostname, or a public DNS name behind a TLS
+// terminator. The API key is left as a placeholder; operators copy it
+// from the Keys tab (or use the admin token directly during bootstrap).
+function IntegrationsTab() {
+  // window.location is the source of truth for the gateway URL the
+  // client should hit. The OpenAI variant carries a /v1 suffix because
+  // that's the OpenAI base-URL convention; Anthropic clients add /v1
+  // themselves so we pass the bare origin.
+  const origin = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8080";
+  const openaiBase = `${origin}/v1`;
+
+  const openaiSnippet = `export OPENAI_BASE_URL="${openaiBase}"
+export OPENAI_API_KEY="<paste an API key from the Keys tab>"`;
+
+  const anthropicSnippet = `export ANTHROPIC_BASE_URL="${origin}"
+export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
+
+  const curlSnippet = `curl -sS "${openaiBase}/chat/completions" \\
+  -H "Authorization: Bearer <api-key>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'`;
+
+  return (
+    <>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 4 }}>
+          Point a coding client at this gateway
+        </div>
+        <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
+          Copy the env vars below into your shell (or your client's settings) to route Codex,
+          Claude Code, or any OpenAI- / Anthropic-compatible client through this gateway.
+          The base URL is auto-filled from your browser location, so the snippets work for
+          local dev, internal hostnames, and public deploys alike.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div>
+          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+            Codex / OpenAI-compatible
+          </div>
+          <CodeBlock code={openaiSnippet} lang="bash" />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+            Claude Code / Anthropic Messages
+          </div>
+          <CodeBlock code={anthropicSnippet} lang="bash" />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--t2)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+            Smoke test (curl)
+          </div>
+          <CodeBlock code={curlSnippet} lang="bash" />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18, fontSize: 12, color: "var(--t2)", lineHeight: 1.6 }}>
+        Need an API key? Create one in the <strong style={{ color: "var(--t0)" }}>Keys</strong> tab
+        — keys can be scoped to a specific tenant, provider list, or model list. For full
+        client-integration notes (auth header precedence, common 4xx responses, two-mode
+        runtime guidance), see <code style={{ fontFamily: "var(--font-mono)" }}>docs/client-integration.md</code>.
+      </div>
     </>
   );
 }
