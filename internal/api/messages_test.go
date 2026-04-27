@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/auth"
+	"github.com/hecate/agent-runtime/internal/config"
+	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -466,5 +468,228 @@ func TestTranslateOpenAIToAnthropicSSEWithThinking(t *testing.T) {
 	// Should end with message_stop
 	if !strings.Contains(output, "message_stop") {
 		t.Errorf("output missing message_stop:\n%s", output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handler error envelopes — every error path must produce the Anthropic-shaped
+// {"type":"error","error":{...}} body, not the OpenAI-shaped {"error":{...}}
+// shape used by /v1/chat/completions. SDK clients pointed at
+// ANTHROPIC_BASE_URL parse the Anthropic envelope; a regression that leaked
+// the OpenAI shape would surface to operators as "unexpected response from
+// Anthropic" without any actionable detail.
+// ---------------------------------------------------------------------------
+
+func TestMessagesReturns402OnBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{name: "openai", defaultModel: "gpt-4o-mini"}
+
+	// 1 µUSD budget — any real request estimate exceeds it immediately.
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Governor: config.GovernorConfig{
+			MaxTotalBudgetMicros:    1,
+			MaxPromptTokens:         100_000,
+			BudgetWarningThresholds: []int{50, 80, 95},
+			BudgetHistoryLimit:      20,
+		},
+	})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Type != "error" {
+		t.Errorf("envelope type = %q, want error (Anthropic shape)", payload.Type)
+	}
+	if payload.Error.Type != "payment_required" {
+		t.Errorf("error.type = %q, want payment_required", payload.Error.Type)
+	}
+}
+
+func TestMessagesReturns429OnRateLimit(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai", defaultModel: "gpt-4o-mini",
+		response: &types.ChatResponse{
+			ID: "chatcmpl-rl", Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{{Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+		},
+	}
+	// burst=1 → second request returns 429 with the Anthropic envelope.
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Server: config.ServerConfig{
+			RateLimit: config.RateLimitConfig{Enabled: true, RequestsPerMinute: 60, BurstSize: 1},
+		},
+	})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}`
+	first := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200; body=%s", first.Code, first.Body.String())
+	}
+	second := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429; body=%s", second.Code, second.Body.String())
+	}
+	// 429 from the rate limiter is written by checkRateLimit, which uses the
+	// shared OpenAI-shaped WriteError. Anthropic clients see the same body
+	// shape used by /v1/chat/completions for this one path — documented here
+	// rather than diverged-and-forgotten. If the handler is later refactored
+	// to emit the Anthropic envelope from checkRateLimit, this test should
+	// flip to assert that contract.
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Error.Type != "rate_limit_exceeded" {
+		t.Errorf("error.type = %q, want rate_limit_exceeded", payload.Error.Type)
+	}
+}
+
+func TestMessagesMapsUpstreamErrorWithAnthropicEnvelope(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		err: &providers.UpstreamError{
+			StatusCode: http.StatusTooManyRequests,
+			Message:    "upstream rate limit exceeded",
+			Type:       "rate_limit_error",
+		},
+	}
+	handler := newTestHTTPHandler(logger, provider)
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Type != "error" {
+		t.Errorf("envelope type = %q, want error", payload.Type)
+	}
+	if payload.Error.Type != "rate_limit_error" {
+		t.Errorf("error.type = %q, want rate_limit_error (carried from UpstreamError)", payload.Error.Type)
+	}
+	if payload.Error.Message != "upstream rate limit exceeded" {
+		t.Errorf("error.message = %q, want upstream message verbatim", payload.Error.Message)
+	}
+}
+
+func TestMessagesDeniedReturns403WithUserFacingMessage(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{name: "openai", response: &types.ChatResponse{}}
+
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Governor: config.GovernorConfig{DenyAll: true},
+	})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if strings.HasPrefix(payload.Error.Message, "request denied: ") {
+		t.Errorf("error.message = %q, want classification prefix stripped", payload.Error.Message)
+	}
+}
+
+func TestMessagesRequiresAuthWhenConfigured(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{name: "openai", response: &types.ChatResponse{}}
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
+	})
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// failingMessagesStreamProvider drives the mid-stream error path so we
+// can assert the Anthropic-flavoured terminal SSE error event. The
+// handler emits `event: error\ndata: {"type":"error","error":{...}}`,
+// which is shaped differently from chat completions' inline `data:`
+// error chunk — Anthropic SDKs detect mid-stream errors via the named
+// `error` event, so the framing matters.
+type failingMessagesStreamProvider struct {
+	fakeProvider
+	streamErr error
+}
+
+func (p *failingMessagesStreamProvider) ChatStream(_ context.Context, _ types.ChatRequest, _ io.Writer) error {
+	return p.streamErr
+}
+
+var (
+	_ providers.Streamer = (*failingMessagesStreamProvider)(nil)
+	_ providers.Provider = (*failingMessagesStreamProvider)(nil)
+)
+
+func TestMessagesStreamMidStreamErrorEmitsAnthropicErrorEvent(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &failingMessagesStreamProvider{
+		fakeProvider: fakeProvider{name: "openai", defaultModel: "gpt-4o-mini"},
+		streamErr: &providers.UpstreamError{
+			StatusCode: http.StatusBadGateway,
+			Message:    "upstream connection reset",
+			Type:       "server_error",
+		},
+	}
+	handler := newTestHTTPHandler(logger, provider)
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (mid-stream errors keep the headers we already sent); body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: error") {
+		t.Errorf("body missing 'event: error' line; got=%q", out)
+	}
+	if !strings.Contains(out, "upstream connection reset") {
+		t.Errorf("body missing upstream message; got=%q", out)
 	}
 }
