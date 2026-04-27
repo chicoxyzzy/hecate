@@ -135,6 +135,14 @@ func main() {
 			}
 		}()
 	}
+	sqliteClient := buildSQLiteClient(cfg, logger)
+	if sqliteClient != nil {
+		defer func() {
+			if err := sqliteClient.Close(); err != nil {
+				logger.Warn("sqlite close failed", slog.Any("error", err))
+			}
+		}()
+	}
 
 	controlPlaneStore := buildControlPlaneStore(cfg, logger, postgresClient)
 	var secretCipher secrets.Cipher
@@ -182,7 +190,7 @@ func main() {
 	semanticStore := buildSemanticStore(cfg, logger, postgresClient)
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient)
 	chatSessionStore := buildChatSessionStore(cfg, logger, postgresClient)
-	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient)
+	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient, sqliteClient)
 	retentionManager := retention.NewManager(
 		logger,
 		cfg.Retention,
@@ -430,7 +438,7 @@ func buildCacheStore(cfg config.Config, logger *slog.Logger, postgresClient *sto
 	return cache.NewMemoryStore(cfg.Cache.DefaultTTL)
 }
 
-func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) retention.HistoryStore {
+func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient, sqliteClient *storage.SQLiteClient) retention.HistoryStore {
 	switch strings.ToLower(strings.TrimSpace(cfg.Retention.HistoryBackend)) {
 	case "redis":
 		client := storage.NewRedisClient(storage.RedisConfig{
@@ -447,6 +455,13 @@ func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgres
 		return store
 	case "postgres":
 		store, err := retention.NewPostgresHistoryStore(context.Background(), postgresClient, "retention_runs")
+		if err != nil {
+			logger.Error("retention history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	case "sqlite":
+		store, err := retention.NewSQLiteHistoryStore(context.Background(), sqliteClient, "retention_runs")
 		if err != nil {
 			logger.Error("retention history store init failed", slog.Any("error", err))
 			os.Exit(1)
@@ -630,6 +645,34 @@ func postgresRequired(cfg config.Config) bool {
 		cfg.Server.TasksBackend == "postgres" ||
 		cfg.Server.TaskQueueBackend == "postgres" ||
 		cfg.Retention.HistoryBackend == "postgres"
+}
+
+func buildSQLiteClient(cfg config.Config, logger *slog.Logger) *storage.SQLiteClient {
+	if !sqliteRequired(cfg) {
+		return nil
+	}
+
+	client, err := storage.NewSQLiteClient(context.Background(), storage.SQLiteConfig{
+		Path:        cfg.SQLite.Path,
+		TablePrefix: cfg.SQLite.TablePrefix,
+		BusyTimeout: cfg.SQLite.BusyTimeout,
+	})
+	if err != nil {
+		logger.Error("sqlite init failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	return client
+}
+
+func sqliteRequired(cfg config.Config) bool {
+	return cfg.Cache.Backend == "sqlite" ||
+		cfg.Cache.Semantic.Backend == "sqlite" ||
+		cfg.Governor.BudgetBackend == "sqlite" ||
+		cfg.Server.ControlPlaneBackend == "sqlite" ||
+		cfg.Chat.SessionsBackend == "sqlite" ||
+		cfg.Server.TasksBackend == "sqlite" ||
+		cfg.Server.TaskQueueBackend == "sqlite" ||
+		cfg.Retention.HistoryBackend == "sqlite"
 }
 
 func buildChatSessionStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient) chatstate.Store {

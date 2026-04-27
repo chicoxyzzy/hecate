@@ -21,8 +21,13 @@ type Config struct {
 	// cache, budget store, control-plane store, and retention history. It
 	// used to be nested under Cache; that was misleading because four
 	// unrelated subsystems consume it.
-	Redis     RedisConfig
-	Postgres  PostgresConfig
+	Redis    RedisConfig
+	Postgres PostgresConfig
+	// SQLite is the single-node-durable tier. Subsystems opt in via
+	// GATEWAY_*_BACKEND=sqlite; the client is opened lazily once any
+	// subsystem actually needs it. See storage.SQLiteClient for the
+	// pragmas applied per connection.
+	SQLite    SQLiteConfig
 	Providers ProvidersConfig
 	Pricebook PricebookConfig
 	LogLevel  string
@@ -200,6 +205,15 @@ type PostgresConfig struct {
 	TablePrefix  string
 	MaxOpenConns int
 	MaxIdleConns int
+}
+
+type SQLiteConfig struct {
+	// Path is the on-disk file. Defaults to .data/hecate.db so a fresh
+	// `make dev` plus `GATEWAY_*_BACKEND=sqlite` Just Works without
+	// extra mkdir or env. Parent directories are auto-created.
+	Path        string
+	TablePrefix string
+	BusyTimeout time.Duration
 }
 
 type ProvidersConfig struct {
@@ -394,6 +408,11 @@ func LoadFromEnv() Config {
 			TablePrefix:  getEnv("POSTGRES_TABLE_PREFIX", "hecate"),
 			MaxOpenConns: getEnvInt("POSTGRES_MAX_OPEN_CONNS", 10),
 			MaxIdleConns: getEnvInt("POSTGRES_MAX_IDLE_CONNS", 5),
+		},
+		SQLite: SQLiteConfig{
+			Path:        getEnv("GATEWAY_SQLITE_PATH", ".data/hecate.db"),
+			TablePrefix: getEnv("GATEWAY_SQLITE_TABLE_PREFIX", "hecate"),
+			BusyTimeout: getEnvDuration("GATEWAY_SQLITE_BUSY_TIMEOUT", 5*time.Second),
 		},
 		Providers: providersCfg,
 		Pricebook: loadPricebookFromEnv(),
