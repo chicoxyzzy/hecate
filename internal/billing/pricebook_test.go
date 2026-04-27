@@ -239,3 +239,98 @@ func TestControlPlanePricebookCanonicalOverrideReflectsLiveControlPlaneUpdates(t
 		t.Fatalf("after delete total = %d, want 825 from base pricebook again", reverted.TotalMicrosUSD)
 	}
 }
+
+// ─── Money-math defenses ─────────────────────────────────────────────────────
+//
+// scaleMicros uses integer arithmetic (microsPerMillion * tokens / 1_000_000).
+// Two invariants worth pinning so a refactor can't silently drift charges:
+//
+//   1. Truncation rounds toward zero. Operators are charged strictly less
+//      than the true cost when there's a fractional micros remainder; a
+//      "round-to-nearest" refactor would silently overcharge.
+//   2. Cached-prompt tokens are charged ADDITIVELY on top of fresh prompt
+//      tokens, not in place of them. A regression that subtracted cached
+//      from prompt before charging would undercharge by the cache rate
+//      on every cache-hit request.
+
+func TestStaticPricebookScaleMicrosTruncatesTowardZero(t *testing.T) {
+	t.Parallel()
+	pricebook := NewStaticPricebook(config.ProvidersConfig{
+		OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+	}, config.PricebookConfig{
+		Entries: []config.ModelPriceConfig{
+			// $0.999999/1M tokens — the max sub-dollar price expressible
+			// in micros. One token = 0.999999 micros, which truncates to 0.
+			{Provider: "openai", Model: "edge-model",
+				InputMicrosUSDPerMillionTokens:  999_999,
+				OutputMicrosUSDPerMillionTokens: 0,
+			},
+		},
+	})
+
+	// 1 token at $0.999999/1M → 0 micros (truncate-toward-zero favors the
+	// operator and never overcharges). Pin so a "round to nearest"
+	// refactor can't silently flip the bias upward.
+	got, err := pricebook.Estimate("openai", "edge-model", types.Usage{PromptTokens: 1})
+	if err != nil {
+		t.Fatalf("Estimate() error = %v", err)
+	}
+	if got.TotalMicrosUSD != 0 {
+		t.Errorf("1 token at $0.999999/M = %d micros, want 0 (truncate-toward-zero)", got.TotalMicrosUSD)
+	}
+
+	// 1_000_001 tokens → 999_999 micros. Math:
+	//   1_000_001 * 999_999 = 999_999_999_999
+	//   999_999_999_999 / 1_000_000 = 999_999 (integer truncation)
+	// At a million-and-one tokens the operator pays 999_999 micros, not
+	// 1M — truncation accumulates to roughly one full token's worth of
+	// underbilling per million-token request. Pin the design.
+	got, err = pricebook.Estimate("openai", "edge-model", types.Usage{PromptTokens: 1_000_001})
+	if err != nil {
+		t.Fatalf("Estimate() error = %v", err)
+	}
+	if got.TotalMicrosUSD != 999_999 {
+		t.Errorf("1_000_001 tokens at $0.999999/M = %d, want 999_999", got.TotalMicrosUSD)
+	}
+}
+
+func TestStaticPricebookCachedPromptIsAdditiveNotSubstitute(t *testing.T) {
+	t.Parallel()
+	// Pin the convention: PromptTokens and CachedPromptTokens are
+	// disjoint counts. Total prompt cost = fresh*price + cached*cachePrice.
+	// A refactor that treated them as overlapping (PromptTokens already
+	// includes the cached count) would silently undercharge by
+	// cached*cachePrice on every request that hit the cache.
+	pricebook := NewStaticPricebook(config.ProvidersConfig{
+		OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+	}, config.PricebookConfig{
+		Entries: []config.ModelPriceConfig{
+			{Provider: "openai", Model: "m",
+				InputMicrosUSDPerMillionTokens:       1_000_000, // $1/1M
+				OutputMicrosUSDPerMillionTokens:      2_000_000, // $2/1M
+				CachedInputMicrosUSDPerMillionTokens: 100_000,   // $0.10/1M
+			},
+		},
+	})
+
+	// 1M fresh prompt + 1M cached prompt + 0 output:
+	//   fresh:  1M * $1/1M    = 1_000_000 micros
+	//   cached: 1M * $0.10/1M = 100_000 micros
+	//   total:                  1_100_000 micros
+	got, err := pricebook.Estimate("openai", "m", types.Usage{
+		PromptTokens:       1_000_000,
+		CachedPromptTokens: 1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("Estimate() error = %v", err)
+	}
+	if got.InputMicrosUSD != 1_000_000 {
+		t.Errorf("InputMicrosUSD = %d, want 1_000_000 (1M tokens * $1/1M)", got.InputMicrosUSD)
+	}
+	if got.CachedInputMicrosUSD != 100_000 {
+		t.Errorf("CachedInputMicrosUSD = %d, want 100_000 (1M tokens * $0.10/1M)", got.CachedInputMicrosUSD)
+	}
+	if got.TotalMicrosUSD != 1_100_000 {
+		t.Errorf("TotalMicrosUSD = %d, want 1_100_000 (additive, not substitute)", got.TotalMicrosUSD)
+	}
+}
