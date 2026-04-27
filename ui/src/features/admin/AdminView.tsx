@@ -519,6 +519,16 @@ function TenantsTab({ state, actions }: Props) {
                 ariaLabel="Allowed models"
               />
             </Field>
+            <Field label="AGENT SYSTEM PROMPT (optional, applies to agent_loop tasks)">
+              <textarea
+                className="input"
+                placeholder="Tenant-level directives stacked under the global default, e.g. 'You operate in a financial-services context — always --dry-run before destructive ops.'"
+                rows={3}
+                style={{ resize: "vertical" }}
+                value={state.tenantFormSystemPrompt}
+                onChange={e => actions.setTenantFormSystemPrompt(e.target.value)}
+              />
+            </Field>
           </div>
         </SlideOver>
       )}

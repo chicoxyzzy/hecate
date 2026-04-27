@@ -3,9 +3,15 @@ package types
 import "time"
 
 type Task struct {
-	ID                 string
-	Title              string
-	Prompt             string
+	ID     string
+	Title  string
+	Prompt string
+	// SystemPrompt is the per-task agent system prompt. When set, it
+	// becomes the narrowest layer in the four-level composition:
+	// global default → tenant prompt → workspace CLAUDE.md/AGENTS.md
+	// → this. Concatenated, broadest first. Empty = no per-task add
+	// (still honors the broader layers).
+	SystemPrompt       string
 	Tenant             string
 	User               string
 	Repo               string

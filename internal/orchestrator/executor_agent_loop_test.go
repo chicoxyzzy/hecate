@@ -843,6 +843,103 @@ func TestAgentLoop_GatedToolListedWithMultipleToolsInTurn(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_SystemPromptPrependedOnFreshRuns(t *testing.T) {
+	// When the runner composes a system prompt, the agent loop must
+	// prepend it as the first message. Without this the four-layer
+	// composition (global / tenant / workspace / task) has no
+	// effect — the model never sees the directives.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("answered")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.SystemPrompt = "You are a careful agent. Always cite sources."
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(llm.lastReqs) != 1 {
+		t.Fatalf("LLM calls = %d, want 1", len(llm.lastReqs))
+	}
+	first := llm.lastReqs[0].Messages
+	if len(first) != 2 {
+		t.Fatalf("messages = %d, want 2 (system + user)", len(first))
+	}
+	if first[0].Role != "system" || !strings.Contains(first[0].Content, "careful agent") {
+		t.Errorf("first message not the system prompt: %+v", first[0])
+	}
+	if first[1].Role != "user" {
+		t.Errorf("second message not user: %+v", first[1])
+	}
+}
+
+func TestAgentLoop_NoSystemPromptWhenEmpty(t *testing.T) {
+	// Empty composed prompt = no system message at all. Avoids
+	// emitting a wasted role:system message with empty content.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("ok")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	spec.SystemPrompt = ""
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	first := llm.lastReqs[0].Messages
+	if len(first) != 1 || first[0].Role != "user" {
+		t.Errorf("messages should be just [user], got: %+v", first)
+	}
+}
+
+func TestAgentLoop_SystemPromptNotReinjectedOnResume(t *testing.T) {
+	// On resume, the saved conversation already contains the system
+	// message from the original run. We must NOT re-prepend it —
+	// double-system would confuse the model and waste tokens.
+	saved := []types.Message{
+		{Role: "system", Content: "Original system prompt"},
+		{Role: "user", Content: "original prompt"},
+		{Role: "assistant", Content: "answer"},
+	}
+	savedJSON, _ := json.Marshal(saved)
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("done")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil)
+	spec := newAgentLoopSpec(t)
+	// Different SystemPrompt would normally apply — but on resume
+	// the saved one wins. Lets us assert that we don't blend layers.
+	spec.SystemPrompt = "Different prompt that should NOT show up"
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:       "run-1",
+		AgentConversation: savedJSON,
+	}
+	// Add another assistant message to provoke another LLM call.
+	llm.responses = append(llm.responses, makeChatResp(makeAssistantMsg("end")))
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	first := llm.lastReqs[0].Messages
+	systemMessages := 0
+	for _, m := range first {
+		if m.Role == "system" {
+			systemMessages++
+		}
+	}
+	if systemMessages != 1 {
+		t.Errorf("system message count on resume = %d, want 1", systemMessages)
+	}
+	for _, m := range first {
+		if m.Role == "system" && strings.Contains(m.Content, "Different prompt") {
+			t.Errorf("re-composed system prompt leaked into resumed conversation")
+		}
+	}
+}
+
 func TestAgentLoop_ContextCancellation(t *testing.T) {
 	// If the run is cancelled mid-loop (operator hits Cancel, gateway
 	// shuts down), the loop must exit cleanly with cancelled status.

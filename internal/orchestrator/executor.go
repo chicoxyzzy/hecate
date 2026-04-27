@@ -27,6 +27,12 @@ type ExecutionSpec struct {
 	NewID            func(prefix string) string
 	UpsertStep       func(step types.TaskStep) error
 	UpsertArtifact   func(artifact types.TaskArtifact) error
+	// SystemPrompt is the composed agent_loop system prompt — global
+	// default + tenant prompt + workspace CLAUDE.md/AGENTS.md +
+	// per-task prompt, concatenated broadest-first. The runner
+	// assembles it via a SystemPromptResolver before dispatching;
+	// non-agent_loop executors ignore it.
+	SystemPrompt string
 }
 
 type ResumeCheckpoint struct {

@@ -1,8 +1,12 @@
 package api
 
 type CreateTaskRequest struct {
-	Title              string `json:"title"`
-	Prompt             string `json:"prompt"`
+	Title  string `json:"title"`
+	Prompt string `json:"prompt"`
+	// SystemPrompt is the per-task system prompt for agent_loop runs.
+	// It's the narrowest layer in the four-level composition (global
+	// → tenant → workspace CLAUDE.md/AGENTS.md → this).
+	SystemPrompt       string `json:"system_prompt,omitempty"`
 	ExecutionProfile   string `json:"execution_profile"`
 	Repo               string `json:"repo"`
 	BaseBranch         string `json:"base_branch"`
@@ -113,6 +117,7 @@ type TaskItem struct {
 	ID                   string `json:"id"`
 	Title                string `json:"title"`
 	Prompt               string `json:"prompt"`
+	SystemPrompt         string `json:"system_prompt,omitempty"`
 	Tenant               string `json:"tenant,omitempty"`
 	User                 string `json:"user,omitempty"`
 	Repo                 string `json:"repo,omitempty"`

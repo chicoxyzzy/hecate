@@ -43,6 +43,9 @@ export type CreateTaskPayload = {
   file_operation?: string;
   working_directory?: string;
   requested_model?: string;
+  // Per-task agent_loop system prompt — narrowest layer (after
+  // global / tenant / workspace CLAUDE.md|AGENTS.md).
+  system_prompt?: string;
 };
 
 type Props = {
@@ -64,6 +67,9 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
   const [taskFileContent, setTaskFileContent] = useState("");
   const [taskFileOp, setTaskFileOp] = useState("write");
   const [taskModel, setTaskModel] = useState("");
+  // Per-task system prompt — only meaningful for agent_loop kind.
+  // Empty value falls back to the tenant / workspace / global layers.
+  const [taskSystemPrompt, setTaskSystemPrompt] = useState("");
 
   function formIsValid(): boolean {
     if (taskKind === "shell") return taskCommand.trim() !== "";
@@ -89,9 +95,11 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
       ...(taskKind === "file" ? { file_path: filePath, file_content: taskFileContent, file_operation: taskFileOp } : {}),
       ...(taskWorkingDir.trim() ? { working_directory: taskWorkingDir.trim() } : {}),
       ...(taskModel ? { requested_model: taskModel } : {}),
+      ...(taskKind === "agent_loop" && taskSystemPrompt.trim() ? { system_prompt: taskSystemPrompt.trim() } : {}),
     });
     setTaskPrompt(""); setTaskCommand(""); setTaskGitCommand(""); setTaskWorkingDir("");
     setTaskFilePath(""); setTaskFileContent(""); setTaskFileOp("write");
+    setTaskSystemPrompt("");
   }
 
   if (!open) return null;
@@ -223,6 +231,22 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
                 placeholder="Human-readable description…"
                 value={taskPrompt}
                 onChange={e => setTaskPrompt(e.target.value)}
+              />
+            </div>
+          )}
+
+          {taskKind === "agent_loop" && (
+            <div>
+              <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>
+                SYSTEM PROMPT <span style={{ color: "var(--t3)" }}>(optional, narrowest layer)</span>
+              </label>
+              <textarea
+                className="input"
+                placeholder="Per-task agent directives. Stacks under global / tenant / workspace CLAUDE.md|AGENTS.md."
+                rows={3}
+                style={{ resize: "vertical" }}
+                value={taskSystemPrompt}
+                onChange={e => setTaskSystemPrompt(e.target.value)}
               />
             </div>
           )}

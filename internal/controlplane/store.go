@@ -16,6 +16,16 @@ type Tenant struct {
 	AllowedProviders []string `json:"allowed_providers,omitempty"`
 	AllowedModels    []string `json:"allowed_models,omitempty"`
 	Enabled          bool     `json:"enabled"`
+	// SystemPrompt is the tenant-level layer for agent_loop tasks. It
+	// stacks between the global default and per-task / workspace
+	// layers in the composed system prompt. Tenant admins set this
+	// via the admin UI to shape their agents' behavior (e.g. "You
+	// operate inside a financial-services context — never run code
+	// that touches production data without --dry-run.").
+	//
+	// Empty = no tenant-level addition; the global + task + workspace
+	// layers still apply.
+	SystemPrompt string `json:"system_prompt,omitempty"`
 }
 
 type APIKey struct {
@@ -127,6 +137,7 @@ func cloneState(state State) State {
 			AllowedProviders: append([]string(nil), tenant.AllowedProviders...),
 			AllowedModels:    append([]string(nil), tenant.AllowedModels...),
 			Enabled:          tenant.Enabled,
+			SystemPrompt:     tenant.SystemPrompt,
 		})
 	}
 	for _, key := range state.APIKeys {

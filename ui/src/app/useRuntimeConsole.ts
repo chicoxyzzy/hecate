@@ -143,6 +143,9 @@ export function useRuntimeConsole() {
   // form shape match directly. parseCSV is no longer involved.
   const [tenantFormProviders, setTenantFormProviders] = useState<string[]>([]);
   const [tenantFormModels, setTenantFormModels] = useState<string[]>([]);
+  // Tenant-level layer of the agent_loop system prompt. Optional;
+  // empty falls back to the global / workspace / per-task layers.
+  const [tenantFormSystemPrompt, setTenantFormSystemPrompt] = useState("");
 
   const [apiKeyFormName, setAPIKeyFormName] = useState("");
   const [apiKeyFormID, setAPIKeyFormID] = useState("");
@@ -381,6 +384,7 @@ export function useRuntimeConsole() {
     setTenantFormName("");
     setTenantFormProviders([]);
     setTenantFormModels([]);
+    setTenantFormSystemPrompt("");
   }
 
   function resetAPIKeyForm() {
@@ -751,6 +755,7 @@ export function useRuntimeConsole() {
             allowed_providers: tenantFormProviders,
             allowed_models: tenantFormModels,
             enabled: true,
+            system_prompt: tenantFormSystemPrompt,
           },
           authToken,
         );
@@ -1110,6 +1115,7 @@ export function useRuntimeConsole() {
       tenantFormModels,
       tenantFormName,
       tenantFormProviders,
+      tenantFormSystemPrompt,
       visibleModels,
     },
     actions: {
@@ -1149,6 +1155,7 @@ export function useRuntimeConsole() {
       setTenantFormModels,
       setTenantFormName,
       setTenantFormProviders,
+      setTenantFormSystemPrompt,
       setBudgetLimit,
       runRetention,
       selectChatSession,

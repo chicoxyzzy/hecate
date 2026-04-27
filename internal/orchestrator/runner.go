@@ -32,25 +32,43 @@ type Config struct {
 	AgentLoopMaxTurns int
 }
 
+// SystemPromptResolver composes the four-layer agent_loop system
+// prompt for one execution. It's called by the runner before
+// dispatching the executor — implementations live outside the
+// orchestrator package because the per-tenant lookup needs the
+// controlplane store, which the runner deliberately doesn't depend on.
+//
+//   - tenantID is the task's tenant (may be empty)
+//   - perTaskPrompt is task.SystemPrompt (may be empty)
+//   - workspacePath is the run's WorkspacePath (where CLAUDE.md /
+//     AGENTS.md may live; may be empty)
+//
+// Implementations concatenate non-empty layers broadest → narrowest:
+// global, tenant, workspace file, per-task. Empty result means "no
+// system prompt" — agent loop just uses the user prompt as the only
+// initial message.
+type SystemPromptResolver func(ctx context.Context, tenantID, perTaskPrompt, workspacePath string) string
+
 type Runner struct {
-	logger     *slog.Logger
-	store      taskstate.Store
-	tracer     profiler.Tracer
-	exec       Executor
-	shell      Executor
-	file       Executor
-	git        Executor
-	agent      Executor
-	workspaces *WorkspaceManager
-	config     Config
-	queue      RunQueue
-	queueLease time.Duration
-	workerID   string
-	jobMu      sync.Mutex
-	queueMu    sync.RWMutex
-	jobs       map[string]context.CancelFunc
-	policies   map[string]struct{}
-	metrics    *telemetry.OrchestratorMetrics
+	logger           *slog.Logger
+	store            taskstate.Store
+	tracer           profiler.Tracer
+	exec             Executor
+	shell            Executor
+	file             Executor
+	git              Executor
+	agent            Executor
+	workspaces       *WorkspaceManager
+	config           Config
+	queue            RunQueue
+	queueLease       time.Duration
+	workerID         string
+	jobMu            sync.Mutex
+	queueMu          sync.RWMutex
+	jobs             map[string]context.CancelFunc
+	policies         map[string]struct{}
+	metrics          *telemetry.OrchestratorMetrics
+	resolveSysPrompt SystemPromptResolver
 }
 
 type StartTaskResult struct {
@@ -166,6 +184,13 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 		return
 	}
 	r.git = exec
+}
+
+// SetSystemPromptResolver wires the four-layer composer used by the
+// agent_loop executor. Safe to call after NewRunner; nil = no
+// composition (agent_loop runs with no system prompt).
+func (r *Runner) SetSystemPromptResolver(resolver SystemPromptResolver) {
+	r.resolveSysPrompt = resolver
 }
 
 // SetAgentLLMClient wires the LLM seam into the agent_loop executor.
@@ -931,6 +956,10 @@ func (r *Runner) unregisterJob(runID string) {
 
 func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID string, resumeCheckpoint *ResumeCheckpoint) (*StartTaskResult, error) {
 	executor := r.executorForTask(task)
+	systemPrompt := ""
+	if r.resolveSysPrompt != nil {
+		systemPrompt = r.resolveSysPrompt(ctx, task.Tenant, task.SystemPrompt, run.WorkspacePath)
+	}
 	execution, err := executor.Execute(ctx, ExecutionSpec{
 		Task:             taskForRun(task, run),
 		Run:              run,
@@ -942,6 +971,7 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		NewID:            defaultResourceID,
 		UpsertStep:       func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
 		UpsertArtifact:   func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
+		SystemPrompt:     systemPrompt,
 	})
 	if err != nil {
 		recordOrchestratorRunFailed(trace, task.ID, run.ID, "executor_failed", err)

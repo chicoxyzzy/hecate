@@ -348,6 +348,8 @@ export type ConfiguredTenantRecord = {
   allowed_providers?: string[];
   allowed_models?: string[];
   enabled: boolean;
+  // Tenant-level layer of the agent_loop system prompt.
+  system_prompt?: string;
 };
 
 export type ConfiguredAPIKeyRecord = {
@@ -546,6 +548,10 @@ export type TaskRecord = {
   id: string;
   title: string;
   prompt: string;
+  // Per-task agent_loop system prompt — narrowest layer in the
+  // four-level composition (global → tenant → workspace
+  // CLAUDE.md/AGENTS.md → this).
+  system_prompt?: string;
   tenant?: string;
   user?: string;
   repo?: string;

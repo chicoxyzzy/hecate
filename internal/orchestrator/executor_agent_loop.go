@@ -1104,29 +1104,35 @@ func buildResumeThinkingStep(spec ExecutionSpec, index, turn int, when time.Time
 }
 
 // hydrateConversation returns the conversation history for this run.
-// On a fresh run, it's just the initial user prompt. On a resume, it's
-// the JSON-decoded prior conversation from the source run's
-// persisted agent_conversation artifact — the loop continues exactly
-// where it left off, preserving tool results and assistant reasoning.
+// On a fresh run, it prepends the composed system prompt (from the
+// runner's four-layer resolver) before the user prompt. On a resume,
+// it returns the JSON-decoded prior conversation from the source
+// run's persisted agent_conversation artifact — the loop continues
+// exactly where it left off, preserving tool results, prior reasoning,
+// AND the original system prompt (it's already in the saved message
+// array; we don't re-compose).
 //
 // If the resume artifact is missing or malformed (corrupt JSON, edited
-// out of band) we fall back to the user-prompt-only state. That
-// degrades gracefully: the agent re-plans rather than crashing.
+// out of band) we fall back to the fresh-start state. That degrades
+// gracefully: the agent re-plans rather than crashing.
 func hydrateConversation(spec ExecutionSpec) []types.Message {
-	freshStart := []types.Message{
-		{Role: "user", Content: spec.Task.Prompt},
+	if spec.ResumeCheckpoint != nil && len(spec.ResumeCheckpoint.AgentConversation) > 0 {
+		var saved []types.Message
+		if err := json.Unmarshal(spec.ResumeCheckpoint.AgentConversation, &saved); err == nil && len(saved) > 0 {
+			return saved
+		}
 	}
-	if spec.ResumeCheckpoint == nil || len(spec.ResumeCheckpoint.AgentConversation) == 0 {
-		return freshStart
+	// Fresh run: optionally prepend the composed system prompt.
+	// Empty SystemPrompt means none of the four layers contributed
+	// (operator hasn't configured anything, no tenant prompt, no
+	// CLAUDE.md/AGENTS.md, no per-task prompt) — skip the system
+	// message entirely rather than emit an empty one.
+	messages := make([]types.Message, 0, 2)
+	if strings.TrimSpace(spec.SystemPrompt) != "" {
+		messages = append(messages, types.Message{Role: "system", Content: spec.SystemPrompt})
 	}
-	var saved []types.Message
-	if err := json.Unmarshal(spec.ResumeCheckpoint.AgentConversation, &saved); err != nil {
-		return freshStart
-	}
-	if len(saved) == 0 {
-		return freshStart
-	}
-	return saved
+	messages = append(messages, types.Message{Role: "user", Content: spec.Task.Prompt})
+	return messages
 }
 
 // upsertConversationArtifact writes the current conversation snapshot

@@ -48,6 +48,12 @@ type ServerConfig struct {
 	// agent_loop run can make. Acts as a runaway-cost safety net.
 	// Default 8 (set in NewAgentLoopExecutor when zero).
 	TaskAgentLoopMaxTurns int
+	// TaskAgentSystemPrompt is the global default system prompt
+	// prepended to every agent_loop conversation. Sits at the
+	// broadest layer of the four-level composition (global → tenant
+	// → workspace CLAUDE.md/AGENTS.md → per-task). Empty disables
+	// the global layer; tenant / workspace / task prompts still apply.
+	TaskAgentSystemPrompt string
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
 	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
@@ -287,6 +293,7 @@ func LoadFromEnv() Config {
 			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
 			TaskEnableAgentExecutor:    getEnvBool("GATEWAY_TASK_ENABLE_AGENT_EXECUTOR", false),
 			TaskAgentLoopMaxTurns:      getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
+			TaskAgentSystemPrompt:      getEnv("GATEWAY_TASK_AGENT_SYSTEM_PROMPT", ""),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),

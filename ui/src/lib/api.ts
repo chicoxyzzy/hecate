@@ -62,6 +62,10 @@ export type TenantUpsertPayload = {
   allowed_providers: string[];
   allowed_models: string[];
   enabled: boolean;
+  // Tenant-level layer of the agent_loop system prompt. Empty string
+  // is sent over the wire to clear an existing tenant prompt; the
+  // backend treats missing/empty the same.
+  system_prompt?: string;
 };
 
 export type APIKeyUpsertPayload = {

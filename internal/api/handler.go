@@ -86,6 +86,14 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		runner.SetQueue(taskQueue)
 	}
 	runner.SetMetrics(telemetry.NewOrchestratorMetrics())
+	// Wire the four-layer agent_loop system-prompt composer. Layers
+	// are concatenated broadest-first:
+	//   1. global default — operator's GATEWAY_TASK_AGENT_SYSTEM_PROMPT
+	//   2. tenant — controlplane Tenant.SystemPrompt
+	//   3. workspace — CLAUDE.md or AGENTS.md in the workspace root
+	//      (matches what Claude Code / Codex CLI users already write)
+	//   4. per-task — Task.SystemPrompt
+	runner.SetSystemPromptResolver(buildSystemPromptResolver(cfg.Server.TaskAgentSystemPrompt, cpStore))
 	// Wire the gateway's chat path as the agent loop's LLM seam. The
 	// agent runtime issues its model calls through the same service
 	// that handles external client traffic — same routing, same

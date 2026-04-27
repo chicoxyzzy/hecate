@@ -79,6 +79,7 @@ export function createRuntimeConsoleFixture(
     tenantFormModels: [],
     tenantFormName: "",
     tenantFormProviders: [],
+    tenantFormSystemPrompt: "",
     visibleModels: [],
     ...overrides,
   };
@@ -122,6 +123,7 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     setTenantFormModels: () => undefined,
     setTenantFormName: () => undefined,
     setTenantFormProviders: () => undefined,
+    setTenantFormSystemPrompt: () => undefined,
     setBudgetLimit: async () => undefined,
     submitChat: async () => undefined,
     submitToolResults: async () => undefined,
