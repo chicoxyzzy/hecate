@@ -1,0 +1,136 @@
+# Development
+
+This guide covers the local-build path (Go + Bun), UI hot reload, the test surface, and the screenshot tooling. For the simplest get-it-running flow, see [Quick Start](../README.md#quick-start) — Docker is the recommended on-ramp for end users.
+
+## Toolchain
+
+- **Go** — pinned via `go.mod` (`make build` runs `go build`)
+- **Bun** — pinned via `ui/package.json` (`packageManager: "bun@..."`)
+- **Docker** — only required for the docker-smoke test job; not needed for the gateway itself
+
+The gateway binary is a single executable with the React UI embedded via `//go:embed ui/dist`. There's no separate UI deployment.
+
+## Local build
+
+1. Copy env defaults and configure at least one provider:
+
+   ```bash
+   cp .env.example .env
+   # Edit .env — at minimum set GATEWAY_DEFAULT_MODEL plus a PROVIDER_*_API_KEY
+   ```
+
+2. Build the hecate binary with the UI bundled in (single binary, single port):
+
+   ```bash
+   make ui-install         # installs UI dependencies (bun install)
+   make build              # ui-build + go build → ./hecate
+   make serve              # run prebuilt ./hecate; sources .env; auto-stops stale :8080
+   ```
+
+The gateway and the operator UI are both served from `http://127.0.0.1:8080`. `make serve` stops any earlier `./hecate` process still bound to that port before starting, so re-running it is always safe.
+
+On first run, an admin-bearer banner is printed to stderr, and the bootstrap file is persisted at `.data/hecate.bootstrap.json` (mode 0600). Read the token back at any time:
+
+```bash
+jq -r .admin_token .data/hecate.bootstrap.json
+```
+
+For iterative changes that don't touch the embed boundary, skip the binary build and run from source: `make run` is `go run` with quick defaults; `make dev` is the same but sources `.env` so provider keys are available.
+
+## UI hot reload
+
+For live UI iteration, run `make dev` (gateway on `:8080`) and the Vite dev server side by side:
+
+```bash
+make ui-dev       # Vite on :5173, proxying API calls to :8080
+```
+
+Default addresses:
+
+- gateway + bundled UI (production): `http://127.0.0.1:8080`
+- Vite dev server (UI hot reload): `http://127.0.0.1:5173`
+
+The Vite dev server proxies every `/v1/*`, `/admin/*`, and `/healthz` request to `:8080`, so the UI runs hot while the gateway runs as-is.
+
+## Reset state
+
+```bash
+make reset-dev        # local dev: stops :8080, removes .data/
+make reset-docker     # docker stack: `docker compose --profile full down -v`
+```
+
+The next page load detects the rejected stale token in `localStorage` and re-prompts for the regenerated one — no manual cleanup required.
+
+## Testing
+
+```bash
+make test              # go test ./...
+make test-race         # go test -race ./...
+make coverage          # go test -coverprofile + writes coverage.html
+make ui-test           # UI unit tests (vitest)
+make ui-test-e2e       # UI end-to-end tests (Playwright)
+make ui-coverage       # UI coverage report (vitest --coverage)
+make test-docker-smoke # boots the production image and probes /healthz, /v1/models, bootstrap volume
+```
+
+The race detector is the strongest correctness check (and the slowest); CI runs it on every push. `test-docker-smoke` requires Docker but doesn't need any other infrastructure — it spins up its own compose project to avoid colliding with a developer's running stack.
+
+## Project layout
+
+Top-level entry points:
+
+```
+cmd/hecate/             # binary entry point (CLI flags + bootstrap wiring)
+cmd/sandboxd/           # out-of-process sandbox executor for tasks
+ui/                     # React app (Vite + Bun); src/ is the source, dist/ is the embed target
+e2e/                    # Go end-to-end tests (build tag: e2e; sub-tags: ollama, docker)
+scripts/                # documentation tooling (Playwright capture-screenshots)
+docs/                   # markdown references + screenshots
+pkg/types/              # public types shared with external Go code
+```
+
+Internal packages (each `internal/<name>/` is a single Go package):
+
+```
+api                     # HTTP handlers — chat, messages, tasks, admin, control-plane, telemetry
+auth                    # bearer + control-plane API-key authentication
+billing                 # pricebook + cost calculation
+bootstrap               # first-run admin token + AES-GCM control-plane key generation
+cache                   # exact + semantic response caches (memory / redis / postgres)
+catalog                 # provider/model discovery and registration
+chatstate               # chat session storage (memory / postgres)
+config                  # env-driven config loading
+controlplane            # tenants, API keys, persisted providers, policy/pricebook CRUD
+gateway                 # request lifecycle: auth, policy, cache, router, retry/fallback
+governor                # budget enforcement, rate limiting, policy rules
+models                  # model identity + canonical-name resolution
+orchestrator            # task runtime: queue, runner, executors, sandboxd boundary
+policy                  # declarative deny / rewrite policy rules
+profiler                # internal trace recorder + OTel SDK adapter
+providers               # provider adapters (OpenAI-compat + Anthropic Messages)
+ratelimit               # per-key token bucket for HTTP throttling
+requestscope            # request-scoped principal/tenant normalization
+retention               # retention worker + history store
+router                  # provider/model routing engine (rules, failover)
+sandbox                 # sandbox-policy types used by orchestrator
+secrets                 # AES-GCM provider-credential encryption
+storage                 # shared Postgres / Redis client connectors
+taskstate               # task / run / step / artifact / approval persistence
+telemetry               # OTel attribute keys, metrics, structured logging
+version                 # build-time version metadata
+```
+
+## Capturing documentation screenshots
+
+```bash
+make screenshots
+```
+
+That's the whole command. The target resets dev state, builds the binary if needed, boots `hecate` in the background, waits for `/healthz`, walks the operator UI through every documented surface (seeding tenants / keys / chat sessions / a task via the public API), snapshots each route, optimizes the PNGs in parallel, and shuts the gateway down. End-to-end: ~13 seconds on a warm machine.
+
+Optional inputs:
+
+- **Ollama on `:11434`** with `ollama pull llama3.1:8b` — seeds a real chat turn so the README hero shows model output instead of an empty session. The capture continues without it; set `HECATE_SKIP_OLLAMA=1` to skip explicitly.
+- **A PNG optimizer on `PATH`** — the script auto-detects in preference order `pngquant` > `oxipng` > `magick`. Without one, captures are 3× larger. Recommended: `brew install pngquant` — lossy palette quantization with Floyd-Steinberg dithering, perceptually indistinguishable from the source on UI screenshots. `HECATE_SKIP_OPTIMIZE=1` skips the optimize pass entirely.
+
+Outputs land in `docs/screenshots/`.

@@ -10,6 +10,8 @@ Hecate is an open-source AI gateway and agent-task runtime that gives teams one 
 
 One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffic) and **agent-style execution loops** (queued tasks with approvals, sandboxed shell/file/git, resumable runs), while keeping operators in control of cost, safety, and traceability.
 
+![Chat playground talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
+
 ## Table Of Contents
 
 - [Quick Start](#quick-start)
@@ -19,20 +21,17 @@ One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffi
 - [Observability](#observability)
 - [Using Hecate With Codex And Claude Code](#using-hecate-with-codex-and-claude-code)
 - [Config Highlights](#config-highlights)
-- [Commands](#commands)
 - [Docs](#docs)
 - [Roadmap](#roadmap)
 
 ## Quick Start
 
-The fastest way to see what Hecate does is to boot the Docker image and step through the first-run wizard.
-
-### Option A — Docker (zero toolchain prerequisites)
-
 ```bash
 docker compose up
 open http://127.0.0.1:8080
 ```
+
+Zero toolchain prerequisites — Docker pulls a multi-arch image and the gateway boots itself, generates an admin token, and serves the UI on port 8080. Building from source instead? See [`docs/development.md`](docs/development.md).
 
 `docker-compose.yml` references `ghcr.io/chicoxyzzy/hecate:latest`, a multi-arch (`linux/amd64`, `linux/arm64`) image published from this repo on every `v*` tag — `docker compose pull` is enough on a fresh host. To pin to a specific release, replace `:latest` with `:vX.Y.Z`. If you've checked out the source, `docker compose up` will rebuild locally from the bundled `Dockerfile` instead.
 
@@ -78,49 +77,6 @@ make reset-docker
 
 The next page load detects the rejected stale token and re-prompts for the regenerated one — no manual `localStorage` cleanup needed.
 
-### Option B — Local build (Go + Bun)
-
-1. Copy env defaults and configure at least one provider:
-
-```bash
-cp .env.example .env
-# Edit .env — at minimum set GATEWAY_DEFAULT_MODEL plus a PROVIDER_*_API_KEY
-```
-
-2. Build the hecate binary with the UI bundled in (single binary, single port):
-
-```bash
-make ui-install
-make build
-make serve
-```
-
-The gateway and the operator UI are both served from `http://127.0.0.1:8080`. `make serve` stops any earlier `./hecate` process still bound to that port before starting, so re-running it is always safe.
-
-On first run, the same admin-bearer banner is printed to stderr, and the bootstrap file is persisted at `.data/hecate.bootstrap.json` (mode 0600). Read the token back at any time:
-
-```bash
-jq -r .admin_token .data/hecate.bootstrap.json
-```
-
-For live UI iteration with hot reload, run the gateway and the Vite dev server side by side:
-
-```bash
-make dev          # gateway on :8080
-make ui-dev       # Vite on :5173, proxying API calls to :8080
-```
-
-Default addresses:
-
-- gateway + bundled UI (production): `http://127.0.0.1:8080`
-- Vite dev server (UI hot reload): `http://127.0.0.1:5173`
-
-To wipe local state back to first-run (stops any gateway on :8080 and removes `.data/`):
-
-```bash
-make reset-dev
-```
-
 ## Architecture
 
 Hecate splits into two concurrent surfaces in one binary: a gateway for OpenAI- and Anthropic-shaped client traffic, and a task runtime for queued agent work. Both share auth, budgets, and observability — but the request paths are independent, so you can use either in isolation.
@@ -141,8 +97,6 @@ For the full request lifecycle, error short-circuits, lease semantics, and stora
 ## Operator UI
 
 The operator UI is the same binary, served at `/`. Every dashboard view is also a thin layer over the public API, so anything you can do in the UI is scriptable.
-
-![Chat playground — sessions sidebar plus a turn against a local Ollama llama3.1:8b model with inline runtime metadata](docs/screenshots/chat.png)
 
 Major surfaces:
 
@@ -288,46 +242,6 @@ A single `POSTGRES_DSN` and the top-level `REDIS_*` block configure the clients 
 
 OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry.md`](docs/telemetry.md) for the full export surface (`GATEWAY_OTEL_*` env vars, samplers, OTLP recipes).
 
-## Commands
-
-### Build
-
-```bash
-make ui-install       # install UI dependencies (bun install)
-make ui-build         # build the UI bundle into ui/dist/ (Vite)
-make build            # ui-build + go build → ./hecate (single binary, UI embedded)
-```
-
-### Run
-
-```bash
-make run              # go run (no .env sourced; quick start with defaults)
-make dev              # go run with .env sourced (provider keys available)
-make serve            # run prebuilt ./hecate; sources .env; auto-stops a stale :8080
-make ui-dev           # Vite dev server on :5173, proxies API to :8080
-```
-
-### Test
-
-```bash
-make test             # go test ./...
-make test-race        # go test -race ./...
-make coverage         # go test -coverprofile + writes coverage.html
-make ui-test          # UI unit tests (vitest)
-make ui-test-e2e      # UI end-to-end tests (Playwright)
-make ui-coverage      # UI coverage report (vitest --coverage)
-make test-docker-smoke # boots the production image and probes /healthz, /v1/models, bootstrap volume
-```
-
-### Reset
-
-```bash
-make reset-dev        # wipe local dev state — stops :8080, removes .data/
-make reset-docker     # wipe docker stack — `docker compose --profile full down -v`
-```
-
-After either reset, the next page load detects the rejected stale token and re-prompts for the regenerated one automatically.
-
 ## Docs
 
 - [Architecture](docs/architecture.md) — request flow, lease semantics, storage tier matrix
@@ -336,6 +250,7 @@ After either reset, the next page load detects the rejected stale token and re-p
 - [Runtime API Notes](docs/runtime-api.md)
 - [Telemetry And OTLP Notes](docs/telemetry.md)
 - [OTLP Collector Recipes And Runbooks](docs/telemetry.md#known-good-otlp-recipes)
+- [Development](docs/development.md) — local build, UI hot reload, full make-target reference, screenshot tooling
 
 ## Roadmap
 

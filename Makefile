@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke reset-dev reset-docker
+.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke reset-dev reset-docker screenshots
 
 # build produces a single self-contained hecate binary with the UI bundle
 # embedded. The UI is built first so //go:embed picks up the real assets;
@@ -108,6 +108,35 @@ reset-dev:
 	rm -f hecate.bootstrap.json
 	@echo "Local dev state reset. Next 'make run'/'make serve' regenerates the admin token."
 	@echo "On next page load, the UI auto-detects the rejected stale token and re-prompts."
+
+# screenshots is the one-shot end-to-end capture workflow:
+# reset → build (if needed) → start hecate in the background → wait
+# for /healthz → run the bun capture script → stop hecate. Everything
+# is reset to a clean state on entry and torn down on exit, so two
+# successive `make screenshots` calls always produce identical files.
+#
+# ollama on :11434 with `llama3.1:8b` pulled produces the realistic
+# chat turn shown in the README hero; HECATE_SKIP_OLLAMA=1 lets you
+# run the workflow without it (chat session will be empty).
+screenshots:
+	@test -d ui/node_modules/@playwright/test || (echo "UI dependencies missing. Run 'make ui-install' first." && exit 1)
+	@pid=$$(lsof -ti:8080 2>/dev/null); [ -n "$$pid" ] && (echo "stopping existing :8080 (pid $$pid)"; kill $$pid; sleep 0.3) || true
+	@$(MAKE) --no-print-directory reset-dev > /dev/null
+	@test -x ./hecate || $(MAKE) --no-print-directory build
+	@mkdir -p .data
+	@echo "starting hecate in background…"
+	@./hecate > .data/screenshots-gateway.log 2>&1 & echo $$! > .data/screenshots-gateway.pid
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  curl -sf http://127.0.0.1:8080/healthz > /dev/null && break; \
+	  sleep 0.3; \
+	done
+	@cd ui && bun run capture-screenshots; \
+	  status=$$?; \
+	  cd ..; \
+	  kill $$(cat .data/screenshots-gateway.pid 2>/dev/null) 2>/dev/null || true; \
+	  rm -f .data/screenshots-gateway.pid; \
+	  echo "gateway stopped — screenshots are in docs/screenshots/"; \
+	  exit $$status
 
 # reset-docker wipes the docker compose stack: stops + removes containers
 # and removes the hecate-data, postgres-data, and ollama-models named

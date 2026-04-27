@@ -1,21 +1,22 @@
 // Capture documentation screenshots against a running gateway on :8080.
 //
-// Run with:  bun run /Users/chicoxyzzy/dev/hecate/scripts/capture-screenshots.ts
-// (must run from a directory where Playwright is resolvable, e.g. `cd ui` first)
+// Run via the bun script (resolves its own cwd, no `cd ui` needed):
+//   bun run capture-screenshots          # from ui/
+//   make screenshots                     # from repo root
 //
 // Prerequisites:
 //   1. `make reset-dev && ./hecate &` — gateway running on :8080 with fresh state
 //   2. ollama running on :11434 with `ollama pull llama3.1:8b` (used to seed
 //      one realistic chat session). Set HECATE_SKIP_OLLAMA=1 to skip.
-//   3. ImageMagick (`magick`) on PATH for the post-capture optimize pass.
-//      Set HECATE_SKIP_OPTIMIZE=1 to skip.
+//
+// Optional optimize pass — the script auto-detects the best PNG
+// optimizer on PATH (preference: oxipng > pngquant > magick) and runs
+// it over each captured PNG. None of these are required to take
+// captures; the standard "people usually use this for README PNGs"
+// install is `brew install oxipng`. Set HECATE_SKIP_OPTIMIZE=1 to skip.
 //
 // The admin token is read from .data/hecate.bootstrap.json. Outputs to
-// docs/screenshots/<name>.png. Each scene navigates to a route,
-// optionally interacts to surface the right state, then snapshots; the
-// optimize pass runs a `magick -strip -colors 256 -define
-// png:compression-level=9` over each PNG (≈3-4× size reduction with no
-// visible loss on dark UI screenshots).
+// docs/screenshots/<name>.png.
 
 import { chromium, type Page } from "@playwright/test";
 import { readFileSync, mkdirSync, statSync } from "node:fs";
@@ -31,7 +32,11 @@ const bootstrap = JSON.parse(
 ) as { admin_token: string };
 const ADMIN_TOKEN = bootstrap.admin_token;
 
-const VIEWPORT = { width: 1440, height: 900 };
+// 1280×800 is a comfortable docs-rendering size — wide enough to show
+// the full sidebar + main pane with no horizontal scrolling, narrow
+// enough that GitHub's README column doesn't have to downscale much.
+// Reducing from 1440×900 trims ~25% of the pixel surface up front.
+const VIEWPORT = { width: 1280, height: 800 };
 
 async function clearAndNavigate(page: Page, path = "/") {
   await page.context().clearCookies();
@@ -57,40 +62,85 @@ async function snap(page: Page, name: string) {
   console.log(`  saved ${path}`);
 }
 
-// optimize runs ImageMagick over each captured PNG to strip metadata,
-// quantize the palette to 256 colors (no visible loss on dark UI
-// screenshots, which have << 256 distinct colors), and re-encode at
-// max compression. Typical reduction is 3-4× on the dashboard
-// screenshots — drops the docs/screenshots total from ~500 KB to
-// ~180 KB.
-function optimize() {
+// pngOptimizer is the build configuration for whichever PNG
+// optimizer was detected on PATH. Preference order matches what most
+// open-source repos use to optimize README screenshots:
+//
+//   1. pngquant — lossy palette quantization with Floyd-Steinberg
+//      dithering. At quality=80-100 the output is perceptually
+//      indistinguishable from the source, files shrink ~3-4×.
+//      This is "the README screenshot optimizer".
+//   2. oxipng — gold-standard lossless. Smaller wins (5-15%) but no
+//      quality loss. Use this if you're allergic to lossy.
+//   3. magick — last-resort lossless re-encode. Marginal at best,
+//      sometimes a no-op.
+type PNGOptimizer = { name: string; args: (path: string) => string[]; lossy: boolean };
+
+function detectOptimizer(): PNGOptimizer | null {
+  const candidates: PNGOptimizer[] = [
+    {
+      name: "pngquant",
+      // Lossy palette quantization with dithering. Quality range
+      // 80-100 means: aim for ≥80% perceptual quality, fail if it
+      // can't reach 100. --speed 1 = max compression effort. The
+      // .png ext + --force makes it overwrite the input in place.
+      args: path => ["--quality=80-100", "--speed", "1", "--strip", "--ext", ".png", "--force", path],
+      lossy: true,
+    },
+    {
+      name: "oxipng",
+      // -o max enables every optimization pass; --strip safe drops
+      // metadata that's safe to remove (timestamps, EXIF) without
+      // touching color data; in-place via the bare path arg.
+      args: path => ["-o", "max", "--strip", "safe", path],
+      lossy: false,
+    },
+    {
+      name: "magick",
+      args: path => [path, "-strip", "-define", "png:compression-level=9", path],
+      lossy: false,
+    },
+  ];
+  for (const c of candidates) {
+    const probe = spawnSync(c.name, ["--version"], { stdio: "ignore" });
+    if (probe.status === 0 || probe.status === 1) return c; // some tools return 1 on --version
+  }
+  return null;
+}
+
+async function optimize() {
   if (process.env.HECATE_SKIP_OPTIMIZE === "1") {
     console.log("→ skipping optimize (HECATE_SKIP_OPTIMIZE=1)");
     return;
   }
-  console.log("→ optimizing PNGs (magick -strip -colors 256)");
-  for (const path of captured) {
-    const before = statSync(path).size;
-    const result = spawnSync("magick", [
-      path,
-      "-strip",
-      "-colors", "256",
-      "-define", "png:compression-level=9",
-      "-define", "png:compression-filter=5",
-      path,
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    if (result.error) {
-      console.warn(`  ${path}: magick failed (${result.error.message}); leaving original`);
-      continue;
-    }
-    if (result.status !== 0) {
-      console.warn(`  ${path}: magick exited ${result.status}: ${result.stderr.toString().trim()}`);
-      continue;
-    }
-    const after = statSync(path).size;
-    const reduction = ((1 - after / before) * 100).toFixed(0);
-    console.log(`  ${path.split("/").pop()}: ${(before / 1024).toFixed(1)} KB → ${(after / 1024).toFixed(1)} KB (-${reduction}%)`);
+  const tool = detectOptimizer();
+  if (!tool) {
+    console.log("→ no PNG optimizer found on PATH (checked pngquant, oxipng, magick)");
+    console.log("  install one for ~3-4× smaller files — recommended: `brew install pngquant`");
+    return;
   }
+  console.log(`→ optimizing PNGs (${tool.name}, ${tool.lossy ? "lossy palette" : "lossless"})`);
+  // Each PNG is independent — run the optimizer in parallel. With 10
+  // captures this drops a serial 2-3s pngquant pass to ~0.5s.
+  const { spawn } = await import("node:child_process");
+  await Promise.all(captured.map(path => new Promise<void>(resolve => {
+    const before = statSync(path).size;
+    const child = spawn(tool.name, tool.args(path), { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("close", code => {
+      if (code !== 0) {
+        console.warn(`  ${path.split("/").pop()}: ${tool.name} failed (${stderr.trim() || `exit ${code}`}); leaving original`);
+        resolve();
+        return;
+      }
+      const after = statSync(path).size;
+      const delta = before - after;
+      const pct = ((delta / before) * 100).toFixed(0);
+      console.log(`  ${path.split("/").pop()}: ${(before / 1024).toFixed(1)} KB → ${(after / 1024).toFixed(1)} KB (-${pct}%)`);
+      resolve();
+    });
+  })));
 }
 
 // seedChatSessions creates a few chat sessions through Hecate's API so
@@ -124,27 +174,41 @@ async function seedChatSessions() {
 
   // Real completion against llama3.1:8b for the first session. Keep
   // the prompt short so the model finishes in seconds, not minutes.
+  // Ollama is optional — if it's not running or doesn't have the
+  // model, we skip the chat turn and the chat screenshot just shows
+  // the empty session. Set HECATE_SKIP_OLLAMA=1 to skip explicitly.
   const firstID = ids[0];
+  if (process.env.HECATE_SKIP_OLLAMA === "1") {
+    console.log("  HECATE_SKIP_OLLAMA=1 — leaving the chat session empty");
+    return { firstID };
+  }
   console.log(`  routing one chat through ollama/llama3.1:8b for ${firstID}…`);
   const start = Date.now();
-  const chatRes = await fetch(`${BASE_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: "llama3.1:8b",
-      provider: "ollama",
-      session_id: firstID,
-      messages: [{
-        role: "user",
-        content: "In two sentences: when do you reach for a Go interface vs a struct?",
-      }],
-    }),
-  });
-  if (!chatRes.ok) {
-    const body = await chatRes.text();
-    throw new Error(`chat failed: ${chatRes.status} ${body}`);
+  try {
+    const chatRes = await fetch(`${BASE_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "llama3.1:8b",
+        provider: "ollama",
+        session_id: firstID,
+        messages: [{
+          role: "user",
+          content: "In two sentences: when do you reach for a Go interface vs a struct?",
+        }],
+      }),
+    });
+    if (!chatRes.ok) {
+      const body = await chatRes.text();
+      console.warn(`  chat seed skipped: ${chatRes.status} ${body.slice(0, 200)}`);
+      console.warn("  (the chat screenshot will show an empty session)");
+      return { firstID };
+    }
+    console.log(`  llama replied in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+  } catch (err) {
+    console.warn(`  chat seed skipped: ${(err as Error).message}`);
+    console.warn("  (the chat screenshot will show an empty session)");
   }
-  console.log(`  llama replied in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   return { firstID };
 }
 
@@ -234,7 +298,7 @@ async function main() {
   await snap(page, "tasks");
 
   await browser.close();
-  optimize();
+  await optimize();
   console.log("done.");
 }
 
