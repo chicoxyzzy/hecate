@@ -265,7 +265,7 @@ jobs:
       # Buildx + GHA cache means cold image builds (~30-60s) drop to a
       # few seconds when the source layers haven't changed. Without it
       # the smoke job would rebuild the full UI + Go binary every run.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Run docker smoke test
         run: go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...
