@@ -41,6 +41,11 @@ func NewServer(name, version string) *Server {
 	}
 }
 
+// SetDescription attaches a human-readable description that's surfaced
+// in the initialize response (per MCP 2025-11-25). Optional — clients
+// that don't render it just ignore the field.
+func (s *Server) SetDescription(d string) { s.info.Description = d }
+
 // RegisterTool wires a tool into the server. Must be called before
 // Serve; the registry is not safe for concurrent mutation while a
 // dispatcher is active.
@@ -189,6 +194,9 @@ func (s *Server) handleListTools() (any, *RPCError) {
 }
 
 func (s *Server) handleCallTool(ctx context.Context, req *Request) (any, *RPCError) {
+	// A malformed tools/call envelope itself (e.g. completely invalid
+	// JSON in `params`) is a protocol error — the client got the
+	// shape wrong, not the model. Keep this as JSON-RPC -32602.
 	var params CallToolParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return nil, NewError(ErrCodeInvalidParams, "invalid tools/call params: "+err.Error())
@@ -197,11 +205,14 @@ func (s *Server) handleCallTool(ctx context.Context, req *Request) (any, *RPCErr
 	if !ok {
 		return nil, NewError(ErrCodeInvalidParams, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
+	// Tool-level error → CallToolResult with isError=true.
+	// Per MCP 2025-11-25 (minor change #5): "input validation errors
+	// should be returned as Tool Execution Errors rather than Protocol
+	// Errors to enable model self-correction." So a handler that
+	// returns an error (including bad-arguments-JSON inside the
+	// handler) becomes a tool result the model can read and adjust.
 	result, err := tool.handler(ctx, params.Arguments)
 	if err != nil {
-		// Tool-level error → return CallToolResult with isError=true,
-		// not a JSON-RPC error. Per MCP spec, tool failures aren't
-		// protocol failures; the client renders them as content.
 		return CallToolResult{
 			Content: TextContent(err.Error()),
 			IsError: true,

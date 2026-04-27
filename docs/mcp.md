@@ -74,6 +74,6 @@ Expected output: two JSON-RPC responses on stdout (initialize result + tools lis
 
 ## Spec compliance
 
-- **Protocol version**: `2024-11-05` (the first stable release). Newer revisions are additive on the wire; we'll bump as we adopt features.
-- **Transport**: stdio with newline-delimited JSON-RPC 2.0 messages. HTTP/SSE is on the v0.2 roadmap.
-- **Capabilities declared**: `tools` only. Resources, prompts, sampling, and logging come later.
+- **Protocol version**: `2025-11-25` (current MCP revision). We track the breaking-change-free surface and adopt the additive bits that improve client UX (`title`, `annotations`, server `description`, input-validation-as-tool-error). Negotiation downgrades to whatever the client speaks.
+- **Transport**: stdio with newline-delimited JSON-RPC 2.0 messages. Streamable HTTP is on the v0.2 roadmap.
+- **Capabilities declared**: `tools` only. Resources, prompts, sampling, elicitation, and the new task primitive land later.

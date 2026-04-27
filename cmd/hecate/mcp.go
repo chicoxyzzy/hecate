@@ -45,6 +45,7 @@ func runMCPServer() {
 	}
 
 	server := mcp.NewServer("hecate", version.Version)
+	server.SetDescription("Hecate gateway: read-only inspection of tasks, chat sessions, and recent traffic.")
 	client := mcp.NewHTTPClient(baseURL, authToken)
 	mcp.RegisterDefaultTools(server, client)
 

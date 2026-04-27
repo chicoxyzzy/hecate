@@ -12,9 +12,24 @@
 // is planned for v0.2 and will share the dispatcher in server.go but
 // have its own framing.
 //
-// Spec target: protocol version "2024-11-05" — the first stable MCP
-// release. Newer revisions are additive on the wire; we'll bump
-// declaredProtocolVersion when we adopt a feature from a newer rev.
+// Spec target: protocol version "2025-11-25" — the current MCP
+// revision as of this writing. We track the breaking-change-free
+// surface (initialize / tools/list / tools/call / notifications/initialized
+// / ping) and adopt the additive bits that improve client UX:
+//
+//   - tool `title` field (2025-06-18): separates the programmatic
+//     identifier (`name`) from the human-readable display label
+//   - tool annotations (2025-03-26): hints like readOnlyHint that let
+//     clients skip "are you sure?" prompts on safe tools
+//   - input validation as tool errors (2025-11-25): bad argument JSON
+//     becomes a CallToolResult with isError=true rather than a
+//     JSON-RPC -32602, so the model can self-correct
+//   - server description (2025-11-25 minor): optional human-readable
+//     context exposed during initialize
+//
+// Out of scope for v0.1: OAuth / Streamable HTTP / elicitation / tasks
+// primitive / resource links / sampling. None apply to stdio-only,
+// tools-only servers.
 package mcp
 
 import "encoding/json"
@@ -23,7 +38,7 @@ import "encoding/json"
 // initialize handshake. Clients negotiate down to a version they speak;
 // if a client sends a different version, we still accept it and reply
 // with our supported version.
-const declaredProtocolVersion = "2024-11-05"
+const declaredProtocolVersion = "2025-11-25"
 
 // JSON-RPC 2.0 wire types.
 //
@@ -145,17 +160,62 @@ type ToolsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 
+// ServerInfo is sent in the initialize response. The optional
+// Description field was added in 2025-11-25 (minor change #2 — aligns
+// with the MCP registry server.json format) for human-readable context
+// during connection.
 type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description,omitempty"`
 }
 
 // Tool is the MCP tool descriptor returned by tools/list.
+//
+// Title is a human-friendly display label, separated from Name in
+// 2025-06-18 so Name can be a stable programmatic identifier. Clients
+// fall back to Name when Title is absent — backward compatible.
+//
+// Annotations carry behavioral hints (added in 2025-03-26) that let
+// clients optimize UX: a readOnlyHint tool can skip an "are you sure?"
+// confirmation; a destructiveHint tool gets one regardless of user
+// preference. All optional.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Title       string           `json:"title,omitempty"`
+	Description string           `json:"description,omitempty"`
+	InputSchema json.RawMessage  `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
+
+// ToolAnnotations is the optional behavioral-hint envelope on a tool.
+// Every field is a *bool so we can distinguish "unset" (omit on the
+// wire) from "explicitly false" (some clients treat unset and false
+// differently — readOnlyHint=false is a stronger signal than absent).
+type ToolAnnotations struct {
+	// Title overrides Tool.Title at the annotation level. Clients
+	// that don't read annotations still see Tool.Title; we duplicate
+	// to be safe across SDK versions.
+	Title string `json:"title,omitempty"`
+	// ReadOnlyHint: this tool only reads, never mutates. Safe by
+	// default; clients may auto-approve.
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
+	// DestructiveHint: this tool may make irreversible changes.
+	// Clients should always confirm. (Only meaningful when not
+	// read-only.)
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	// IdempotentHint: repeating the call has no extra effect. Useful
+	// for retry logic. (Only meaningful when not read-only.)
+	IdempotentHint *bool `json:"idempotentHint,omitempty"`
+	// OpenWorldHint: the tool reaches into an open universe (the web,
+	// external APIs) rather than a closed local environment.
+	OpenWorldHint *bool `json:"openWorldHint,omitempty"`
+}
+
+// BoolPtr is a small helper for ToolAnnotations callers — Go's
+// composite literal syntax makes &true awkward enough to warrant a
+// helper.
+func BoolPtr(v bool) *bool { return &v }
 
 // CallToolParams is the body of a tools/call request.
 type CallToolParams struct {

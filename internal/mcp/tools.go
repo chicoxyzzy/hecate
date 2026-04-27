@@ -22,8 +22,16 @@ import (
 //   - Errors that originate at the upstream HTTP layer become the
 //     handler's error return → CallToolResult with isError=true.
 func RegisterDefaultTools(s *Server, client *HTTPClient) {
+	// All four v0.1 tools are read-only inspections of the gateway
+	// state; we declare ReadOnlyHint=true so MCP-aware clients can
+	// auto-approve invocations without an "are you sure?" prompt.
+	// Write tools (create_task, resolve_approval) land in v0.2 and
+	// will set DestructiveHint where appropriate.
+	readOnly := &ToolAnnotations{ReadOnlyHint: BoolPtr(true)}
+
 	s.RegisterTool(Tool{
 		Name:        "list_tasks",
+		Title:       "List recent tasks",
 		Description: "List recent agent tasks tracked by the Hecate gateway. Returns each task's id, title, status, and execution kind.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -31,10 +39,12 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 				"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 30, "description": "Maximum number of tasks to return."}
 			}
 		}`),
+		Annotations: readOnly,
 	}, listTasksHandler(client))
 
 	s.RegisterTool(Tool{
 		Name:        "get_task_status",
+		Title:       "Get task status",
 		Description: "Get the current status of a specific Hecate task by id, including its latest run and step count.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -43,10 +53,12 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 			},
 			"required": ["task_id"]
 		}`),
+		Annotations: readOnly,
 	}, getTaskStatusHandler(client))
 
 	s.RegisterTool(Tool{
 		Name:        "list_chat_sessions",
+		Title:       "List chat sessions",
 		Description: "List recent chat sessions on the Hecate gateway. Returns each session's id, title, turn count, and last-updated time.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -55,10 +67,12 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 				"tenant": {"type": "string", "description": "Filter to a single tenant id. Empty = all tenants the caller can see."}
 			}
 		}`),
+		Annotations: readOnly,
 	}, listChatSessionsHandler(client))
 
 	s.RegisterTool(Tool{
 		Name:        "summarize_recent_traffic",
+		Title:       "Summarize recent traffic",
 		Description: "Summarize recent gateway request activity: total count, by-provider breakdown, error rate, and average latency.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -66,6 +80,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 				"limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100, "description": "Number of recent traces to inspect."}
 			}
 		}`),
+		Annotations: readOnly,
 	}, summarizeRecentTrafficHandler(client))
 }
 

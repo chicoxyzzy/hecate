@@ -111,8 +111,8 @@ func TestServer_Initialize(t *testing.T) {
 	if result.ServerInfo.Name != "hecate-test" {
 		t.Errorf("ServerInfo.Name = %q, want hecate-test", result.ServerInfo.Name)
 	}
-	if result.ProtocolVersion != "2024-11-05" {
-		t.Errorf("ProtocolVersion = %q, want 2024-11-05", result.ProtocolVersion)
+	if result.ProtocolVersion != "2025-11-25" {
+		t.Errorf("ProtocolVersion = %q, want 2025-11-25", result.ProtocolVersion)
 	}
 	if result.Capabilities.Tools == nil {
 		t.Errorf("Capabilities.Tools must be non-nil to advertise tool support")
@@ -171,8 +171,10 @@ func TestServer_ListTools(t *testing.T) {
 	register := func(s *Server) {
 		s.RegisterTool(Tool{
 			Name:        "echo",
+			Title:       "Echo back",
 			Description: "echo back input",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`),
+			Annotations: &ToolAnnotations{ReadOnlyHint: BoolPtr(true)},
 		}, func(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 			return CallToolResult{Content: TextContent(string(args))}, nil
 		})
@@ -189,6 +191,45 @@ func TestServer_ListTools(t *testing.T) {
 	_ = json.Unmarshal(r.Result, &result)
 	if len(result.Tools) != 1 || result.Tools[0].Name != "echo" {
 		t.Fatalf("tools = %+v, want one echo", result.Tools)
+	}
+	// 2025-06-18: title must be a separate field from name so clients
+	// can render a friendly label without losing the programmatic id.
+	if result.Tools[0].Title != "Echo back" {
+		t.Errorf("Title = %q, want 'Echo back'", result.Tools[0].Title)
+	}
+	// 2025-03-26: annotations advertise behavioral hints; readOnlyHint
+	// lets the client auto-approve safe inspection tools.
+	if result.Tools[0].Annotations == nil ||
+		result.Tools[0].Annotations.ReadOnlyHint == nil ||
+		*result.Tools[0].Annotations.ReadOnlyHint != true {
+		t.Errorf("Annotations.ReadOnlyHint not propagated: %+v", result.Tools[0].Annotations)
+	}
+}
+
+func TestServer_InitializeResponse_HasDescription(t *testing.T) {
+	// 2025-11-25 minor #2: ServerInfo.Description is optional but
+	// surfaces during initialize so clients can render context. We
+	// pin that SetDescription wires through to the wire shape.
+	in := newRWPipe()
+	var outBuf safeBuffer
+	srv := NewServer("hecate-test", "0.0.0")
+	srv.SetDescription("a test server")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, in, &outBuf) }()
+	_, _ = in.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"t","version":"1"}}}` + "\n"))
+	_ = in.w.Close()
+	<-done
+
+	var r Response
+	_ = json.Unmarshal([]byte(outBuf.String()), &r)
+	var result InitializeResult
+	_ = json.Unmarshal(r.Result, &result)
+	if result.ServerInfo.Description != "a test server" {
+		t.Fatalf("ServerInfo.Description = %q, want 'a test server'", result.ServerInfo.Description)
 	}
 }
 
