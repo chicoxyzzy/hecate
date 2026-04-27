@@ -1187,6 +1187,16 @@ func (r *Runner) resumeCheckpointForRun(ctx context.Context, taskID, runID strin
 		LastStepIndex: 0,
 		ArtifactCount: len(artifacts),
 	}
+	// Pull the agent-conversation artifact (if any) so the agent loop
+	// can hydrate state on resume. We use a stable kind + ID
+	// convention so the lookup is a single linear scan rather than a
+	// new store method. Non-agent_loop runs simply won't have one.
+	for _, art := range artifacts {
+		if art.Kind == "agent_conversation" && len(art.ContentText) > 0 {
+			checkpoint.AgentConversation = []byte(art.ContentText)
+			break
+		}
+	}
 	var lastSequence int64
 	maxCompletedIndex := 0
 	for _, event := range sourceEvents {

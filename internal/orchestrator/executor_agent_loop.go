@@ -112,14 +112,23 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 	allSteps := make([]types.TaskStep, 0, e.maxTurns*2)
 	allArtifacts := make([]types.TaskArtifact, 0, e.maxTurns)
 
-	// Build the initial conversation. The user-supplied prompt is the
-	// user message; we don't currently inject a system prompt — the
-	// task's own Prompt carries enough intent. Per-tenant system
-	// prompts are a v0.2 feature.
-	messages := []types.Message{
-		{Role: "user", Content: spec.Task.Prompt},
-	}
+	// Build the initial conversation. On resume, we hydrate from the
+	// previous run's persisted conversation artifact so the agent
+	// continues the exact dialogue rather than restarting from scratch
+	// — preserves prior tool results, partial reasoning, and avoids
+	// re-paying for tokens already spent. Fresh runs start with just
+	// the user prompt.
+	//
+	// We don't currently inject a system prompt — the task's own
+	// Prompt carries enough intent. Per-tenant system prompts are a
+	// later add.
+	messages := hydrateConversation(spec)
 	tools := agentToolDefinitions()
+	// Stable artifact ID for this run's conversation snapshot. Same
+	// ID across turns means UpsertArtifact replaces the contents in
+	// place rather than creating a new artifact each time, so the
+	// run's artifact list stays clean.
+	conversationArtifactID := "convo-" + spec.Run.ID
 
 	finalResult := &ExecutionResult{
 		Status:    "completed",
@@ -177,6 +186,16 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		// regardless — even an answer-only turn must be in history if
 		// we somehow re-enter the loop later.
 		messages = append(messages, assistantMsg)
+		// Persist a conversation snapshot here so a crash between the
+		// LLM response and the tool dispatch still leaves a recoverable
+		// state (the tool calls are in messages, the resume can re-run
+		// them).
+		if art, err := upsertConversationArtifact(spec, conversationArtifactID, messages, turn, turnStartedAt); err != nil {
+			return nil, err
+		} else if art != nil && len(allArtifacts) == 0 {
+			// First write — also surface in the returned artifacts.
+			allArtifacts = append(allArtifacts, *art)
+		}
 
 		// 4. If no tool calls, the assistant gave a final answer.
 		// Save the final-answer artifact and exit.
@@ -223,6 +242,13 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			// tool, malformed args). Real tool failures are captured
 			// in toolResultText.
 			_ = dispatchErr
+		}
+		// Snapshot conversation after the full set of tool results is
+		// appended. A crash before the next LLM turn still leaves a
+		// recoverable state — the resumed run sees the tool results
+		// and asks the LLM what to do next.
+		if _, err := upsertConversationArtifact(spec, conversationArtifactID, messages, turn, turnStartedAt); err != nil {
+			return nil, err
 		}
 	}
 
@@ -621,6 +647,70 @@ func summarizeSubResult(r *ExecutionResult) string {
 		}
 	}
 	return b.String()
+}
+
+// hydrateConversation returns the conversation history for this run.
+// On a fresh run, it's just the initial user prompt. On a resume, it's
+// the JSON-decoded prior conversation from the source run's
+// persisted agent_conversation artifact — the loop continues exactly
+// where it left off, preserving tool results and assistant reasoning.
+//
+// If the resume artifact is missing or malformed (corrupt JSON, edited
+// out of band) we fall back to the user-prompt-only state. That
+// degrades gracefully: the agent re-plans rather than crashing.
+func hydrateConversation(spec ExecutionSpec) []types.Message {
+	freshStart := []types.Message{
+		{Role: "user", Content: spec.Task.Prompt},
+	}
+	if spec.ResumeCheckpoint == nil || len(spec.ResumeCheckpoint.AgentConversation) == 0 {
+		return freshStart
+	}
+	var saved []types.Message
+	if err := json.Unmarshal(spec.ResumeCheckpoint.AgentConversation, &saved); err != nil {
+		return freshStart
+	}
+	if len(saved) == 0 {
+		return freshStart
+	}
+	return saved
+}
+
+// upsertConversationArtifact writes the current conversation snapshot
+// to a stable artifact ID. Returns the artifact when it's newly
+// created (or on the first call) so the caller can include it in the
+// run's artifact list. Idempotent across turns: the same ID means the
+// artifact's content is replaced in place rather than appended.
+func upsertConversationArtifact(spec ExecutionSpec, id string, messages []types.Message, turn int, when time.Time) (*types.TaskArtifact, error) {
+	if spec.UpsertArtifact == nil {
+		return nil, nil
+	}
+	payload, err := json.Marshal(messages)
+	if err != nil {
+		// Marshal failures here are fatal — every Message field is
+		// JSON-marshalable by construction; a failure would be a
+		// runtime corruption we shouldn't paper over.
+		return nil, fmt.Errorf("marshal agent conversation: %w", err)
+	}
+	art := types.TaskArtifact{
+		ID:          id,
+		TaskID:      spec.Task.ID,
+		RunID:       spec.Run.ID,
+		Kind:        "agent_conversation",
+		Name:        "agent-conversation.json",
+		Description: fmt.Sprintf("Agent loop conversation snapshot after turn %d", turn),
+		MimeType:    "application/json",
+		StorageKind: "inline",
+		ContentText: string(payload),
+		SizeBytes:   int64(len(payload)),
+		Status:      "ready",
+		CreatedAt:   when,
+		RequestID:   spec.RequestID,
+		TraceID:     spec.TraceID,
+	}
+	if err := spec.UpsertArtifact(art); err != nil {
+		return nil, err
+	}
+	return &art, nil
 }
 
 // resultFromStatus maps an executor's status string ("completed",

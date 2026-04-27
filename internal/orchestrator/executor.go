@@ -37,6 +37,14 @@ type ResumeCheckpoint struct {
 	LastStepIndex       int
 	CompletedStepCount  int
 	ArtifactCount       int
+	// AgentConversation is the JSON-encoded conversation history from
+	// the source run, populated when the source produced an
+	// `agent_conversation` artifact. Empty on resumes of non-agent_loop
+	// runs. The agent loop unmarshals this and continues from the
+	// saved state rather than restarting the conversation from
+	// scratch — that's what lets the loop survive crashes and
+	// approval-gating mid-conversation.
+	AgentConversation []byte
 }
 
 type ExecutionResult struct {

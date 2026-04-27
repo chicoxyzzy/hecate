@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -102,11 +103,18 @@ func TestAgentLoop_FinalAnswerOnFirstTurn(t *testing.T) {
 	if len(res.Steps) != 1 {
 		t.Errorf("Steps = %d, want 1 (just the thinking step)", len(res.Steps))
 	}
-	if len(res.Artifacts) != 1 || res.Artifacts[0].Name != "agent-final-answer.txt" {
-		t.Errorf("Artifacts = %+v, want one final-answer artifact", res.Artifacts)
+	// Two artifacts now: the conversation snapshot (persisted every
+	// turn for resume) and the final-answer summary.
+	finalAnswer := findArtifactByKind(res.Artifacts, "summary")
+	if finalAnswer == nil {
+		t.Fatalf("no summary artifact; got: %+v", res.Artifacts)
 	}
-	if !strings.Contains(res.Artifacts[0].ContentText, "README") {
-		t.Errorf("final answer content lost: %s", res.Artifacts[0].ContentText)
+	if finalAnswer.Name != "agent-final-answer.txt" || !strings.Contains(finalAnswer.ContentText, "README") {
+		t.Errorf("final answer artifact wrong: %+v", finalAnswer)
+	}
+	convo := findArtifactByKind(res.Artifacts, "agent_conversation")
+	if convo == nil {
+		t.Fatalf("no agent_conversation artifact persisted; got: %+v", res.Artifacts)
 	}
 }
 
@@ -303,6 +311,156 @@ func TestAgentLoop_UnknownToolBecomesToolError(t *testing.T) {
 	}
 	if !hasUnknown {
 		t.Errorf("expected unknown-tool tool message; got: %+v", secondReq.Messages)
+	}
+}
+
+// findArtifactByKind picks the first artifact matching kind. Multiple
+// artifacts now exist per run (conversation snapshot + final-answer
+// summary); tests target a specific kind rather than indexing.
+func findArtifactByKind(arts []types.TaskArtifact, kind string) *types.TaskArtifact {
+	for i := range arts {
+		if arts[i].Kind == kind {
+			return &arts[i]
+		}
+	}
+	return nil
+}
+
+func TestAgentLoop_ConversationPersistsAcrossTurns(t *testing.T) {
+	// Pin the resume contract: every turn writes a snapshot to the
+	// same stable artifact ID (`convo-{run.ID}`). A test stub records
+	// each upsert so we can verify (a) the artifact ID is stable
+	// across turns, (b) the JSON-decoded payload reflects the latest
+	// conversation state, and (c) tool results are in the snapshot.
+	upserts := make([]types.TaskArtifact, 0)
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("", types.ToolCall{
+				ID: "call-1", Type: "function",
+				Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`},
+			})),
+			makeChatResp(makeAssistantMsg("Done.")),
+		},
+	}
+	shell := &stubExecutor{
+		result: &ExecutionResult{
+			Status: "completed",
+			Artifacts: []types.TaskArtifact{
+				{Kind: "stdout", Name: "stdout.txt", ContentText: "README.md\n"},
+			},
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, shell, &stubExecutor{}, &stubExecutor{}, 8)
+	spec := newAgentLoopSpec(t)
+	spec.UpsertArtifact = func(art types.TaskArtifact) error {
+		upserts = append(upserts, art)
+		return nil
+	}
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	convoUpserts := make([]types.TaskArtifact, 0)
+	for _, u := range upserts {
+		if u.Kind == "agent_conversation" {
+			convoUpserts = append(convoUpserts, u)
+		}
+	}
+	if len(convoUpserts) < 2 {
+		t.Fatalf("conversation upserts = %d, want >= 2 (one per turn)", len(convoUpserts))
+	}
+	// Stable ID across all upserts.
+	for i, u := range convoUpserts {
+		if u.ID != "convo-run-1" {
+			t.Errorf("upsert[%d].ID = %q, want stable convo-run-1", i, u.ID)
+		}
+	}
+	// Last snapshot must contain the final assistant message.
+	last := convoUpserts[len(convoUpserts)-1]
+	if !strings.Contains(last.ContentText, "Done.") {
+		t.Errorf("last snapshot missing final assistant turn: %s", last.ContentText)
+	}
+	// Tool result was in the conversation between turn 1 and turn 2,
+	// so an intermediate snapshot must include it.
+	hasToolResult := false
+	for _, u := range convoUpserts {
+		if strings.Contains(u.ContentText, "README.md") {
+			hasToolResult = true
+		}
+	}
+	if !hasToolResult {
+		t.Errorf("no snapshot captured tool result: %+v", convoUpserts)
+	}
+}
+
+func TestAgentLoop_HydratesFromResumeCheckpoint(t *testing.T) {
+	// On resume: the loop starts with the saved conversation, NOT
+	// the user prompt. We verify by encoding a 3-message history and
+	// checking that the next LLM call sees those exact messages.
+	saved := []types.Message{
+		{Role: "user", Content: "original prompt"},
+		{Role: "assistant", Content: "", ToolCalls: []types.ToolCall{{ID: "c1", Type: "function", Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"command":"ls"}`}}}},
+		{Role: "tool", Content: "status=completed\n--- stdout ---\nREADME.md\n", ToolCallID: "c1"},
+	}
+	savedJSON, _ := json.Marshal(saved)
+
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("Resumed and answered.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	spec := newAgentLoopSpec(t)
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:       "run-prev",
+		AgentConversation: savedJSON,
+		LastStepIndex:     5,
+	}
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(llm.lastReqs) != 1 {
+		t.Fatalf("LLM calls = %d, want 1 (single resume turn)", len(llm.lastReqs))
+	}
+	resumed := llm.lastReqs[0].Messages
+	if len(resumed) != 3 {
+		t.Fatalf("resumed conversation = %d messages, want 3 (saved history, no fresh user prompt)", len(resumed))
+	}
+	if resumed[0].Content != "original prompt" {
+		t.Errorf("resumed[0].Content = %q, want 'original prompt'", resumed[0].Content)
+	}
+	if len(resumed[1].ToolCalls) != 1 || resumed[1].ToolCalls[0].ID != "c1" {
+		t.Errorf("resumed[1] tool call lost: %+v", resumed[1])
+	}
+	if resumed[2].Role != "tool" || resumed[2].ToolCallID != "c1" {
+		t.Errorf("resumed[2] tool message lost: %+v", resumed[2])
+	}
+}
+
+func TestAgentLoop_HydrateGracefulFallbackOnCorruptCheckpoint(t *testing.T) {
+	// Corrupt JSON in the resume artifact must not crash the loop —
+	// fall back to a fresh user-prompt-only conversation. Lets a
+	// hand-edited or out-of-band artifact still produce a useful run.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("Fresh start.")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8)
+	spec := newAgentLoopSpec(t)
+	spec.ResumeCheckpoint = &ResumeCheckpoint{
+		SourceRunID:       "run-prev",
+		AgentConversation: []byte(`not valid json {`),
+	}
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "completed" {
+		t.Errorf("Status = %q, want completed (fallback)", res.Status)
+	}
+	if len(llm.lastReqs[0].Messages) != 1 || llm.lastReqs[0].Messages[0].Content != "summarize the working directory" {
+		t.Errorf("expected fresh-start user-prompt-only conversation; got: %+v", llm.lastReqs[0].Messages)
 	}
 }
 
