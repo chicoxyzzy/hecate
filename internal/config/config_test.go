@@ -85,7 +85,7 @@ func TestDefaultPricebookIncludesCurrentProviderDefaults(t *testing.T) {
 		{provider: "openai", model: "gpt-5.4"},
 		{provider: "anthropic", model: "claude-sonnet-4-6"},
 		{provider: "groq", model: "llama-3.3-70b-versatile"},
-		{provider: "google", model: "gemini-2.5-flash"},
+		{provider: "gemini", model: "gemini-2.5-flash"},
 	} {
 		tt := tt
 		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
@@ -220,18 +220,18 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("deepseek default model = %q, want deepseek-chat", got)
 	}
 
-	google, ok := BuiltInProviderByID("google")
+	gemini, ok := BuiltInProviderByID("gemini")
 	if !ok {
-		t.Fatal("BuiltInProviderByID(google) = not found")
+		t.Fatal("BuiltInProviderByID(gemini) = not found")
 	}
-	if google.Protocol != "openai" {
-		t.Fatalf("google protocol = %q, want openai", google.Protocol)
+	if gemini.Protocol != "openai" {
+		t.Fatalf("gemini protocol = %q, want openai", gemini.Protocol)
 	}
-	if google.BaseURL != "https://generativelanguage.googleapis.com/v1beta/openai" {
-		t.Fatalf("google base url = %q, want https://generativelanguage.googleapis.com/v1beta/openai", google.BaseURL)
+	if gemini.BaseURL != "https://generativelanguage.googleapis.com/v1beta/openai" {
+		t.Fatalf("gemini base url = %q, want https://generativelanguage.googleapis.com/v1beta/openai", gemini.BaseURL)
 	}
-	if got := google.RuntimeConfig("ignored").DefaultModel; got != "gemini-2.5-flash" {
-		t.Fatalf("google default model = %q, want gemini-2.5-flash", got)
+	if got := gemini.RuntimeConfig("ignored").DefaultModel; got != "gemini-2.5-flash" {
+		t.Fatalf("gemini default model = %q, want gemini-2.5-flash", got)
 	}
 
 	xai, ok := BuiltInProviderByID("xai")
@@ -262,18 +262,18 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 		t.Fatalf("mistral default model = %q, want mistral-small-latest", got)
 	}
 
-	together, ok := BuiltInProviderByID("together")
+	together, ok := BuiltInProviderByID("together_ai")
 	if !ok {
-		t.Fatal("BuiltInProviderByID(together) = not found")
+		t.Fatal("BuiltInProviderByID(together_ai) = not found")
 	}
 	if together.Protocol != "openai" {
-		t.Fatalf("together protocol = %q, want openai", together.Protocol)
+		t.Fatalf("together_ai protocol = %q, want openai", together.Protocol)
 	}
 	if together.BaseURL != "https://api.together.xyz/v1" {
-		t.Fatalf("together base url = %q, want https://api.together.xyz/v1", together.BaseURL)
+		t.Fatalf("together_ai base url = %q, want https://api.together.xyz/v1", together.BaseURL)
 	}
 	if got := together.RuntimeConfig("ignored").DefaultModel; got != "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" {
-		t.Fatalf("together default model = %q, want meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", got)
+		t.Fatalf("together_ai default model = %q, want meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", got)
 	}
 
 	for _, id := range []string{"ollama", "LM Studio", "localai", "llamacpp"} {

@@ -44,6 +44,10 @@ export const Icons = {
   branch:   ["M6 3v12","M18 9a3 3 0 100-6 3 3 0 000 6z","M6 21a3 3 0 100-6 3 3 0 000 6z","M18 9a9 9 0 01-9 9"],
   eye:      ["M15 12a3 3 0 11-6 0 3 3 0 016 0z","M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"],
   search:   "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
+  // Broom — used for the "Clear price" action on pricebook rows. The
+  // shape: a diagonal handle, a pentagonal brush head, three short
+  // vertical bristles below.
+  broom:    ["M19.5 4.5L11.5 12.5", "M11.5 12.5L8.5 15.5L8.5 18.5L11.5 18.5L14.5 15.5Z", "M8 19V22 M11 19V22 M14 19V22"],
 };
 
 // ─── Badge ───────────────────────────────────────────────────────────────────
@@ -146,6 +150,184 @@ export function CodeBlock({ code, lang = "bash" }: { code: string; lang?: string
   );
 }
 
+// ─── DialogShell (internal) ──────────────────────────────────────────────────
+
+// Shared header chrome for SlideOver and Modal. Renders the title in
+// the same mono-uppercase-teal section-label voice the rest of the
+// admin uses for group headers (KeysTab tenants, AdminView tabs), so
+// dialogs read as part of the page rather than a foreign system widget.
+// Keyboard: Escape closes.
+function DialogChrome({
+  title,
+  children,
+  footer,
+  onClose,
+  surface,
+}: {
+  title: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+  onClose: () => void;
+  surface: React.CSSProperties;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "oklch(0 0 0 / 0.55)", backdropFilter: "blur(2px)" }}
+      onClick={onClose}>
+      <div
+        role="dialog"
+        aria-label={title}
+        style={surface}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "11px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)" }}>
+          <span style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            fontWeight: 500,
+            color: "var(--teal)",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}>{title}</span>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: "auto", padding: "3px 6px" }}
+            onClick={onClose}
+            aria-label="Close"
+            title="Close (Esc)">
+            <Icon d={Icons.x} size={14} />
+          </button>
+        </div>
+        <div style={{ padding: 16, flex: 1, overflowY: "auto" }}>{children}</div>
+        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", background: "var(--bg2)" }}>{footer}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SlideOver ───────────────────────────────────────────────────────────────
+
+// SlideOver is the right-anchored panel used across admin tabs for
+// forms. The backdrop closes on click, Escape closes, and the close
+// button in the header carries the same affordance — so footers
+// don't need a redundant Cancel button.
+export function SlideOver({ title, children, footer, onClose, width = 420 }: {
+  title: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+  onClose: () => void;
+  width?: number;
+}) {
+  return (
+    <DialogChrome
+      title={title}
+      footer={footer}
+      onClose={onClose}
+      surface={{
+        marginLeft: "auto",
+        width,
+        background: "var(--bg1)",
+        borderLeft: "1px solid var(--border)",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+      }}>
+      {children}
+    </DialogChrome>
+  );
+}
+
+// ─── Modal ───────────────────────────────────────────────────────────────────
+
+// Modal is a centered overlay dialog. Same chrome as SlideOver but
+// floats in the middle of the viewport — use for confirmations and
+// content that interrupts to ask a question (vs SlideOver which feels
+// like an inspector slot attached to the page).
+export function Modal({ title, children, footer, onClose, width = 560 }: {
+  title: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+  onClose: () => void;
+  width?: number;
+}) {
+  return (
+    <DialogChrome
+      title={title}
+      footer={footer}
+      onClose={onClose}
+      surface={{
+        width,
+        maxHeight: "80vh",
+        background: "var(--bg1)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        display: "flex",
+        flexDirection: "column",
+        boxShadow: "0 12px 40px oklch(0 0 0 / 0.4)",
+      }}>
+      {children}
+    </DialogChrome>
+  );
+}
+
+// ─── ConfirmModal ────────────────────────────────────────────────────────────
+
+// ConfirmModal is the styled replacement for `window.confirm` — same
+// frame as the import consent dialog (centered Modal) so destructive
+// or significant actions read consistently across the admin surface.
+//
+// Usage: track an "is-this-action-pending-confirmation" piece of state
+// in the parent. Render <ConfirmModal /> when it's truthy, pass the
+// onConfirm handler that runs the action, onClose handler that clears
+// the state. The "danger" flag tints the confirm button red — use it
+// for destructive operations like Clear / Delete.
+//
+// Footer has only the primary action button. Dismiss is via the X in
+// the modal header or a backdrop click — adding an explicit Cancel
+// button next to Confirm was redundant noise.
+export function ConfirmModal({
+  title,
+  message,
+  confirmLabel,
+  danger = false,
+  pending = false,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  message: React.ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  pending?: boolean;
+  onConfirm: () => void | Promise<void>;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title={title}
+      onClose={onClose}
+      width={420}
+      footer={
+        <button
+          className={`btn ${danger ? "btn-danger" : "btn-primary"}`}
+          style={{ width: "100%", justifyContent: "center" }}
+          disabled={pending}
+          onClick={() => void onConfirm()}>
+          {pending ? "Working…" : confirmLabel}
+        </button>
+      }>
+      <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>{message}</div>
+    </Modal>
+  );
+}
+
 // ─── ModelPicker ─────────────────────────────────────────────────────────────
 
 function groupModelRecords(models: ModelRecord[]): Array<{ provider: string; models: ModelRecord[] }> {
@@ -201,6 +383,116 @@ export function ModelPicker({ value, onChange, models }: {
                 </div>
               ))}
               <div className="dropdown-divider" />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ProviderPicker ──────────────────────────────────────────────────────────
+
+// ProviderOption is the shape every caller of ProviderPicker hands in.
+// `name` is the display label shown in the dropdown; `id` is what
+// `onChange` emits (and what `value` matches against). `healthy` drives
+// the small green dot on cloud providers in the chat view; pricebook
+// callers leave it undefined.
+export type ProviderOption = {
+  id: string;
+  name: string;
+  healthy?: boolean;
+};
+
+// ProviderPicker is the styled dropdown both the chat view (filter
+// requests by provider) and the pricebook (filter the table by
+// provider) use. Pass `includeAuto` to surface an "All providers"
+// sentinel row at the top.
+//
+// The trigger is auto-sized to the longest possible option label so
+// switching selection doesn't shift the controls to its right. The
+// implementation: a `display: inline-grid` wrapper holds the active
+// label in cell (1,1) and a hidden copy of the *longest* label also in
+// cell (1,1). The grid sizes to the wider child, the visible label
+// paints on top.
+export function ProviderPicker({
+  value,
+  onChange,
+  options,
+  includeAuto = false,
+  autoValue = "auto",
+  autoLabel = "All providers",
+  emptyLabel = "select provider",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: ProviderOption[];
+  includeAuto?: boolean;
+  // autoValue is the sentinel emitted/matched when "auto" is selected.
+  // Chat view's ProviderFilter type uses "auto"; other callers may
+  // prefer "" or a custom string. Defaults to "auto".
+  autoValue?: string;
+  autoLabel?: string;
+  emptyLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const selected = options.find(o => o.id === value);
+  const label = includeAuto && value === autoValue
+    ? autoLabel
+    : selected?.name ?? value ?? emptyLabel;
+  // Reserve enough horizontal room for the longest option so the
+  // trigger's width never depends on the current selection.
+  const widestLabel = (() => {
+    const candidates = options.map(o => o.name);
+    if (includeAuto) candidates.push(autoLabel);
+    if (candidates.length === 0) return label;
+    return candidates.reduce((a, b) => (b.length > a.length ? b : a));
+  })();
+
+  return (
+    <div className="dropdown-wrap" ref={ref}>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        onClick={() => setOpen(o => !o)}
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)" }}>
+        <Icon d={Icons.providers} size={13} />
+        <span style={{ display: "inline-grid" }}>
+          <span aria-hidden style={{ gridColumn: 1, gridRow: 1, visibility: "hidden", whiteSpace: "nowrap", pointerEvents: "none" }}>{widestLabel}</span>
+          <span style={{ gridColumn: 1, gridRow: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+        </span>
+        <Icon d={Icons.chevD} size={11} />
+      </button>
+      {open && (
+        <div className="dropdown-menu" style={{ minWidth: 180 }}>
+          {includeAuto && (
+            <>
+              <div
+                className={`dropdown-item ${value === autoValue ? "selected" : ""}`}
+                onClick={() => { onChange(autoValue); setOpen(false); }}>
+                <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12 }}>{autoLabel}</span>
+                {value === autoValue && <Icon d={Icons.check} size={12} />}
+              </div>
+              {options.length > 0 && <div className="dropdown-divider" />}
+            </>
+          )}
+          {options.map(o => (
+            <div key={o.id}
+              className={`dropdown-item ${value === o.id ? "selected" : ""}`}
+              onClick={() => { onChange(o.id); setOpen(false); }}>
+              <span style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.name}</span>
+              {o.healthy && value !== o.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flexShrink: 0, display: "inline-block" }} />}
+              {value === o.id && <Icon d={Icons.check} size={12} />}
             </div>
           ))}
         </div>

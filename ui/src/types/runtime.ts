@@ -416,15 +416,22 @@ export type PricebookImportUpdateRecord = {
 };
 
 // PricebookImportDiff is the response payload from both the preview and
-// apply endpoints. Preview populates `added` + `updated`; apply replaces
-// those with `applied` (the rows it persisted).
+// apply endpoints. Preview populates `added` + `updated` + `skipped`;
+// apply replaces added+updated with `applied` (the rows it persisted).
+//
+// `skipped` lists current manual rows where LiteLLM has a *different*
+// price. The UI uses these to surface a "Replace manual" affordance —
+// the operator can opt in to replacing one (per-row Import) or many
+// (consent dialog). Each entry pairs LiteLLM's proposal (`entry`) with
+// the current manual row (`previous`), the same shape as `updated`,
+// so the UI renders a price diff identically.
 export type PricebookImportDiff = {
   fetched_at: string;
   added?: ConfiguredPricebookRecord[];
   updated?: PricebookImportUpdateRecord[];
   applied?: ConfiguredPricebookRecord[];
   unchanged: number;
-  skipped?: ConfiguredPricebookRecord[];
+  skipped?: PricebookImportUpdateRecord[];
 };
 
 export type PricebookImportDiffResponse = {

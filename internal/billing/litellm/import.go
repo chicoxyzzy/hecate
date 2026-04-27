@@ -3,6 +3,15 @@
 // schema. The fetch is intentionally synchronous and stateless: callers
 // (the admin import preview/apply handlers) drive the lifecycle.
 //
+// Provider names from LiteLLM's `litellm_provider` field are passed
+// through verbatim. Hecate's built-in provider IDs are aligned with
+// LiteLLM's canonical names (e.g. `gemini`, `together_ai`) so no
+// translation is needed. Names that don't match a Hecate built-in still
+// pass through — operators may have a custom-configured provider with
+// that exact name (PROVIDER_<NAME>_*), or be planning to add one later.
+// The import-preview UI flags such rows as `not configured` so the
+// operator stays in control of what actually gets persisted.
+//
 // Attribution: the pricing data fetched by this package is maintained
 // by the LiteLLM project (https://github.com/BerriAI/litellm) and
 // distributed under the MIT License. We do not vendor a copy of the
@@ -33,33 +42,6 @@ const SourceURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_
 // fetchTimeout caps the HTTP fetch so a hung GitHub mirror can't pin an
 // admin handler indefinitely.
 const fetchTimeout = 30 * time.Second
-
-// providerNameMap rewrites LiteLLM's provider names to the IDs Hecate uses
-// in `internal/config/builtin_providers.go`. Anything not in this map is
-// dropped silently — Hecate only prices models for providers it knows
-// how to route to.
-//
-// The right-hand side must match a built-in provider ID exactly; the
-// `_, ok := config.BuiltInProviderByID(...)` lookup at apply time is the
-// final guardrail.
-var providerNameMap = map[string]string{
-	// One-to-one passthroughs.
-	"openai":    "openai",
-	"anthropic": "anthropic",
-	"groq":      "groq",
-	"deepseek":  "deepseek",
-	"mistral":   "mistral",
-	"xai":       "xai",
-	// LiteLLM uses underscored / dashed names for some providers.
-	"together_ai": "together",
-	// Google's chat/generation models live under several LiteLLM keys.
-	// Map the common ones to Hecate's "google" provider preset.
-	"gemini":                    "google",
-	"google":                    "google",
-	"vertex_ai":                 "google",
-	"vertex_ai-language-models": "google",
-	"vertex_ai-chat-models":     "google",
-}
 
 // litellmEntry mirrors the subset of fields we read out of LiteLLM's JSON.
 // We deliberately decode into a map first so that unknown / variable-shaped
@@ -105,8 +87,14 @@ func Fetch(ctx context.Context, httpClient *http.Client) ([]config.ModelPriceCon
 }
 
 // Parse decodes a LiteLLM pricing-data JSON payload into Hecate pricebook
-// entries. Entries that aren't chat/completion models, that have no input
-// cost, or whose provider doesn't map to a Hecate built-in are dropped.
+// entries. Entries that aren't chat/completion models or that have no
+// input cost are dropped. The `litellm_provider` value is used as the
+// Hecate provider ID verbatim — Hecate's built-in IDs match LiteLLM's
+// canonical names. Entries whose provider doesn't match a Hecate
+// built-in still pass through with the LiteLLM name unchanged: the
+// operator may have a custom-configured provider with that name, or
+// may add one later. The import-preview UI flags such rows as
+// `not configured` so they're never auto-checked.
 func Parse(raw []byte) ([]config.ModelPriceConfig, error) {
 	var rawEntries map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawEntries); err != nil {
@@ -114,6 +102,13 @@ func Parse(raw []byte) ([]config.ModelPriceConfig, error) {
 	}
 
 	out := make([]config.ModelPriceConfig, 0, len(rawEntries))
+	// seen tracks (provider, model) tuples we've already emitted so a
+	// duplicate LiteLLM key (deepseek ships both `deepseek-chat` and
+	// `deepseek/deepseek-chat`, for example) doesn't produce two rows
+	// with the same identity but potentially different prices. Go's map
+	// iteration is non-deterministic, so without this guard the
+	// last-write-wins outcome flickered between runs.
+	seen := make(map[string]struct{}, len(rawEntries))
 	for key, valueRaw := range rawEntries {
 		// LiteLLM ships a "sample_spec" sentinel in the same map. Skip it.
 		if key == "sample_spec" {
@@ -132,22 +127,28 @@ func Parse(raw []byte) ([]config.ModelPriceConfig, error) {
 		default:
 			continue
 		}
-		// Map LiteLLM provider name to Hecate's built-in ID.
-		providerID, ok := providerNameMap[entry.provider]
-		if !ok {
-			continue
-		}
-		// Belt-and-suspenders: confirm the mapped ID is a real built-in
-		// provider so a stale entry in providerNameMap can't smuggle a
-		// junk row through.
-		if _, ok := config.BuiltInProviderByID(providerID); !ok {
-			continue
-		}
+		// Use the LiteLLM provider name verbatim. Hecate's built-in IDs
+		// are aligned with LiteLLM's canonical names, and unmatched names
+		// pass through so operators with custom-configured providers
+		// (PROVIDER_<NAME>_*) still get pricing for them.
+		providerID := entry.provider
 		// "Free" upstream prices are ambiguous — could mean "we don't
 		// know" or "the model is genuinely free." Skip rather than
 		// record a bogus zero, since 0 is meaningful in Hecate's schema
 		// (used for local providers).
 		if entry.inputCostPerToken <= 0 {
+			continue
+		}
+		// LiteLLM ships pseudo-entries for `together_ai` that aren't
+		// real model IDs but pricing-tier brackets — keys like
+		// `together-ai-21.1b-41b`, `together-ai-41.1b-80b`. They have
+		// `litellm_provider: "together_ai"` and a chat mode but the
+		// "model" can't be sent to Together's API. Skip them so they
+		// don't pollute the pricebook with non-routable rows. Heuristic:
+		// the bare key starts with `together-ai-` (the bucket pattern)
+		// and has no `/` separator, since real Together AI models always
+		// use the `together_ai/<vendor>/<model>` form.
+		if providerID == "together_ai" && !strings.Contains(key, "/") && strings.HasPrefix(key, "together-ai-") {
 			continue
 		}
 		// Strip the leading provider prefix (e.g. "openai/gpt-4o" → "gpt-4o").
@@ -160,6 +161,11 @@ func Parse(raw []byte) ([]config.ModelPriceConfig, error) {
 		if modelName == "" {
 			continue
 		}
+		dedupKey := providerID + "\x00" + modelName
+		if _, dup := seen[dedupKey]; dup {
+			continue
+		}
+		seen[dedupKey] = struct{}{}
 
 		row := config.ModelPriceConfig{
 			Provider:                        providerID,

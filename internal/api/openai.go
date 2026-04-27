@@ -535,17 +535,23 @@ type PricebookImportUpdateRecord struct {
 }
 
 // PricebookImportDiff is the response payload for both the preview and apply
-// endpoints. On preview, `Added` and `Updated` are populated; on apply they're
-// merged into `Applied`. `Skipped` lists currently-manual rows that LiteLLM
-// would have touched — they're protected and reported back so the UI can
-// explain why nothing changed for those rows.
+// endpoints. On preview, `Added`, `Updated`, and `Skipped` are populated; on
+// apply, the rows that were persisted move into `Applied`.
+//
+// `Skipped` lists currently-manual rows where LiteLLM has a *different* price.
+// We never touch them in a blanket apply (manual is operator-protected), but
+// the UI can offer an explicit "replace this manual row with LiteLLM's price"
+// affordance — when the operator opts in by passing the row's key in the
+// apply request, the backend honors it. Each entry pairs LiteLLM's proposal
+// (`Entry`) with the current manual row (`Previous`), the same shape as
+// `Updated`, so the UI can render a price diff identically.
 type PricebookImportDiff struct {
 	FetchedAt string                        `json:"fetched_at"`
 	Added     []ControlPlanePricebookRecord `json:"added,omitempty"`
 	Updated   []PricebookImportUpdateRecord `json:"updated,omitempty"`
 	Applied   []ControlPlanePricebookRecord `json:"applied,omitempty"`
 	Unchanged int                           `json:"unchanged"`
-	Skipped   []ControlPlanePricebookRecord `json:"skipped,omitempty"`
+	Skipped   []PricebookImportUpdateRecord `json:"skipped,omitempty"`
 }
 
 // PricebookImportApplyRequest narrows the apply call to a subset of rows.

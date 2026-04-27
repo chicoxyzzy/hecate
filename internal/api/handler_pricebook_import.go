@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/billing/litellm"
@@ -100,6 +101,22 @@ func (h *Handler) HandleControlPlanePricebookImportApply(w http.ResponseWriter, 
 		}
 		applied = append(applied, renderControlPlanePricebookEntry(saved))
 	}
+	// Manual rows (Skipped) are only applied when the operator named them
+	// explicitly. Blanket apply (empty filter) leaves them alone — that's
+	// the operator-protection contract that makes "manual" stick.
+	if keyFilter.explicit() {
+		for _, skip := range diff.Skipped {
+			if !keyFilter.allows(skip.Entry.Provider, skip.Entry.Model) {
+				continue
+			}
+			saved, upsertErr := h.controlPlane.UpsertPricebookEntry(ctx, modelPriceFromRecord(skip.Entry))
+			if upsertErr != nil {
+				WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, upsertErr.Error())
+				return
+			}
+			applied = append(applied, renderControlPlanePricebookEntry(saved))
+		}
+	}
 
 	out := PricebookImportDiff{
 		FetchedAt: diff.FetchedAt,
@@ -146,11 +163,22 @@ func (h *Handler) computePricebookImportDiff(ctx context.Context) (PricebookImpo
 			diff.Added = append(diff.Added, renderControlPlanePricebookEntry(entry))
 			continue
 		}
-		// Manual rows are operator-protected: an import never overwrites
-		// them. The UI surfaces these in a "skipped" list so the operator
-		// understands why their LiteLLM-listed model didn't move.
+		// Manual rows are operator-protected: a blanket import never
+		// overwrites them. We still surface them in `Skipped` (paired
+		// with LiteLLM's proposed price) so the UI can offer an
+		// explicit "replace manual with LiteLLM" action — the operator
+		// opts in by including the row's key in an apply request.
+		// Manual rows that already match LiteLLM are silently counted
+		// in Unchanged; only differing manual rows show up here.
 		if existing.source == config.PricebookSourceManual {
-			diff.Skipped = append(diff.Skipped, renderControlPlanePricebookEntry(existing.entry))
+			if pricebookPricesEqual(existing.entry, entry) {
+				diff.Unchanged++
+				continue
+			}
+			diff.Skipped = append(diff.Skipped, PricebookImportUpdateRecord{
+				Entry:    renderControlPlanePricebookEntry(entry),
+				Previous: renderControlPlanePricebookEntry(existing.entry),
+			})
 			continue
 		}
 		// Imported row already in place — only counts as an update if a
@@ -164,6 +192,23 @@ func (h *Handler) computePricebookImportDiff(ctx context.Context) (PricebookImpo
 			Previous: renderControlPlanePricebookEntry(existing.entry),
 		})
 	}
+	// Sort each section by `provider/model` so the wire output is
+	// deterministic. Without this the order tracks Go map iteration
+	// (non-deterministic) and the import-preview modal jumps around
+	// between renders. Stable case-insensitive ordering matches what
+	// operators expect when scanning a long list.
+	sort.Slice(diff.Added, func(i, j int) bool {
+		return pricebookKey(diff.Added[i].Provider, diff.Added[i].Model) <
+			pricebookKey(diff.Added[j].Provider, diff.Added[j].Model)
+	})
+	sort.Slice(diff.Updated, func(i, j int) bool {
+		return pricebookKey(diff.Updated[i].Entry.Provider, diff.Updated[i].Entry.Model) <
+			pricebookKey(diff.Updated[j].Entry.Provider, diff.Updated[j].Entry.Model)
+	})
+	sort.Slice(diff.Skipped, func(i, j int) bool {
+		return pricebookKey(diff.Skipped[i].Entry.Provider, diff.Skipped[i].Entry.Model) <
+			pricebookKey(diff.Skipped[j].Entry.Provider, diff.Skipped[j].Entry.Model)
+	})
 	return diff, nil
 }
 
@@ -218,4 +263,13 @@ func (f pricebookKeyFilterSet) allows(provider, model string) bool {
 	}
 	_, ok := f.keys[pricebookKey(provider, model)]
 	return ok
+}
+
+// explicit reports whether the operator passed a specific key list. The
+// blanket apply (empty list) deliberately does NOT touch Skipped rows —
+// those carry manual prices we never overwrite without consent. With an
+// explicit list, the operator has already opted in by checking the
+// "replace manual" boxes in the consent dialog, so we apply them.
+func (f pricebookKeyFilterSet) explicit() bool {
+	return f.keys != nil
 }

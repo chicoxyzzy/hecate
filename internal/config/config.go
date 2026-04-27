@@ -597,14 +597,14 @@ func defaultPricebookConfig() PricebookConfig {
 			// Seeded from Google Gemini API pricing docs as of 2026-04-23.
 			// Source: https://ai.google.dev/gemini-api/docs/pricing
 			{
-				Provider:                             "google",
+				Provider:                             "gemini",
 				Model:                                "gemini-2.5-flash",
 				InputMicrosUSDPerMillionTokens:       300_000,
 				OutputMicrosUSDPerMillionTokens:      2_500_000,
 				CachedInputMicrosUSDPerMillionTokens: 30_000,
 			},
 			{
-				Provider:                             "google",
+				Provider:                             "gemini",
 				Model:                                "gemini-2.5-flash-lite",
 				InputMicrosUSDPerMillionTokens:       100_000,
 				OutputMicrosUSDPerMillionTokens:      400_000,

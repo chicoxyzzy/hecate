@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord } from "../../types/runtime";
-import { Badge, CopyBtn, Dot, Icon, Icons, InlineError } from "../shared/ui";
+import { Badge, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
 import { PricebookTab } from "./PricebookTab";
 
 type Props = {
@@ -11,8 +11,23 @@ type Props = {
 
 type Tab = "keys" | "tenants" | "budget" | "usage" | "pricebook" | "retention";
 
+const TAB_STORAGE_KEY = "hecate.adminTab";
+const VALID_TABS: readonly Tab[] = ["keys", "tenants", "budget", "usage", "pricebook", "retention"];
+
 export function AdminView({ state, actions }: Props) {
-  const [tab, setTab] = useState<Tab>("keys");
+  // Persist the admin sub-tab so refreshing while on (say) Pricebook
+  // returns the operator to Pricebook, not Keys. The lazy initializer
+  // reads localStorage; the setter wrapper writes it back. Validating
+  // against VALID_TABS guards against stale values from older builds
+  // (e.g. a tab id that no longer exists).
+  const [tab, setTabRaw] = useState<Tab>(() => {
+    const saved = localStorage.getItem(TAB_STORAGE_KEY);
+    return saved && (VALID_TABS as readonly string[]).includes(saved) ? (saved as Tab) : "keys";
+  });
+  const setTab = (next: Tab) => {
+    localStorage.setItem(TAB_STORAGE_KEY, next);
+    setTabRaw(next);
+  };
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -809,26 +824,3 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function SlideOver({ title, children, footer, onClose }: {
-  title: string;
-  children: React.ReactNode;
-  footer: React.ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", background: "oklch(0 0 0 / 0.5)" }}
-      onClick={onClose}>
-      <div style={{ marginLeft: "auto", width: 420, background: "var(--bg1)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", height: "100%" }}
-        onClick={e => e.stopPropagation()}>
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontWeight: 500, fontSize: 13 }}>{title}</span>
-          <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto", padding: "3px 6px" }} onClick={onClose}>
-            <Icon d={Icons.x} size={14} />
-          </button>
-        </div>
-        <div style={{ padding: 16, flex: 1, overflowY: "auto" }}>{children}</div>
-        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>{footer}</div>
-      </div>
-    </div>
-  );
-}

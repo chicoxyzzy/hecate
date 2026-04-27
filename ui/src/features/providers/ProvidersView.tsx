@@ -11,11 +11,11 @@ type Props = {
 const PRESET_COLORS: Record<string, string> = {
   anthropic:  "#c084fc",
   openai:     "var(--t0)",
-  google:     "#4ade80",
+  gemini:     "#4ade80",
   deepseek:   "var(--teal)",
   mistral:    "var(--amber)",
   groq:       "var(--amber)",
-  together:   "var(--t2)",
+  together_ai: "var(--t2)",
   xai:        "var(--t0)",
   ollama:     "var(--teal)",
   lmstudio:   "var(--t2)",

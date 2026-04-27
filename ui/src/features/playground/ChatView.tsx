@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { parseInlineNodes, parseMarkdownBlocks } from "../../lib/markdown";
-import type { ModelRecord, ProviderFilter, ProviderRecord } from "../../types/runtime";
-import { CodeBlock, Icon, Icons, InlineError } from "../shared/ui";
+import type { ModelRecord } from "../../types/runtime";
+import { CodeBlock, Icon, Icons, InlineError, ProviderPicker } from "../shared/ui";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -199,14 +199,25 @@ export function ChatView({ state, actions }: Props) {
           </span>
           <ProviderPicker
             value={state.providerFilter}
-            onChange={actions.setProviderFilter}
-            providers={state.providers.filter(p => {
-              if (!p.healthy) return false;
-              const cfg = state.adminConfig?.providers.find(c => c.name === p.name);
-              return !cfg || cfg.enabled;
-            })}
-            allowedProviders={state.session.allowedProviders}
-            presets={state.providerPresets}
+            onChange={v => actions.setProviderFilter(v as typeof state.providerFilter)}
+            options={(() => {
+              const allowed = state.session.allowedProviders;
+              return state.providers
+                .filter(p => {
+                  if (!p.healthy) return false;
+                  const cfg = state.adminConfig?.providers.find(c => c.name === p.name);
+                  if (cfg && !cfg.enabled) return false;
+                  if (allowed.length > 0 && !allowed.includes(p.name)) return false;
+                  return true;
+                })
+                .filter(p => p.name)
+                .map(p => ({
+                  id: p.name,
+                  name: state.providerPresets.find(pr => pr.id === p.name)?.name || p.name,
+                  healthy: p.healthy,
+                }));
+            })()}
+            includeAuto
           />
           <ModelPicker value={state.model} onChange={actions.setModel} models={state.providerScopedModels} presets={state.providerPresets} />
           <button className="btn btn-ghost btn-sm" onClick={() => setSyspromptOpen(o => !o)}
@@ -396,63 +407,6 @@ export function ChatView({ state, actions }: Props) {
         .cursor-blink { color: var(--teal); }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
       `}</style>
-    </div>
-  );
-}
-
-function ProviderPicker({ value, onChange, providers, allowedProviders, presets }: {
-  value: ProviderFilter;
-  onChange: (v: ProviderFilter) => void;
-  providers: ProviderRecord[];
-  allowedProviders: string[];
-  presets: import("../../types/runtime").ProviderPresetRecord[];
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  const visible = (allowedProviders.length > 0
-    ? providers.filter(p => allowedProviders.includes(p.name))
-    : providers).filter(p => p.name);
-
-  const displayName = (id: string) => presets.find(p => p.id === id)?.name || id;
-  const label = value === "auto" ? "any provider" : displayName(value);
-
-  return (
-    <div className="dropdown-wrap" ref={ref}>
-      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)" }}>
-        <Icon d={Icons.providers} size={13} />
-        {label}
-        <Icon d={Icons.chevD} size={11} />
-      </button>
-      {open && (
-        <div className="dropdown-menu" style={{ minWidth: 180 }}>
-          <div
-            className={`dropdown-item ${value === "auto" ? "selected" : ""}`}
-            onClick={() => { onChange("auto"); setOpen(false); }}>
-            <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12 }}>any provider</span>
-            {value === "auto" && <Icon d={Icons.check} size={12} />}
-          </div>
-          {visible.length > 0 && <div className="dropdown-divider" />}
-          {visible.map(p => (
-            <div key={p.name}
-              className={`dropdown-item ${value === p.name ? "selected" : ""}`}
-              onClick={() => { onChange(p.name as ProviderFilter); setOpen(false); }}>
-              <span style={{ flex: 1, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName(p.name)}</span>
-              {p.healthy && value !== p.name && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flexShrink: 0, display: "inline-block" }} />}
-              {value === p.name && <Icon d={Icons.check} size={12} />}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

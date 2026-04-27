@@ -862,14 +862,14 @@ export function useRuntimeConsole() {
   }
 
   async function deletePricebookEntry(provider: string, model: string) {
+    // Confirmation is the caller's concern now (PricebookTab routes
+    // this through a styled ConfirmModal). The action itself just
+    // performs the deletion.
     resetAdminFeedback();
-    if (!window.confirm(`Delete pricebook entry "${provider}/${model}"?`)) {
-      return;
-    }
     await runAdminMutation({
-      successMessage: "Pricebook entry deleted.",
-      errorMessage: "Failed to delete pricebook entry.",
-      failureDetail: "failed to delete pricebook entry",
+      successMessage: "Price cleared.",
+      errorMessage: "Failed to clear price.",
+      failureDetail: "failed to clear pricebook entry",
       action: async () => {
         await deletePricebookEntryRequest(provider, model, authToken);
       },

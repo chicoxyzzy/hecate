@@ -218,28 +218,28 @@ available when needed.
 
 Built-in cloud presets:
 
-- `anthropic`
-- `deepseek`
-- `google`
-- `groq`
-- `mistral`
-- `openai`
-- `together`
-- `xai`
+- Anthropic (`anthropic`)
+- DeepSeek (`deepseek`)
+- Google Gemini (`gemini`)
+- Groq (`groq`)
+- Mistral (`mistral`)
+- OpenAI (`openai`)
+- Together AI (`together_ai`)
+- xAI (`xai`)
 
 Built-in local presets:
 
-- `llamacpp`
-- `lmstudio`
-- `localai`
-- `ollama`
+- llama.cpp (`llamacpp`)
+- LM Studio (`lmstudio`)
+- LocalAI (`localai`)
+- Ollama (`ollama`)
 
 Default local base URLs:
 
-- `llamacpp`: `http://127.0.0.1:8080/v1`
-- `lmstudio`: `http://127.0.0.1:1234/v1`
-- `localai`: `http://127.0.0.1:8080/v1`
-- `ollama`: `http://127.0.0.1:11434/v1`
+- llama.cpp (`llamacpp`): `http://127.0.0.1:8080/v1`
+- LM Studio (`lmstudio`): `http://127.0.0.1:1234/v1`
+- LocalAI (`localai`): `http://127.0.0.1:8080/v1`
+- Ollama (`ollama`): `http://127.0.0.1:11434/v1`
 
 ## Auth, Policy, And Spend
 
@@ -290,10 +290,13 @@ The operator UI includes:
 - trace inspection
 - budget admin flows
 - tenant/API key management and control-plane activity views
-- pricebook editor with one-click import of current cloud-LLM token prices
-  from the [LiteLLM](https://github.com/BerriAI/litellm) project (MIT-licensed,
-  attribution in [`NOTICE.md`](NOTICE.md)). Manually-edited rows are protected
-  from being overwritten by subsequent imports.
+- pricebook editor: a catalog of every cloud-provider model the gateway
+  knows about (each row tagged `priced` / `unpriced` / `deprecated`), filterable
+  by provider, status, or substring. Per-row Import or bulk "Import all" pulls
+  the latest token prices from the [LiteLLM](https://github.com/BerriAI/litellm)
+  reference dataset (MIT-licensed, attribution in [`NOTICE.md`](NOTICE.md)).
+  Manually-edited rows are protected from blanket imports — operators opt in
+  explicitly via the consent dialog's "Override manual" section to replace them.
 
 The app shell lives in `ui/src/app`, shared console primitives live in
 `ui/src/features/shared`, and feature-owned styles live beside feature views.
