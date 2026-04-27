@@ -44,6 +44,10 @@ type ServerConfig struct {
 	TaskQueueLeaseSeconds      int
 	TaskEnableAgentExecutor    bool
 	TaskMaxConcurrentPerTenant int
+	// TaskAgentLoopMaxTurns caps how many LLM round-trips an
+	// agent_loop run can make. Acts as a runaway-cost safety net.
+	// Default 8 (set in NewAgentLoopExecutor when zero).
+	TaskAgentLoopMaxTurns int
 
 	// TraceBodyCapture enables recording (redacted) request and response bodies
 	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
@@ -282,6 +286,7 @@ func LoadFromEnv() Config {
 			TaskQueueBuffer:            getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
 			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
 			TaskEnableAgentExecutor:    getEnvBool("GATEWAY_TASK_ENABLE_AGENT_EXECUTOR", false),
+			TaskAgentLoopMaxTurns:      getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),

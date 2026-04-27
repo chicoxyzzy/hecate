@@ -2858,27 +2858,25 @@ func TestTaskStartAgentLoopDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestTaskStartAgentLoopExecutesPlanningAndFileStep(t *testing.T) {
+func TestTaskStartFileExecutesFileStep(t *testing.T) {
+	// File-execution tasks (execution_kind=file) write a file and
+	// produce a "file" step. agent_loop used to also run this path
+	// deterministically as a fallback, but in v0.1 agent_loop means
+	// "LLM-driven" — without an LLM it fails fast. Tests that need a
+	// no-LLM path use the explicit kinds, like this one.
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{
-		Server: config.ServerConfig{
-			TaskEnableAgentExecutor: true,
-		},
-	})
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
 	tasks := newTaskTestClient(t, handler)
 
-	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Agent loop file","prompt":"Execute file step","execution_profile":"repo_local","file_operation":"write","file_path":"agent-loop.txt","file_content":"hello agent loop"}`)
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"File write","prompt":"Execute file step","execution_kind":"file","execution_profile":"repo_local","file_operation":"write","file_path":"agent-loop.txt","file_content":"hello"}`)
 	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
 	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
 
 	steps := mustTaskRequestJSON[TaskStepsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/steps", "")
-	if len(steps.Data) < 2 {
-		t.Fatalf("steps = %d, want >= 2", len(steps.Data))
-	}
-	if steps.Data[0].Kind != "model" {
-		t.Fatalf("first step kind = %q, want model", steps.Data[0].Kind)
+	if len(steps.Data) < 1 {
+		t.Fatalf("steps = %d, want >= 1", len(steps.Data))
 	}
 	foundFileStep := false
 	for _, step := range steps.Data {
@@ -2888,7 +2886,7 @@ func TestTaskStartAgentLoopExecutesPlanningAndFileStep(t *testing.T) {
 		}
 	}
 	if !foundFileStep {
-		t.Fatal("missing file step in agent_loop execution")
+		t.Fatal("missing file step")
 	}
 }
 

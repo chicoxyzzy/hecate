@@ -19,6 +19,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/internal/version"
+	"github.com/hecate/agent-runtime/pkg/types"
 )
 
 type Handler struct {
@@ -79,11 +80,34 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		QueueLeaseSeconds:      cfg.Server.TaskQueueLeaseSeconds,
 		EnableAgentExecutor:    cfg.Server.TaskEnableAgentExecutor,
 		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
+		AgentLoopMaxTurns:      cfg.Server.TaskAgentLoopMaxTurns,
 	})
 	if taskQueue != nil {
 		runner.SetQueue(taskQueue)
 	}
 	runner.SetMetrics(telemetry.NewOrchestratorMetrics())
+	// Wire the gateway's chat path as the agent loop's LLM seam. The
+	// agent runtime issues its model calls through the same service
+	// that handles external client traffic — same routing, same
+	// caching, same budget enforcement, same audit trail. The
+	// adapter unwraps gateway.ChatResult into the bare ChatResponse
+	// the loop expects.
+	//
+	// Tests that build handlers with `nil` providers and don't
+	// exercise agent_loop are unaffected — only agent_loop tasks
+	// invoke this path, and agent_loop tasks with no providers
+	// configured surface a clean error to the operator rather than
+	// silently doing nothing.
+	runner.SetAgentLLMClient(orchestrator.AgentLLMClientFunc(func(ctx context.Context, req types.ChatRequest) (*types.ChatResponse, error) {
+		result, err := service.HandleChat(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, nil
+		}
+		return result.Response, nil
+	}))
 	if err := runner.ReconcilePendingRuns(context.Background()); err != nil {
 		logger.Warn("task runner reconciliation failed", slog.Any("error", err))
 	}

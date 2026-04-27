@@ -26,6 +26,10 @@ type Config struct {
 	QueueLeaseSeconds      int
 	EnableAgentExecutor    bool
 	MaxConcurrentPerTenant int
+	// AgentLoopMaxTurns caps how many LLM round-trips a single
+	// agent_loop run can make. Default 8 (set in NewAgentLoopExecutor
+	// when zero or negative). Acts as a runaway-cost safety net.
+	AgentLoopMaxTurns int
 }
 
 type Runner struct {
@@ -108,7 +112,11 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		jobs:       make(map[string]context.CancelFunc),
 		policies:   make(map[string]struct{}),
 	}
-	runner.agent = NewAgentLoopExecutor(runner.shell, runner.file, runner.git)
+	// LLM client + max-turns are wired post-construction via
+	// SetAgentLLMClient — main.go injects the gateway.Service after
+	// it's built. nil here means the loop falls back to a pass-through
+	// step until configured (see executor_agent_loop.go runWithoutLLM).
+	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns)
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
 		if policy == "" {
@@ -155,6 +163,15 @@ func (r *Runner) SetGitExecutor(exec Executor) {
 		return
 	}
 	r.git = exec
+}
+
+// SetAgentLLMClient wires the LLM seam into the agent_loop executor.
+// Safe to call after NewRunner — main.go invokes this once the gateway
+// service is constructed, since the chat path needs its own deps that
+// the runner doesn't otherwise know about. Nil unwires the loop back
+// to its no-LLM fallback (deterministic pass-through).
+func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
+	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns)
 }
 
 // SetMetrics wires in an OrchestratorMetrics instance. Safe to call after
