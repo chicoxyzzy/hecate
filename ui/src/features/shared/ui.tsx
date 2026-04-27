@@ -685,9 +685,17 @@ export function ProviderPicker({
   }, []);
 
   const selected = options.find(o => o.id === value);
+  // When the saved `value` doesn't resolve to any current option (the
+  // provider was removed, the localStorage value is from an older
+  // build, or value is the empty-string default before first
+  // selection), render `emptyLabel` instead of the raw id. Showing
+  // "stale-anthropic-id" in the trigger looks broken; "select provider"
+  // is the honest state — pick again. The previous `?? value`
+  // intermediate hop also broke the empty-string case because `??`
+  // treats `""` as defined and the trigger went blank.
   const label = includeAuto && value === autoValue
     ? autoLabel
-    : selected?.name ?? value ?? emptyLabel;
+    : selected?.name ?? emptyLabel;
   // Reserve enough horizontal room for the longest option so the
   // trigger's width never depends on the current selection.
   const widestLabel = (() => {

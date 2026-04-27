@@ -345,6 +345,52 @@ describe("ProviderPicker", () => {
     await user.click(within(menu).getByText("Anthropic"));
     expect(document.querySelector(".dropdown-menu")).toBeNull();
   });
+
+  it("renders emptyLabel when value is the empty string and no autoValue match", () => {
+    // The previous fallback chain was `selected?.name ?? value ?? emptyLabel`.
+    // `??` treats "" as defined, so an empty value rendered a blank trigger.
+    // Pin emptyLabel as the fallback so the trigger never goes blank.
+    render(<ProviderPicker value="" onChange={() => {}} options={options} emptyLabel="select provider" />);
+    expect(screen.getByRole("button").textContent).toContain("select provider");
+  });
+
+  it("renders the default emptyLabel ('select provider') when no prop is passed", () => {
+    render(<ProviderPicker value="" onChange={() => {}} options={options} />);
+    expect(screen.getByRole("button").textContent).toContain("select provider");
+  });
+
+  it("renders emptyLabel when value points to a removed/stale option", () => {
+    // localStorage may persist a provider id from an earlier build that
+    // no longer exists in the current options list. Showing the raw
+    // stale id ("stale-anthropic-id") looks like a bug; emptyLabel is
+    // the honest state — pick again.
+    render(<ProviderPicker value="stale-anthropic-id" onChange={() => {}} options={options} emptyLabel="pick one" />);
+    const trigger = screen.getByRole("button").textContent || "";
+    expect(trigger).toContain("pick one");
+    expect(trigger).not.toContain("stale-anthropic-id");
+  });
+
+  it("renders emptyLabel when options is empty", () => {
+    render(<ProviderPicker value="" onChange={() => {}} options={[]} emptyLabel="no providers configured" />);
+    expect(screen.getByRole("button").textContent).toContain("no providers configured");
+  });
+
+  it("autoLabel still wins over emptyLabel when value matches autoValue", () => {
+    render(
+      <ProviderPicker
+        value=""
+        onChange={() => {}}
+        options={options}
+        includeAuto
+        autoValue=""
+        autoLabel="All providers"
+        emptyLabel="select provider"
+      />,
+    );
+    const trigger = screen.getByRole("button").textContent || "";
+    expect(trigger).toContain("All providers");
+    expect(trigger).not.toContain("select provider");
+  });
 });
 
 // ─── CodeBlock ────────────────────────────────────────────────────────
