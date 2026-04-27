@@ -664,6 +664,67 @@ var (
 	_ providers.Provider = (*failingMessagesStreamProvider)(nil)
 )
 
+// TestMessagesStreamMidStreamErrorEventBodyIsValidJSON pins the
+// Anthropic error-event JSON across special characters. Same hazard
+// as the OpenAI SSE counterpart — a regression to naive concat would
+// silently corrupt the body when an upstream message contains quotes
+// or newlines, and Anthropic SDKs that parse `event: error\ndata: {...}`
+// would surface a JSON parse error instead of the actual reason.
+func TestMessagesStreamMidStreamErrorEventBodyIsValidJSON(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &failingMessagesStreamProvider{
+		fakeProvider: fakeProvider{name: "openai", defaultModel: "gpt-4o-mini"},
+		streamErr: &providers.UpstreamError{
+			StatusCode: http.StatusBadGateway,
+			Message:    `failed: "bad" model` + "\n" + `path=\x`,
+			Type:       "server_error",
+		},
+	}
+	handler := newTestHTTPHandler(logger, provider)
+
+	body := `{"model":"gpt-4o-mini","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	rec := performRequest(t, handler, http.MethodPost, "/v1/messages", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+
+	// The Anthropic SSE shape is:
+	//   event: error
+	//   data: {"type":"error","error":{"type":"api_error","message":"..."}}
+	// Find the `data:` line that follows `event: error` and JSON.parse it.
+	idx := strings.Index(out, "event: error")
+	if idx < 0 {
+		t.Fatalf("body missing 'event: error'; got=%q", out)
+	}
+	rest := out[idx:]
+	dataIdx := strings.Index(rest, "data: ")
+	if dataIdx < 0 {
+		t.Fatalf("body missing 'data:' line after error event; got=%q", out)
+	}
+	rest = rest[dataIdx+len("data: "):]
+	end := strings.Index(rest, "\n")
+	if end < 0 {
+		end = len(rest)
+	}
+	dataLine := rest[:end]
+	var payload struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(dataLine), &payload); err != nil {
+		t.Fatalf("anthropic error frame is not valid JSON: %v\nframe=%q", err, dataLine)
+	}
+	want := `failed: "bad" model` + "\n" + `path=\x`
+	if payload.Error.Message != want {
+		t.Errorf("parsed message = %q, want %q", payload.Error.Message, want)
+	}
+}
+
 func TestMessagesStreamMidStreamErrorEmitsAnthropicErrorEvent(t *testing.T) {
 	t.Parallel()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))

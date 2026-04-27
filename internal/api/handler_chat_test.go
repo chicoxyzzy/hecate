@@ -203,6 +203,65 @@ func TestChatCompletionsStreamMidStreamErrorEmitsSSEErrorEvent(t *testing.T) {
 	}
 }
 
+// TestChatCompletionsStreamMidStreamErrorMessageIsValidJSON pins the
+// SSE error-event JSON shape across messages with characters that need
+// escaping. Go's %q verb produces a Go-syntax string literal that
+// happens to be JSON-compatible for the common cases (quotes, newlines,
+// backslashes); a regression that switched to a naive string-concat
+// (`"...message: ` + errMsg + `"`) would silently corrupt the body any
+// time upstream returned a quote-containing message — the client would
+// see an SSE frame that fails JSON.parse() and the chat hangs.
+func TestChatCompletionsStreamMidStreamErrorMessageIsValidJSON(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// Upstream error containing every char that needs JSON escaping:
+	// " (quote), \n (newline), \ (backslash). These are exactly the
+	// characters a real provider error like
+	//   `model "gpt-4o-mini" not found\non region "us"`
+	// would carry.
+	provider := &failingStreamProvider{
+		fakeProvider: fakeProvider{name: "openai", defaultModel: "gpt-4o-mini"},
+		streamErr: &providers.UpstreamError{
+			StatusCode: http.StatusBadGateway,
+			Message:    `upstream "rate limit" failed:` + "\n" + `details=\path\file`,
+			Type:       "server_error",
+		},
+	}
+	handler := newTestHTTPHandler(logger, provider)
+
+	rec := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// Extract the data: line carrying the error and verify it's valid
+	// JSON. SSE framing splits on \n\n; first frame is the error.
+	lines := strings.Split(body, "\n")
+	var dataLine string
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "data: {") {
+			dataLine = strings.TrimPrefix(ln, "data: ")
+			break
+		}
+	}
+	if dataLine == "" {
+		t.Fatalf("body missing JSON data line; got=%q", body)
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(dataLine), &payload); err != nil {
+		t.Fatalf("error frame is not valid JSON: %v\nframe=%q", err, dataLine)
+	}
+	want := `upstream "rate limit" failed:` + "\n" + `details=\path\file`
+	if payload.Error.Message != want {
+		t.Errorf("parsed message = %q, want %q", payload.Error.Message, want)
+	}
+}
+
 // TestChatCompletionsRequiresAuthWhenConfigured guards the auth gate.
 // Without an AuthToken the handler is open by default (test fixtures
 // rely on this); flipping AuthToken on must produce a 401 for an
