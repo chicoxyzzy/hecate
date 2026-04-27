@@ -195,6 +195,10 @@ export function useRuntimeConsole() {
   }, [systemPrompt]);
 
   useEffect(() => {
+    // TokenGate renders when authToken is empty; firing the dashboard
+    // anyway would 401-spam the eight admin/auth-required endpoints in
+    // the console for no benefit. Skip until we have something to send.
+    if (!authToken) return;
     void loadDashboard();
   }, [authToken]);
 

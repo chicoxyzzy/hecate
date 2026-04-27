@@ -9,6 +9,11 @@ describe("useRuntimeConsole", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     window.localStorage.clear();
+    // Seed an admin token so loadDashboard actually fires. The hook
+    // skips the dashboard load when authToken is empty (TokenGate is
+    // rendering anyway), but every test in this file is exercising the
+    // post-auth dashboard path.
+    window.localStorage.setItem("hecate.authToken", "test-bearer");
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/healthz") {
