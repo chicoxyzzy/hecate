@@ -21,7 +21,7 @@ node_modules
 ui/node_modules
 
 # Built artifacts — the build stages regenerate these.
-/gateway
+/hecate
 ui/dist
 ui/test-results
 ui/playwright-report

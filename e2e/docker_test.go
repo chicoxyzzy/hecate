@@ -75,7 +75,7 @@ func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 	// Bring the gateway up. --build forces a rebuild so a stale local image
 	// can't mask a Dockerfile regression. -d so we don't block on container
 	// stdout; we drive everything via the published port.
-	if out, err := dockerComposeCombined(ctx, composeDir, "up", "--build", "-d", "gateway"); err != nil {
+	if out, err := dockerComposeCombined(ctx, composeDir, "up", "--build", "-d", "hecate"); err != nil {
 		t.Fatalf("docker compose up failed: %v\n%s", err, out)
 	}
 
@@ -84,8 +84,8 @@ func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 	const baseURL = "http://127.0.0.1:8080"
 	if err := waitHealthyDocker(ctx, baseURL+"/healthz", 60*time.Second); err != nil {
 		// Capture container logs so the failure mode is visible in CI.
-		out, _ := dockerComposeCombined(ctx, composeDir, "logs", "gateway")
-		t.Fatalf("healthz never responded 200 within 60s: %v\n--- gateway logs ---\n%s", err, out)
+		out, _ := dockerComposeCombined(ctx, composeDir, "logs", "hecate")
+		t.Fatalf("healthz never responded 200 within 60s: %v\n--- hecate logs ---\n%s", err, out)
 	}
 
 	// Pull the admin token out of /data via `docker compose cp`. We copy
@@ -94,7 +94,7 @@ func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 	// through `tar -xO`. Copying to a real path gives raw bytes back.
 	// Distroless has no shell, so `exec cat` is not an option; `cp` is.
 	hostCopy := filepath.Join(t.TempDir(), "hecate.bootstrap.json")
-	if out, err := dockerComposeCombined(ctx, composeDir, "cp", "gateway:/data/hecate.bootstrap.json", hostCopy); err != nil {
+	if out, err := dockerComposeCombined(ctx, composeDir, "cp", "hecate:/data/hecate.bootstrap.json", hostCopy); err != nil {
 		t.Fatalf("retrieve bootstrap from /data: %v\n%s", err, out)
 	}
 	bootstrapJSON, err := os.ReadFile(hostCopy)

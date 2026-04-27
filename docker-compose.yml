@@ -1,16 +1,16 @@
-# Quickstart stack. Defaults to "just the gateway" so a `docker compose up`
+# Quickstart stack. Defaults to "just the hecate gateway" so a `docker compose up`
 # is enough to try Hecate end-to-end on http://127.0.0.1:8080.
 #
 # Optional services live behind profiles so they don't start by default:
 #   docker compose --profile postgres up    # adds Postgres for state
 #   docker compose --profile ollama up      # adds Ollama on :11434
 #
-# When the gateway image isn't on a registry yet, this builds locally from
+# When the hecate image isn't on a registry yet, this builds locally from
 # the Dockerfile in the same directory. Once published, the `image:` tag
 # below also doubles as the pull target so `docker compose pull` works.
 
 services:
-  gateway:
+  hecate:
     build:
       context: .
       dockerfile: Dockerfile

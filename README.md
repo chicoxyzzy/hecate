@@ -111,7 +111,7 @@ prints it to the container logs inside a banner like:
 ============================================================
 ```
 
-Copy the token from the logs (`docker compose logs gateway`), open the UI,
+Copy the token from the logs (`docker compose logs hecate`), open the UI,
 and paste it into the prompt. The browser remembers it in localStorage;
 subsequent visits go straight to the dashboard. If you scroll past the
 banner, the token also lives in the bootstrap file on the `hecate-data`
@@ -119,7 +119,7 @@ volume — the gateway image is distroless, so use `docker compose cp` to
 copy it out without a shell:
 
 ```bash
-docker compose cp gateway:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_token
+docker compose cp hecate:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_token
 ```
 
 (`docker compose cp ... -` emits a tar archive, hence the `tar -xO`.)
@@ -157,7 +157,7 @@ cp .env.example .env
 # Edit .env — at minimum set GATEWAY_DEFAULT_MODEL plus a PROVIDER_*_API_KEY
 ```
 
-2. Build the gateway with the UI bundled in (single binary, single port):
+2. Build the hecate binary with the UI bundled in (single binary, single port):
 
 ```bash
 make ui-install
@@ -166,7 +166,7 @@ make serve
 ```
 
 The gateway and the operator UI are both served from
-`http://127.0.0.1:8080`. `make serve` stops any earlier `./gateway` process
+`http://127.0.0.1:8080`. `make serve` stops any earlier `./hecate` process
 still bound to that port before starting, so re-running it is always safe.
 
 On first run, an admin bearer token is auto-generated, printed to stderr
@@ -385,7 +385,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See
 ## Commands
 
 ```bash
-make dev              # run gateway from source (no bundled UI)
+make dev              # run hecate from source (no bundled UI)
 make test             # run Go tests
 make ui-install       # install UI dependencies (bun install)
 make ui-dev           # Vite dev server on :5173

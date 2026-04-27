@@ -44,7 +44,7 @@ type ProviderRuntime interface {
 }
 
 // NewHandler wires the api.Handler from already-constructed dependencies.
-// Storage backends (taskStore, taskQueue) are built by cmd/gateway/main.go
+// Storage backends (taskStore, taskQueue) are built by cmd/hecate/main.go
 // alongside every other backend the gateway uses, so all dispatch lives in
 // one place. taskQueue may be nil — the runner falls back to its default
 // in-process queue, which is what the test fixtures rely on.

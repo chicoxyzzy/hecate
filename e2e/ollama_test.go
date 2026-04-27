@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 
 	// ── 4. Gateway binary ─────────────────────────────────────────────────────
 	var err error
-	suiteGateway, err = startGatewayProcess(
+	suiteGateway, err = startHecateProcess(
 		"PROVIDER_OLLAMA_BASE_URL="+suiteOllamaURL,
 		"PROVIDER_OLLAMA_KIND=local",
 		"PROVIDER_OLLAMA_DEFAULT_MODEL="+ollamaModel,
@@ -82,7 +82,7 @@ func TestMain(m *testing.M) {
 		"GATEWAY_OTEL_METRICS_INTERVAL=2s",
 	)
 	if err != nil {
-		log.Fatalf("start gateway: %v", err)
+		log.Fatalf("start hecate: %v", err)
 	}
 
 	os.Exit(m.Run())
@@ -417,16 +417,16 @@ func (s *otlpSink) waitForMetric(substr string, timeout time.Duration) bool {
 	return false
 }
 
-// ─── gateway process lifecycle (TestMain-scoped, no *testing.T) ──────────────
+// ─── hecate process lifecycle (TestMain-scoped, no *testing.T) ──────────────
 
-// startGatewayProcess builds the gateway binary once, starts it with the
+// startHecateProcess builds the hecate binary once, starts it with the
 // given extra env vars plus a fixed admin token (so existing "Bearer
 // test-token" headers in tests authenticate) and a per-process temp data
 // dir for the bootstrap file. Waits for /healthz, returns the base URL.
 // The process is intentionally not tracked for cleanup: it is killed by
 // the OS when the test binary exits.
-func startGatewayProcess(extraEnv ...string) (string, error) {
-	bin, err := buildGatewayBin()
+func startHecateProcess(extraEnv ...string) (string, error) {
+	bin, err := buildHecateBin()
 	if err != nil {
 		return "", fmt.Errorf("build: %w", err)
 	}
@@ -471,16 +471,16 @@ func startGatewayProcess(extraEnv ...string) (string, error) {
 	return baseURL, nil
 }
 
-func buildGatewayBin() (string, error) {
-	if bin := os.Getenv("E2E_GATEWAY_BIN"); bin != "" {
+func buildHecateBin() (string, error) {
+	if bin := os.Getenv("E2E_HECATE_BIN"); bin != "" {
 		return bin, nil
 	}
 	dir, err := os.MkdirTemp("", "hecate-e2e-*")
 	if err != nil {
 		return "", err
 	}
-	bin := dir + "/gateway"
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/gateway")
+	bin := dir + "/hecate"
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/hecate")
 	cmd.Dir = moduleRootDir() // defined in gateway_test.go
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %v\n%s", err, out)
@@ -501,7 +501,7 @@ func waitHealthyDirect(baseURL string, timeout time.Duration) error {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	return fmt.Errorf("gateway at %s did not become healthy within %s", baseURL, timeout)
+	return fmt.Errorf("hecate at %s did not become healthy within %s", baseURL, timeout)
 }
 
 // ─── misc helpers ─────────────────────────────────────────────────────────────

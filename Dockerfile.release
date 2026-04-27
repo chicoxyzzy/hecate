@@ -2,7 +2,7 @@
 #
 # Release image used by goreleaser. The dev Dockerfile (./Dockerfile)
 # builds Go from source in-image; this one is a pure copy job — it
-# expects goreleaser to have cross-compiled the static `gateway` binary
+# expects goreleaser to have cross-compiled the static `hecate` binary
 # on the host and staged it into the build context root.
 #
 # Final image is byte-identical in shape to the dev Dockerfile's runtime
@@ -20,7 +20,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY gateway /usr/local/bin/gateway
+COPY hecate /usr/local/bin/hecate
 COPY --from=prep --chown=65532:65532 /data /data
 
 ENV GATEWAY_ADDRESS=:8080 \
@@ -29,4 +29,4 @@ ENV GATEWAY_ADDRESS=:8080 \
 VOLUME ["/data"]
 EXPOSE 8080
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/gateway"]
+ENTRYPOINT ["/usr/local/bin/hecate"]
