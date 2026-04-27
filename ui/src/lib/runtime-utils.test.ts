@@ -4,20 +4,27 @@ import {
   buildSemanticCacheInsight,
   budgetConsumedPercent,
   buildTraceTimeline,
+  countRouteHealthStatuses,
+  describeBudgetScope,
   describeCachePath,
+  describeHealthStatus,
   describeRouteReason,
+  describeRouteRecovery,
   filterModelsByKind,
   filterModelsByProvider,
   findModelInTrace,
   formatTraceAttributeKey,
   formatTraceAttributeValue,
   findProvider,
+  healthStatusTone,
   parseCSV,
   providerStatusTone,
   routeOutcomeTone,
+  tracePhaseFromEvent,
   usdToMicros,
 } from "./runtime-utils";
-import type { ModelRecord, ProviderRecord, RuntimeHeaders, TraceSpanRecord } from "../types/runtime";
+import type { TraceRouteRecord } from "./runtime-utils";
+import type { BudgetRecord, ModelRecord, ProviderRecord, RuntimeHeaders, TraceSpanRecord } from "../types/runtime";
 
 const models: ModelRecord[] = [
   { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } },
@@ -223,5 +230,240 @@ describe("runtime-utils", () => {
         enforced: true,
       }),
     ).toBe(50);
+  });
+
+  // ── tone/label exhaustiveness ─────────────────────────────────────────
+  // Switch-based helpers — drive every case (incl. the default fallback)
+  // so a refactor that adds a new status without updating the mapping
+  // gets flagged. The wire-level enums for outcome / health_status are
+  // tied to operator-facing colors; a bad mapping silently shows the
+  // wrong tone in the trace inspector.
+
+  it("routeOutcomeTone covers every wire outcome", () => {
+    expect(routeOutcomeTone("selected")).toBe("healthy");
+    expect(routeOutcomeTone("completed")).toBe("healthy");
+    expect(routeOutcomeTone("failed")).toBe("danger");
+    expect(routeOutcomeTone("denied")).toBe("warning");
+    expect(routeOutcomeTone("skipped")).toBe("warning");
+    expect(routeOutcomeTone("unknown")).toBe("neutral");
+    expect(routeOutcomeTone(undefined)).toBe("neutral");
+  });
+
+  it("healthStatusTone covers every health enum", () => {
+    expect(healthStatusTone("healthy")).toBe("healthy");
+    expect(healthStatusTone("degraded")).toBe("warning");
+    expect(healthStatusTone("half_open")).toBe("warning");
+    expect(healthStatusTone("open")).toBe("danger");
+    expect(healthStatusTone("unhealthy")).toBe("danger");
+    expect(healthStatusTone(undefined)).toBe("neutral");
+  });
+
+  it("describeHealthStatus produces a label for each enum", () => {
+    expect(describeHealthStatus("healthy")).toBe("Healthy");
+    expect(describeHealthStatus("degraded")).toBe("Degraded");
+    expect(describeHealthStatus("half_open")).toBe("Recovery probe");
+    expect(describeHealthStatus("open")).toBe("Circuit open");
+    expect(describeHealthStatus("unhealthy")).toBe("Unhealthy");
+    expect(describeHealthStatus(undefined)).toBe("Unknown health");
+    expect(describeHealthStatus("brand-new-state")).toBe("Unknown health");
+  });
+
+  // ── trace attribute formatting ────────────────────────────────────────
+
+  it("formatTraceAttributeValue stringifies every supported type", () => {
+    expect(formatTraceAttributeValue(null)).toBe("n/a");
+    expect(formatTraceAttributeValue(undefined)).toBe("n/a");
+    expect(formatTraceAttributeValue("hello")).toBe("hello");
+    expect(formatTraceAttributeValue(42)).toBe("42");
+    expect(formatTraceAttributeValue(true)).toBe("true");
+    expect(formatTraceAttributeValue({ a: 1 })).toBe(`{"a":1}`);
+    expect(formatTraceAttributeValue([1, 2])).toBe("[1,2]");
+  });
+
+  it("formatTraceAttributeKey replaces underscores with spaces", () => {
+    expect(formatTraceAttributeKey("provider_kind")).toBe("provider kind");
+    expect(formatTraceAttributeKey("snake_case_key")).toBe("snake case key");
+    // No underscores → unchanged.
+    expect(formatTraceAttributeKey("alreadyClean")).toBe("alreadyClean");
+  });
+
+  // ── cache-path branches ───────────────────────────────────────────────
+  // describeCachePath drives the "what happened in cache?" tile in the
+  // trace panel. Each branch emits a different operator-visible label;
+  // a regression that swaps "Semantic lookup executed" for "No cache hit"
+  // (or vice versa) misleads operators about what the gateway actually did.
+
+  it("describeCachePath returns a neutral default when no headers are present", () => {
+    expect(describeCachePath()).toEqual({
+      title: "No runtime metadata",
+      detail: expect.any(String),
+      tone: "neutral",
+    });
+    expect(describeCachePath(null)).toMatchObject({ tone: "neutral" });
+  });
+
+  it("describeCachePath classifies a semantic cache hit", () => {
+    const result = describeCachePath({
+      ...semanticHeaders,
+      cache: "true",
+      cacheType: "semantic",
+    });
+    expect(result.title).toBe("Semantic cache hit");
+    expect(result.tone).toBe("healthy");
+    expect(result.detail).toMatch(/postgres_pgvector/);
+    expect(result.detail).toMatch(/0\.982/);
+  });
+
+  it("describeCachePath classifies an exact cache hit when cacheType is not semantic", () => {
+    const result = describeCachePath({
+      ...semanticHeaders,
+      cache: "true",
+      cacheType: "exact",
+      semanticStrategy: "",
+    });
+    expect(result.title).toBe("Exact cache hit");
+    expect(result.tone).toBe("healthy");
+  });
+
+  it("describeCachePath classifies a semantic-lookup-but-miss as a warning", () => {
+    const result = describeCachePath({
+      ...semanticHeaders,
+      cache: "false",
+      cacheType: "false",
+    });
+    expect(result.title).toBe("Semantic lookup executed");
+    expect(result.tone).toBe("warning");
+  });
+
+  it("describeCachePath falls through to neutral when nothing about cache fired", () => {
+    const result = describeCachePath({
+      ...semanticHeaders,
+      cache: "false",
+      cacheType: "false",
+      semanticStrategy: "",
+    });
+    expect(result.tone).toBe("neutral");
+  });
+
+  // ── tracePhaseFromEvent ──────────────────────────────────────────────
+
+  it("tracePhaseFromEvent maps every prefix the gateway emits", () => {
+    expect(tracePhaseFromEvent("request.received")).toBe("request");
+    expect(tracePhaseFromEvent("router.selected")).toBe("routing");
+    expect(tracePhaseFromEvent("cache.exact_hit")).toBe("cache");
+    expect(tracePhaseFromEvent("semantic.miss")).toBe("cache");
+    expect(tracePhaseFromEvent("provider.invoked")).toBe("provider");
+    expect(tracePhaseFromEvent("governor.allowed")).toBe("governor");
+    expect(tracePhaseFromEvent("usage.recorded")).toBe("usage");
+    expect(tracePhaseFromEvent("cost.calculated")).toBe("usage");
+    expect(tracePhaseFromEvent("response.returned")).toBe("response");
+    // Unknown prefix → "other" (default branch).
+    expect(tracePhaseFromEvent("custom.event")).toBe("other");
+  });
+
+  // ── route helpers ────────────────────────────────────────────────────
+
+  it("describeRouteRecovery prefers half-open probe over fallback messages", () => {
+    const route: TraceRouteRecord = {
+      candidates: [{ provider: "openai", model: "gpt-4o", outcome: "selected", health_status: "half_open" }],
+    } as unknown as TraceRouteRecord;
+    expect(describeRouteRecovery(route, semanticHeaders)).toBe("Recovered via half-open provider probe");
+  });
+
+  it("describeRouteRecovery names the fallback source when one is present", () => {
+    const headers: RuntimeHeaders = { ...semanticHeaders, fallbackFrom: "anthropic" };
+    expect(describeRouteRecovery(undefined, headers)).toBe("Failed over from anthropic");
+  });
+
+  it("describeRouteRecovery describes failovers without a named source", () => {
+    const route: TraceRouteRecord = {
+      candidates: [{ provider: "openai", model: "gpt-4o", outcome: "selected", health_status: "healthy" }],
+      failovers: [{ from: "openai", to: "anthropic" }],
+    } as unknown as TraceRouteRecord;
+    expect(describeRouteRecovery(route)).toBe("Recovered after one or more failover hops");
+  });
+
+  it("describeRouteRecovery returns the no-op label when nothing recovered", () => {
+    expect(describeRouteRecovery(undefined, undefined)).toBe("No recovery path needed");
+  });
+
+  it("countRouteHealthStatuses tallies tones across candidates", () => {
+    const route: TraceRouteRecord = {
+      candidates: [
+        { provider: "a", model: "x", outcome: "selected", health_status: "healthy" },
+        { provider: "b", model: "y", outcome: "skipped", health_status: "degraded" },
+        { provider: "c", model: "z", outcome: "failed", health_status: "open" },
+      ],
+    } as unknown as TraceRouteRecord;
+    expect(countRouteHealthStatuses(route)).toEqual({ healthy: 1, warning: 1, danger: 1 });
+    // Empty / missing route → all-zero summary.
+    expect(countRouteHealthStatuses(undefined)).toEqual({ healthy: 0, warning: 0, danger: 0 });
+    expect(countRouteHealthStatuses(null)).toEqual({ healthy: 0, warning: 0, danger: 0 });
+  });
+
+  // ── provider helpers ─────────────────────────────────────────────────
+
+  it("providerStatusTone treats !healthy + status=healthy as a warning, otherwise mirrors status", () => {
+    // The "looks healthy but isn't" mismatch is a real wire state — the
+    // health tracker can flag a provider as unhealthy after threshold-N
+    // failures even while its self-reported status is still "healthy".
+    expect(providerStatusTone({ name: "x", kind: "cloud", healthy: false, status: "healthy", default_model: "" })).toBe("warning");
+    expect(providerStatusTone({ name: "x", kind: "cloud", healthy: true, status: "healthy", default_model: "" })).toBe("healthy");
+    expect(providerStatusTone({ name: "x", kind: "cloud", healthy: false, status: "open", default_model: "" })).toBe("danger");
+    expect(providerStatusTone(undefined)).toBe("neutral");
+  });
+
+  it("findProvider returns the matching record or null", () => {
+    const list: ProviderRecord[] = [
+      { name: "openai", kind: "cloud", healthy: true, status: "healthy", default_model: "gpt-4o" },
+      { name: "ollama", kind: "local", healthy: false, status: "open", default_model: "llama3" },
+    ];
+    expect(findProvider(list, "openai")?.name).toBe("openai");
+    expect(findProvider(list, "missing")).toBeNull();
+    expect(findProvider(list, undefined)).toBeNull();
+    expect(findProvider(list, "")).toBeNull();
+  });
+
+  // ── budget helpers ──────────────────────────────────────────────────
+
+  it("budgetConsumedPercent clamps to 0..100 and handles missing / zero credit", () => {
+    const baseBudget: BudgetRecord = {
+      key: "x", scope: "global", backend: "memory", balance_source: "config",
+      debited_micros_usd: 0, debited_usd: "0",
+      credited_micros_usd: 1_000_000, credited_usd: "1",
+      balance_micros_usd: 1_000_000, balance_usd: "1",
+      available_micros_usd: 1_000_000, available_usd: "1",
+      enforced: false,
+    };
+    expect(budgetConsumedPercent(undefined)).toBe(0);
+    expect(budgetConsumedPercent(null)).toBe(0);
+    // Zero credit budget: protect against /0.
+    expect(budgetConsumedPercent({ ...baseBudget, credited_micros_usd: 0 })).toBe(0);
+    // Over-debit (e.g. delayed reconciliation) clamps to 100.
+    expect(budgetConsumedPercent({ ...baseBudget, debited_micros_usd: 5_000_000 })).toBe(100);
+  });
+
+  it("describeBudgetScope joins parts that are populated", () => {
+    expect(describeBudgetScope(undefined)).toBe("No scope");
+    expect(describeBudgetScope(null)).toBe("No scope");
+
+    const base: BudgetRecord = {
+      key: "x", scope: "tenant_provider", backend: "memory", balance_source: "config",
+      debited_micros_usd: 0, debited_usd: "0",
+      credited_micros_usd: 1, credited_usd: "0",
+      balance_micros_usd: 1, balance_usd: "0",
+      available_micros_usd: 1, available_usd: "0",
+      enforced: false,
+    };
+    // scope only → just the scope label.
+    expect(describeBudgetScope({ ...base })).toBe("tenant_provider");
+    // scope + tenant → " / " separators.
+    expect(describeBudgetScope({ ...base, tenant: "team-a" })).toBe("tenant_provider / tenant team-a");
+    // scope + provider, no tenant.
+    expect(describeBudgetScope({ ...base, provider: "openai" })).toBe("tenant_provider / provider openai");
+    // All three populated.
+    expect(describeBudgetScope({ ...base, tenant: "team-a", provider: "openai" })).toBe(
+      "tenant_provider / tenant team-a / provider openai",
+    );
   });
 });
