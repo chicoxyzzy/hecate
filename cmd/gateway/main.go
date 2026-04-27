@@ -34,9 +34,23 @@ import (
 	"github.com/hecate/agent-runtime/internal/storage"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
+	"github.com/hecate/agent-runtime/internal/version"
 )
 
 func main() {
+	// Tiny manual flag parse: a single `--version` / `-v` short-circuit.
+	// We don't want to pull in the full flag package here because the rest
+	// of configuration is env-driven; mixing the two would muddle the
+	// surface. Anything other than `--version`/`-v` falls through to the
+	// regular env-driven startup.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v", "version":
+			fmt.Println(version.Version)
+			return
+		}
+	}
+
 	cfg := config.LoadFromEnv()
 
 	// Resolve the auto-generated bootstrap secrets (control-plane encryption

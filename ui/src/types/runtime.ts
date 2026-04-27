@@ -1,6 +1,9 @@
 export type HealthResponse = {
   status: string;
   time: string;
+  // Build identifier of the gateway. "dev" for local builds; release
+  // builds (via goreleaser) inject the git tag (e.g. "v0.1.0").
+  version?: string;
 };
 
 export type ModelRecord = {

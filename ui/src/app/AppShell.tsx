@@ -313,6 +313,12 @@ function AuthenticatedShell({
       {/* Status bar */}
       <div className="hecate-statusbar">
         <span className="hecate-statusbar__brand">hecate</span>
+        {state.health?.version && (
+          <>
+            <span className="hecate-statusbar__sep">|</span>
+            <span style={{ fontFamily: "var(--font-mono)" }}>{state.health.version}</span>
+          </>
+        )}
         <span className="hecate-statusbar__sep">|</span>
         <span>{state.session.label}</span>
         <span className="hecate-statusbar__sep">|</span>

@@ -18,6 +18,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/ratelimit"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
+	"github.com/hecate/agent-runtime/internal/version"
 )
 
 type Handler struct {
@@ -102,8 +103,9 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"time":   time.Now().UTC().Format(time.RFC3339),
+		"status":  "ok",
+		"time":    time.Now().UTC().Format(time.RFC3339),
+		"version": version.Version,
 	})
 }
 

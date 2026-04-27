@@ -26,6 +26,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X github.com/hecate/agent-runtime/internal/version.Version={{ .Version }}
     goos:
       - linux
       - darwin
