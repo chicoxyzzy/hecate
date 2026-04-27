@@ -248,8 +248,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 - [Providers](docs/providers.md) — built-in catalog, configuration, custom providers, health/circuit breaking
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md)
 - [Runtime API Notes](docs/runtime-api.md)
-- [Telemetry And OTLP Notes](docs/telemetry.md)
-- [OTLP Collector Recipes And Runbooks](docs/telemetry.md#known-good-otlp-recipes)
+- [Telemetry, OTLP, And Collector Recipes](docs/telemetry.md)
 - [Development](docs/development.md) — local build, UI hot reload, full make-target reference, screenshot tooling
 
 ## Roadmap
