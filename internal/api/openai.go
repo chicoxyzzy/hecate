@@ -521,6 +521,39 @@ type ControlPlanePricebookRecord struct {
 	InputMicrosUSDPerMillionTokens       int64  `json:"input_micros_usd_per_million_tokens"`
 	OutputMicrosUSDPerMillionTokens      int64  `json:"output_micros_usd_per_million_tokens"`
 	CachedInputMicrosUSDPerMillionTokens int64  `json:"cached_input_micros_usd_per_million_tokens"`
+	// Source is "manual" (operator-edited) or "imported" (LiteLLM bulk
+	// import). Empty on legacy responses; the UI treats empty as manual.
+	Source string `json:"source,omitempty"`
+}
+
+// PricebookImportUpdateRecord pairs an incoming imported entry with the
+// current row it would overwrite, so the UI can show a side-by-side diff
+// before the operator confirms apply.
+type PricebookImportUpdateRecord struct {
+	Entry    ControlPlanePricebookRecord `json:"entry"`
+	Previous ControlPlanePricebookRecord `json:"previous"`
+}
+
+// PricebookImportDiff is the response payload for both the preview and apply
+// endpoints. On preview, `Added` and `Updated` are populated; on apply they're
+// merged into `Applied`. `Skipped` lists currently-manual rows that LiteLLM
+// would have touched — they're protected and reported back so the UI can
+// explain why nothing changed for those rows.
+type PricebookImportDiff struct {
+	FetchedAt string                        `json:"fetched_at"`
+	Added     []ControlPlanePricebookRecord `json:"added,omitempty"`
+	Updated   []PricebookImportUpdateRecord `json:"updated,omitempty"`
+	Applied   []ControlPlanePricebookRecord `json:"applied,omitempty"`
+	Unchanged int                           `json:"unchanged"`
+	Skipped   []ControlPlanePricebookRecord `json:"skipped,omitempty"`
+}
+
+// PricebookImportApplyRequest narrows the apply call to a subset of rows.
+// Empty `keys` (or omitted) means "apply everything in Added+Updated".
+// Each key is "<provider>/<model>", matching the format the UI displays
+// in the import-modal checklist.
+type PricebookImportApplyRequest struct {
+	Keys []string `json:"keys,omitempty"`
 }
 
 type ControlPlaneAuditEventRecord struct {

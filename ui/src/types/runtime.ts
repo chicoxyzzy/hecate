@@ -403,6 +403,44 @@ export type ConfiguredPricebookRecord = {
   input_micros_usd_per_million_tokens: number;
   output_micros_usd_per_million_tokens: number;
   cached_input_micros_usd_per_million_tokens: number;
+  // "manual" (operator-edited) or "imported" (LiteLLM bulk import).
+  // Empty/undefined for legacy responses; treat empty as manual.
+  source?: string;
+};
+
+// PricebookImportUpdateRecord pairs an inbound imported entry with the
+// row it would overwrite — the UI uses both halves to render a price diff.
+export type PricebookImportUpdateRecord = {
+  entry: ConfiguredPricebookRecord;
+  previous: ConfiguredPricebookRecord;
+};
+
+// PricebookImportDiff is the response payload from both the preview and
+// apply endpoints. Preview populates `added` + `updated`; apply replaces
+// those with `applied` (the rows it persisted).
+export type PricebookImportDiff = {
+  fetched_at: string;
+  added?: ConfiguredPricebookRecord[];
+  updated?: PricebookImportUpdateRecord[];
+  applied?: ConfiguredPricebookRecord[];
+  unchanged: number;
+  skipped?: ConfiguredPricebookRecord[];
+};
+
+export type PricebookImportDiffResponse = {
+  object: string;
+  data: PricebookImportDiff;
+};
+
+// PricebookEntryUpsertPayload mirrors the backend ControlPlanePricebookRecord
+// type alias used as the upsert request body.
+export type PricebookEntryUpsertPayload = {
+  provider: string;
+  model: string;
+  input_micros_usd_per_million_tokens: number;
+  output_micros_usd_per_million_tokens: number;
+  cached_input_micros_usd_per_million_tokens: number;
+  source?: string;
 };
 
 export type ConfiguredAuditEventRecord = {

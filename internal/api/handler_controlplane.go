@@ -413,6 +413,7 @@ func (h *Handler) HandleControlPlaneUpsertPricebookEntry(w http.ResponseWriter, 
 		InputMicrosUSDPerMillionTokens:       req.InputMicrosUSDPerMillionTokens,
 		OutputMicrosUSDPerMillionTokens:      req.OutputMicrosUSDPerMillionTokens,
 		CachedInputMicrosUSDPerMillionTokens: req.CachedInputMicrosUSDPerMillionTokens,
+		Source:                               req.Source,
 	})
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
@@ -493,6 +494,7 @@ func renderControlPlanePricebookEntry(entry config.ModelPriceConfig) ControlPlan
 		InputMicrosUSDPerMillionTokens:       entry.InputMicrosUSDPerMillionTokens,
 		OutputMicrosUSDPerMillionTokens:      entry.OutputMicrosUSDPerMillionTokens,
 		CachedInputMicrosUSDPerMillionTokens: entry.CachedInputMicrosUSDPerMillionTokens,
+		Source:                               entry.Source,
 	}
 }
 

@@ -134,6 +134,10 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     updateToolResult: () => undefined,
     clearAuthToken: () => undefined,
     setProviderAPIKey: async () => undefined,
+    upsertPricebookEntry: async () => undefined,
+    deletePricebookEntry: async () => undefined,
+    previewPricebookImport: async () => ({ fetched_at: "", unchanged: 0 }),
+    applyPricebookImport: async () => ({ fetched_at: "", unchanged: 0 }),
     dismissNotice: () => undefined,
   };
 }

@@ -7,6 +7,8 @@ import type {
   ConfiguredStateResponse,
   HealthResponse,
   ModelResponse,
+  PricebookEntryUpsertPayload,
+  PricebookImportDiffResponse,
   ProviderPresetResponse,
   ProviderStatusResponse,
   RuntimeStatsResponse,
@@ -235,6 +237,22 @@ export async function deleteAPIKey(payload: DeletePayload, authToken?: string): 
 
 export async function setProviderEnabled(id: string, enabled: boolean, authToken?: string): Promise<unknown> {
   return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { enabled } });
+}
+
+export async function upsertPricebookEntry(entry: PricebookEntryUpsertPayload, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/pricebook", { authToken, method: "POST", body: entry });
+}
+
+export async function deletePricebookEntry(provider: string, model: string, authToken?: string): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/pricebook/delete", { authToken, method: "POST", body: { provider, model } });
+}
+
+export async function previewPricebookImport(authToken?: string): Promise<PricebookImportDiffResponse> {
+  return fetchJSON<PricebookImportDiffResponse>("/admin/control-plane/pricebook/import/preview", { authToken, method: "POST", body: {} });
+}
+
+export async function applyPricebookImport(keys: string[], authToken?: string): Promise<PricebookImportDiffResponse> {
+  return fetchJSON<PricebookImportDiffResponse>("/admin/control-plane/pricebook/import/apply", { authToken, method: "POST", body: { keys } });
 }
 
 // setProviderAPIKey sets the provider's API key. An empty `key` clears it.

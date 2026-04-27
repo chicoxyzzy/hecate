@@ -217,7 +217,21 @@ type ModelPriceConfig struct {
 	InputMicrosUSDPerMillionTokens       int64  `json:"input_micros_usd_per_million_tokens"`
 	OutputMicrosUSDPerMillionTokens      int64  `json:"output_micros_usd_per_million_tokens"`
 	CachedInputMicrosUSDPerMillionTokens int64  `json:"cached_input_micros_usd_per_million_tokens"`
+	// Source records who set this entry: "manual" if a human edited it
+	// through the admin UI / API, "imported" if it came from a LiteLLM
+	// pricing-data import. Manual entries are protected from being
+	// overwritten by subsequent imports. Empty == "manual" for backward
+	// compatibility (every pre-existing row was set by a human).
+	Source string `json:"source,omitempty"`
 }
+
+// Pricebook source constants. Free-form strings rather than a typed enum
+// because they round-trip through JSON to the UI; keeping the wire
+// format stable is more important than compile-time exhaustiveness.
+const (
+	PricebookSourceManual   = "manual"
+	PricebookSourceImported = "imported"
+)
 
 type OpenAICompatibleProviderConfig struct {
 	Name         string        `json:"name"`

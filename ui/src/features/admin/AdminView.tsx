@@ -2,13 +2,14 @@ import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord } from "../../types/runtime";
 import { Badge, CopyBtn, Dot, Icon, Icons, InlineError } from "../shared/ui";
+import { PricebookTab } from "./PricebookTab";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
   actions: RuntimeConsoleViewModel["actions"];
 };
 
-type Tab = "keys" | "tenants" | "budget" | "usage" | "retention";
+type Tab = "keys" | "tenants" | "budget" | "usage" | "pricebook" | "retention";
 
 export function AdminView({ state, actions }: Props) {
   const [tab, setTab] = useState<Tab>("keys");
@@ -20,7 +21,7 @@ export function AdminView({ state, actions }: Props) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        {(["keys", "tenants", "budget", "usage", "retention"] as Tab[]).map(t => (
+        {(["keys", "tenants", "budget", "usage", "pricebook", "retention"] as Tab[]).map(t => (
           <button key={t} type="button"
             onClick={() => setTab(t)}
             style={{
@@ -47,6 +48,7 @@ export function AdminView({ state, actions }: Props) {
         {tab === "tenants"   && <TenantsTab state={state} actions={actions} />}
         {tab === "budget"    && <BudgetTab state={state} actions={actions} />}
         {tab === "usage"     && <UsageTab state={state} />}
+        {tab === "pricebook" && <PricebookTab state={state} actions={actions} />}
         {tab === "retention" && <RetentionTab state={state} actions={actions} />}
       </div>
     </div>

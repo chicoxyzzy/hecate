@@ -290,6 +290,10 @@ The operator UI includes:
 - trace inspection
 - budget admin flows
 - tenant/API key management and control-plane activity views
+- pricebook editor with one-click import of current cloud-LLM token prices
+  from the [LiteLLM](https://github.com/BerriAI/litellm) project (MIT-licensed,
+  attribution in [`NOTICE.md`](NOTICE.md)). Manually-edited rows are protected
+  from being overwritten by subsequent imports.
 
 The app shell lives in `ui/src/app`, shared console primitives live in
 `ui/src/features/shared`, and feature-owned styles live beside feature views.
@@ -408,9 +412,12 @@ Near term:
 Platform:
 
 1. clearer route diagnostics and failure explanations
-2. automated provider pricebook ingestion and sync
-3. deployment reference stacks for local and production environments
+2. deployment reference stacks for local and production environments
 
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+Third-party data and software notices live in [`NOTICE.md`](NOTICE.md) — most
+notably the LiteLLM pricing data fetched at runtime by the pricebook import
+feature.

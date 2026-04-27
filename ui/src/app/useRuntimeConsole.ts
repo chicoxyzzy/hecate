@@ -25,6 +25,10 @@ import {
   getSession,
   rotateAPIKey as rotateAPIKeyRequest,
   setProviderAPIKey as setProviderAPIKeyRequest,
+  upsertPricebookEntry as upsertPricebookEntryRequest,
+  deletePricebookEntry as deletePricebookEntryRequest,
+  previewPricebookImport as previewPricebookImportRequest,
+  applyPricebookImport as applyPricebookImportRequest,
   runRetention as runRetentionRequest,
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
@@ -45,6 +49,8 @@ import type {
   HealthResponse,
   ModelFilter,
   ModelResponse,
+  PricebookEntryUpsertPayload,
+  PricebookImportDiff,
   ProviderPresetRecord,
   ProviderFilter,
   ProviderStatusResponse,
@@ -844,6 +850,47 @@ export function useRuntimeConsole() {
     });
   }
 
+  async function upsertPricebookEntry(entry: PricebookEntryUpsertPayload) {
+    await runAdminMutation({
+      successMessage: "Pricebook entry saved.",
+      errorMessage: "Failed to save pricebook entry.",
+      failureDetail: "failed to save pricebook entry",
+      action: async () => {
+        await upsertPricebookEntryRequest(entry, authToken);
+      },
+    });
+  }
+
+  async function deletePricebookEntry(provider: string, model: string) {
+    resetAdminFeedback();
+    if (!window.confirm(`Delete pricebook entry "${provider}/${model}"?`)) {
+      return;
+    }
+    await runAdminMutation({
+      successMessage: "Pricebook entry deleted.",
+      errorMessage: "Failed to delete pricebook entry.",
+      failureDetail: "failed to delete pricebook entry",
+      action: async () => {
+        await deletePricebookEntryRequest(provider, model, authToken);
+      },
+    });
+  }
+
+  // previewPricebookImport intentionally does NOT call runAdminMutation —
+  // it doesn't mutate anything. It just fetches the diff and lets the
+  // caller (the import modal) render it.
+  async function previewPricebookImport(): Promise<PricebookImportDiff> {
+    const response = await previewPricebookImportRequest(authToken);
+    return response.data;
+  }
+
+  async function applyPricebookImport(keys: string[]): Promise<PricebookImportDiff> {
+    const response = await applyPricebookImportRequest(keys, authToken);
+    await loadDashboard();
+    setNoticeMessage("success", "Pricebook import applied.");
+    return response.data;
+  }
+
   async function copyCommand(command: string) {
     try {
       await navigator.clipboard.writeText(command);
@@ -1056,6 +1103,10 @@ export function useRuntimeConsole() {
       topUpBudget,
       upsertAPIKey,
       setProviderAPIKey,
+      upsertPricebookEntry,
+      deletePricebookEntry,
+      previewPricebookImport,
+      applyPricebookImport,
       upsertTenant,
       clearAuthToken: () => setAuthToken(""),
       dismissNotice: () => setNotice(null),

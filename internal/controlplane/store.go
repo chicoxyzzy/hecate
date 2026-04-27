@@ -727,6 +727,17 @@ func normalizePricebookEntry(entry config.ModelPriceConfig) (config.ModelPriceCo
 	if entry.InputMicrosUSDPerMillionTokens < 0 || entry.OutputMicrosUSDPerMillionTokens < 0 || entry.CachedInputMicrosUSDPerMillionTokens < 0 {
 		return config.ModelPriceConfig{}, fmt.Errorf("pricebook values must be zero or greater")
 	}
+	switch strings.TrimSpace(entry.Source) {
+	case "":
+		// Empty == manual for backward compatibility. Every pre-Source-field
+		// row was put there by a human, so default to that.
+		entry.Source = config.PricebookSourceManual
+	case config.PricebookSourceManual, config.PricebookSourceImported:
+		// ok
+	default:
+		return config.ModelPriceConfig{}, fmt.Errorf("pricebook source must be %q or %q (got %q)",
+			config.PricebookSourceManual, config.PricebookSourceImported, entry.Source)
+	}
 	return entry, nil
 }
 
