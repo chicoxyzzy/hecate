@@ -69,16 +69,19 @@ export async function mockGatewayAPIs(page: Page) {
 
   await page.route("/healthz", r => r.fulfill(ok({ status: "ok", time: "2026-04-25T00:00:00Z" })));
 
+  // Two-phase dashboard load gates admin-only fetches behind an authenticated
+  // admin role. Anonymous → no /v1/models, /admin/control-plane, etc., so most
+  // specs would render empty shells. Claim admin so all endpoints fire.
   await page.route("/v1/whoami", r =>
     r.fulfill(ok({
       object: "session",
       data: {
-        authenticated: false,
+        authenticated: true,
         invalid_token: false,
-        role: "anonymous",
+        role: "admin",
         tenant: "",
-        source: "",
-        key_id: "",
+        source: "bearer",
+        key_id: "e2e-test-token",
       },
     })),
   );
