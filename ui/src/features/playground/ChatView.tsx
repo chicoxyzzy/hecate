@@ -41,17 +41,16 @@ export function ChatView({ state, actions }: Props) {
   }, [state.streamingContent, turns.length]);
 
   useEffect(() => {
+    // Reset scroll state on every session change. Focus is NOT applied
+    // here on purpose: data-load (sessions arriving from the API) also
+    // triggers an activeChatSessionID transition, and stealing focus on
+    // load would block page-level keyboard shortcuts (1/2/3/4/5) for
+    // the entire dashboard. Focus is instead applied at the explicit
+    // user-driven entry points: the New-session button and the session
+    // row onClick handlers.
     userScrolledRef.current = false;
     setAtBottom(true);
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
-    // Focus the message textarea on every session change — including
-    // mount, since if ChatView is mounted the user is looking at the
-    // chat tab and is one keystroke away from typing. Switching to a
-    // session is almost always followed by a reply; auto-focus saves
-    // a click. The New-session button onClick also focuses directly,
-    // covering the case where activeChatSessionID is already "" and
-    // this effect would not re-fire.
-    textareaRef.current?.focus();
   }, [state.activeChatSessionID]);
 
   function handleScroll() {
@@ -139,7 +138,11 @@ export function ChatView({ state, actions }: Props) {
             )}
             {sessions.map(s => (
               <div key={s.id}
-                onClick={() => renamingId !== s.id && void actions.selectChatSession(s.id)}
+                onClick={() => {
+                  if (renamingId === s.id) return;
+                  void actions.selectChatSession(s.id);
+                  textareaRef.current?.focus();
+                }}
                 onMouseEnter={() => setHoveredSessionId(s.id)}
                 onMouseLeave={() => setHoveredSessionId(null)}
                 style={{

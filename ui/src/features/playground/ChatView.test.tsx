@@ -132,22 +132,41 @@ describe("ChatView New session button", () => {
 });
 
 describe("ChatView session focus", () => {
-  it("focuses the message textarea when activeChatSessionID changes (session switch)", async () => {
-    // Switching sessions via the sidebar drives activeChatSessionID
-    // change → useEffect → focus. Pinning here so a refactor of the
-    // mount/scroll effect doesn't accidentally drop the focus call.
-    const { state, actions } = setup({ activeChatSessionID: "" });
-    const { rerender } = render(<ChatView state={state} actions={actions} />);
-    // Move focus to a sibling control so we can detect the focus jump.
-    // The Close-sidebar button has a stable accessible name and is
-    // outside the textarea.
+  it("focuses the message textarea when a sidebar session row is clicked", async () => {
+    // Focus is applied on EXPLICIT user actions only — the New-session
+    // button onClick and session-row onClick. The activeChatSessionID
+    // effect deliberately does NOT focus, because data-load (sessions
+    // arriving from the API) also drives that transition and stealing
+    // focus on load would block the dashboard's keyboard shortcuts
+    // (e2e regression — see shell.spec.ts shortcut tests).
+    const selectChatSession = vi.fn(async () => undefined);
+    const { state, actions } = setup({
+      chatSessions: [{ id: "s2", title: "Pick me", turn_count: 0 } as any],
+    }, { selectChatSession });
+    const user = userEvent.setup();
+    render(<ChatView state={state} actions={actions} />);
+    // Move focus elsewhere to detect the jump.
     const closeBtn = screen.getByTitle("Close");
     closeBtn.focus();
     expect(document.activeElement).toBe(closeBtn);
-    // Now simulate the session switch via prop change.
-    const next = { ...state, activeChatSessionID: "s1" };
-    rerender(<ChatView state={next} actions={actions} />);
+    // Click the session row — the only user-driven session switch.
+    await user.click(screen.getByText("Pick me"));
     const textarea = screen.getByPlaceholderText(/^Message…/i);
     expect(document.activeElement).toBe(textarea);
+    expect(selectChatSession).toHaveBeenCalledWith("s2");
+  });
+
+  it("does NOT focus the textarea when activeChatSessionID changes from data-load", async () => {
+    // Initial-load and API-driven session arrivals must not steal
+    // focus — page-level shortcuts depend on it. Asserts the negative.
+    const { state, actions } = setup({ activeChatSessionID: "" });
+    const { rerender } = render(<ChatView state={state} actions={actions} />);
+    const closeBtn = screen.getByTitle("Close");
+    closeBtn.focus();
+    const next = { ...state, activeChatSessionID: "s1" };
+    rerender(<ChatView state={next} actions={actions} />);
+    // Focus must STAY on the close button — the effect should not have
+    // jumped to the textarea on a programmatic ID transition.
+    expect(document.activeElement).toBe(closeBtn);
   });
 });
