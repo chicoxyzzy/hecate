@@ -64,7 +64,13 @@ export function getAvailableWorkspaces(isAdmin: boolean): WorkspaceDefinition[] 
 // rest of the console: same .card, .input, .btn-primary classes, same
 // monospace section labels, and the shared InlineError for the validation
 // message.
-function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
+function TokenGate({
+  onSubmit,
+  rejected,
+}: {
+  onSubmit: (token: string) => void;
+  rejected?: boolean;
+}) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const handleSubmit = (e: React.FormEvent) => {
@@ -76,6 +82,8 @@ function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
     }
     onSubmit(trimmed);
   };
+  const displayedError =
+    error || (rejected ? "The saved token was rejected by the gateway. Paste a fresh one." : "");
   return (
     <div className="hecate-shell" style={{
       display: "flex",
@@ -162,7 +170,7 @@ function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
           style={{ fontFamily: "var(--font-mono)" }}
         />
 
-        {error && <InlineError message={error} />}
+        {displayedError && <InlineError message={displayedError} />}
 
         <button
           type="submit"
@@ -189,11 +197,72 @@ export function ConsoleShell({
 }) {
   // Block the rest of the console behind the token gate when no admin token
   // is set OR when the saved token was rejected on the most recent attempt.
-  // The gateway always requires a token now, so an empty token == new user.
+  // The gateway always requires a token now, so an empty token == new user;
+  // a rejected token (from a stale localStorage entry, a rotated key, or a
+  // gateway reset) re-prompts with an inline explanation rather than dumping
+  // the operator into a 401-spinning workspace.
   if (!state.authToken) {
     return <TokenGate onSubmit={actions.setAuthToken} />;
   }
+  // While the very first dashboard load is in flight we don't yet know if
+  // the saved token is valid. Render a quiet placeholder instead of
+  // flashing the workspace with stale state — once /healthz returns, the
+  // session check below routes to TokenGate(rejected) or the workspace.
+  // `state.health` stays populated across subsequent reloads, so this
+  // splash only shows on the very first load after a refresh.
+  if (state.health === null && !state.error) {
+    return <AuthLoadingShell />;
+  }
+  if (state.session.kind === "invalid") {
+    return <TokenGate onSubmit={actions.setAuthToken} rejected />;
+  }
+  return (
+    <AuthenticatedShell
+      activeWorkspace={activeWorkspace}
+      onSelectWorkspace={onSelectWorkspace}
+      state={state}
+      actions={actions}
+    />
+  );
+}
 
+function AuthLoadingShell() {
+  return (
+    <div
+      className="hecate-shell"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--t3)",
+          fontFamily: "var(--font-mono)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}
+      >
+        Connecting…
+      </div>
+    </div>
+  );
+}
+
+function AuthenticatedShell({
+  activeWorkspace,
+  onSelectWorkspace,
+  state,
+  actions,
+}: {
+  activeWorkspace: WorkspaceID;
+  onSelectWorkspace: (workspace: WorkspaceID) => void;
+  state: ConsoleState;
+  actions: ConsoleActions;
+}) {
   const workspaces = getAvailableWorkspaces(state.session.isAdmin);
 
   useEffect(() => {

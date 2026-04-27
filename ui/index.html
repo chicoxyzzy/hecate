@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0c0e12" />
     <title>Hecate Runtime Console</title>
+    <!-- Paint the app background before styles.css and the JS bundle land
+         so the page never flashes browser-default white on first load. The
+         color and color-scheme are duplicated in styles.css; keep them in
+         sync. -->
+    <style>
+      html, body { margin: 0; background: oklch(0.09 0.008 240); color-scheme: dark; }
+    </style>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />

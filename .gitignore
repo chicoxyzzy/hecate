@@ -1,4 +1,8 @@
 .env
+# Auto-generated on first run by internal/bootstrap. Holds the AES-GCM
+# control-plane key + admin bearer token, mode 0600. Default location is
+# the repo root (GATEWAY_DATA_DIR=.), so this matters — *never* commit it.
+*.bootstrap.json
 .gocache/
 .gomodcache/
 .gopath/

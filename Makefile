@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke
+.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke reset-dev reset-docker
 
 # build produces a single self-contained gateway binary with the UI bundle
 # embedded. The UI is built first so //go:embed picks up the real assets;
@@ -90,3 +90,29 @@ ui-test-e2e:
 test-docker-smoke:
 	mkdir -p "$(GOCACHE_DIR)"
 	GOCACHE="$(GOCACHE_DIR)" go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...
+
+# reset-dev wipes local dev state back to first-run: stops the gateway on
+# :8080 and deletes the bootstrap file so the next start regenerates a
+# fresh admin token + control-plane secret. Memory-backed control plane
+# is already wiped on restart; if you've pointed Hecate at postgres or
+# redis, drop those out yourself.
+reset-dev:
+	@pid=$$(lsof -ti:8080 2>/dev/null); \
+	if [ -n "$$pid" ]; then \
+	  echo "stopping existing gateway on :8080 (pid $$pid)"; \
+	  kill $$pid; \
+	  sleep 0.3; \
+	fi
+	rm -f hecate.bootstrap.json
+	@echo "Local dev state reset. Next 'make run'/'make serve' regenerates the admin token."
+	@echo "Clear hecate.* keys from your browser's localStorage to re-prompt the UI."
+
+# reset-docker wipes the docker compose stack: stops + removes containers
+# and removes the hecate-data, postgres-data, and ollama-models named
+# volumes so the next 'docker compose up' re-bootstraps from scratch.
+# --profile full activates the optional services so their volumes are
+# also caught by 'down -v'.
+reset-docker:
+	docker compose --profile full down -v --remove-orphans
+	@echo "Docker stack reset. Next 'docker compose up' regenerates the admin token."
+	@echo "Clear hecate.* keys from your browser's localStorage to re-prompt the UI."

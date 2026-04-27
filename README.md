@@ -118,9 +118,9 @@ docker compose cp gateway:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin
 (`docker compose cp ... -` emits a tar archive, hence the `tar -xO`.)
 Restarts of the same volume reuse the same token.
 
-Configure providers through the UI once the token is in, or by creating a
-`.env` file before `docker compose up` (the compose stack picks it up
-automatically).
+Configure providers from the Providers tab once the token is in, or
+pre-seed them with a `.env` file before `docker compose up` (the
+compose stack picks it up automatically).
 
 Optional services live behind profiles:
 
@@ -129,6 +129,17 @@ docker compose --profile postgres up    # adds Postgres for state persistence
 docker compose --profile ollama up      # adds Ollama on :11434 for local models
 docker compose --profile full up        # everything
 ```
+
+To wipe the stack back to first-run (removes the `hecate-data`,
+`postgres-data`, and `ollama-models` volumes, regenerates the admin
+token on the next `docker compose up`):
+
+```bash
+make reset-docker
+```
+
+After resetting, also clear the `hecate.*` keys from your browser's
+localStorage so the UI re-prompts for the new token.
 
 ### Option B: Local build (Go + Bun)
 
@@ -163,6 +174,17 @@ Default addresses:
 
 - gateway + bundled UI (production): `http://127.0.0.1:8080`
 - Vite dev server (UI hot reload): `http://127.0.0.1:5173`
+
+To wipe local state back to first-run (stops any gateway on :8080 and
+removes `hecate.bootstrap.json` so the next start regenerates the
+admin token):
+
+```bash
+make reset-dev
+```
+
+After resetting, also clear the `hecate.*` keys from your browser's
+localStorage so the UI re-prompts for the new token.
 
 ## Provider Model
 
@@ -347,11 +369,14 @@ OpenTelemetry traces, metrics, and logs are off by default. See
 ## Commands
 
 ```bash
-make dev
-make test
-make ui-install
-make ui-dev
-make ui-build
+make dev              # run gateway from source (no bundled UI)
+make test             # run Go tests
+make ui-install       # install UI dependencies (bun install)
+make ui-dev           # Vite dev server on :5173
+make ui-build         # build the UI bundle into ui/dist/
+make ui-test          # run UI unit tests (vitest)
+make reset-dev        # wipe local dev state (kills :8080, drops bootstrap file)
+make reset-docker     # wipe docker stack (down -v across all profiles)
 ```
 
 ## Roadmap

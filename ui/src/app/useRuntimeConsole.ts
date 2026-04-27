@@ -115,7 +115,13 @@ export function useRuntimeConsole() {
   const [budgetLimitUsd, setBudgetLimitUsd] = useState("5.00");
   const [budgetActionError, setBudgetActionError] = useState("");
 
-  const [authToken, setAuthToken] = useState("");
+  // Lazy-init from localStorage so the very first render already knows
+  // whether we have a token. Otherwise the gate flashes the workspace
+  // shell with stale data on every refresh before TokenGate can mount.
+  const [authToken, setAuthToken] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("hecate.authToken") ?? "";
+  });
   const [sessionInfo, setSessionInfo] = useState<SessionResponse["data"] | null>(null);
   const [adminConfigError, setAdminConfigError] = useState("");
   const [notice, setNotice] = useState<NoticeState | null>(null);
@@ -165,10 +171,7 @@ export function useRuntimeConsole() {
   }, [sessionInfo]);
 
   useEffect(() => {
-    const storedAuthToken = window.localStorage.getItem("hecate.authToken");
-    if (storedAuthToken) {
-      setAuthToken(storedAuthToken);
-    }
+    // authToken is hydrated synchronously above via the useState lazy init.
     const storedChatSessionID = window.localStorage.getItem("hecate.chatSessionID");
     if (storedChatSessionID) {
       setActiveChatSessionID(storedChatSessionID);
