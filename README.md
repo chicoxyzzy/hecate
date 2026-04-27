@@ -126,10 +126,9 @@ make reset-dev
 Hecate splits into two concurrent surfaces in one binary: a gateway for OpenAI- and Anthropic-shaped client traffic, and a task runtime for queued agent work. Both share auth, budgets, and observability — but the request paths are independent, so you can use either in isolation.
 
 ```mermaid
-flowchart LR
-    Client["Client<br/>(SDK / curl / Codex / Claude Code)"]
-    Client -->|"chat / messages"| Gateway["Gateway pipeline<br/>auth → policy → cache → router → provider"]
-    Client -->|"task control"| Runtime["Task runtime<br/>queue → worker → sandboxd"]
+    Client["Client"]
+    Client -->|"chat / messages"| Gateway["Gateway pipeline"]
+    Client -->|"task control"| Runtime["Task runtime"]
     Gateway --> Providers["Cloud + local providers"]
     Runtime --> Sandbox["sandboxd execution boundary"]
     Gateway --> Telemetry["OTel traces, metrics, logs"]
@@ -290,16 +289,43 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 
 ## Commands
 
+### Build
+
 ```bash
-make dev              # run hecate from source (no bundled UI)
-make test             # run Go tests
 make ui-install       # install UI dependencies (bun install)
-make ui-dev           # Vite dev server on :5173
-make ui-build         # build the UI bundle into ui/dist/
-make ui-test          # run UI unit tests (vitest)
-make reset-dev        # wipe local dev state (kills :8080, removes .data/)
-make reset-docker     # wipe docker stack (down -v across all profiles)
+make ui-build         # build the UI bundle into ui/dist/ (Vite)
+make build            # ui-build + go build → ./hecate (single binary, UI embedded)
 ```
+
+### Run
+
+```bash
+make run              # go run (no .env sourced; quick start with defaults)
+make dev              # go run with .env sourced (provider keys available)
+make serve            # run prebuilt ./hecate; sources .env; auto-stops a stale :8080
+make ui-dev           # Vite dev server on :5173, proxies API to :8080
+```
+
+### Test
+
+```bash
+make test             # go test ./...
+make test-race        # go test -race ./...
+make coverage         # go test -coverprofile + writes coverage.html
+make ui-test          # UI unit tests (vitest)
+make ui-test-e2e      # UI end-to-end tests (Playwright)
+make ui-coverage      # UI coverage report (vitest --coverage)
+make test-docker-smoke # boots the production image and probes /healthz, /v1/models, bootstrap volume
+```
+
+### Reset
+
+```bash
+make reset-dev        # wipe local dev state — stops :8080, removes .data/
+make reset-docker     # wipe docker stack — `docker compose --profile full down -v`
+```
+
+After either reset, also clear the `hecate.*` keys from your browser's `localStorage` so the UI re-prompts for the regenerated admin token.
 
 ## Docs
 
