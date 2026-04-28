@@ -15,6 +15,18 @@ The Observe tab in the operator UI surfaces all of this without needing an exter
 
 For the full request lifecycle that produces these traces, see [`architecture.md`](architecture.md).
 
+## Three streams, not one
+
+Hecate produces three independent observability surfaces. They overlap in vocabulary but serve different consumers; mixing them up is the most common cause of "I'm seeing the wrong shape" confusion.
+
+| Surface | Where it lives | What it's for | Reference |
+|---|---|---|---|
+| **OTel traces / metrics / logs** | Your tracing backend (via OTLP/HTTP export) | Long-term observability across many requests | This doc |
+| **Persisted run events** | The gateway's `task_state_run_events` table | Subscribe-able timeline of one task or many; powers operator UI + dashboards | [`events.md`](events.md) |
+| **Response headers + `/v1/traces`** | Per-request, in-memory | Fast local debugging without a collector | This doc |
+
+The `events.md` catalog is the canonical reference for what `/v1/events` and the per-run SSE feed will hand you. This doc focuses on OTel spans, metrics, and the local debug surfaces.
+
 ## What You Can Inspect Today
 
 Telemetry currently shows up in three places:
@@ -231,16 +243,7 @@ Coding-runtime operations emit their own spans, grouped by lifecycle stage:
 
 Steps carry `hecate.step.duration_ms`. Runs carry `hecate.run.duration_ms`. Queue claim events carry `hecate.queue.wait_ms` — the time the run spent in the queue between enqueue and claim.
 
-`agent_loop` runs additionally emit one `agent.turn.completed` run event per LLM round-trip, persisted on the run's event log (consumed by the per-run stream and the public `/v1/events` feed). Each event carries:
-
-- `turn` — turn number (1-indexed)
-- `step_id` — the assistant `step` produced this turn
-- `cost_micros_usd` — this turn's LLM spend in micro-USD
-- `run_cumulative_cost_micros_usd` — running total across this run only
-- `task_cumulative_cost_micros_usd` — running total across the entire resume chain (this run + every prior run via `PriorCostMicrosUSD`)
-- `tool_call_count` — how many tool calls the assistant emitted this turn
-
-The per-turn cost figure is also stamped on the corresponding model step's `OutputSummary.cost_micros_usd` so the run-replay UI surfaces it next to the turn label without a separate event subscription. See [`agent-runtime.md`](agent-runtime.md#cost-tracking) for the full cost model.
+`agent_loop` runs *also* emit one `agent.turn.completed` per LLM round-trip on the **persisted run-event log** — not the OTel trace. That stream is documented in [`events.md`](events.md#agentturncompleted) and powers the per-run UI cost ledger and `/v1/events` subscriptions. The OTel side carries duration on the spans above; the cost breakdown lives on the run event.
 
 ### Retention Spans
 
@@ -419,3 +422,24 @@ This keeps Hecate vendor-neutral and lets you change backends without touching r
 - runs UI shows telemetry health panel and SLO cards without errors
 - run timeline links resolve to trace payloads for recent task runs
 - docs recipes and troubleshooting steps were exercised in a smoke environment
+
+## OTel support: status and gaps
+
+Working today:
+
+- OTLP/HTTP export for traces, metrics, and logs (each independently toggleable)
+- W3C TextMap propagator on inbound — `traceparent`, `tracestate`, `baggage` are honored automatically; the gateway becomes a child of the upstream trace
+- Sampler selection: `always_on` / `always_off` / `traceidratio` / `parentbased_*` (default: `parentbased_always_on`)
+- Resource attributes auto-populated (telemetry SDK, host, process; service identity from `GATEWAY_OTEL_SERVICE_*`)
+- Stable span and metric vocabulary (`gen_ai.*` for OTel-standard fields, `hecate.*` for product-specific fields)
+- High-cardinality protection on `hecate.error.kind` — values outside the closed set are normalized to `other`
+
+Not yet:
+
+- **OTLP/gRPC transport** — exporters are HTTP-only. Run a collector if you need gRPC downstream.
+- **Outbound trace propagation to upstream providers** — Hecate does not currently inject `traceparent` into provider HTTP calls, so OpenAI / Anthropic spans (where they exist) are not stitched into the gateway trace.
+- **Histogram exemplars** — duration histograms don't attach example trace ids, so backend-side trace-from-metric pivots aren't available.
+- **Tenant-scoped sampling** — the sampler is global. There's no per-tenant rate limiting / sampling tier yet.
+- **Cardinality protection beyond `hecate.error.kind`** — model and provider labels are trusted to be normalized upstream by the router; ad-hoc values in metric attributes can still blow up cardinality if you bypass that path.
+
+If any of these gaps are blocking your deployment, file an issue — operator demand drives the prioritization.

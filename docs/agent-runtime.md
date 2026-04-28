@@ -129,7 +129,7 @@ The approval banner stays in sync with the run state because approvals ride alon
 
 Per-turn LLM cost is captured at three granularities:
 
-- **`agent.turn.completed` events** — emitted by the runner once per LLM round-trip. Carry `cost_micros_usd` (this turn), `run_cumulative_cost_micros_usd` (this run only), `task_cumulative_cost_micros_usd` (full task lifetime including prior runs in the resume chain), `tool_call_count`, and the model `step_id`. These rows are pruned by the retention worker under the `turn_events` subsystem; see the subsystem table in [`telemetry.md`](telemetry.md#retention-spans) and the `GATEWAY_RETENTION_TURN_EVENTS_*` knobs in `.env.example`.
+- **`agent.turn.completed` events** — one per LLM round-trip on the persisted run-event log. Each event carries the per-turn spend, the run-cumulative figure (this run only), and the task-cumulative figure (entire resume chain via `PriorCostMicrosUSD`). Subscribe via `/v1/events?event_type=agent.turn.completed`; the wire shape is in [`events.md`](events.md#agentturncompleted). These rows are the only run events the retention worker prunes — see the `turn_events` subsystem in [`telemetry.md`](telemetry.md#retention-spans) and `GATEWAY_RETENTION_TURN_EVENTS_*` in `.env.example`.
 - **Model-step `OutputSummary`** — each thinking step's `OutputSummary.cost_micros_usd` carries the same per-turn figure, so the run-replay UI surfaces it next to "turn N" without a separate event subscription.
 - **`TaskRun.TotalCostMicrosUSD` + `PriorCostMicrosUSD`** — finalized totals on the run record. Cumulative across the resume chain = `Prior + Total`.
 

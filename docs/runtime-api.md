@@ -122,16 +122,13 @@ Filters AND together; within a slice (`event_type` is comma-separated) the match
 
 ### Event types
 
-Common event types you'll see in either feed:
+The full catalog of event types — including payload shapes, when each fires, and per-event extras — lives in [`events.md`](events.md). Highlights:
 
-| Event | When |
-|---|---|
-| `run.created` | A run record is persisted (status `queued` or `awaiting_approval`) |
-| `run.queued` / `run.running` / `run.finished` | Lifecycle transitions |
-| `run.awaiting_approval` | A pre-execution approval is required |
-| `approval.requested` / `approval.approved` / `approval.rejected` | Approval lifecycle |
-| `agent.turn.completed` | One LLM round-trip in an `agent_loop` run finished. Carries `cost_micros_usd`, `run_cumulative_cost_micros_usd`, `task_cumulative_cost_micros_usd`, `tool_call_count`, and the model `step_id`. See [`agent-runtime.md`](agent-runtime.md#cost-tracking). |
-| `run.resumed` / `run.resume_requested` | A new run was created from a prior one (resume / retry-from-turn). Resume-from-turn events carry `retry_from_turn` |
+- `run.*` lifecycle (`run.created` / `run.queued` / `run.running` / `run.completed` / `run.failed` / `run.cancelled`)
+- `step.*` and `artifact.*` for in-run timeline detail
+- `approval.requested` / `approval.approved` / `approval.rejected` for human-gating flows
+- `agent.turn.completed` for per-LLM-turn cost ledgers in `agent_loop` runs
+- `run.resumed` / `run.resume_requested` for resume / retry-from-turn chains
 
 ## Queue execution model
 
