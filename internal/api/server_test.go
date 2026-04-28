@@ -2884,6 +2884,70 @@ func TestTaskRunResumeFromCancelledRun(t *testing.T) {
 	}
 }
 
+func TestTaskRunResume_RaisesCeilingBeforeQueueing(t *testing.T) {
+	// "Raise ceiling and resume" affordance: passing budget_micros_usd
+	// in the resume body persists the new ceiling on the task BEFORE
+	// the resumed run is enqueued. The agent loop's next budget check
+	// (priorCost + costSpent vs Task.BudgetMicrosUSD) sees the raised
+	// value, so a run that originally hit the ceiling can continue
+	// without two roundtrips (PATCH-task + POST-resume) and without
+	// a race between them.
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	// Use a sandbox-policy-denied file run as a deterministic way
+	// to land in `failed` quickly. The ceiling-raise behavior is
+	// the same regardless of why the source run failed; we only
+	// need a terminal run to resume.
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks",
+		`{"title":"Raise ceiling","prompt":"x","execution_kind":"file","file_operation":"write","file_path":"x.txt","file_content":"hi","working_directory":".","sandbox_read_only":true,"budget_micros_usd":100000}`)
+	if created.Data.BudgetMicrosUSD != 100000 {
+		t.Fatalf("initial budget = %d, want 100000", created.Data.BudgetMicrosUSD)
+	}
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "failed")
+
+	// Resume with a doubled ceiling.
+	resumed := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost,
+		"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume",
+		`{"budget_micros_usd":200000,"reason":"raise ceiling"}`)
+	if resumed.Data.ID == started.Data.ID {
+		t.Fatal("resume returned original run id, want new run id")
+	}
+
+	// Task ceiling must now reflect the raised value.
+	got := mustTaskRequestJSON[TaskResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID, "")
+	if got.Data.BudgetMicrosUSD != 200000 {
+		t.Errorf("task budget after resume = %d, want 200000 (raised)", got.Data.BudgetMicrosUSD)
+	}
+}
+
+func TestTaskRunResume_RejectsLoweredCeiling(t *testing.T) {
+	// Lowering the ceiling on resume is rejected with 400 — silently
+	// stranding a run below its already-spent prior cost would be a
+	// surprising failure mode.
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks",
+		`{"title":"Lower ceiling","prompt":"x","execution_kind":"file","file_operation":"write","file_path":"x.txt","file_content":"hi","working_directory":".","sandbox_read_only":true,"budget_micros_usd":500000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "failed")
+
+	rec := tasks.mustRequestStatus(http.StatusBadRequest, http.MethodPost,
+		"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume",
+		`{"budget_micros_usd":100000}`)
+	if !strings.Contains(rec.Body.String(), "cannot be lower") {
+		t.Errorf("error body should mention 'cannot be lower'; got: %s", rec.Body.String())
+	}
+}
+
 func TestTaskRunResumeBuildsCheckpointStepContext(t *testing.T) {
 	t.Parallel()
 

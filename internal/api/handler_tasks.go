@@ -1098,6 +1098,28 @@ func (h *Handler) HandleResumeTaskRun(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run is not resumable")
 		return
 	}
+	// Optional ceiling raise — used by the "Raise ceiling and
+	// resume" UI affordance after a cost_ceiling_exceeded failure.
+	// We persist the new ceiling on the task BEFORE queueing the
+	// resumed run so the agent loop's per-task ceiling check
+	// (priorCost + costSpent vs Task.BudgetMicrosUSD) sees the
+	// raised value on its first turn. The ceiling can only go up
+	// here — a request to lower it is rejected, since the obvious
+	// failure would be to silently strand a run below its
+	// already-spent prior cost.
+	if req.BudgetMicrosUSD > 0 {
+		if req.BudgetMicrosUSD < task.BudgetMicrosUSD {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "budget_micros_usd cannot be lower than the current task ceiling")
+			return
+		}
+		task.BudgetMicrosUSD = req.BudgetMicrosUSD
+		if updated, err := h.taskStore.UpdateTask(ctx, task); err != nil {
+			WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+			return
+		} else {
+			task = updated
+		}
+	}
 	result, err := h.taskRunner.ResumeTask(ctx, task, run, strings.TrimSpace(req.Reason), newOpaqueTaskResourceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())

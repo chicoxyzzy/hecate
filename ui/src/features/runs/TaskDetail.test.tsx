@@ -68,6 +68,7 @@ function setup(propOverrides: Partial<React.ComponentProps<typeof TaskDetail>> =
     onRetryRun: vi.fn(),
     onResumeRun: vi.fn(),
     onRetryFromTurn: vi.fn(),
+    onResumeRaisingCeiling: vi.fn(),
     ...propOverrides,
   };
   const user = userEvent.setup();
@@ -336,6 +337,87 @@ describe("TaskDetail agent conversation viewer", () => {
     const retryButtons = screen.getAllByRole("button", { name: /retry from here/i });
     expect(retryButtons.length).toBe(2);
     retryButtons.forEach(b => expect((b as HTMLButtonElement).disabled).toBe(true));
+  });
+});
+
+describe("TaskDetail cost ceiling banner", () => {
+  function ceilingFailedRun(overrides: Partial<TaskRunRecord> = {}): TaskRunRecord {
+    // The agent loop sets otel_status_message = "cost_ceiling_exceeded"
+    // on this specific failure mode; LastError carries the human
+    // breakdown. The banner gates on the otel field so a generic
+    // "failed" run doesn't flash the affordance.
+    return makeRun({
+      status: "failed",
+      otel_status_code: "error",
+      otel_status_message: "cost_ceiling_exceeded",
+      total_cost_micros_usd: 600_000,
+      prior_cost_micros_usd: 0,
+      ...overrides,
+    });
+  }
+
+  it("renders the ceiling banner when otel_status_message is cost_ceiling_exceeded", () => {
+    const { render } = setup({
+      task: makeTask({ budget_micros_usd: 500_000 }),
+      run: ceilingFailedRun(),
+    });
+    render();
+    expect(screen.getByText(/Cost ceiling exceeded/i)).toBeTruthy();
+  });
+
+  it("does NOT render the ceiling banner for generic failures", () => {
+    // The affordance is specifically for ceiling-overage failures.
+    // A generic failed run (timeout, tool error, etc.) must not
+    // surface it — it would invite operators to spend more on a
+    // run that's blocked for unrelated reasons.
+    const { render } = setup({
+      task: makeTask({ budget_micros_usd: 500_000 }),
+      run: makeRun({ status: "failed", otel_status_message: "tool_failed" }),
+    });
+    render();
+    expect(screen.queryByText(/Cost ceiling exceeded/i)).toBeNull();
+  });
+
+  it("pre-fills the new ceiling at 2x the current ceiling", () => {
+    const { render } = setup({
+      task: makeTask({ budget_micros_usd: 250_000 }),
+      run: ceilingFailedRun(),
+    });
+    render();
+    // Default raise = 2x → 500000 µUSD = $0.500
+    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    expect(input.value).toBe("0.500");
+  });
+
+  it("calls onResumeRaisingCeiling with the typed value in micro-USD", async () => {
+    const { props, user, render } = setup({
+      task: makeTask({ budget_micros_usd: 100_000 }),
+      run: ceilingFailedRun(),
+    });
+    render();
+    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "0.500");
+    const button = screen.getByRole("button", { name: /Raise ceiling & resume/i });
+    await user.click(button);
+    // 0.500 USD == 500000 µUSD
+    expect(props.onResumeRaisingCeiling).toHaveBeenCalledWith(500_000);
+  });
+
+  it("disables the action and shows an error when the new value is below the current ceiling", async () => {
+    const { props, user, render } = setup({
+      task: makeTask({ budget_micros_usd: 500_000 }),
+      run: ceilingFailedRun(),
+    });
+    render();
+    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "0.100"); // below 0.500
+    const button = screen.getByRole("button", { name: /Raise ceiling & resume/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Must be at least \$0\.500/i)).toBeTruthy();
+    await user.click(button);
+    expect(props.onResumeRaisingCeiling).not.toHaveBeenCalled();
   });
 });
 

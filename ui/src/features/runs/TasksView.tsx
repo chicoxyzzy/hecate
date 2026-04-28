@@ -4,7 +4,8 @@ import {
   cancelTaskRun, createTask, deleteTask, getModels, getProviderPresets, getProviders,
   getTaskApprovals, getTaskRunArtifacts,
   getTaskRuns, getTaskRunSteps, getTasks, resolveTaskApproval,
-  retryTaskRun, retryTaskRunFromTurn, resumeTaskRun, startTask, streamTaskRun,
+  retryTaskRun, retryTaskRunFromTurn, resumeTaskRun, resumeTaskRunRaisingCeiling,
+  startTask, streamTaskRun,
 } from "../../lib/api";
 import type {
   ModelRecord,
@@ -235,6 +236,25 @@ export function TasksView({ authToken, session }: Props) {
     finally { setBusyAction(""); }
   }
 
+  // Raise the per-task cost ceiling and resume in one click. Only
+  // exposed in the run header when the prior run failed with
+  // otel_status_message=cost_ceiling_exceeded. The gateway persists
+  // the new ceiling before queueing the resumed run, so the agent
+  // loop sees the raised value on its first turn. Surfaces server
+  // validation (e.g. "ceiling cannot be lower") as a notice rather
+  // than failing silently.
+  async function handleResumeRaisingCeiling(budgetMicrosUSD: number) {
+    if (!selectedTaskID || !selectedRunID) return;
+    setBusyAction("resume-raise");
+    try {
+      const res = await resumeTaskRunRaisingCeiling(selectedTaskID, selectedRunID, budgetMicrosUSD, authToken);
+      setNotice({ tone: "success", message: `Ceiling raised to $${(budgetMicrosUSD / 1_000_000).toFixed(3)} and resumed (run #${res.data.number}).` });
+      await loadTasks(selectedTaskID, res.data.id);
+    } catch (err) {
+      setNotice({ tone: "error", message: err instanceof Error ? err.message : "raise & resume failed" });
+    } finally { setBusyAction(""); }
+  }
+
   // Retry-from-turn-N: re-issue the LLM call at turn N with the prior
   // conversation preserved. Server-side validation rejects out-of-range
   // turns and non-agent_loop runs with a 4xx — we surface the message
@@ -323,6 +343,7 @@ export function TasksView({ authToken, session }: Props) {
           onRetryRun={() => void handleRetryRun()}
           onResumeRun={() => void handleResumeRun()}
           onRetryFromTurn={(turn) => void handleRetryFromTurn(turn)}
+          onResumeRaisingCeiling={(budgetMicrosUSD) => void handleResumeRaisingCeiling(budgetMicrosUSD)}
         />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>

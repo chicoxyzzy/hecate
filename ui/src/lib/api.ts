@@ -385,6 +385,27 @@ export async function resumeTaskRun(taskID: string, runID: string, authToken?: s
   });
 }
 
+// resumeTaskRunRaisingCeiling pairs a budget-update with a resume in
+// one server-side transaction — used by the "Raise ceiling and
+// resume" affordance after a cost_ceiling_exceeded failure. The
+// gateway persists the new ceiling on the task before queueing the
+// resumed run so the agent loop's budget check sees the raised
+// value on its very first turn (no race between PATCH-task and
+// POST-resume). budgetMicrosUSD must be >= the current ceiling;
+// the gateway rejects lower values with a 400.
+export async function resumeTaskRunRaisingCeiling(
+  taskID: string,
+  runID: string,
+  budgetMicrosUSD: number,
+  authToken?: string,
+): Promise<TaskRunResponse> {
+  return fetchJSON<TaskRunResponse>(`/v1/tasks/${encodeURIComponent(taskID)}/runs/${encodeURIComponent(runID)}/resume`, {
+    authToken,
+    method: "POST",
+    body: { budget_micros_usd: budgetMicrosUSD },
+  });
+}
+
 // retryTaskRunFromTurn re-runs an agent_loop run starting at turn N
 // with the prior conversation preserved up to (but not including)
 // that turn's assistant message. Returns the newly-created run.

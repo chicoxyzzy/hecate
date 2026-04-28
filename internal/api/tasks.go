@@ -43,6 +43,13 @@ type RetryTaskRunRequest struct {
 
 type ResumeTaskRunRequest struct {
 	Reason string `json:"reason"`
+	// BudgetMicrosUSD, when > 0, replaces the task's per-task cost
+	// ceiling before the resumed run is queued. Used by the
+	// "Raise ceiling and resume" affordance on cost_ceiling_exceeded
+	// failures so operators don't have to update the task and
+	// resume in two separate calls. Zero / unset preserves the
+	// existing ceiling.
+	BudgetMicrosUSD int64 `json:"budget_micros_usd,omitempty"`
 }
 
 // RetryFromTurnRequest is the body for

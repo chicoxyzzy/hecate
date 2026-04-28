@@ -59,6 +59,88 @@ function RunCostBadge({ run }: { run: TaskRunRecord }) {
   );
 }
 
+// CostCeilingBanner is the inline affordance shown when a run failed
+// specifically because of the per-task cost ceiling. Surfaces what
+// was spent vs. the ceiling, suggests a doubled value as a sensible
+// next step, and pairs the budget update with the resume in a
+// single server call. The banner only renders for runs whose
+// otel_status_message is "cost_ceiling_exceeded" — TaskDetail gates
+// rendering, this component just owns the inline form.
+function CostCeilingBanner({
+  run,
+  task,
+  busy,
+  onResumeRaisingCeiling,
+}: {
+  run: TaskRunRecord;
+  task: TaskRecord;
+  busy: boolean;
+  onResumeRaisingCeiling: (budgetMicrosUSD: number) => void;
+}) {
+  const currentCeilingMicros = task.budget_micros_usd ?? 0;
+  // Pre-fill with double the current ceiling — common operator move
+  // ("clearly underestimated, give it more room"). Operators can
+  // type any value >= the current ceiling. Stored as a USD string
+  // so the input retains "1.50" rather than collapsing to "1.5".
+  const defaultRaisedUSD = (() => {
+    if (currentCeilingMicros > 0) return ((currentCeilingMicros * 2) / 1_000_000).toFixed(3);
+    return "";
+  })();
+  const [raisedUSD, setRaisedUSD] = useState(defaultRaisedUSD);
+
+  const totalSpentMicros = (run.total_cost_micros_usd ?? 0) + (run.prior_cost_micros_usd ?? 0);
+  const proposedMicros = Math.max(0, Math.round(parseFloat(raisedUSD || "0") * 1_000_000));
+  const isValid = proposedMicros >= currentCeilingMicros && proposedMicros > 0;
+
+  return (
+    <div style={{ margin: "14px 16px", border: "1px solid var(--amber-border)", borderRadius: "var(--radius)", background: "var(--amber-bg)", overflow: "hidden" }}>
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--amber-border)", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon d={Icons.warning} size={15} />
+        <span style={{ fontWeight: 500, color: "var(--amber)", fontSize: 13 }}>Cost ceiling exceeded</span>
+        <span style={{ fontSize: 11, color: "var(--amber-lo)", fontFamily: "var(--font-mono)", marginLeft: "auto" }}>
+          spent {formatMicrosUSD(totalSpentMicros)} · ceiling {formatMicrosUSD(currentCeilingMicros)}
+        </span>
+      </div>
+      <div style={{ padding: "12px 14px" }}>
+        <div style={{ fontSize: 12, color: "var(--amber)", marginBottom: 10 }}>
+          The agent loop hit the per-task budget. Raise the ceiling and resume to continue from where it stopped. The new ceiling persists on the task and applies to every future run.
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label style={{ fontSize: 11, color: "var(--t2)", fontFamily: "var(--font-mono)" }}>NEW CEILING</label>
+          <div style={{ display: "flex", alignItems: "center", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0 8px" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--t3)", marginRight: 4 }}>$</span>
+            <input
+              className="input"
+              style={{ border: "none", background: "transparent", padding: "5px 0", width: 90, fontFamily: "var(--font-mono)" }}
+              type="number"
+              step="0.01"
+              min={(currentCeilingMicros / 1_000_000).toFixed(3)}
+              value={raisedUSD}
+              onChange={e => setRaisedUSD(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && isValid && !busy) onResumeRaisingCeiling(proposedMicros); }}
+            />
+          </div>
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={busy || !isValid}
+            onClick={() => onResumeRaisingCeiling(proposedMicros)}
+            title={!isValid ? `Must be >= ${formatMicrosUSD(currentCeilingMicros)}` : undefined}
+            style={{ gap: 5 }}
+          >
+            <Icon d={Icons.refresh} size={13} />
+            Raise ceiling & resume
+          </button>
+        </div>
+        {!isValid && raisedUSD !== "" && (
+          <div style={{ fontSize: 10, color: "var(--red)", fontFamily: "var(--font-mono)", marginTop: 6 }}>
+            Must be at least {formatMicrosUSD(currentCeilingMicros)} (the current ceiling).
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatDuration(start?: string, end?: string): string {
   if (!start) return "";
   const startMs = new Date(start).getTime();
@@ -92,12 +174,19 @@ type Props = {
   // the conversation viewer itself only renders for those, so we don't
   // need to gate the button further at the bubble level.
   onRetryFromTurn: (turn: number) => void;
+  // onResumeRaisingCeiling raises the task's per-task cost ceiling
+  // and resumes the run in one server-side transaction. Surfaced
+  // only when the run failed with otel_status_message =
+  // "cost_ceiling_exceeded" — the inline banner inside this
+  // component drives it via an embedded budget input.
+  onResumeRaisingCeiling: (budgetMicrosUSD: number) => void;
 };
 
 export function TaskDetail({
   task, run, runs, selectedRunID, steps, artifacts, approvals,
   streamState, busyAction, notice,
   onSelectRun, onResolveApproval, onCancelRun, onRetryRun, onResumeRun, onRetryFromTurn,
+  onResumeRaisingCeiling,
 }: Props) {
   const termRef = useRef<HTMLDivElement>(null);
   const [runPickerOpen, setRunPickerOpen] = useState(false);
@@ -202,6 +291,19 @@ export function TaskDetail({
       )}
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        {/* Cost-ceiling banner: shown only when this run failed
+            specifically because of the per-task budget. Lets the
+            operator raise the ceiling and resume in one click rather
+            than calling two endpoints. */}
+        {run && run.status === "failed" && run.otel_status_message === "cost_ceiling_exceeded" && (
+          <CostCeilingBanner
+            run={run}
+            task={task}
+            busy={busyAction !== ""}
+            onResumeRaisingCeiling={onResumeRaisingCeiling}
+          />
+        )}
+
         {pendingApprovals.map(approval => (
           <div key={approval.id} style={{ margin: "14px 16px", border: "1px solid var(--amber-border)", borderRadius: "var(--radius)", background: "var(--amber-bg)", overflow: "hidden" }}>
             <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--amber-border)", display: "flex", alignItems: "center", gap: 8 }}>
