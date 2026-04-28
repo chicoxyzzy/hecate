@@ -81,11 +81,79 @@ type openAIToolCallFunction struct {
 }
 
 type openAIChatMessage struct {
-	Role       string           `json:"role"`
-	Content    *string          `json:"content"`
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	Role string `json:"role"`
+	// Content accepts string, array of blocks, or null. Mirrors
+	// the inbound OpenAIMessageContent shape; defined here in the
+	// provider package so the outbound wire encoding stays
+	// dependency-free of the API package.
+	Content    openAIMessageContent `json:"content"`
+	Name       string               `json:"name,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCall     `json:"tool_calls,omitempty"`
+}
+
+// openAIMessageContent is the provider-side polymorphic content
+// value. Same shape as api.OpenAIMessageContent; duplicated here
+// to keep the providers package free of api-package imports.
+type openAIMessageContent struct {
+	Text   string
+	Blocks []openAIContentBlock
+	Null   bool
+}
+
+func (c *openAIMessageContent) UnmarshalJSON(data []byte) error {
+	*c = openAIMessageContent{}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		c.Null = true
+		return nil
+	}
+	switch trimmed[0] {
+	case '"':
+		return json.Unmarshal(data, &c.Text)
+	case '[':
+		return json.Unmarshal(data, &c.Blocks)
+	}
+	return fmt.Errorf("content must be string, array, or null")
+}
+
+func (c openAIMessageContent) MarshalJSON() ([]byte, error) {
+	if c.Null {
+		return []byte("null"), nil
+	}
+	if len(c.Blocks) > 0 {
+		return json.Marshal(c.Blocks)
+	}
+	return json.Marshal(c.Text)
+}
+
+// AsString flattens block content for code paths (token estimation,
+// response decoding) that want a single string.
+func (c openAIMessageContent) AsString() string {
+	if c.Text != "" {
+		return c.Text
+	}
+	parts := make([]string, 0, len(c.Blocks))
+	for _, b := range c.Blocks {
+		if (b.Type == "text" || b.Type == "") && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// openAIContentBlock is one element of the array form of message
+// content. Today: text + image_url; the struct's open shape lets
+// future block types pass through.
+type openAIContentBlock struct {
+	Type     string                 `json:"type"`
+	Text     string                 `json:"text,omitempty"`
+	ImageURL *openAIContentImageURL `json:"image_url,omitempty"`
+}
+
+type openAIContentImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {
@@ -377,6 +445,9 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 			ToolCallID: msg.ToolCallID,
 		}
 		if len(msg.ToolCalls) > 0 {
+			// content: null is required by OpenAI when tool_calls
+			// is present.
+			wireMsg.Content = openAIMessageContent{Null: true}
 			wireMsg.ToolCalls = make([]openAIToolCall, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
 				wireMsg.ToolCalls = append(wireMsg.ToolCalls, openAIToolCall{
@@ -389,8 +460,7 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 				})
 			}
 		} else {
-			c := msg.Content
-			wireMsg.Content = &c
+			wireMsg.Content = buildOpenAIWireContent(msg)
 		}
 		wireReq.Messages = append(wireReq.Messages, wireMsg)
 	}
@@ -441,13 +511,13 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 
 	choices := make([]types.ChatChoice, 0, len(wireResp.Choices))
 	for _, choice := range wireResp.Choices {
-		content := ""
-		if choice.Message.Content != nil {
-			content = *choice.Message.Content
-		}
+		// Response-side content from OpenAI today is always a
+		// string (or null with tool_calls). AsString flattens
+		// either form, so this stays correct if a future API
+		// version returns image content blocks in responses.
 		m := types.Message{
 			Role:       choice.Message.Role,
-			Content:    content,
+			Content:    choice.Message.Content.AsString(),
 			Name:       choice.Message.Name,
 			ToolCallID: choice.Message.ToolCallID,
 		}
@@ -530,6 +600,9 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 			ToolCallID: msg.ToolCallID,
 		}
 		if len(msg.ToolCalls) > 0 {
+			// content: null is required by OpenAI when tool_calls
+			// is present.
+			wireMsg.Content = openAIMessageContent{Null: true}
 			wireMsg.ToolCalls = make([]openAIToolCall, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
 				wireMsg.ToolCalls = append(wireMsg.ToolCalls, openAIToolCall{
@@ -542,8 +615,7 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 				})
 			}
 		} else {
-			c := msg.Content
-			wireMsg.Content = &c
+			wireMsg.Content = buildOpenAIWireContent(msg)
 		}
 		wireReq.Messages = append(wireReq.Messages, wireMsg)
 	}
@@ -588,6 +660,68 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 	}
 
 	return proxySSE(ctx, resp.Body, w)
+}
+
+// buildOpenAIWireContent picks between the string form and the
+// array-of-blocks form for outbound message content.
+//
+//   - When the source message has no ContentBlocks (the common
+//     case — single-turn text chat, tool results, etc.), we emit
+//     the string form. This matches what every OpenAI-compat
+//     upstream has accepted forever; multi-modal isn't needed.
+//   - When ContentBlocks contains image_url blocks, we emit the
+//     array form so the upstream sees the structured payload.
+//   - Text-only block content collapses back to the string form
+//     to keep payloads compact and avoid surprising unsupported
+//     downstreams (some OpenAI-compat endpoints — older Ollama,
+//     llama.cpp — only accept the string form).
+func buildOpenAIWireContent(msg types.Message) openAIMessageContent {
+	if !messageHasNonTextBlocks(msg) {
+		return openAIMessageContent{Text: msg.Content}
+	}
+	blocks := make([]openAIContentBlock, 0, len(msg.ContentBlocks))
+	for _, cb := range msg.ContentBlocks {
+		switch cb.Type {
+		case "text", "":
+			if cb.Text == "" {
+				continue
+			}
+			blocks = append(blocks, openAIContentBlock{Type: "text", Text: cb.Text})
+		case "image_url":
+			out := openAIContentBlock{Type: "image_url"}
+			if cb.Image != nil {
+				out.ImageURL = &openAIContentImageURL{
+					URL:    cb.Image.URL,
+					Detail: cb.Image.Detail,
+				}
+			}
+			blocks = append(blocks, out)
+		}
+		// Unknown block types are dropped here — OpenAI rejects
+		// strict-mode requests with unrecognized block types, and
+		// silently sending them risks an upstream 400 the operator
+		// can't easily debug.
+	}
+	if len(blocks) == 0 {
+		// All blocks were unrecognized / empty; fall back to the
+		// flattened string form so the upstream still gets *some*
+		// content.
+		return openAIMessageContent{Text: msg.Content}
+	}
+	return openAIMessageContent{Blocks: blocks}
+}
+
+// messageHasNonTextBlocks reports whether the message's
+// ContentBlocks include anything that needs the array form on the
+// wire. Pure-text block content can ride as a flat string.
+func messageHasNonTextBlocks(msg types.Message) bool {
+	for _, cb := range msg.ContentBlocks {
+		switch cb.Type {
+		case "image_url", "image":
+			return true
+		}
+	}
+	return false
 }
 
 func buildChatCompletionsURL(baseURL string) string {

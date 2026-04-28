@@ -129,8 +129,8 @@ func TestChatCompletionsCachesResponsesAndReturnsRuntimeHeaders(t *testing.T) {
 	if response.Model != "gpt-4o-mini-2024-07-18" {
 		t.Fatalf("response model = %q, want resolved model", response.Model)
 	}
-	if response.Choices[0].Message.Content == nil || *response.Choices[0].Message.Content != "Hello!" {
-		t.Fatalf("response content = %v, want Hello!", response.Choices[0].Message.Content)
+	if got := response.Choices[0].Message.Content.AsString(); got != "Hello!" {
+		t.Fatalf("response content = %q, want Hello!", got)
 	}
 
 	logOutput := logBuf.String()
@@ -660,7 +660,7 @@ func TestNormalizeChatRequestCarriesProviderHint(t *testing.T) {
 		Provider: "ollama",
 		User:     "team-a",
 		Messages: []OpenAIChatMessage{
-			{Role: "user", Content: strPtr("hello")},
+			{Role: "user", Content: OpenAIMessageContent{Text: "hello"}},
 		},
 	}
 
@@ -683,7 +683,7 @@ func TestNormalizeChatRequestBindsTenantFromPrincipal(t *testing.T) {
 		Model: "gpt-4o-mini",
 		User:  "team-a",
 		Messages: []OpenAIChatMessage{
-			{Role: "user", Content: strPtr("hello")},
+			{Role: "user", Content: OpenAIMessageContent{Text: "hello"}},
 		},
 	}, "req-123", auth.Principal{
 		Role:   "tenant",
@@ -704,7 +704,7 @@ func TestNormalizeChatRequestRejectsTenantImpersonation(t *testing.T) {
 		Model: "gpt-4o-mini",
 		User:  "team-b",
 		Messages: []OpenAIChatMessage{
-			{Role: "user", Content: strPtr("hello")},
+			{Role: "user", Content: OpenAIMessageContent{Text: "hello"}},
 		},
 	}, "req-123", auth.Principal{
 		Role:   "tenant",
@@ -1893,7 +1893,7 @@ func TestChatSessionsPersistTurnsWithRuntimeMetadata(t *testing.T) {
 	if session.Data.Turns[0].Model != "claude-sonnet-4-20250514" {
 		t.Fatalf("model = %q, want Claude model", session.Data.Turns[0].Model)
 	}
-	if session.Data.Turns[0].UserMessage.Content == nil || *session.Data.Turns[0].UserMessage.Content != "Say hello." {
+	if got := session.Data.Turns[0].UserMessage.Content.AsString(); got != "Say hello." {
 		t.Fatalf("user content = %v, want original prompt", session.Data.Turns[0].UserMessage.Content)
 	}
 }

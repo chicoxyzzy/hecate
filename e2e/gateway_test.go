@@ -375,6 +375,212 @@ func TestGatewayFakeUpstreamClaudeCode(t *testing.T) {
 	}
 }
 
+// TestGatewayMultimodalCodexImageURLPassthrough exercises the
+// full multi-modal pipe end-to-end on the OpenAI route: the
+// caller posts a content array (text + image_url) to the real
+// hecate binary, and the fake upstream must receive the array
+// form on the wire with the image_url block intact.
+//
+// This catches regressions that the unit tests can't: the JSON
+// decode → normalize → provider serialize chain runs across the
+// real binary and a real HTTP roundtrip. A subtle break (e.g.
+// flattening blocks to a string at any layer) shows up here as
+// the upstream receiving a string instead of an array.
+func TestGatewayMultimodalCodexImageURLPassthrough(t *testing.T) {
+	t.Parallel()
+
+	fakeResp := `{"id":"chatcmpl-mm","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"It's a cat."},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":4,"total_tokens":54}}`
+	upstream, captured := fakeUpstreamCapturing(t, "/v1/chat/completions", fakeResp)
+
+	base := hecateServer(t,
+		"PROVIDER_FAKE_API_KEY=dummy",
+		"PROVIDER_FAKE_BASE_URL="+upstream,
+		"PROVIDER_FAKE_PROTOCOL=openai",
+		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o",
+		"PROVIDER_FAKE_KIND=local",
+		"GATEWAY_DEFAULT_MODEL=gpt-4o",
+	)
+
+	body := `{
+		"model":"gpt-4o",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe this"},
+			{"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"high"}}
+		]}]
+	}`
+	resp := postJSON(t, base+"/v1/chat/completions", body, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", resp.StatusCode, readBody(t, resp))
+	}
+
+	// Inspect what hecate forwarded to the upstream.
+	upstreamBody := captured.lastBody()
+	if upstreamBody == nil {
+		t.Fatal("upstream received no request body")
+	}
+	msgs, _ := upstreamBody["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("upstream messages = %d, want 1", len(msgs))
+	}
+	first, _ := msgs[0].(map[string]any)
+	contentArr, ok := first["content"].([]any)
+	if !ok {
+		t.Fatalf("upstream received content as %T (not array form): %v", first["content"], first["content"])
+	}
+	if len(contentArr) != 2 {
+		t.Fatalf("upstream content blocks = %d, want 2", len(contentArr))
+	}
+	imgBlock, _ := contentArr[1].(map[string]any)
+	if imgBlock["type"] != "image_url" {
+		t.Errorf("blocks[1].type = %v, want image_url", imgBlock["type"])
+	}
+	imgURL, _ := imgBlock["image_url"].(map[string]any)
+	if imgURL["url"] != "https://example.com/cat.png" {
+		t.Errorf("upstream got image URL %v, want https://example.com/cat.png", imgURL["url"])
+	}
+	if imgURL["detail"] != "high" {
+		t.Errorf("upstream got image detail %v, want high (detail must survive the gateway hop)", imgURL["detail"])
+	}
+}
+
+// TestGatewayMultimodalAnthropicImageURLTranslation exercises the
+// cross-provider path: an OpenAI-shaped /v1/chat/completions
+// request lands on an Anthropic upstream, and the gateway must
+// translate the image_url block into Anthropic's image+source
+// shape on the wire.
+//
+// A regression that left blocks in the OpenAI shape would 400 the
+// Anthropic upstream — exactly the sort of failure this test
+// catches before users hit it.
+func TestGatewayMultimodalAnthropicImageURLTranslation(t *testing.T) {
+	t.Parallel()
+
+	// Fake Anthropic upstream — minimal Messages-API response.
+	fakeResp := `{"id":"msg_e2e_mm","type":"message","role":"assistant","model":"claude-opus-4-5","content":[{"type":"text","text":"It's a cat."}],"stop_reason":"end_turn","usage":{"input_tokens":50,"output_tokens":4}}`
+	upstream, captured := fakeUpstreamCapturing(t, "/v1/messages", fakeResp)
+
+	base := hecateServer(t,
+		"PROVIDER_FAKE_API_KEY=dummy",
+		"PROVIDER_FAKE_BASE_URL="+upstream,
+		"PROVIDER_FAKE_PROTOCOL=anthropic",
+		"PROVIDER_FAKE_DEFAULT_MODEL=claude-opus-4-5",
+		// kind=local skips the cost-preflight pricebook lookup
+		// (no price entries for synthetic test models). The
+		// provider adapter is unaffected — protocol=anthropic
+		// still selects the native Anthropic wire shape.
+		"PROVIDER_FAKE_KIND=local",
+		"GATEWAY_DEFAULT_MODEL=claude-opus-4-5",
+	)
+
+	// Caller posts the OpenAI shape — this is the cross-provider
+	// route operators care about ("I use the OpenAI SDK but route
+	// to Claude").
+	body := `{
+		"model":"claude-opus-4-5",
+		"max_tokens":128,
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe this"},
+			{"type":"image_url","image_url":{"url":"https://example.com/cat.png"}}
+		]}]
+	}`
+	resp := postJSON(t, base+"/v1/chat/completions", body, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", resp.StatusCode, readBody(t, resp))
+	}
+
+	upstreamBody := captured.lastBody()
+	if upstreamBody == nil {
+		t.Fatal("upstream received no request body")
+	}
+	msgs, _ := upstreamBody["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	contentArr, _ := first["content"].([]any)
+	if len(contentArr) != 2 {
+		t.Fatalf("anthropic upstream content blocks = %d, want 2 (text + image)", len(contentArr))
+	}
+	imgBlock, _ := contentArr[1].(map[string]any)
+	// Anthropic uses type=image (not image_url) and source=...
+	if imgBlock["type"] != "image" {
+		t.Errorf("blocks[1].type = %v, want image (translated from image_url)", imgBlock["type"])
+	}
+	source, _ := imgBlock["source"].(map[string]any)
+	if source["type"] != "url" {
+		t.Errorf("source.type = %v, want url", source["type"])
+	}
+	if source["url"] != "https://example.com/cat.png" {
+		t.Errorf("source.url = %v, want passthrough", source["url"])
+	}
+}
+
+// TestGatewayMultimodalAnthropicDataURITranslation exercises the
+// other half of the cross-provider image story: a `data:image/...`
+// URI (the common shape for client-side embedded images) gets
+// parsed by the gateway and re-emitted as Anthropic's base64
+// source form. Saves Anthropic from having to handle a pseudo-URL
+// and works on older Anthropic API versions that only accept
+// base64.
+func TestGatewayMultimodalAnthropicDataURITranslation(t *testing.T) {
+	t.Parallel()
+
+	fakeResp := `{"id":"msg_e2e_b64","type":"message","role":"assistant","model":"claude-opus-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":80,"output_tokens":1}}`
+	upstream, captured := fakeUpstreamCapturing(t, "/v1/messages", fakeResp)
+
+	base := hecateServer(t,
+		"PROVIDER_FAKE_API_KEY=dummy",
+		"PROVIDER_FAKE_BASE_URL="+upstream,
+		"PROVIDER_FAKE_PROTOCOL=anthropic",
+		"PROVIDER_FAKE_DEFAULT_MODEL=claude-opus-4-5",
+		// kind=local skips the cost-preflight pricebook lookup
+		// (no price entries for synthetic test models). The
+		// provider adapter is unaffected — protocol=anthropic
+		// still selects the native Anthropic wire shape.
+		"PROVIDER_FAKE_KIND=local",
+		"GATEWAY_DEFAULT_MODEL=claude-opus-4-5",
+	)
+
+	// `data:image/jpeg;base64,...` — the shape an OpenAI client
+	// produces when reading a local file with the official SDK.
+	body := `{
+		"model":"claude-opus-4-5",
+		"max_tokens":128,
+		"messages":[{"role":"user","content":[
+			{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQ"}}
+		]}]
+	}`
+	resp := postJSON(t, base+"/v1/chat/completions", body, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", resp.StatusCode, readBody(t, resp))
+	}
+
+	upstreamBody := captured.lastBody()
+	msgs, _ := upstreamBody["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	contentArr, _ := first["content"].([]any)
+	imgBlock, _ := contentArr[0].(map[string]any)
+	source, _ := imgBlock["source"].(map[string]any)
+	if source["type"] != "base64" {
+		t.Errorf("source.type = %v, want base64 (data URI must be parsed inline)", source["type"])
+	}
+	if source["media_type"] != "image/jpeg" {
+		t.Errorf("source.media_type = %v, want image/jpeg from URI", source["media_type"])
+	}
+	if source["data"] != "/9j/4AAQ" {
+		t.Errorf("source.data = %v, want extracted base64 payload", source["data"])
+	}
+	if _, present := source["url"]; present {
+		t.Errorf("source.url should be absent on base64 form; got %v", source["url"])
+	}
+}
+
 // TestGatewayRuntimeProviderHeader verifies that the gateway injects the
 // X-Runtime-Provider header into successful responses.
 func TestGatewayRuntimeProviderHeader(t *testing.T) {
@@ -848,6 +1054,61 @@ func TestGatewayFakeUpstreamStreamingClaudeCode(t *testing.T) {
 // fakeOpenAIServer starts an httptest.Server that mimics an OpenAI-compatible
 // upstream.  If streaming=true it returns chunked SSE; otherwise it returns a
 // plain JSON response.  The server is shut down when the test ends.
+// capturedRequests is the recorder side of fakeUpstreamCapturing.
+// Tests inspect what the gateway forwarded to the (faked) upstream
+// — used by the multi-modal e2e tests to verify the wire body
+// carries the right shape after translation.
+type capturedRequests struct {
+	mu     sync.Mutex
+	bodies []map[string]any
+}
+
+func (c *capturedRequests) record(body map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bodies = append(c.bodies, body)
+}
+
+func (c *capturedRequests) lastBody() map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.bodies) == 0 {
+		return nil
+	}
+	return c.bodies[len(c.bodies)-1]
+}
+
+// fakeUpstreamCapturing is fakeOpenAIServer's introspectable
+// sibling: it records every inbound JSON body so a test can assert
+// what the gateway actually forwarded. The response body is fixed
+// (callers tailor to the protocol they're emulating). Reused
+// across protocols — OpenAI's /v1/chat/completions and Anthropic's
+// /v1/messages have the same JSON-decode contract at this layer.
+func fakeUpstreamCapturing(t *testing.T, path, response string) (string, *capturedRequests) {
+	t.Helper()
+	captured := &capturedRequests{}
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		// Decode best-effort; non-JSON bodies still record an
+		// empty map so the test can detect "request reached
+		// upstream" separately from "request was the right shape."
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		captured.record(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, response)
+	})
+	srv := &http.Server{Handler: mux}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("fakeUpstreamCapturing listen: %v", err)
+	}
+	go srv.Serve(ln) //nolint:errcheck
+	t.Cleanup(func() { srv.Close() })
+	return "http://" + ln.Addr().String(), captured
+}
+
 func fakeOpenAIServer(t *testing.T, path, body string, streaming bool) string {
 	t.Helper()
 	mux := http.NewServeMux()

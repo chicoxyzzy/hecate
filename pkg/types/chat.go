@@ -126,6 +126,26 @@ type ContentBlock struct {
 	Thinking  string `json:"thinking,omitempty"`  // thinking block content
 	Signature string `json:"signature,omitempty"` // thinking block signature (verified by Anthropic)
 	Data      string `json:"data,omitempty"`      // redacted_thinking block opaque data
+	// Image carries image-content data for multi-modal messages.
+	// Set when Type == "image_url" (OpenAI-shaped) or Type ==
+	// "image" (Anthropic-shaped). The Image struct unifies the
+	// two upstreams' shapes: URL for url-based images, Data +
+	// MediaType for inlined base64. Detail is an OpenAI hint
+	// (low/high/auto) and is ignored by Anthropic.
+	Image *ContentImage `json:"image,omitempty"`
+}
+
+// ContentImage is the unified image-content payload carried on
+// ContentBlock.Image. Adapters convert between this and their
+// provider's wire shape: OpenAI uses {image_url:{url, detail}};
+// Anthropic uses {source:{type, media_type, data|url}}. Exactly
+// one of URL or Data should be set on a given block — URL for
+// url-referenced images, Data for inline base64 (with MediaType).
+type ContentImage struct {
+	URL       string `json:"url,omitempty"`
+	Data      string `json:"data,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 type ToolCall struct {

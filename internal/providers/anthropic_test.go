@@ -809,6 +809,120 @@ func TestAnthropicProviderServiceTierPassthrough(t *testing.T) {
 	}
 }
 
+// TestAnthropicProviderTranslatesURLImageBlock confirms a
+// content block of type image_url with a public URL becomes an
+// Anthropic image block on the wire with source.type=url.
+// Catches the cross-provider routing case: caller hits
+// /v1/chat/completions with multi-modal content but the router
+// picks an Anthropic provider.
+func TestAnthropicProviderTranslatesURLImageBlock(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_img_url",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "It's a cat."}},
+			"usage":       map[string]any{"input_tokens": 100, "output_tokens": 5},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "claude-opus-4-5",
+		Messages: []types.Message{{
+			Role:    "user",
+			Content: "describe",
+			ContentBlocks: []types.ContentBlock{
+				{Type: "text", Text: "describe"},
+				{Type: "image_url", Image: &types.ContentImage{URL: "https://example.com/cat.png"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs, _ := captured["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	blocks, _ := first["content"].([]any)
+	if len(blocks) != 2 {
+		t.Fatalf("content blocks = %d, want 2", len(blocks))
+	}
+	imgBlock, _ := blocks[1].(map[string]any)
+	if imgBlock["type"] != "image" {
+		t.Errorf("blocks[1].type = %v, want image (translated)", imgBlock["type"])
+	}
+	source, _ := imgBlock["source"].(map[string]any)
+	if source["type"] != "url" {
+		t.Errorf("source.type = %v, want url", source["type"])
+	}
+	if source["url"] != "https://example.com/cat.png" {
+		t.Errorf("source.url = %v, want passthrough URL", source["url"])
+	}
+}
+
+// TestAnthropicProviderTranslatesDataURIImageBlock pins the
+// data-URI translation: when the OpenAI caller sends
+// `data:image/png;base64,...` (the common shape for client-side
+// embedded images), we parse it and emit Anthropic's base64
+// source form. Saves Anthropic from having to fetch a pseudo-URL.
+func TestAnthropicProviderTranslatesDataURIImageBlock(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_img_b64",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage":       map[string]any{"input_tokens": 100, "output_tokens": 1},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "claude-opus-4-5",
+		Messages: []types.Message{{
+			Role: "user",
+			ContentBlocks: []types.ContentBlock{
+				{Type: "image_url", Image: &types.ContentImage{URL: "data:image/jpeg;base64,/9j/4AAQ"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs, _ := captured["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	blocks, _ := first["content"].([]any)
+	imgBlock, _ := blocks[0].(map[string]any)
+	source, _ := imgBlock["source"].(map[string]any)
+	if source["type"] != "base64" {
+		t.Errorf("source.type = %v, want base64 (data URI parsed)", source["type"])
+	}
+	if source["media_type"] != "image/jpeg" {
+		t.Errorf("source.media_type = %v, want image/jpeg from URI", source["media_type"])
+	}
+	if source["data"] != "/9j/4AAQ" {
+		t.Errorf("source.data = %v, want extracted base64 payload", source["data"])
+	}
+	// URL field must NOT be present alongside base64.
+	if _, ok := source["url"]; ok {
+		t.Errorf("source.url should be absent when type=base64; got %v", source["url"])
+	}
+}
+
 // TestAnthropicProviderTier2FieldsAllDropped pins the wire
 // invariant for the Tier-2 OpenAI passthroughs: every one of them
 // must be absent from the body sent to Anthropic upstream. The

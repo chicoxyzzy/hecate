@@ -86,8 +86,8 @@ func TestChatCompletionsToolCallResponse(t *testing.T) {
 		t.Fatalf("finish_reason = %q, want tool_calls", choice.FinishReason)
 	}
 	// content must be null when tool_calls are present
-	if choice.Message.Content != nil {
-		t.Fatalf("content = %v, want nil when tool_calls present", *choice.Message.Content)
+	if !choice.Message.Content.Null {
+		t.Fatalf("content = %q (Null=%v), want JSON null when tool_calls present", choice.Message.Content.AsString(), choice.Message.Content.Null)
 	}
 	if len(choice.Message.ToolCalls) != 1 {
 		t.Fatalf("tool_calls count = %d, want 1", len(choice.Message.ToolCalls))
@@ -157,8 +157,8 @@ func TestChatCompletionsToolResultFollowUp(t *testing.T) {
 	if resp.Choices[0].FinishReason != "stop" {
 		t.Fatalf("finish_reason = %q, want stop (final answer)", resp.Choices[0].FinishReason)
 	}
-	if got := resp.Choices[0].Message.Content; got == nil || !strings.Contains(*got, "22°C") {
-		t.Fatalf("content = %v, want final answer containing temperature", got)
+	if got := resp.Choices[0].Message.Content.AsString(); !strings.Contains(got, "22°C") {
+		t.Fatalf("content = %q, want final answer containing temperature", got)
 	}
 
 	// Verify all three messages were forwarded to the provider.

@@ -356,6 +356,157 @@ func TestRenderChatCompletionResponseOmitsDetailsWhenNoCacheTokens(t *testing.T)
 	}
 }
 
+// TestOpenAIMessageContentUnmarshalsBothShapes pins the
+// polymorphic content unmarshaller. The wire allows three shapes:
+// JSON string, JSON array of blocks, JSON null. Each must round-
+// trip cleanly into the typed Go struct so downstream parsers can
+// branch on Text vs Blocks vs Null without re-decoding.
+func TestOpenAIMessageContentUnmarshalsBothShapes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		input      string
+		wantText   string
+		wantBlocks int
+		wantNull   bool
+	}{
+		{"plain string", `"hello"`, "hello", 0, false},
+		{"empty string", `""`, "", 0, false},
+		{"null", `null`, "", 0, true},
+		{"text-only array", `[{"type":"text","text":"hi"}]`, "", 1, false},
+		{"text+image array", `[{"type":"text","text":"describe this"},{"type":"image_url","image_url":{"url":"https://example.com/x.png","detail":"high"}}]`, "", 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got OpenAIMessageContent
+			if err := json.Unmarshal([]byte(tc.input), &got); err != nil {
+				t.Fatalf("Unmarshal(%q): %v", tc.input, err)
+			}
+			if got.Text != tc.wantText {
+				t.Errorf("Text = %q, want %q", got.Text, tc.wantText)
+			}
+			if len(got.Blocks) != tc.wantBlocks {
+				t.Errorf("Blocks len = %d, want %d", len(got.Blocks), tc.wantBlocks)
+			}
+			if got.Null != tc.wantNull {
+				t.Errorf("Null = %v, want %v", got.Null, tc.wantNull)
+			}
+		})
+	}
+}
+
+// TestOpenAIMessageContentMarshalRoundTrip confirms re-encoding
+// produces the canonical wire shape: blocks → array, null → null,
+// otherwise → string. Without this round-trip pin, a future field
+// addition could accidentally drop text or blocks.
+func TestOpenAIMessageContentMarshalRoundTrip(t *testing.T) {
+	t.Parallel()
+	imageURL := "data:image/png;base64,iVBOR"
+	cases := []struct {
+		name string
+		in   OpenAIMessageContent
+		want string
+	}{
+		{"text", OpenAIMessageContent{Text: "hi"}, `"hi"`},
+		{"empty stays empty string", OpenAIMessageContent{}, `""`},
+		{"null", OpenAIMessageContent{Null: true}, `null`},
+		{"blocks override text",
+			OpenAIMessageContent{
+				Text: "ignored",
+				Blocks: []OpenAIContentBlock{
+					{Type: "text", Text: "a"},
+					{Type: "image_url", ImageURL: &OpenAIContentImageURL{URL: imageURL, Detail: "low"}},
+				},
+			},
+			`[{"type":"text","text":"a"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR","detail":"low"}}]`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("Marshal = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeChatRequestParsesImageBlocks verifies that an
+// OpenAI-shaped multi-modal request lands as a types.Message with
+// ContentBlocks populated (text + image_url). The text-only string
+// content path stays unchanged — backward compat for every
+// existing single-modal caller.
+func TestNormalizeChatRequestParsesImageBlocks(t *testing.T) {
+	t.Parallel()
+	body := `{
+		"model":"gpt-4o-mini",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe this"},
+			{"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"high"}}
+		]}]
+	}`
+	var req OpenAIChatCompletionRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("decode wire request: %v", err)
+	}
+	internal, err := normalizeChatRequest(req, "req-1", auth.Principal{})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if len(internal.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(internal.Messages))
+	}
+	m := internal.Messages[0]
+	// Content (string flatten) gets the text part for legacy
+	// code paths.
+	if m.Content != "describe this" {
+		t.Errorf("flattened Content = %q, want \"describe this\"", m.Content)
+	}
+	// ContentBlocks carries the structured form.
+	if len(m.ContentBlocks) != 2 {
+		t.Fatalf("ContentBlocks len = %d, want 2", len(m.ContentBlocks))
+	}
+	if m.ContentBlocks[0].Type != "text" || m.ContentBlocks[0].Text != "describe this" {
+		t.Errorf("blocks[0] = %+v, want text/describe", m.ContentBlocks[0])
+	}
+	if m.ContentBlocks[1].Type != "image_url" {
+		t.Errorf("blocks[1].Type = %q, want image_url", m.ContentBlocks[1].Type)
+	}
+	if m.ContentBlocks[1].Image == nil ||
+		m.ContentBlocks[1].Image.URL != "https://example.com/cat.png" ||
+		m.ContentBlocks[1].Image.Detail != "high" {
+		t.Errorf("blocks[1].Image = %+v, want URL+Detail set", m.ContentBlocks[1].Image)
+	}
+}
+
+// TestNormalizeChatRequestStringContentUnchanged is the backward-
+// compat guard for the single-modal text path. Pre-multi-modal
+// every request had `content: "..."` as a plain string; that
+// shape must still produce a Message with Content set and no
+// ContentBlocks (the old code path).
+func TestNormalizeChatRequestStringContentUnchanged(t *testing.T) {
+	t.Parallel()
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`
+	var req OpenAIChatCompletionRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	internal, err := normalizeChatRequest(req, "req-1", auth.Principal{})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	m := internal.Messages[0]
+	if m.Content != "hello" {
+		t.Errorf("Content = %q, want hello", m.Content)
+	}
+	if len(m.ContentBlocks) != 0 {
+		t.Errorf("ContentBlocks len = %d, want 0 (string-content path should not populate blocks)", len(m.ContentBlocks))
+	}
+}
+
 // TestNormalizeChatRequestCapturesResponseFormat verifies the
 // inbound parser preserves the structured-output knob onto
 // ChatRequest. Without this, the OpenAI provider has nothing to
@@ -366,7 +517,7 @@ func TestNormalizeChatRequestCapturesResponseFormat(t *testing.T) {
 	hi := "hi"
 	req := OpenAIChatCompletionRequest{
 		Model:          "gpt-4o-mini",
-		Messages:       []OpenAIChatMessage{{Role: "user", Content: &hi}},
+		Messages:       []OpenAIChatMessage{{Role: "user", Content: OpenAIMessageContent{Text: hi}}},
 		ResponseFormat: rf,
 	}
 	internal, err := normalizeChatRequest(req, "req-1", auth.Principal{})

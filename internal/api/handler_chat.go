@@ -266,15 +266,19 @@ func (h *Handler) applySessionSystemPrompt(ctx context.Context, req *types.ChatR
 func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
 	messages := make([]types.Message, 0, len(req.Messages))
 	for _, msg := range req.Messages {
-		content := ""
-		if msg.Content != nil {
-			content = *msg.Content
-		}
+		// Content can be a plain string OR an array of content
+		// blocks (multi-modal: text + image_url). The string form
+		// stays in Message.Content for legacy code paths; the array
+		// form additionally populates ContentBlocks so the outbound
+		// adapter can reconstruct the structured wire shape.
 		m := types.Message{
 			Role:       msg.Role,
-			Content:    content,
+			Content:    msg.Content.AsString(),
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,
+		}
+		if len(msg.Content.Blocks) > 0 {
+			m.ContentBlocks = openAIInboundBlocksToContentBlocks(msg.Content.Blocks)
 		}
 		if len(msg.ToolCalls) > 0 {
 			m.ToolCalls = make([]types.ToolCall, 0, len(msg.ToolCalls))
@@ -347,7 +351,8 @@ func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletion
 			Name: choice.Message.Name,
 		}
 		if len(choice.Message.ToolCalls) > 0 {
-			// null content is correct when tool_calls are present
+			// OpenAI requires content: null when tool_calls is set.
+			msg.Content = OpenAIMessageContent{Null: true}
 			msg.ToolCalls = make([]OpenAIToolCall, 0, len(choice.Message.ToolCalls))
 			for _, tc := range choice.Message.ToolCalls {
 				msg.ToolCalls = append(msg.ToolCalls, OpenAIToolCall{
@@ -360,8 +365,7 @@ func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletion
 				})
 			}
 		} else {
-			c := choice.Message.Content
-			msg.Content = &c
+			msg.Content = OpenAIMessageContent{Text: choice.Message.Content}
 		}
 		choices = append(choices, OpenAIChatCompletionChoice{
 			Index:        choice.Index,
@@ -414,11 +418,48 @@ func messageToWire(msg types.Message) OpenAIChatMessage {
 				},
 			})
 		}
+		// OpenAI requires assistant + tool_calls messages to carry
+		// content: null on the wire. The marshaller honors the
+		// Null flag.
+		wire.Content = OpenAIMessageContent{Null: true}
 	} else {
-		c := msg.Content
-		wire.Content = &c
+		wire.Content = OpenAIMessageContent{Text: msg.Content}
 	}
 	return wire
+}
+
+// openAIInboundBlocksToContentBlocks converts the inbound OpenAI
+// content-block array into the internal types.ContentBlock shape.
+// Text blocks land as text; image_url blocks land as Type="image_url"
+// with the URL/Detail packed into ContentImage. Unknown block
+// types pass through with Type set so the outbound adapter can
+// either re-emit or warn-and-drop.
+func openAIInboundBlocksToContentBlocks(blocks []OpenAIContentBlock) []types.ContentBlock {
+	out := make([]types.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text", "":
+			out = append(out, types.ContentBlock{
+				Type: "text",
+				Text: b.Text,
+			})
+		case "image_url":
+			cb := types.ContentBlock{Type: "image_url"}
+			if b.ImageURL != nil {
+				cb.Image = &types.ContentImage{
+					URL:    b.ImageURL.URL,
+					Detail: b.ImageURL.Detail,
+				}
+			}
+			out = append(out, cb)
+		default:
+			// Forward unknown variants so future block types
+			// (audio, file, video) survive the round-trip; the
+			// outbound adapter decides whether to ship them.
+			out = append(out, types.ContentBlock{Type: b.Type})
+		}
+	}
+	return out
 }
 
 func modelAllowedForPrincipal(principal auth.Principal, provider, model string) bool {

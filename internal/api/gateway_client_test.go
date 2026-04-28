@@ -273,8 +273,8 @@ func TestCodexClientNonStreaming(t *testing.T) {
 	if len(completion.Choices) != 1 {
 		t.Fatalf("choices len = %d, want 1", len(completion.Choices))
 	}
-	if completion.Choices[0].Message.Content == nil || *completion.Choices[0].Message.Content != "4" {
-		t.Errorf("choices[0].message.content = %v, want \"4\"", completion.Choices[0].Message.Content)
+	if got := completion.Choices[0].Message.Content.AsString(); got != "4" {
+		t.Errorf("choices[0].message.content = %q, want \"4\"", got)
 	}
 	if completion.Choices[0].FinishReason != "stop" {
 		t.Errorf("finish_reason = %q, want stop", completion.Choices[0].FinishReason)
@@ -1056,8 +1056,8 @@ func TestGatewayViaRealProviderNonStreaming(t *testing.T) {
 	if len(completion.Choices) == 0 {
 		t.Fatal("choices is empty")
 	}
-	if completion.Choices[0].Message.Content == nil || !strings.Contains(*completion.Choices[0].Message.Content, "42") {
-		t.Errorf("content = %v, want text containing 42", completion.Choices[0].Message.Content)
+	if got := completion.Choices[0].Message.Content.AsString(); !strings.Contains(got, "42") {
+		t.Errorf("content = %q, want text containing 42", got)
 	}
 
 	// Gateway must set X-Runtime-Provider even when using the real provider.

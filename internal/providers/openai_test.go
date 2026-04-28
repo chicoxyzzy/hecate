@@ -42,7 +42,7 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 		if wireReq.Model != "gpt-4o-mini" {
 			return nil, fmt.Errorf("model = %q, want %q", wireReq.Model, "gpt-4o-mini")
 		}
-		if len(wireReq.Messages) != 1 || wireReq.Messages[0].Content == nil || *wireReq.Messages[0].Content != "hello" {
+		if len(wireReq.Messages) != 1 || wireReq.Messages[0].Content.AsString() != "hello" {
 			return nil, fmt.Errorf("messages = %#v, want one hello message", wireReq.Messages)
 		}
 
@@ -55,7 +55,7 @@ func TestOpenAIProviderChatUpstream(t *testing.T) {
 					Index: 0,
 					Message: openAIChatMessage{
 						Role:    "assistant",
-						Content: strPtr("world"),
+						Content: openAIMessageContent{Text: "world"},
 					},
 					FinishReason: "stop",
 				},
@@ -371,7 +371,7 @@ func TestOpenAIProviderCapturesCachedTokens(t *testing.T) {
 			Model:   "gpt-4o-mini",
 			Choices: []openAIChatCompletionChoice{{
 				Index:        0,
-				Message:      openAIChatMessage{Role: "assistant", Content: strPtr("ok")},
+				Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: "ok"}},
 				FinishReason: "stop",
 			}},
 			Usage: openAIUsage{
@@ -412,6 +412,138 @@ func TestOpenAIProviderCapturesCachedTokens(t *testing.T) {
 	}
 	if got := resp.Usage.PromptTokens; got != 100 {
 		t.Errorf("PromptTokens = %d, want 100 (unchanged)", got)
+	}
+}
+
+// TestOpenAIProviderForwardsImageBlocks pins multi-modal
+// passthrough on the outbound OpenAI wire. When a ChatRequest's
+// Message has ContentBlocks containing an image_url block, the
+// outbound `content` field is the array form (not flattened to
+// string) so the upstream sees the structured payload.
+func TestOpenAIProviderForwardsImageBlocks(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1/chat/completions" || r.Body == nil {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
+		}
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(openAIChatCompletionResponse{
+			ID: "x", Model: "gpt-4o-mini",
+			Choices: []openAIChatCompletionChoice{{
+				Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: "ok"}},
+				FinishReason: "stop",
+			}},
+			Usage: openAIUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})
+	provider := NewOpenAIProvider(config.OpenAICompatibleProviderConfig{
+		Name: "openai", Kind: "cloud", BaseURL: "https://example.test",
+		APIKey: "k", Timeout: time.Second, DefaultModel: "gpt-4o-mini",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	provider.httpClient.Transport = transport
+	provider.cachedCaps = Capabilities{
+		Name: "openai", Kind: KindCloud,
+		DefaultModel: "gpt-4o-mini",
+		Models:       []string{"gpt-4o-mini"},
+	}
+	provider.capsExpiry = time.Now().Add(time.Minute)
+
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []types.Message{{
+			Role:    "user",
+			Content: "describe this",
+			ContentBlocks: []types.ContentBlock{
+				{Type: "text", Text: "describe this"},
+				{Type: "image_url", Image: &types.ContentImage{URL: "https://example.com/x.png", Detail: "low"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs, _ := captured["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	first, _ := msgs[0].(map[string]any)
+	contentArr, ok := first["content"].([]any)
+	if !ok {
+		t.Fatalf("content was not an array (multi-modal path didn't trigger): %v", first["content"])
+	}
+	if len(contentArr) != 2 {
+		t.Fatalf("content blocks = %d, want 2", len(contentArr))
+	}
+	imgBlock, _ := contentArr[1].(map[string]any)
+	if imgBlock["type"] != "image_url" {
+		t.Errorf("blocks[1].type = %v, want image_url", imgBlock["type"])
+	}
+	if imgURL, _ := imgBlock["image_url"].(map[string]any); imgURL["url"] != "https://example.com/x.png" || imgURL["detail"] != "low" {
+		t.Errorf("blocks[1].image_url = %+v, want URL+detail", imgBlock["image_url"])
+	}
+}
+
+// TestOpenAIProviderTextOnlyBlocksFlattenToString pins the compact
+// behavior: when ContentBlocks contains only text blocks (no
+// images), the outbound wire form is the plain string content,
+// NOT the array form. This keeps payloads small and avoids
+// surprising downstream OpenAI-compat endpoints (older Ollama,
+// llama.cpp) that only accept string content.
+func TestOpenAIProviderTextOnlyBlocksFlattenToString(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1/chat/completions" || r.Body == nil {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
+		}
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(openAIChatCompletionResponse{
+			ID: "x", Model: "gpt-4o-mini",
+			Choices: []openAIChatCompletionChoice{{
+				Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: "ok"}},
+				FinishReason: "stop",
+			}},
+			Usage: openAIUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})
+	provider := NewOpenAIProvider(config.OpenAICompatibleProviderConfig{
+		Name: "openai", Kind: "cloud", BaseURL: "https://example.test",
+		APIKey: "k", Timeout: time.Second, DefaultModel: "gpt-4o-mini",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	provider.httpClient.Transport = transport
+	provider.cachedCaps = Capabilities{
+		Name: "openai", Kind: KindCloud,
+		DefaultModel: "gpt-4o-mini",
+		Models:       []string{"gpt-4o-mini"},
+	}
+	provider.capsExpiry = time.Now().Add(time.Minute)
+
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []types.Message{{
+			Role:          "user",
+			Content:       "hello",
+			ContentBlocks: []types.ContentBlock{{Type: "text", Text: "hello"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs, _ := captured["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	if got, ok := first["content"].(string); !ok || got != "hello" {
+		t.Errorf("content was not the string form: %T %v", first["content"], first["content"])
 	}
 }
 
@@ -480,7 +612,7 @@ func TestOpenAIProviderForwardsTier2Passthroughs(t *testing.T) {
 				body, _ := json.Marshal(openAIChatCompletionResponse{
 					ID: "x", Model: "gpt-4o-mini",
 					Choices: []openAIChatCompletionChoice{{
-						Message:      openAIChatMessage{Role: "assistant", Content: strPtr("ok")},
+						Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: "ok"}},
 						FinishReason: "stop",
 					}},
 					Usage: openAIUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
@@ -566,7 +698,7 @@ func TestOpenAIProviderForwardsResponseFormat(t *testing.T) {
 					Model: "gpt-4o-mini",
 					Choices: []openAIChatCompletionChoice{{
 						Index:        0,
-						Message:      openAIChatMessage{Role: "assistant", Content: strPtr("{}")},
+						Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: "{}"}},
 						FinishReason: "stop",
 					}},
 					Usage: openAIUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},

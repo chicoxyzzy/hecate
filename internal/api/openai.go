@@ -1,6 +1,97 @@
 package api
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// OpenAIMessageContent is the polymorphic OpenAI message-content
+// value. The wire shape is one of:
+//   - JSON string ("Hello")
+//   - JSON array of blocks ([{type:"text",text:"..."},{type:"image_url",image_url:{url:"..."}}])
+//   - JSON null (assistant message paired with tool_calls)
+//
+// We unmarshal both shapes into this struct and re-marshal to the
+// more specific form: blocks → array, otherwise string. Null is
+// preserved (used for assistant messages with tool_calls — OpenAI's
+// API requires a literal null there, not an empty string).
+type OpenAIMessageContent struct {
+	Text   string
+	Blocks []OpenAIContentBlock
+	// Null records whether the wire value was an explicit null.
+	// Distinguished from an empty Text so the response renderer
+	// emits null (not "") on assistant + tool_calls turns.
+	Null bool
+}
+
+func (c *OpenAIMessageContent) UnmarshalJSON(data []byte) error {
+	*c = OpenAIMessageContent{}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		c.Null = true
+		return nil
+	}
+	switch trimmed[0] {
+	case '"':
+		return json.Unmarshal(data, &c.Text)
+	case '[':
+		return json.Unmarshal(data, &c.Blocks)
+	}
+	return fmt.Errorf("content must be string, array, or null")
+}
+
+func (c OpenAIMessageContent) MarshalJSON() ([]byte, error) {
+	if c.Null {
+		return []byte("null"), nil
+	}
+	if len(c.Blocks) > 0 {
+		return json.Marshal(c.Blocks)
+	}
+	return json.Marshal(c.Text)
+}
+
+// AsString flattens content into a single text string. Block-form
+// content concatenates text-typed blocks with double newlines;
+// non-text blocks (images) are skipped — callers that need the
+// structured form should walk Blocks directly.
+func (c OpenAIMessageContent) AsString() string {
+	if c.Text != "" {
+		return c.Text
+	}
+	parts := make([]string, 0, len(c.Blocks))
+	for _, b := range c.Blocks {
+		if (b.Type == "text" || b.Type == "") && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// OpenAIContentBlock is one element of the array form of message
+// content. OpenAI today defines two block types in this position:
+//   - {type:"text", text:"..."}
+//   - {type:"image_url", image_url:{url:"...", detail:"low|high|auto"}}
+//
+// Audio / file / video blocks land here too as the API grows; the
+// struct accepts unknown variants by leaving non-recognized fields
+// untouched (the JSON layer drops them but the Type is preserved
+// so the inbound parser can still warn-and-skip cleanly).
+type OpenAIContentBlock struct {
+	Type     string                 `json:"type"`
+	Text     string                 `json:"text,omitempty"`
+	ImageURL *OpenAIContentImageURL `json:"image_url,omitempty"`
+}
+
+// OpenAIContentImageURL mirrors OpenAI's image_url object. URL is
+// either a public https:// URL or a `data:image/...;base64,...`
+// data URI. Detail is a sampling hint ("low" | "high" | "auto");
+// upstream defaults to "auto" when absent.
+type OpenAIContentImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
 
 type OpenAIChatCompletionRequest struct {
 	Model        string              `json:"model"`
@@ -54,11 +145,13 @@ type OpenAIToolCallFunction struct {
 }
 
 type OpenAIChatMessage struct {
-	Role       string           `json:"role"`
-	Content    *string          `json:"content"`
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	Role string `json:"role"`
+	// Content accepts string, array of blocks, or null. See
+	// OpenAIMessageContent for the unmarshal contract.
+	Content    OpenAIMessageContent `json:"content"`
+	Name       string               `json:"name,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
+	ToolCalls  []OpenAIToolCall     `json:"tool_calls,omitempty"`
 }
 
 type OpenAIChatCompletionResponse struct {

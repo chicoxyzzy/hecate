@@ -80,6 +80,12 @@ type anthropicContentBlock struct {
 	// IsError flags a tool_result as a failed tool call. Anthropic
 	// uses it to feed clearer failure context to the model.
 	IsError bool `json:"is_error,omitempty"`
+	// Source carries the image payload for type=="image" blocks.
+	// Anthropic accepts {type:"url", url:"..."} or
+	// {type:"base64", media_type:"image/png", data:"..."}.
+	// We use json.RawMessage so the builder can pick either shape
+	// without a typed union.
+	Source json.RawMessage `json:"source,omitempty"`
 	// prompt caching
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 	// extended thinking
@@ -679,6 +685,24 @@ func contentBlocksToAnthropicBlocks(cbs []types.ContentBlock) []anthropicContent
 				Type: "redacted_thinking",
 				Data: cb.Data,
 			})
+		case "image_url", "image":
+			// Translate OpenAI's image_url shape (and the
+			// internal `image` shape used by the Anthropic-
+			// inbound path) into Anthropic's image block on the
+			// wire. The internal ContentImage struct unifies
+			// both upstreams' source formats — we just pick
+			// between url and base64 based on which field is
+			// populated.
+			if source := buildAnthropicImageSource(cb.Image); source != nil {
+				out = append(out, anthropicContentBlock{
+					Type:         "image",
+					Source:       source,
+					CacheControl: cb.CacheControl,
+				})
+			}
+			// If Image is nil or unrenderable, drop the block
+			// silently — sending an image type with no source
+			// would 400 the upstream.
 		// tool_result is handled via the "tool" role path, not content blocks
 		default:
 			// pass unknown block types through verbatim so they reach the upstream
@@ -689,6 +713,113 @@ func contentBlocksToAnthropicBlocks(cbs []types.ContentBlock) []anthropicContent
 		}
 	}
 	return out
+}
+
+// buildAnthropicImageSource maps the unified ContentImage shape to
+// Anthropic's image source object. Returns nil when the source has
+// neither a URL nor base64 data — caller drops the block in that
+// case (sending an image with no source would 400 the upstream).
+//
+// Two output shapes:
+//   - {type: "url", url: "https://..."} — for url-referenced images.
+//     If the URL is a data: URI, we parse it into the base64 form
+//     instead so older Anthropic API versions (which only accepted
+//     base64) keep working.
+//   - {type: "base64", media_type: "image/png", data: "..."}
+//     — for inline base64 content.
+func buildAnthropicImageSource(img *types.ContentImage) json.RawMessage {
+	if img == nil {
+		return nil
+	}
+	// Inline base64 takes precedence when both fields are set —
+	// it's the more specific representation.
+	if img.Data != "" {
+		mediaType := img.MediaType
+		if mediaType == "" {
+			// Anthropic requires a media_type. Default to
+			// image/png when the caller didn't set one — the
+			// upstream rejects with a clear error if the
+			// payload doesn't actually match, so a wrong
+			// default is at worst an actionable error rather
+			// than silent corruption.
+			mediaType = "image/png"
+		}
+		raw, err := json.Marshal(map[string]any{
+			"type":       "base64",
+			"media_type": mediaType,
+			"data":       img.Data,
+		})
+		if err != nil {
+			return nil
+		}
+		return raw
+	}
+	if img.URL != "" {
+		// Data URIs (data:image/png;base64,...) are common in
+		// OpenAI flows. Convert to Anthropic's base64 form
+		// inline so the upstream doesn't have to fetch a
+		// pseudo-URL.
+		if strings.HasPrefix(img.URL, "data:") {
+			mediaType, data := parseDataURI(img.URL)
+			if data != "" {
+				if mediaType == "" {
+					mediaType = "image/png"
+				}
+				raw, err := json.Marshal(map[string]any{
+					"type":       "base64",
+					"media_type": mediaType,
+					"data":       data,
+				})
+				if err == nil {
+					return raw
+				}
+			}
+		}
+		raw, err := json.Marshal(map[string]any{
+			"type": "url",
+			"url":  img.URL,
+		})
+		if err != nil {
+			return nil
+		}
+		return raw
+	}
+	return nil
+}
+
+// parseDataURI extracts media-type and base64 payload from a
+// `data:image/png;base64,iVBOR...` URI. Returns empty strings on
+// any malformed input — the caller falls back to passing the URL
+// through verbatim, which lets newer Anthropic API versions that
+// accept data URIs handle it themselves.
+func parseDataURI(uri string) (mediaType, data string) {
+	if !strings.HasPrefix(uri, "data:") {
+		return "", ""
+	}
+	rest := uri[len("data:"):]
+	commaIdx := strings.IndexByte(rest, ',')
+	if commaIdx < 0 {
+		return "", ""
+	}
+	meta := rest[:commaIdx]
+	payload := rest[commaIdx+1:]
+	// meta is "image/png;base64" or "text/plain;charset=utf-8".
+	// We only support base64 for image data.
+	parts := strings.Split(meta, ";")
+	if len(parts) == 0 {
+		return "", ""
+	}
+	mediaType = parts[0]
+	hasBase64 := false
+	for _, p := range parts[1:] {
+		if strings.EqualFold(p, "base64") {
+			hasBase64 = true
+		}
+	}
+	if !hasBase64 {
+		return "", ""
+	}
+	return mediaType, payload
 }
 
 // toolResultBlock converts a tool-role message into a tool_result content block.

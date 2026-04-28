@@ -1,4 +1,5 @@
 .env
+.claude/
 # Default GATEWAY_DATA_DIR for local dev. Holds the auto-generated
 # bootstrap file (AES-GCM control-plane key + admin bearer token, mode
 # 0600). Never commit it.

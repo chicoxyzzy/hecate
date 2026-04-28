@@ -151,16 +151,16 @@ func TestOpenAIProviderSendsToolResultAsToolRoleMessage(t *testing.T) {
 	if toolMsg.ToolCallID != "call_xyz" {
 		t.Fatalf("messages[2].tool_call_id = %q, want call_xyz", toolMsg.ToolCallID)
 	}
-	if toolMsg.Content == nil || !strings.Contains(*toolMsg.Content, "celsius") {
-		t.Fatalf("messages[2].content = %v, want tool result JSON", toolMsg.Content)
+	if got := toolMsg.Content.AsString(); !strings.Contains(got, "celsius") {
+		t.Fatalf("messages[2].content = %q, want tool result JSON containing celsius", got)
 	}
-	// assistant message must have tool_calls, nil content.
+	// assistant message must have tool_calls, JSON-null content.
 	assistMsg := capturedBody.Messages[1]
 	if len(assistMsg.ToolCalls) != 1 {
 		t.Fatalf("messages[1].tool_calls count = %d, want 1", len(assistMsg.ToolCalls))
 	}
-	if assistMsg.Content != nil {
-		t.Fatalf("messages[1].content = %v, want nil for tool_calls message", assistMsg.Content)
+	if !assistMsg.Content.Null {
+		t.Fatalf("messages[1].content = %q (Null=%v), want JSON null for tool_calls message", assistMsg.Content.AsString(), assistMsg.Content.Null)
 	}
 }
 
@@ -484,14 +484,13 @@ func openAIToolCallResponse(t *testing.T, callID, fnName, args string) *http.Res
 
 func openAITextResponse(t *testing.T, text string) *http.Response {
 	t.Helper()
-	c := text
 	resp := openAIChatCompletionResponse{
 		ID:    "chatcmpl-text",
 		Model: "gpt-4o-mini",
 		Choices: []openAIChatCompletionChoice{{
 			Index:        0,
 			FinishReason: "stop",
-			Message:      openAIChatMessage{Role: "assistant", Content: &c},
+			Message:      openAIChatMessage{Role: "assistant", Content: openAIMessageContent{Text: text}},
 		}},
 		Usage: openAIUsage{PromptTokens: 40, CompletionTokens: 10, TotalTokens: 50},
 	}
