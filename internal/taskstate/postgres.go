@@ -587,6 +587,49 @@ func (s *PostgresStore) ListEvents(ctx context.Context, filter EventFilter) ([]t
 	return items, rows.Err()
 }
 
+// PruneTurnEvents drops `agent.turn.completed` rows older than maxAge
+// or, when maxCount > 0, beyond the most recent maxCount rows
+// (ordered by sequence DESC). Other event types are preserved.
+func (s *PostgresStore) PruneTurnEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := int64(0)
+
+	if maxAge > 0 {
+		result, err := s.db.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE event_type = 'agent.turn.completed' AND created_at < $1`, s.eventsTable),
+			time.Now().Add(-maxAge).UTC(),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("delete aged postgres turn events: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	if maxCount > 0 {
+		// Keep the most-recent maxCount rows of this event type and
+		// delete the rest. Ordering by sequence DESC mirrors what
+		// ListEvents does — sequence is monotonically increasing.
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE event_type = 'agent.turn.completed'
+			  AND sequence IN (
+			    SELECT sequence
+			    FROM %s
+			    WHERE event_type = 'agent.turn.completed'
+			    ORDER BY sequence DESC
+			    OFFSET $1
+			  )
+		`, s.eventsTable, s.eventsTable), maxCount)
+		if err != nil {
+			return 0, fmt.Errorf("enforce postgres turn-event max count: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	return int(deleted), nil
+}
+
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	statements := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id TEXT PRIMARY KEY, tenant TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), payload JSONB NOT NULL)`, s.tasksTable),

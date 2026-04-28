@@ -194,6 +194,9 @@ func main() {
 	budgetStore := buildBudgetStore(cfg, logger, postgresClient, sqliteClient)
 	chatSessionStore := buildChatSessionStore(cfg, logger, postgresClient, sqliteClient)
 	retentionHistoryStore := buildRetentionHistoryStore(cfg, logger, postgresClient, sqliteClient)
+	// Build the task-state store before the retention manager so the
+	// turn-events sweep can target its events table directly.
+	taskStore := buildTaskStore(cfg, logger, postgresClient, sqliteClient)
 	retentionManager := retention.NewManager(
 		logger,
 		cfg.Retention,
@@ -203,6 +206,7 @@ func main() {
 		controlPlaneStore,
 		pruneableExactCache(cacheStore),
 		pruneableSemanticCache(semanticStore),
+		taskStore,
 		retentionHistoryStore,
 	)
 	providerCatalog := catalog.NewRegistryCatalogWithSelfAddr(providerRegistry, healthTracker, cfg.Server.Address)
@@ -233,7 +237,6 @@ func main() {
 	defer retentionCancel()
 	go retentionManager.RunLoop(retentionCtx)
 
-	taskStore := buildTaskStore(cfg, logger, postgresClient, sqliteClient)
 	taskQueue := buildTaskQueue(cfg, logger, postgresClient, sqliteClient)
 
 	// Pricebook auto-import scheduler. Enabled when the operator sets

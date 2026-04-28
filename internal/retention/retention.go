@@ -18,6 +18,12 @@ const (
 	SubsystemAuditEvents   = "audit_events"
 	SubsystemExactCache    = "exact_cache"
 	SubsystemSemanticCache = "semantic_cache"
+	// SubsystemTurnEvents prunes the high-cardinality
+	// `agent.turn.completed` rows from the task-run events table.
+	// Other event types (run.started / run.finished / approval.*) are
+	// kept for forensics — turn events are bulk telemetry that's only
+	// useful while the run is hot.
+	SubsystemTurnEvents = "turn_events"
 )
 
 // Pruner prunes old or excess records from a subsystem store.
@@ -35,6 +41,13 @@ type AuditEventPruner interface {
 	PruneAuditEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
+// TurnEventPruner is implemented by task-state stores that support
+// pruning `agent.turn.completed` rows from the run-events table.
+// Other event types are not touched.
+type TurnEventPruner interface {
+	PruneTurnEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
+}
+
 // CachePruner is an alias kept for compatibility with callers that type-assert cache stores.
 type CachePruner = Pruner
 
@@ -48,6 +61,12 @@ type auditPrunerAdapter struct{ p AuditEventPruner }
 
 func (a auditPrunerAdapter) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
 	return a.p.PruneAuditEvents(ctx, maxAge, maxCount)
+}
+
+type turnEventPrunerAdapter struct{ p TurnEventPruner }
+
+func (a turnEventPrunerAdapter) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	return a.p.PruneTurnEvents(ctx, maxAge, maxCount)
 }
 
 type subsystemEntry struct {
@@ -96,6 +115,7 @@ func NewManager(
 	audit AuditEventPruner,
 	exact Pruner,
 	semantic Pruner,
+	turnEvents TurnEventPruner,
 	history HistoryStore,
 ) *Manager {
 	var budgetsPruner Pruner
@@ -105,6 +125,10 @@ func NewManager(
 	var auditPruner Pruner
 	if audit != nil {
 		auditPruner = auditPrunerAdapter{audit}
+	}
+	var turnEventsPruner Pruner
+	if turnEvents != nil {
+		turnEventsPruner = turnEventPrunerAdapter{turnEvents}
 	}
 	return &Manager{
 		logger: logger,
@@ -116,6 +140,7 @@ func NewManager(
 			{SubsystemAuditEvents, cfg.AuditEvents, auditPruner},
 			{SubsystemExactCache, cfg.ExactCache, exact},
 			{SubsystemSemanticCache, cfg.SemanticCache, semantic},
+			{SubsystemTurnEvents, cfg.TurnEvents, turnEventsPruner},
 		},
 		history: history,
 	}

@@ -255,6 +255,17 @@ Retention manager runs emit events under the `retention.run` span:
 | `retention.history.persisted` | Run record written to history store |
 | `retention.history.failed` | History write failed |
 
+The retention worker handles the following subsystems (each with a `GATEWAY_RETENTION_<NAME>_MAX_AGE` / `_MAX_COUNT` knob — see `.env.example`):
+
+| Subsystem | What it prunes |
+|---|---|
+| `trace_snapshots` | Per-request profiler trace snapshots |
+| `budget_events` | Governor budget ledger entries |
+| `audit_events` | Control-plane audit log |
+| `exact_cache` | Exact-match response cache |
+| `semantic_cache` | Semantic-similarity response cache |
+| `turn_events` | `agent.turn.completed` rows in the run-events table — high-cardinality bulk telemetry from agent_loop runs. Other event types (`run.started`, `run.finished`, `approval.*`) are never touched |
+
 ## Metrics
 
 ### Gateway Metrics

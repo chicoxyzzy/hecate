@@ -511,12 +511,19 @@ func (s *SQLiteStore) AppendRunEvent(ctx context.Context, event types.TaskRunEve
 	// modernc.org/sqlite ships SQLite >= 3.35, so RETURNING works. We
 	// could also use LastInsertId() here, but RETURNING keeps the shape
 	// identical to the Postgres analog.
+	//
+	// We format the timestamp as RFC3339Nano text rather than binding a
+	// time.Time directly: the driver's default time-to-text mapping
+	// (`2006-01-02 15:04:05.999999999 -0700 MST`) doesn't lex-compare
+	// with RFC3339Nano cutoffs, which breaks the retention sweep.
+	// RFC3339Nano sorts chronologically when both sides use UTC, and
+	// it round-trips through parseSQLiteTime cleanly.
 	var id int64
 	err = s.db.QueryRowContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (task_id, run_id, event_type, event_data, request_id, trace_id, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		RETURNING sequence
-	`, s.eventsTable), event.TaskID, event.RunID, event.EventType, string(payload), event.RequestID, event.TraceID, event.CreatedAt).Scan(&id)
+	`, s.eventsTable), event.TaskID, event.RunID, event.EventType, string(payload), event.RequestID, event.TraceID, event.CreatedAt.UTC().Format(time.RFC3339Nano)).Scan(&id)
 	if err != nil {
 		return types.TaskRunEvent{}, err
 	}
@@ -618,6 +625,53 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, filter EventFilter) ([]typ
 		items = append(items, event)
 	}
 	return items, rows.Err()
+}
+
+// PruneTurnEvents drops `agent.turn.completed` rows older than maxAge
+// or, when maxCount > 0, beyond the most recent maxCount rows
+// (ordered by sequence DESC). Other event types are preserved.
+func (s *SQLiteStore) PruneTurnEvents(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := int64(0)
+
+	if maxAge > 0 {
+		cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+		// created_at is stored as RFC3339Nano text; lexicographic
+		// comparison matches chronological ordering within a single
+		// timezone (we always write UTC).
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE event_type = 'agent.turn.completed' AND created_at < ?
+		`, s.eventsTable), cutoff)
+		if err != nil {
+			return 0, fmt.Errorf("delete aged sqlite turn events: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	if maxCount > 0 {
+		// Mirrors the cache_sqlite trick: keep the most-recent N rows
+		// of this event type and delete the rest. LIMIT -1 OFFSET ?
+		// returns "all rows starting at index maxCount" — the tail.
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE event_type = 'agent.turn.completed'
+			  AND sequence IN (
+			    SELECT sequence
+			    FROM %s
+			    WHERE event_type = 'agent.turn.completed'
+			    ORDER BY sequence DESC
+			    LIMIT -1 OFFSET ?
+			  )
+		`, s.eventsTable, s.eventsTable), maxCount)
+		if err != nil {
+			return 0, fmt.Errorf("enforce sqlite turn-event max count: %w", err)
+		}
+		count, _ := result.RowsAffected()
+		deleted += count
+	}
+
+	return int(deleted), nil
 }
 
 // sqlitePlaceholders returns "?, ?, ?" for n placeholders. Keeps the

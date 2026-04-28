@@ -183,6 +183,10 @@ type RetentionConfig struct {
 	AuditEvents    RetentionPolicy
 	ExactCache     RetentionPolicy
 	SemanticCache  RetentionPolicy
+	// TurnEvents prunes `agent.turn.completed` rows from the
+	// task-run events table. Other event types (run.started/finished,
+	// approval.*) are kept for forensics.
+	TurnEvents RetentionPolicy
 }
 
 type RetentionPolicy struct {
@@ -423,6 +427,11 @@ func LoadFromEnv() Config {
 			AuditEvents:    loadRetentionPolicyFromEnv("GATEWAY_RETENTION_AUDIT_EVENTS_", 30*24*time.Hour, 500),
 			ExactCache:     loadRetentionPolicyFromEnv("GATEWAY_RETENTION_EXACT_CACHE_", 24*time.Hour, 10_000),
 			SemanticCache:  loadRetentionPolicyFromEnv("GATEWAY_RETENTION_SEMANTIC_CACHE_", 7*24*time.Hour, 10_000),
+			// agent.turn.completed events accumulate fast on long
+			// agent runs (one per LLM round-trip). 7d/100k is a
+			// generous default for a single-tenant operator; tune
+			// down on busy multi-tenant deployments.
+			TurnEvents: loadRetentionPolicyFromEnv("GATEWAY_RETENTION_TURN_EVENTS_", 7*24*time.Hour, 100_000),
 		},
 		Postgres: PostgresConfig{
 			DSN:          getEnv("POSTGRES_DSN", ""),

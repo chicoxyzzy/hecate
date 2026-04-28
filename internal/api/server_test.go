@@ -3351,6 +3351,7 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 		nil,
 		nil,
 		nil,
+		nil,
 		retention.NewMemoryHistoryStore(),
 	)
 	service := gateway.NewService(gateway.Dependencies{

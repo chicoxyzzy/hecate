@@ -462,3 +462,88 @@ func (s *MemoryStore) ListEvents(_ context.Context, filter EventFilter) ([]types
 	}
 	return result, nil
 }
+
+// PruneTurnEvents removes `agent.turn.completed` rows older than
+// maxAge or, if maxCount > 0, beyond the most recent maxCount rows
+// (counted globally across all runs). Returns the number of rows
+// removed. Other event types are preserved.
+//
+// Both bounds are evaluated additively — i.e. a row is dropped if it
+// fails *either* the age check (when maxAge > 0) or the count check
+// (when maxCount > 0). With both zero, this is a no-op.
+func (s *MemoryStore) PruneTurnEvents(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := time.Time{}
+	if maxAge > 0 {
+		cutoff = time.Now().UTC().Add(-maxAge)
+	}
+
+	// Pass 1: drop rows older than cutoff. Track surviving turn rows so
+	// pass 2 can apply a global most-recent-N cap by sequence.
+	type turnRef struct {
+		runID    string
+		idx      int
+		sequence int64
+	}
+	survivingTurns := make([]turnRef, 0)
+	deleted := 0
+	for runID, list := range s.events {
+		kept := list[:0]
+		for _, evt := range list {
+			if evt.EventType == "agent.turn.completed" && maxAge > 0 && evt.CreatedAt.Before(cutoff) {
+				deleted++
+				continue
+			}
+			kept = append(kept, evt)
+			if evt.EventType == "agent.turn.completed" {
+				survivingTurns = append(survivingTurns, turnRef{
+					runID:    runID,
+					idx:      len(kept) - 1,
+					sequence: evt.Sequence,
+				})
+			}
+		}
+		// Zero out slack so the GC can reclaim the dropped events.
+		for i := len(kept); i < len(list); i++ {
+			list[i] = types.TaskRunEvent{}
+		}
+		s.events[runID] = kept
+	}
+
+	if maxCount > 0 && len(survivingTurns) > maxCount {
+		sort.Slice(survivingTurns, func(i, j int) bool {
+			// Newest first so we can drop the tail.
+			return survivingTurns[i].sequence > survivingTurns[j].sequence
+		})
+		// Mark old ones for deletion.
+		toDrop := survivingTurns[maxCount:]
+		dropSet := make(map[string]map[int64]struct{}, len(toDrop))
+		for _, ref := range toDrop {
+			if _, ok := dropSet[ref.runID]; !ok {
+				dropSet[ref.runID] = make(map[int64]struct{})
+			}
+			dropSet[ref.runID][ref.sequence] = struct{}{}
+		}
+		for runID, seqs := range dropSet {
+			list := s.events[runID]
+			kept := list[:0]
+			for _, evt := range list {
+				if evt.EventType == "agent.turn.completed" {
+					if _, ok := seqs[evt.Sequence]; ok {
+						deleted++
+						continue
+					}
+				}
+				kept = append(kept, evt)
+			}
+			for i := len(kept); i < len(list); i++ {
+				list[i] = types.TaskRunEvent{}
+			}
+			s.events[runID] = kept
+		}
+	}
+
+	return deleted, nil
+}

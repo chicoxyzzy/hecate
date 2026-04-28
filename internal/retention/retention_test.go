@@ -29,6 +29,12 @@ func (f fakeCachePruner) Prune(context.Context, time.Duration, int) (int, error)
 	return f.deleted, nil
 }
 
+type fakeTurnEventPruner struct{ deleted int }
+
+func (f fakeTurnEventPruner) PruneTurnEvents(context.Context, time.Duration, int) (int, error) {
+	return f.deleted, nil
+}
+
 func TestManagerRunFiltersSubsystems(t *testing.T) {
 	t.Parallel()
 
@@ -59,6 +65,10 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 				MaxAge:   time.Hour,
 				MaxCount: 10,
 			},
+			TurnEvents: config.RetentionPolicy{
+				MaxAge:   time.Hour,
+				MaxCount: 100,
+			},
 		},
 		tracer,
 		tracer,
@@ -66,6 +76,7 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 		fakeAuditPruner{deleted: 3},
 		fakeCachePruner{deleted: 4},
 		fakeCachePruner{deleted: 5},
+		fakeTurnEventPruner{deleted: 6},
 		NewMemoryHistoryStore(),
 	)
 
@@ -74,13 +85,13 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 
 	result := manager.Run(context.Background(), RunRequest{
 		Trigger:    "manual",
-		Subsystems: []string{SubsystemBudgetEvents, SubsystemExactCache},
+		Subsystems: []string{SubsystemBudgetEvents, SubsystemExactCache, SubsystemTurnEvents},
 	})
 	if result.Trigger != "manual" {
 		t.Fatalf("trigger = %q, want manual", result.Trigger)
 	}
-	if len(result.Results) != 5 {
-		t.Fatalf("results = %d, want 5", len(result.Results))
+	if len(result.Results) != 6 {
+		t.Fatalf("results = %d, want 6", len(result.Results))
 	}
 
 	if result.Results[1].Name != SubsystemBudgetEvents || result.Results[1].Deleted != 2 {
@@ -88,6 +99,9 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 	}
 	if result.Results[3].Name != SubsystemExactCache || result.Results[3].Deleted != 4 {
 		t.Fatalf("exact cache result = %#v, want exact cache deletion count 4", result.Results[3])
+	}
+	if result.Results[5].Name != SubsystemTurnEvents || result.Results[5].Deleted != 6 {
+		t.Fatalf("turn events result = %#v, want turn-event deletion count 6", result.Results[5])
 	}
 	if !result.Results[0].Skipped || !result.Results[2].Skipped || !result.Results[4].Skipped {
 		t.Fatalf("unexpected skip flags: %#v", result.Results)
@@ -110,6 +124,7 @@ func TestManagerRunPersistsHistory(t *testing.T) {
 			AuditEvents:    config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 5},
 			ExactCache:     config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 10},
 			SemanticCache:  config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 10},
+			TurnEvents:     config.RetentionPolicy{MaxAge: time.Hour, MaxCount: 100},
 		},
 		tracer,
 		tracer,
@@ -117,6 +132,7 @@ func TestManagerRunPersistsHistory(t *testing.T) {
 		fakeAuditPruner{deleted: 3},
 		fakeCachePruner{deleted: 4},
 		fakeCachePruner{deleted: 5},
+		fakeTurnEventPruner{deleted: 6},
 		history,
 	)
 
@@ -139,7 +155,7 @@ func TestManagerRunPersistsHistory(t *testing.T) {
 	if runs[0].RequestID != "req-1" {
 		t.Fatalf("request_id = %q, want req-1", runs[0].RequestID)
 	}
-	if len(runs[0].Results) != 5 {
-		t.Fatalf("results = %d, want 5", len(runs[0].Results))
+	if len(runs[0].Results) != 6 {
+		t.Fatalf("results = %d, want 6", len(runs[0].Results))
 	}
 }
