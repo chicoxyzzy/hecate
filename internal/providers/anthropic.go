@@ -435,23 +435,74 @@ func anthropicUsageToTypes(u anthropicUsage) types.Usage {
 	}
 }
 
-// warnResponseFormatDropped logs once per request when the caller
-// asked for OpenAI-style structured output but the route landed on
-// an Anthropic provider that has no direct equivalent. We don't
-// fail the request — the model usually still produces something
-// usable — but the operator deserves to know the constraint was
-// silently dropped. Operators wanting strict structured output on
-// Anthropic should use `tools` + `tool_choice` instead.
-func (p *AnthropicProvider) warnResponseFormatDropped(req types.ChatRequest) {
-	if len(req.ResponseFormat) == 0 || p.logger == nil {
+// warnUnsupportedFieldsDropped logs once per request when the
+// caller set OpenAI-specific knobs that have no Anthropic
+// equivalent. We don't fail the request — the model still produces
+// something usable — but the operator deserves to know the
+// constraint was silently dropped. Each entry below names the
+// field, includes its value in the log for diagnosability, and
+// hints at the right Anthropic-side equivalent (or notes there
+// is none).
+//
+// Centralized here rather than scattered across per-field calls
+// so adding a new passthrough is a one-line append: declare the
+// field on ChatRequest + add a case below.
+func (p *AnthropicProvider) warnUnsupportedFieldsDropped(req types.ChatRequest) {
+	if p.logger == nil {
 		return
 	}
-	p.logger.Warn("response_format dropped on Anthropic route",
-		slog.String("provider", p.Name()),
-		slog.String("model", req.Model),
-		slog.String("response_format", string(req.ResponseFormat)),
-		slog.String("hint", "Anthropic has no direct response_format equivalent; use tools + tool_choice for structured output"),
-	)
+	emit := func(field string, value any, hint string) {
+		p.logger.Warn("OpenAI-only field dropped on Anthropic route",
+			slog.String("provider", p.Name()),
+			slog.String("model", req.Model),
+			slog.String("field", field),
+			slog.Any("value", value),
+			slog.String("hint", hint),
+		)
+	}
+	if len(req.ResponseFormat) > 0 {
+		emit("response_format", string(req.ResponseFormat),
+			"Anthropic has no direct equivalent; use tools + tool_choice for structured output")
+	}
+	if req.Seed != nil {
+		emit("seed", *req.Seed,
+			"Anthropic has no deterministic-sampling knob")
+	}
+	if req.PresencePenalty != 0 {
+		emit("presence_penalty", req.PresencePenalty,
+			"Anthropic does not expose presence/frequency penalties")
+	}
+	if req.FrequencyPenalty != 0 {
+		emit("frequency_penalty", req.FrequencyPenalty,
+			"Anthropic does not expose presence/frequency penalties")
+	}
+	if req.Logprobs {
+		emit("logprobs", true,
+			"Anthropic does not return per-token log probabilities")
+	}
+	if req.TopLogprobs > 0 {
+		emit("top_logprobs", req.TopLogprobs,
+			"Anthropic does not return per-token log probabilities")
+	}
+	if len(req.LogitBias) > 0 {
+		emit("logit_bias", string(req.LogitBias),
+			"Anthropic does not accept logit_bias")
+	}
+	if len(req.StreamOptions) > 0 {
+		emit("stream_options", string(req.StreamOptions),
+			"Anthropic streaming has its own usage shape; per-chunk usage is already forwarded by translateAnthropicSSE")
+	}
+	if req.ParallelToolCalls != nil && !*req.ParallelToolCalls {
+		emit("parallel_tool_calls", false,
+			"to disable parallelism on Anthropic, embed disable_parallel_tool_use:true inside tool_choice")
+	}
+}
+
+// warnResponseFormatDropped is retained for compatibility with the
+// existing call sites. The general path now lives in
+// warnUnsupportedFieldsDropped.
+func (p *AnthropicProvider) warnResponseFormatDropped(req types.ChatRequest) {
+	p.warnUnsupportedFieldsDropped(req)
 }
 
 func (p *AnthropicProvider) applyHeaders(req *http.Request) {

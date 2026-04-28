@@ -19,6 +19,15 @@ type OpenAIChatCompletionRequest struct {
 	// through verbatim to OpenAI-compat upstreams; Anthropic
 	// upstreams log-and-drop it (no direct equivalent).
 	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+	// Tier-2 OpenAI passthroughs (mirrors types.ChatRequest).
+	Seed              *int            `json:"seed,omitempty"`
+	PresencePenalty   float64         `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  float64         `json:"frequency_penalty,omitempty"`
+	Logprobs          bool            `json:"logprobs,omitempty"`
+	TopLogprobs       int             `json:"top_logprobs,omitempty"`
+	LogitBias         json.RawMessage `json:"logit_bias,omitempty"`
+	StreamOptions     json.RawMessage `json:"stream_options,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 }
 
 type OpenAITool struct {

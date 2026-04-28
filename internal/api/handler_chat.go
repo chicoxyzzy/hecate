@@ -316,18 +316,26 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 	scope := requestscope.Build(principal, tenant, req.Provider)
 
 	return types.ChatRequest{
-		RequestID:      requestID,
-		SessionID:      req.SessionID,
-		SessionTitle:   req.SessionTitle,
-		Model:          req.Model,
-		Messages:       messages,
-		Temperature:    req.Temperature,
-		MaxTokens:      req.MaxTokens,
-		Scope:          scope,
-		Tools:          tools,
-		ToolChoice:     req.ToolChoice,
-		Stream:         req.Stream,
-		ResponseFormat: req.ResponseFormat,
+		RequestID:         requestID,
+		SessionID:         req.SessionID,
+		SessionTitle:      req.SessionTitle,
+		Model:             req.Model,
+		Messages:          messages,
+		Temperature:       req.Temperature,
+		MaxTokens:         req.MaxTokens,
+		Scope:             scope,
+		Tools:             tools,
+		ToolChoice:        req.ToolChoice,
+		Stream:            req.Stream,
+		ResponseFormat:    req.ResponseFormat,
+		Seed:              req.Seed,
+		PresencePenalty:   req.PresencePenalty,
+		FrequencyPenalty:  req.FrequencyPenalty,
+		Logprobs:          req.Logprobs,
+		TopLogprobs:       req.TopLogprobs,
+		LogitBias:         req.LogitBias,
+		StreamOptions:     req.StreamOptions,
+		ParallelToolCalls: req.ParallelToolCalls,
 	}, nil
 }
 

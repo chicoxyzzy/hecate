@@ -39,6 +39,47 @@ type ChatRequest struct {
 	// should use `tools` + `tool_choice` for structured output, or
 	// the dedicated `output_format` field on newer Claude APIs).
 	ResponseFormat json.RawMessage
+
+	// Tier-2 OpenAI passthroughs. Each is captured from the
+	// inbound /v1/chat/completions request and re-emitted verbatim
+	// by the OpenAI provider. Anthropic providers log-and-drop
+	// these (no direct equivalents). The set is intentionally
+	// narrow — adding more fields is a one-line change here +
+	// one-line at the inbound parser + one-line at the outbound
+	// provider.
+
+	// Seed is OpenAI's deterministic-sampling knob. Pointer
+	// because 0 is a valid seed and we need to distinguish it
+	// from "not set."
+	Seed *int
+	// PresencePenalty / FrequencyPenalty are OpenAI's [-2, 2]
+	// repetition controls. 0.0 is the default — semantically
+	// equivalent to omitting the field — so plain float64 with
+	// omitempty on the wire is sufficient.
+	PresencePenalty  float64
+	FrequencyPenalty float64
+	// Logprobs requests per-token log-probability data on the
+	// response. TopLogprobs (0..20) caps how many alternatives
+	// to include per position; only meaningful when Logprobs is
+	// true.
+	Logprobs    bool
+	TopLogprobs int
+	// LogitBias is a `{token_id: bias}` map (-100..100) that
+	// nudges sampling. We keep it as raw JSON so callers can
+	// pass either string or int keys (the API has accepted both
+	// over time) without a typed-map conversion.
+	LogitBias json.RawMessage
+	// StreamOptions carries OpenAI's stream tuning — currently
+	// {include_usage: bool} but the field is open-ended on the
+	// upstream side. RawMessage stays forward-compatible.
+	StreamOptions json.RawMessage
+	// ParallelToolCalls toggles concurrent tool dispatch on the
+	// OpenAI side (default true). Pointer because the user's
+	// explicit "false" intent must survive — omitempty would drop
+	// it. Anthropic's analog (`tool_choice.disable_parallel_tool_use`)
+	// is captured separately via the existing ToolChoice
+	// passthrough; cross-translation is not yet wired.
+	ParallelToolCalls *bool
 }
 
 type RequestScope struct {

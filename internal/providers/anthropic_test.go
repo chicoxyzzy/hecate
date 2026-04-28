@@ -809,6 +809,69 @@ func TestAnthropicProviderServiceTierPassthrough(t *testing.T) {
 	}
 }
 
+// TestAnthropicProviderTier2FieldsAllDropped pins the wire
+// invariant for the Tier-2 OpenAI passthroughs: every one of them
+// must be absent from the body sent to Anthropic upstream. The
+// gateway logs a warning per dropped field, but never injects the
+// field onto the wire — that would either confuse Anthropic's
+// strict parser or, worse, get silently ignored and mask the
+// configuration bug.
+//
+// This is the dual of TestOpenAIProviderForwardsTier2Passthroughs:
+// they pin the same fields' behavior on opposite sides of the
+// router.
+func TestAnthropicProviderTier2FieldsAllDropped(t *testing.T) {
+	t.Parallel()
+	intPtr := func(i int) *int { return &i }
+	boolPtr := func(b bool) *bool { return &b }
+
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_t2drop",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:             "claude-opus-4-5",
+		Messages:          []types.Message{{Role: "user", Content: "hi"}},
+		Seed:              intPtr(7),
+		PresencePenalty:   0.5,
+		FrequencyPenalty:  -1,
+		Logprobs:          true,
+		TopLogprobs:       5,
+		LogitBias:         json.RawMessage(`{"50256":-100}`),
+		StreamOptions:     json.RawMessage(`{"include_usage":true}`),
+		ParallelToolCalls: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	leaked := []string{}
+	for _, key := range []string{
+		"seed", "presence_penalty", "frequency_penalty",
+		"logprobs", "top_logprobs", "logit_bias",
+		"stream_options", "parallel_tool_calls",
+	} {
+		if _, ok := captured[key]; ok {
+			leaked = append(leaked, key)
+		}
+	}
+	if len(leaked) > 0 {
+		t.Errorf("OpenAI-only fields leaked onto Anthropic wire: %v", leaked)
+	}
+}
+
 // TestAnthropicProviderResponseFormatDroppedNotPropagated pins that
 // the Anthropic provider does NOT forward an OpenAI-style
 // response_format on the wire (Anthropic has no equivalent). The

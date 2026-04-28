@@ -43,6 +43,18 @@ type openAIChatCompletionRequest struct {
 	// Together, Groq, vLLM with hermes/grammar) honor it; Ollama
 	// ignores unknown fields silently.
 	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+	// Tier-2 passthroughs. Each rides the wire verbatim when the
+	// caller set it; default-zero fields are dropped via omitempty
+	// so we never accidentally enable a knob the caller didn't
+	// ask for.
+	Seed              *int            `json:"seed,omitempty"`
+	PresencePenalty   float64         `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  float64         `json:"frequency_penalty,omitempty"`
+	Logprobs          bool            `json:"logprobs,omitempty"`
+	TopLogprobs       int             `json:"top_logprobs,omitempty"`
+	LogitBias         json.RawMessage `json:"logit_bias,omitempty"`
+	StreamOptions     json.RawMessage `json:"stream_options,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 }
 
 type openAITool struct {
@@ -340,15 +352,23 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 	}
 
 	wireReq := openAIChatCompletionRequest{
-		Model:          req.Model,
-		Messages:       make([]openAIChatMessage, 0, len(req.Messages)),
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		TopP:           req.TopP,
-		Stop:           append([]string(nil), req.StopSequences...),
-		User:           requestscope.Normalize(req.Scope).User,
-		ToolChoice:     req.ToolChoice,
-		ResponseFormat: req.ResponseFormat,
+		Model:             req.Model,
+		Messages:          make([]openAIChatMessage, 0, len(req.Messages)),
+		MaxTokens:         req.MaxTokens,
+		Temperature:       req.Temperature,
+		TopP:              req.TopP,
+		Stop:              append([]string(nil), req.StopSequences...),
+		User:              requestscope.Normalize(req.Scope).User,
+		ToolChoice:        req.ToolChoice,
+		ResponseFormat:    req.ResponseFormat,
+		Seed:              req.Seed,
+		PresencePenalty:   req.PresencePenalty,
+		FrequencyPenalty:  req.FrequencyPenalty,
+		Logprobs:          req.Logprobs,
+		TopLogprobs:       req.TopLogprobs,
+		LogitBias:         req.LogitBias,
+		StreamOptions:     req.StreamOptions,
+		ParallelToolCalls: req.ParallelToolCalls,
 	}
 	for _, msg := range req.Messages {
 		wireMsg := openAIChatMessage{
@@ -484,16 +504,24 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 	}
 
 	wireReq := openAIChatCompletionRequest{
-		Model:          req.Model,
-		Messages:       make([]openAIChatMessage, 0, len(req.Messages)),
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		TopP:           req.TopP,
-		Stop:           append([]string(nil), req.StopSequences...),
-		User:           requestscope.Normalize(req.Scope).User,
-		ToolChoice:     req.ToolChoice,
-		ResponseFormat: req.ResponseFormat,
-		Stream:         true,
+		Model:             req.Model,
+		Messages:          make([]openAIChatMessage, 0, len(req.Messages)),
+		MaxTokens:         req.MaxTokens,
+		Temperature:       req.Temperature,
+		TopP:              req.TopP,
+		Stop:              append([]string(nil), req.StopSequences...),
+		User:              requestscope.Normalize(req.Scope).User,
+		ToolChoice:        req.ToolChoice,
+		ResponseFormat:    req.ResponseFormat,
+		Seed:              req.Seed,
+		PresencePenalty:   req.PresencePenalty,
+		FrequencyPenalty:  req.FrequencyPenalty,
+		Logprobs:          req.Logprobs,
+		TopLogprobs:       req.TopLogprobs,
+		LogitBias:         req.LogitBias,
+		StreamOptions:     req.StreamOptions,
+		ParallelToolCalls: req.ParallelToolCalls,
+		Stream:            true,
 	}
 	for _, msg := range req.Messages {
 		wireMsg := openAIChatMessage{

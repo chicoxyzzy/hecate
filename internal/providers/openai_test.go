@@ -415,6 +415,119 @@ func TestOpenAIProviderCapturesCachedTokens(t *testing.T) {
 	}
 }
 
+// TestOpenAIProviderForwardsTier2Passthroughs pins the Tier-2
+// passthrough bundle: seed, penalties, logprobs/top_logprobs,
+// logit_bias, stream_options, parallel_tool_calls. Each field
+// must arrive on the wire exactly as the caller set it; an
+// "absent" case verifies omitempty actually drops the field
+// (otherwise we'd be sending the API a default the caller didn't
+// ask for, e.g. seed=0 when the caller passed nothing).
+//
+// Pattern: build a ChatRequest with the field set, capture the
+// upstream body, assert the JSON key/value matches.
+func TestOpenAIProviderForwardsTier2Passthroughs(t *testing.T) {
+	t.Parallel()
+
+	intPtr := func(i int) *int { return &i }
+	boolPtr := func(b bool) *bool { return &b }
+
+	cases := []struct {
+		name      string
+		mutate    func(*types.ChatRequest)
+		assertKey string
+		want      any // nil = field absent on wire
+	}{
+		// Each row sets one field; we want a clean signal that
+		// just that field arrived. Bundle-wide regression checks
+		// happen in the all-fields-set case at the end.
+		{"seed_set", func(r *types.ChatRequest) { r.Seed = intPtr(42) }, "seed", float64(42)},
+		{"seed_zero_still_sent", func(r *types.ChatRequest) { r.Seed = intPtr(0) }, "seed", float64(0)},
+		{"seed_unset_omits", func(r *types.ChatRequest) {}, "seed", nil},
+
+		{"presence_penalty_set", func(r *types.ChatRequest) { r.PresencePenalty = 0.5 }, "presence_penalty", 0.5},
+		{"presence_penalty_zero_omits", func(r *types.ChatRequest) { r.PresencePenalty = 0 }, "presence_penalty", nil},
+		{"frequency_penalty_set", func(r *types.ChatRequest) { r.FrequencyPenalty = -1.2 }, "frequency_penalty", -1.2},
+
+		{"logprobs_true", func(r *types.ChatRequest) { r.Logprobs = true }, "logprobs", true},
+		{"logprobs_false_omits", func(r *types.ChatRequest) { r.Logprobs = false }, "logprobs", nil},
+		{"top_logprobs_set", func(r *types.ChatRequest) { r.TopLogprobs = 5 }, "top_logprobs", float64(5)},
+
+		{"logit_bias_passes_through", func(r *types.ChatRequest) {
+			r.LogitBias = json.RawMessage(`{"50256":-100}`)
+		}, "logit_bias", map[string]any{"50256": float64(-100)}},
+
+		{"stream_options_passes_through", func(r *types.ChatRequest) {
+			r.StreamOptions = json.RawMessage(`{"include_usage":true}`)
+		}, "stream_options", map[string]any{"include_usage": true}},
+
+		{"parallel_tool_calls_explicit_false", func(r *types.ChatRequest) {
+			r.ParallelToolCalls = boolPtr(false)
+		}, "parallel_tool_calls", false},
+		{"parallel_tool_calls_explicit_true", func(r *types.ChatRequest) {
+			r.ParallelToolCalls = boolPtr(true)
+		}, "parallel_tool_calls", true},
+		{"parallel_tool_calls_unset_omits", func(r *types.ChatRequest) {}, "parallel_tool_calls", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var captured map[string]any
+			transport := testRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/v1/chat/completions" || r.Body == nil {
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
+				}
+				_ = json.NewDecoder(r.Body).Decode(&captured)
+				body, _ := json.Marshal(openAIChatCompletionResponse{
+					ID: "x", Model: "gpt-4o-mini",
+					Choices: []openAIChatCompletionChoice{{
+						Message:      openAIChatMessage{Role: "assistant", Content: strPtr("ok")},
+						FinishReason: "stop",
+					}},
+					Usage: openAIUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewReader(body)),
+				}, nil
+			})
+			provider := NewOpenAIProvider(config.OpenAICompatibleProviderConfig{
+				Name: "openai", Kind: "cloud", BaseURL: "https://example.test",
+				APIKey: "k", Timeout: time.Second, DefaultModel: "gpt-4o-mini",
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			provider.httpClient.Transport = transport
+			provider.cachedCaps = Capabilities{
+				Name: "openai", Kind: KindCloud,
+				DefaultModel: "gpt-4o-mini",
+				Models:       []string{"gpt-4o-mini"},
+			}
+			provider.capsExpiry = time.Now().Add(time.Minute)
+
+			req := types.ChatRequest{
+				Model:    "gpt-4o-mini",
+				Messages: []types.Message{{Role: "user", Content: "hi"}},
+			}
+			tc.mutate(&req)
+			if _, err := provider.Chat(context.Background(), req); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			got, present := captured[tc.assertKey]
+			switch {
+			case tc.want == nil && present:
+				t.Errorf("%s present on wire (=%v) but should be omitted", tc.assertKey, got)
+			case tc.want != nil && !present:
+				t.Errorf("%s absent on wire; want %v", tc.assertKey, tc.want)
+			case tc.want != nil:
+				wantBytes, _ := json.Marshal(tc.want)
+				gotBytes, _ := json.Marshal(got)
+				if string(wantBytes) != string(gotBytes) {
+					t.Errorf("%s = %s, want %s", tc.assertKey, gotBytes, wantBytes)
+				}
+			}
+		})
+	}
+}
+
 // TestOpenAIProviderForwardsResponseFormat pins that the
 // structured-output knob reaches the wire verbatim. Three cases:
 // json_schema (most common), json_object (legacy), and the
