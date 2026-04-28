@@ -156,6 +156,41 @@ curl -sS "http://127.0.0.1:8080/v1/messages" \
   }'
 ```
 
+## Multi-modal content (vision)
+
+`POST /v1/chat/completions` accepts the OpenAI multi-modal content shape — `messages[].content` may be either a plain string OR an array of typed blocks. Image blocks ride the `image_url` form Codex/SDKs already produce:
+
+```bash
+curl -sS "http://127.0.0.1:8080/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer hecate-client-token" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role":"user","content":[
+      {"type":"text","text":"describe this"},
+      {"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"high"}}
+    ]}]
+  }'
+```
+
+Both `https://...` URLs and `data:image/...;base64,...` data URIs work. When the router lands on an Anthropic provider, the gateway translates `image_url` to Anthropic's `image` block automatically (URL → `source.type:url`; data URI parsed inline → `source.type:base64` with extracted `media_type` and `data`). Plain-string content paths are unchanged — the array form only triggers when the caller actually sends one.
+
+## OpenAI request fields and cross-provider behavior
+
+The gateway accepts the OpenAI request shape verbatim and faithfully forwards it when the route lands on an OpenAI-compatible upstream. When the route lands on an Anthropic upstream, OpenAI-only fields are dropped with a per-field warning log (operators see what was lost; the request still completes).
+
+| Field | OpenAI route | Anthropic route |
+|---|---|---|
+| `seed`, `presence_penalty`, `frequency_penalty` | passthrough | dropped |
+| `logprobs`, `top_logprobs`, `logit_bias` | passthrough | dropped |
+| `stream_options` (incl. `include_usage`) | passthrough | dropped (Anthropic streaming carries usage natively) |
+| `parallel_tool_calls` | passthrough | dropped (use `tool_choice.disable_parallel_tool_use:true` on Anthropic) |
+| `response_format` (`json_object` / `json_schema`) | passthrough | dropped (use `tools` + `tool_choice` for structured output on Claude) |
+| `tools`, `tool_choice` | passthrough | translated (`auto` / `none` / `required` → Anthropic equivalents) |
+| `image_url` content blocks | passthrough | translated to `image` + `source` |
+
+`cached_tokens` (the prompt-cache hit count) is surfaced in the response under `usage.prompt_tokens_details.cached_tokens` regardless of which provider served the request — Anthropic's `cache_read_input_tokens` and OpenAI's native `cached_tokens` both flow into this single field, so cost-aware clients can read one shape across all routes.
+
 ## Common failures
 
 - `401 unauthorized`: missing or invalid token.
