@@ -75,6 +75,16 @@ make test-docker-smoke # boots the production image and probes /healthz, /v1/mod
 
 The race detector is the strongest correctness check (and the slowest); CI runs it on every push. `test-docker-smoke` requires Docker but doesn't need any other infrastructure — it spins up its own compose project to avoid colliding with a developer's running stack.
 
+### Skipping CI for inert changes
+
+Pure markdown commits already skip CI via `paths-ignore: '**/*.md'` in the workflow triggers. For inert changes inside source files (e.g. fixing a typo in a `//` comment, renaming an unexported test helper that no test references), include one of GitHub's [skip-ci markers](https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs) in the commit message and Actions will skip the run:
+
+```bash
+git commit -m "chore: fix typo in agent_loop comment [skip ci]"
+```
+
+Recognized markers: `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`. Use sparingly — when in doubt, let CI run.
+
 ## Project layout
 
 Top-level entry points:
