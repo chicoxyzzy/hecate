@@ -201,6 +201,14 @@ Hecate maintains a shared client cache so multiple tasks targeting the same upst
 - **Idle TTL**: 5 minutes. Entries with refcount=0 evict after this; in-use entries are never evicted regardless of age.
 - **Reaper interval**: 30 seconds.
 - **Reactive eviction**: a transport-closed error from a tool call drops the entry so the next task respawns, instead of being handed back the same dead client.
+- **Max-entries soft cap**: 256 by default (`GATEWAY_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES`). On a fresh insert that would push the cache over the cap, the least-recently-used IDLE entry is evicted first. If every entry is in-use, the over-cap insert is allowed (rejecting an Acquire would break a legitimate run; TTL eviction catches up once anything goes idle). Set to `0` to disable the cap.
+
+### Resource limits
+
+| Knob | Default | What it does |
+|---|---|---|
+| `GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK` | `16` | Per-task cap on `mcp_servers` entries. The gateway rejects creates that exceed this with a 400 — protects the worker from a single misconfigured task spawning hundreds of subprocesses before failing. `0` disables the check. |
+| `GATEWAY_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES` | `256` | Gateway-wide soft cap on cached MCP clients. See "Lifecycle and caching" above for the LRU-idle eviction contract. `0` disables. |
 
 ### Shutdown
 
