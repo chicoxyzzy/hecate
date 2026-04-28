@@ -13,6 +13,38 @@ const STEP_STATUS_COLOR: Record<string, string> = {
 };
 function stepColor(status: string) { return STEP_STATUS_COLOR[status] || "var(--t3)"; }
 
+// MCP_TOOL_PREFIX mirrors mcpclient.PoolToolNamespacePrefix +
+// PoolToolNamespaceSep on the gateway side. Tool calls dispatched
+// through an external MCP server arrive here as steps whose
+// tool_name follows this shape:
+//
+//   mcp__<server>__<tool>
+//
+// We split it so the timeline can render server + tool separately
+// (operators want to see "github · create_pr", not the raw
+// double-underscore string), and the StepDetail can break out
+// transport / server / tool labels.
+const MCP_TOOL_PREFIX = "mcp__";
+const MCP_TOOL_SEP = "__";
+
+// splitNamespacedToolName mirrors the Go-side SplitNamespacedToolName
+// (internal/mcp/client/pool.go). Returns server + tool when the name
+// matches the namespacing scheme, otherwise null. Tool names may
+// themselves contain "__" — we honor only the FIRST split after the
+// server segment, so `mcp__weird__double__under` parses as
+// (weird, double__under), matching the gateway's split.
+type MCPToolName = { server: string; tool: string };
+function splitNamespacedToolName(name: string | undefined): MCPToolName | null {
+  if (!name || !name.startsWith(MCP_TOOL_PREFIX)) return null;
+  const rest = name.slice(MCP_TOOL_PREFIX.length);
+  const idx = rest.indexOf(MCP_TOOL_SEP);
+  if (idx <= 0) return null;
+  const server = rest.slice(0, idx);
+  const tool = rest.slice(idx + MCP_TOOL_SEP.length);
+  if (!server || !tool) return null;
+  return { server, tool };
+}
+
 function taskBadgeStatus(status: string): string {
   if (status === "completed") return "done";
   if (status === "awaiting_approval") return "awaiting";
@@ -366,9 +398,7 @@ export function TaskDetail({
                         width: 13, height: 13, borderRadius: "50%", background: stepColor(step.status), flexShrink: 0, zIndex: 1,
                         boxShadow: step.status === "running" ? `0 0 8px ${stepColor(step.status)}` : "none",
                       }} />
-                      <span style={{ fontSize: 12, color: (step.status === "queued" || !step.status) ? "var(--t3)" : "var(--t0)", flex: 1 }}>
-                        {step.title || step.kind || step.tool_name || "step"}
-                      </span>
+                      <StepRowTitle step={step} />
                       {step.exit_code !== undefined && step.exit_code !== 0 && step.status !== "running" && (
                         <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--red)" }}>exit {step.exit_code}</span>
                       )}
@@ -476,8 +506,53 @@ export function TaskDetail({
   );
 }
 
+// StepRowTitle renders the headline label for one row in the steps
+// timeline. For built-in tools and non-tool steps (model thinking,
+// approvals, etc.) we keep the existing "title or kind" fallback —
+// changing it would churn every other surface. For MCP tool calls we
+// swap in a small "MCP" badge plus a parsed "server · tool" label so
+// the operator can scan the timeline and immediately distinguish
+// external-server calls from built-ins. The raw namespaced name
+// remains available via the row's title attribute for accessibility
+// and copy-paste.
+function StepRowTitle({ step }: { step: TaskStepRecord }) {
+  const baseStyle = {
+    fontSize: 12,
+    color: (step.status === "queued" || !step.status) ? "var(--t3)" : "var(--t0)",
+    flex: 1,
+  } as const;
+  const mcp = splitNamespacedToolName(step.tool_name);
+  if (mcp) {
+    return (
+      <span
+        style={{ ...baseStyle, display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}
+        title={step.tool_name}
+      >
+        <span
+          className="badge badge-muted"
+          aria-label="MCP tool call"
+          style={{ fontSize: 9, fontFamily: "var(--font-mono)", padding: "1px 5px", flexShrink: 0 }}
+        >
+          MCP
+        </span>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span style={{ color: "var(--t2)" }}>{mcp.server}</span>
+          <span style={{ color: "var(--t3)", margin: "0 4px" }}>·</span>
+          <span style={{ color: "var(--t0)", fontFamily: "var(--font-mono)" }}>{mcp.tool}</span>
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span style={baseStyle}>
+      {step.title || step.kind || step.tool_name || "step"}
+    </span>
+  );
+}
+
 function StepDetail({ step }: { step: TaskStepRecord }) {
   const duration = formatDuration(step.started_at, step.finished_at);
+  const mcp = splitNamespacedToolName(step.tool_name);
   return (
     <div
       style={{
@@ -492,12 +567,36 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
       }}
     >
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--t3)" }}>
-        {step.tool_name && <span>tool: <span style={{ color: "var(--t1)" }}>{step.tool_name}</span></span>}
+        {/* Tool identity. MCP tool calls carry a `mcp__<server>__<tool>`
+            namespaced name; we break it out here so the operator
+            sees transport/server/tool as separate facts rather than
+            one long opaque token. Built-in tools fall through to
+            the existing single-line rendering. */}
+        {step.tool_name && mcp && (
+          <>
+            <span>transport: <span style={{ color: "var(--t1)" }}>MCP</span></span>
+            <span>server: <span style={{ color: "var(--t1)" }}>{mcp.server}</span></span>
+            <span>tool: <span style={{ color: "var(--t1)" }}>{mcp.tool}</span></span>
+          </>
+        )}
+        {step.tool_name && !mcp && <span>tool: <span style={{ color: "var(--t1)" }}>{step.tool_name}</span></span>}
         {step.phase && <span>phase: <span style={{ color: "var(--t1)" }}>{step.phase}</span></span>}
         {step.exit_code !== undefined && <span>exit: <span style={{ color: step.exit_code === 0 ? "var(--green)" : "var(--red)" }}>{step.exit_code}</span></span>}
         {duration && <span>took: <span style={{ color: "var(--t1)" }}>{duration}</span></span>}
         {step.started_at && <span>started: <span style={{ color: "var(--t1)" }}>{new Date(step.started_at).toLocaleString()}</span></span>}
       </div>
+      {/* Hint pointing operators to the conversation viewer where
+          the upstream server's full text result is rendered. The
+          step's output_summary captures only is_error + text_size
+          (the dispatcher trims to keep step rows small in the
+          store); the full text lives as a tool-role message in the
+          agent_conversation artifact, which the bottom timeline
+          already shows as a chat bubble. */}
+      {mcp && (
+        <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--t3)" }}>
+          Full upstream result rendered in the agent conversation below.
+        </div>
+      )}
       {step.error && (
         <div>
           <div className="kicker" style={{ marginBottom: 4 }}>Error</div>

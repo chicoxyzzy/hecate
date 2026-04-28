@@ -478,3 +478,110 @@ describe("TaskDetail run cost badge", () => {
     expect(screen.queryByText(/\$0\.000/)).toBeNull();
   });
 });
+
+describe("TaskDetail steps timeline — MCP tool distinction", () => {
+  // makeMcpStep is a builder mirroring the wire shape the gateway
+  // emits for MCP tool calls in the agent loop. tool_name is the
+  // namespaced `mcp__<server>__<tool>` form; the title carries the
+  // raw name with a status suffix (executor_agent_loop.go produces
+  // exactly this shape).
+  function makeMcpStep(overrides: Partial<TaskStepRecord> = {}): TaskStepRecord {
+    return makeStep({
+      id: "step-mcp",
+      kind: "tool",
+      tool_name: "mcp__filesystem__read_text_file",
+      title: "mcp__filesystem__read_text_file (completed)",
+      ...overrides,
+    });
+  }
+
+  it("renders an MCP badge on namespaced tool steps", () => {
+    const { render } = setup({ steps: [makeMcpStep()] });
+    render();
+    // The badge has aria-label "MCP tool call" so screen readers
+    // announce it consistently across rows.
+    expect(screen.getByLabelText(/mcp tool call/i)).toBeTruthy();
+  });
+
+  it("renders parsed server · tool instead of the raw namespaced name in the row", () => {
+    const { render } = setup({ steps: [makeMcpStep()] });
+    render();
+    // Server and tool render as separate spans with a middle-dot
+    // between them; assert each part is independently visible.
+    expect(screen.getByText("filesystem")).toBeTruthy();
+    expect(screen.getByText("read_text_file")).toBeTruthy();
+    // The raw namespaced name must NOT appear as the row's visible
+    // label — it would defeat the whole point of the parse. (It's
+    // still in the row's title attribute for copy-paste.)
+    expect(screen.queryByText("mcp__filesystem__read_text_file")).toBeNull();
+  });
+
+  it("does NOT render the MCP badge on built-in tool steps", () => {
+    // shell_exec is a built-in — no MCP_TOOL_PREFIX, so no badge.
+    // Pinning this guard keeps a future regex slip-up (matching
+    // anything containing "mcp") from putting the badge on
+    // unrelated rows.
+    const builtin = makeStep({ id: "step-shell", kind: "tool", tool_name: "shell_exec", title: "shell_exec (completed)" });
+    const { render } = setup({ steps: [builtin] });
+    render();
+    expect(screen.queryByLabelText(/mcp tool call/i)).toBeNull();
+    // Built-in keeps its title verbatim.
+    expect(screen.getByText("shell_exec (completed)")).toBeTruthy();
+  });
+
+  it("expanded StepDetail breaks out transport, server, and tool labels for MCP steps", async () => {
+    const { render, user } = setup({ steps: [makeMcpStep()] });
+    render();
+    // Click the row to expand its detail.
+    await user.click(screen.getByRole("button", { name: /step mcp__filesystem__read_text_file/i }));
+    // Expanded detail must carry transport/server/tool as
+    // separate labelled facts.
+    expect(screen.getByText(/^transport:/)).toBeTruthy();
+    expect(screen.getByText(/^server:/)).toBeTruthy();
+    // "tool:" appears here too — but we don't pin its presence with
+    // a generic regex because the row badge text "MCP" might match
+    // separately in some CSS setups. Instead we look up the
+    // surrounding label and assert the tool name appears.
+    expect(screen.getAllByText("read_text_file").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("expanded StepDetail on a built-in shows the single-line tool label, not transport/server", async () => {
+    const builtin = makeStep({ id: "step-shell", kind: "tool", tool_name: "shell_exec", title: "shell_exec (completed)" });
+    const { render, user } = setup({ steps: [builtin] });
+    render();
+    await user.click(screen.getByRole("button", { name: /step shell_exec/i }));
+    // The single combined "tool:" line is the existing rendering;
+    // the MCP-only "transport:" / "server:" facets must NOT appear.
+    expect(screen.queryByText(/^transport:/)).toBeNull();
+    expect(screen.queryByText(/^server:/)).toBeNull();
+  });
+
+  it("MCP StepDetail points operators to the conversation viewer for the full result", async () => {
+    // The dispatcher trims output_summary to {is_error, text_size}
+    // to keep step rows small; the actual upstream text lives in
+    // the agent_conversation artifact below. This hint is the
+    // navigation aid that closes the loop without inventing a
+    // step→message join.
+    const { render, user } = setup({ steps: [makeMcpStep()] });
+    render();
+    await user.click(screen.getByRole("button", { name: /step mcp__filesystem__read_text_file/i }));
+    expect(screen.getByText(/full upstream result rendered in the agent conversation/i)).toBeTruthy();
+  });
+
+  it("handles a tool name with embedded double-underscores in the tool segment", () => {
+    // Some upstream MCP servers use `__` inside their tool names
+    // (e.g. `mcp__weird__double__under` parses as server=weird,
+    // tool=double__under). The Go-side SplitNamespacedToolName
+    // honors the FIRST split after the server segment — pin the
+    // same behavior on the UI side.
+    const step = makeMcpStep({
+      id: "step-weird",
+      tool_name: "mcp__weird__double__under",
+      title: "mcp__weird__double__under (completed)",
+    });
+    const { render } = setup({ steps: [step] });
+    render();
+    expect(screen.getByText("weird")).toBeTruthy();
+    expect(screen.getByText("double__under")).toBeTruthy();
+  });
+});
