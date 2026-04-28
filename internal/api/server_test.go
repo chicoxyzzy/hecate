@@ -2660,6 +2660,141 @@ func TestTaskRunStream_PendingApprovalRidesAlongInSnapshot(t *testing.T) {
 	}
 }
 
+func TestTaskRunStream_AgentTurnCompletedFlowsTurnOverlayIntoSnapshot(t *testing.T) {
+	// End-to-end check on the Turn overlay path:
+	//
+	//   1. Runner emits `agent.turn.completed` to the run-event log
+	//   2. SSE handler reads the event, decodeTaskRunEventData treats
+	//      it as Turn-only (ok=false)
+	//   3. Handler preserves the overlay across buildTaskRunStreamState
+	//   4. Final snapshot carries BOTH the rebuilt Run/Steps/Artifacts
+	//      AND the Turn block
+	//
+	// The unit tests in turn_cost_stream_test.go pin steps 2-3 in
+	// isolation. This test pins the wire-up: a regression that, say,
+	// ran buildTaskRunStreamState without preserving overlayTurn
+	// would silently swallow per-turn cost on the SSE feed without
+	// any unit test failing. We POST the event via the public
+	// /events endpoint so we don't need a real LLM.
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createResp := postJSONToURL(t, server.URL+"/v1/tasks", `{"title":"Turn overlay","prompt":"Test turn overlay flow","execution_kind":"shell","shell_command":"echo hi","working_directory":".","timeout_ms":3000}`)
+	if createResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d, body=%s", createResp.StatusCode, string(body))
+	}
+	var created TaskResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	createResp.Body.Close()
+
+	startResp := postJSONToURL(t, server.URL+"/v1/tasks/"+created.Data.ID+"/start", "")
+	if startResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(startResp.Body)
+		t.Fatalf("start status = %d, body=%s", startResp.StatusCode, string(body))
+	}
+	var started TaskRunResponse
+	if err := json.NewDecoder(startResp.Body).Decode(&started); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	startResp.Body.Close()
+
+	// Inject an agent.turn.completed event via the public events
+	// endpoint. The endpoint always merges a `snapshot` key into
+	// data — but the decoder's agent.turn.completed branch is
+	// checked BEFORE the snapshot branch, so the type-specific
+	// path wins (which is what we're testing).
+	eventBody := `{
+		"event_type": "agent.turn.completed",
+		"data": {
+			"turn": 2,
+			"step_id": "step-injected",
+			"cost_micros_usd": 4242,
+			"run_cumulative_cost_micros_usd": 7777,
+			"task_cumulative_cost_micros_usd": 12345,
+			"tool_call_count": 1
+		}
+	}`
+	eventResp := postJSONToURL(t, server.URL+"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events", eventBody)
+	if eventResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(eventResp.Body)
+		t.Fatalf("post event status = %d, body=%s", eventResp.StatusCode, string(body))
+	}
+	eventResp.Body.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, server.URL+"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/stream", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	streamCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	streamReq = streamReq.WithContext(streamCtx)
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer streamResp.Body.Close()
+
+	// Walk snapshots until we see one carrying our Turn block.
+	// SSE may emit several intervening snapshots (run.queued,
+	// run.awaiting_approval, etc.) before reaching ours; the
+	// stream handler tags every payload with its event_type, so
+	// we filter on that.
+	var sawTurn bool
+	for event := range readSSEEvents(t, streamResp.Body) {
+		if event.Event != "snapshot" {
+			continue
+		}
+		var payload TaskRunStreamEventResponse
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("unmarshal snapshot: %v", err)
+		}
+		if payload.Data.EventType != "agent.turn.completed" {
+			continue
+		}
+		// This is the snapshot we drove. Three assertions:
+		//
+		//   a) Turn is populated (the decoder did its job)
+		//   b) Turn fields match what we POSTed (no key rename
+		//      regression in decodeTurnCostFromEventData)
+		//   c) Run.ID is also set (proves the overlay was merged
+		//      AFTER buildTaskRunStreamState rebuilt full state —
+		//      not a Turn-only payload that lost the rest of the
+		//      run context)
+		if payload.Data.Turn == nil {
+			t.Fatal("snapshot.Turn is nil; overlay was not populated on agent.turn.completed snapshot")
+		}
+		if got := payload.Data.Turn.CostMicrosUSD; got != 4242 {
+			t.Errorf("Turn.CostMicrosUSD = %d, want 4242", got)
+		}
+		if got := payload.Data.Turn.TaskCumulativeMicrosUSD; got != 12345 {
+			t.Errorf("Turn.TaskCumulativeMicrosUSD = %d, want 12345", got)
+		}
+		if got := payload.Data.Turn.StepID; got != "step-injected" {
+			t.Errorf("Turn.StepID = %q, want step-injected", got)
+		}
+		if got := payload.Data.Turn.Turn; got != 2 {
+			t.Errorf("Turn.Turn = %d, want 2", got)
+		}
+		if payload.Data.Run.ID != started.Data.ID {
+			t.Errorf("Run.ID = %q, want %q (overlay should merge AFTER full state rebuild, not replace it)", payload.Data.Run.ID, started.Data.ID)
+		}
+		sawTurn = true
+		break
+	}
+	cancel()
+
+	if !sawTurn {
+		t.Fatal("never observed an agent.turn.completed snapshot with a populated Turn block")
+	}
+}
+
 func TestTaskRunStreamResumeWithAfterSequence(t *testing.T) {
 	t.Parallel()
 

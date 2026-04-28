@@ -237,6 +237,74 @@ func TestLocalExecutor_NetworkPolicy_PublicHTTPSPasses(t *testing.T) {
 	}
 }
 
+func TestLocalExecutor_NetworkPolicy_MultipleURLsAllChecked(t *testing.T) {
+	// Important non-bypass guarantee: when a single command spells
+	// out several URLs (a `curl` chained with a `git clone`, or a
+	// shell one-liner that hits two endpoints), the validator must
+	// reject if ANY URL fails — not just the first one. Otherwise
+	// an operator could sneak a denied host past the check by
+	// putting an allowed URL first.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `curl https://github.com/ok && curl https://evil.example.com/data`,
+		Policy: Policy{
+			Network:      true,
+			AllowedHosts: []string{"github.com"},
+		},
+		Timeout: time.Second,
+	})
+	if !IsPolicyDenied(err) {
+		t.Fatalf("Run() error = %v, want policy denial for second-position off-allowlist URL", err)
+	}
+	if !strings.Contains(err.Error(), "evil.example.com") {
+		t.Errorf("error = %q, want it to name the bad host (proves we didn't stop after the first allowed URL)", err.Error())
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_URLWithPortAndUserinfo(t *testing.T) {
+	// `url.Parse` extracts the bare hostname via Hostname(),
+	// stripping the port and userinfo. The allowlist check should
+	// match on the bare host, so https://user:pass@github.com:8443/x
+	// passes when github.com is allowed. Without this test, a
+	// regression that compared u.Host (which includes port) against
+	// the allowlist would silently break common URLs.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `echo https://user:pass@github.com:8443/foo`,
+		Policy: Policy{
+			Network:      true,
+			AllowedHosts: []string{"github.com"},
+		},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("URL with port + userinfo should pass when bare host is allowed; got %v", err)
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_PrivateIPBlockedRegardlessOfAllowlist(t *testing.T) {
+	// The private-IP block is independent of AllowedHosts: even
+	// when AllowedHosts is empty (no host restriction) and the
+	// operator hasn't flipped AllowPrivateIPs, a 10.x address must
+	// still be rejected. Covers the common misconfiguration of
+	// "I just want network on" missing the private-IP exposure.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `curl http://10.0.0.1/internal`,
+		Policy:  Policy{Network: true},
+		Timeout: time.Second,
+	})
+	if !IsPolicyDenied(err) {
+		t.Fatalf("Run() error = %v, want policy denial for RFC1918 host", err)
+	}
+	if !strings.Contains(err.Error(), "private") {
+		t.Errorf("error = %q, want mention of 'private'", err.Error())
+	}
+}
+
 func TestWorkerExecutorWritesFile(t *testing.T) {
 	t.Parallel()
 
