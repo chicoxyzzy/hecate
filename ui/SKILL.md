@@ -5,8 +5,6 @@ description: Use when working on the Hecate operator UI in `ui/`. This skill kee
 
 # Hecate UI Skill
 
-Use this skill for any work inside `/Users/chicoxyzzy/dev/hecate/ui`.
-
 This is not a marketing site. It is an operator-facing control surface for an AI gateway. The UI should help someone understand what the runtime is doing, what is misconfigured, what costs money, and what action to take next.
 
 ## Product Lens
