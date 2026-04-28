@@ -36,11 +36,16 @@ type CreateTaskRequest struct {
 // MCPServerConfigItem is the wire shape of an MCP-server entry on a
 // task. Mirrors types.MCPServerConfig — duplicated here so the API
 // package owns its JSON contract independent of the internal types.
+// Exactly one of command or url must be set.
 type MCPServerConfigItem struct {
-	Name    string            `json:"name"`
-	Command string            `json:"command"`
+	Name string `json:"name"`
+	// Stdio transport (mutually exclusive with url):
+	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// HTTP transport (mutually exclusive with command):
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type TaskLifecycleRequest struct {

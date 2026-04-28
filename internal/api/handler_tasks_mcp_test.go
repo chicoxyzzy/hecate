@@ -52,9 +52,9 @@ func TestNormalizeMCPServerConfigs_Validation(t *testing.T) {
 			wantErr: "name is required",
 		},
 		{
-			desc:    "empty command",
+			desc:    "empty command and url",
 			items:   []MCPServerConfigItem{{Name: "fs", Command: ""}},
-			wantErr: "command is required",
+			wantErr: "either command or url is required",
 		},
 		{
 			desc: "duplicate name",

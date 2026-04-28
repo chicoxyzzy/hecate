@@ -15,19 +15,27 @@ import (
 )
 
 // ServerConfig is one external MCP server the pool should bring up.
-// The pool spawns Command (with Args + merged Env) over stdio, runs
-// the initialize handshake, and lists its tools — all surfaced under
-// the namespace `mcp__<Name>__<tool>` so multiple servers can't
-// collide on a tool name.
+// Exactly one of Command (stdio) or URL (HTTP) must be set.
+//
+// Stdio: the pool spawns Command (with Args and merged Env) as a
+// subprocess and communicates via stdin/stdout.
+//
+// HTTP: the pool connects to URL using the Streamable HTTP transport.
+// Headers are sent on every request (e.g. {"Authorization": "Bearer
+// <token>"}). Env is ignored for HTTP servers.
 //
 // Duplicated from pkg/types.MCPServerConfig so the client package
 // stays free of the orchestrator's type tree. The orchestrator
 // converts on the way in.
 type ServerConfig struct {
-	Name    string
+	Name string
+	// Stdio transport — mutually exclusive with URL.
 	Command string
 	Args    []string
 	Env     map[string]string
+	// HTTP transport — mutually exclusive with Command.
+	URL     string
+	Headers map[string]string
 }
 
 // PoolToolName is the namespace prefix every pool-vended tool name
@@ -102,24 +110,43 @@ func NewPool(ctx context.Context, info mcp.ClientInfo, configs []ServerConfig) (
 			return nil, fmt.Errorf("mcp pool: duplicate server name %q", name)
 		}
 		command := strings.TrimSpace(cfg.Command)
-		if command == "" {
+		rawURL := strings.TrimSpace(cfg.URL)
+		if command != "" && rawURL != "" {
 			cleanup()
-			return nil, fmt.Errorf("mcp pool: server %q: command is required", name)
+			return nil, fmt.Errorf("mcp pool: server %q: command and url are mutually exclusive", name)
+		}
+		if command == "" && rawURL == "" {
+			cleanup()
+			return nil, fmt.Errorf("mcp pool: server %q: either command or url is required", name)
 		}
 
-		cmd := exec.CommandContext(ctx, command, cfg.Args...)
-		cmd.Env = mergeEnv(os.Environ(), cfg.Env)
-		transport, err := NewStdioTransport(cmd)
-		if err != nil {
-			cleanup()
-			return nil, fmt.Errorf("mcp pool: server %q: spawn: %w", name, err)
+		var transport Transport
+		var transportErr error
+		if rawURL != "" {
+			transport, transportErr = NewHTTPTransport(rawURL, cfg.Headers, nil)
+			if transportErr != nil {
+				cleanup()
+				return nil, fmt.Errorf("mcp pool: server %q: http: %w", name, transportErr)
+			}
+		} else {
+			cmd := exec.CommandContext(ctx, command, cfg.Args...)
+			cmd.Env = mergeEnv(os.Environ(), cfg.Env)
+			transport, transportErr = NewStdioTransport(cmd)
+			if transportErr != nil {
+				cleanup()
+				return nil, fmt.Errorf("mcp pool: server %q: spawn: %w", name, transportErr)
+			}
 		}
 		client := New(transport, info)
 		if _, err := client.Initialize(ctx); err != nil {
-			// Surface the child's stderr if any — the JSON-RPC error
-			// alone (often "EOF") rarely names the actual problem
-			// (missing deps, bad arg, auth failure).
-			diag := transport.Stderr()
+			// Surface stderr from stdio servers — the JSON-RPC error
+			// alone (often "EOF") rarely names the root cause (missing
+			// deps, bad arg, auth failure). HTTP transports have no
+			// stderr; the HTTP status error already carries the detail.
+			var diag string
+			if st, ok := transport.(*StdioTransport); ok {
+				diag = st.Stderr()
+			}
 			_ = client.Close()
 			cleanup()
 			if strings.TrimSpace(diag) != "" {

@@ -155,6 +155,17 @@ func resolveEnvConfigs(configs []types.MCPServerConfig, cipher secrets.Cipher) (
 			}
 			resolved.Env = env
 		}
+		if len(cfg.Headers) > 0 {
+			headers := make(map[string]string, len(cfg.Headers))
+			for k, v := range cfg.Headers {
+				rv, err := resolveEnvValue(cfg.Name, k, v, cipher)
+				if err != nil {
+					return nil, err
+				}
+				headers[k] = rv
+			}
+			resolved.Headers = headers
+		}
 		out[i] = resolved
 	}
 	return out, nil
@@ -179,6 +190,8 @@ func toClientServerConfigs(configs []types.MCPServerConfig) []mcpclient.ServerCo
 			Command: c.Command,
 			Args:    c.Args,
 			Env:     c.Env,
+			URL:     c.URL,
+			Headers: c.Headers,
 		})
 	}
 	return out

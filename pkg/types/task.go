@@ -77,6 +77,7 @@ type MCPServerConfig struct {
 	// Must be non-empty and unique within a task; the gateway rejects
 	// duplicates at create time.
 	Name string
+	// Stdio transport (mutually exclusive with URL):
 	// Command is the executable that speaks MCP over stdio (e.g. "npx",
 	// "uvx", or a path to a binary).
 	Command string
@@ -85,6 +86,12 @@ type MCPServerConfig struct {
 	// Env is merged onto the spawned process's environment. Values may
 	// be $VAR_NAME references, enc: ciphertext, or bare literals.
 	Env map[string]string
+	// HTTP transport (mutually exclusive with Command):
+	// URL is the MCP endpoint (e.g. "https://api.example.com/mcp").
+	URL string
+	// Headers are sent on every HTTP request. Values follow the same
+	// $VAR_NAME / enc: / literal rules as Env values.
+	Headers map[string]string
 }
 
 type TaskRun struct {

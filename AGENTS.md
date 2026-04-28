@@ -52,7 +52,7 @@ internal/mcp/           stdio MCP server (read tools + write tools)
   - Value with `omitempty` when zero == API default: `PresencePenalty float64`, `Logprobs bool`.
 - **`json.RawMessage`** for forward-compat passthrough (response_format, logit_bias, stream_options). Decode lazily where the gateway needs to inspect; stay out of the way otherwise.
 - **Test naming**: `TestPackage_Behavior`. Table-driven where the variant set is obvious.
-- **Commits**: Conventional Commits one-liner; `/commit-msg` proposes one. Pure `*.md` skips CI via `paths-ignore`; for inert source changes append `[skip ci]`.
+- **Commits**: Conventional Commits; `/commit-msg` proposes one. Pure `*.md` skips CI via `paths-ignore`; for inert source changes append `[skip ci]`.
 
 ## Test helper cheat-sheet
 
@@ -127,4 +127,4 @@ The chain that bit me three times before I stopped re-discovering it:
 
 ## Commit etiquette
 
-Don't auto-commit. After a change, propose a Conventional Commits one-liner (or run `/commit-msg`); the user merges.
+Don't auto-commit. After a change, propose a Conventional Commits (or run `/commit-msg`); the user merges.

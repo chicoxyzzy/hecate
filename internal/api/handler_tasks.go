@@ -1334,16 +1334,16 @@ func renderTaskItem(task types.Task) TaskItem {
 
 // normalizeMCPServerConfigs converts the wire shape into the internal
 // types.MCPServerConfig slice used by the orchestrator. Trims whitespace
-// on string fields, enforces non-empty Name + Command, and rejects
-// duplicate names within the same task — a duplicate would clobber the
-// tool-namespacing prefix and produce silently wrong dispatch.
+// on string fields, enforces non-empty Name, rejects duplicate names,
+// and validates that exactly one of command or url is set per entry.
 //
-// Env values are stored in three forms depending on cipher availability:
+// Env and Header values are stored in three forms depending on cipher
+// availability:
 //   - "$VAR_NAME" references are stored verbatim — resolved from the
 //     Hecate process environment at subprocess spawn time.
 //   - Literal values are encrypted with cipher when available →
 //     stored as "enc:<base64>". When cipher is nil they are stored
-//     as-is; operators should use $VAR_NAME references in that case.
+//     as-is; operators should prefer $VAR_NAME references in that case.
 //
 // Returns nil for an empty input (the agent loop skips MCP-host
 // startup when MCPServers is nil/empty).
@@ -1356,11 +1356,15 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Ciphe
 	for i, item := range items {
 		name := strings.TrimSpace(item.Name)
 		command := strings.TrimSpace(item.Command)
+		rawURL := strings.TrimSpace(item.URL)
 		if name == "" {
 			return nil, fmt.Errorf("mcp_servers[%d]: name is required", i)
 		}
-		if command == "" {
-			return nil, fmt.Errorf("mcp_servers[%d] (%s): command is required", i, name)
+		if command != "" && rawURL != "" {
+			return nil, fmt.Errorf("mcp_servers[%d] (%s): command and url are mutually exclusive", i, name)
+		}
+		if command == "" && rawURL == "" {
+			return nil, fmt.Errorf("mcp_servers[%d] (%s): either command or url is required", i, name)
 		}
 		if _, dup := seen[name]; dup {
 			return nil, fmt.Errorf("mcp_servers[%d]: duplicate name %q", i, name)
@@ -1368,23 +1372,40 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Ciphe
 		seen[name] = struct{}{}
 		// Defensive copies — callers may reuse the request struct.
 		args := append([]string(nil), item.Args...)
-		var env map[string]string
-		if len(item.Env) > 0 {
-			env = make(map[string]string, len(item.Env))
-			for k, v := range item.Env {
-				stored, err := storeMCPEnvValue(v, cipher)
-				if err != nil {
-					return nil, fmt.Errorf("mcp_servers[%d] (%s): env %q: %w", i, name, k, err)
-				}
-				env[k] = stored
-			}
+		env, err := storeSecretMap(item.Env, cipher, fmt.Sprintf("mcp_servers[%d] (%s): env", i, name))
+		if err != nil {
+			return nil, err
+		}
+		headers, err := storeSecretMap(item.Headers, cipher, fmt.Sprintf("mcp_servers[%d] (%s): headers", i, name))
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, types.MCPServerConfig{
 			Name:    name,
 			Command: command,
 			Args:    args,
 			Env:     env,
+			URL:     rawURL,
+			Headers: headers,
 		})
+	}
+	return out, nil
+}
+
+// storeSecretMap applies storeMCPEnvValue to every value in m, returning
+// a new defensive copy. Returns nil for a nil or empty input. errPrefix
+// is prepended to any encryption error for context (e.g. "mcp_servers[0] (github): env").
+func storeSecretMap(m map[string]string, cipher secrets.Cipher, errPrefix string) (map[string]string, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		stored, err := storeMCPEnvValue(v, cipher)
+		if err != nil {
+			return nil, fmt.Errorf("%s %q: %w", errPrefix, k, err)
+		}
+		out[k] = stored
 	}
 	return out, nil
 }
@@ -1431,8 +1452,8 @@ func isMCPEnvRef(v string) bool {
 }
 
 // renderMCPServerConfigs is the inverse of normalizeMCPServerConfigs:
-// internal slice → wire shape on TaskItem responses. Env values are
-// selectively redacted:
+// internal slice → wire shape on TaskItem responses. Env and Headers
+// values are selectively redacted:
 //   - "$VAR_NAME" references are returned verbatim (they name a variable,
 //     not the secret itself).
 //   - "enc:<base64>" encrypted values and bare literals are replaced with
@@ -1444,23 +1465,31 @@ func renderMCPServerConfigs(configs []types.MCPServerConfig) []MCPServerConfigIt
 	out := make([]MCPServerConfigItem, 0, len(configs))
 	for _, c := range configs {
 		args := append([]string(nil), c.Args...)
-		var env map[string]string
-		if len(c.Env) > 0 {
-			env = make(map[string]string, len(c.Env))
-			for k, v := range c.Env {
-				if isMCPEnvRef(v) {
-					env[k] = v
-				} else {
-					env[k] = "[redacted]"
-				}
-			}
-		}
 		out = append(out, MCPServerConfigItem{
 			Name:    c.Name,
 			Command: c.Command,
 			Args:    args,
-			Env:     env,
+			Env:     redactSecretMap(c.Env),
+			URL:     c.URL,
+			Headers: redactSecretMap(c.Headers),
 		})
+	}
+	return out
+}
+
+// redactSecretMap returns a copy of m where non-$VAR_NAME values are
+// replaced with "[redacted]". Returns nil for nil/empty input.
+func redactSecretMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if isMCPEnvRef(v) {
+			out[k] = v
+		} else {
+			out[k] = "[redacted]"
+		}
 	}
 	return out
 }
