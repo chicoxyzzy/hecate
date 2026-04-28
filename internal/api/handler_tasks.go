@@ -53,6 +53,12 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mcpServers, mcpErr := normalizeMCPServerConfigs(req.MCPServers)
+	if mcpErr != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, mcpErr.Error())
+		return
+	}
+
 	workspaceMode := strings.TrimSpace(req.WorkspaceMode)
 	if workspaceMode == "" {
 		workspaceMode = "ephemeral"
@@ -89,6 +95,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		RequestedModel:     strings.TrimSpace(req.RequestedModel),
 		RequestedProvider:  strings.TrimSpace(req.RequestedProvider),
 		BudgetMicrosUSD:    req.BudgetMicrosUSD,
+		MCPServers:         mcpServers,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -1307,6 +1314,7 @@ func renderTaskItem(task types.Task) TaskItem {
 		RootTraceID:        task.RootTraceID,
 		LatestTraceID:      task.LatestTraceID,
 		LatestRequestID:    task.LatestRequestID,
+		MCPServers:         renderMCPServerConfigs(task.MCPServers),
 	}
 	if !task.CreatedAt.IsZero() {
 		item.CreatedAt = task.CreatedAt.UTC().Format(time.RFC3339Nano)
@@ -1321,6 +1329,78 @@ func renderTaskItem(task types.Task) TaskItem {
 		item.FinishedAt = task.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return item
+}
+
+// normalizeMCPServerConfigs converts the wire shape into the internal
+// types.MCPServerConfig slice used by the orchestrator. Trims whitespace
+// on string fields, enforces non-empty Name + Command, and rejects
+// duplicate names within the same task — a duplicate would clobber the
+// tool-namespacing prefix and produce silently wrong dispatch.
+//
+// Returns nil for an empty input (the agent loop skips MCP-host
+// startup when MCPServers is nil/empty).
+func normalizeMCPServerConfigs(items []MCPServerConfigItem) ([]types.MCPServerConfig, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	out := make([]types.MCPServerConfig, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for i, item := range items {
+		name := strings.TrimSpace(item.Name)
+		command := strings.TrimSpace(item.Command)
+		if name == "" {
+			return nil, fmt.Errorf("mcp_servers[%d]: name is required", i)
+		}
+		if command == "" {
+			return nil, fmt.Errorf("mcp_servers[%d] (%s): command is required", i, name)
+		}
+		if _, dup := seen[name]; dup {
+			return nil, fmt.Errorf("mcp_servers[%d]: duplicate name %q", i, name)
+		}
+		seen[name] = struct{}{}
+		// Defensive copies — callers may reuse the request struct.
+		args := append([]string(nil), item.Args...)
+		var env map[string]string
+		if len(item.Env) > 0 {
+			env = make(map[string]string, len(item.Env))
+			for k, v := range item.Env {
+				env[k] = v
+			}
+		}
+		out = append(out, types.MCPServerConfig{
+			Name:    name,
+			Command: command,
+			Args:    args,
+			Env:     env,
+		})
+	}
+	return out, nil
+}
+
+// renderMCPServerConfigs is the inverse of normalizeMCPServerConfigs:
+// internal slice → wire shape on TaskItem responses.
+func renderMCPServerConfigs(configs []types.MCPServerConfig) []MCPServerConfigItem {
+	if len(configs) == 0 {
+		return nil
+	}
+	out := make([]MCPServerConfigItem, 0, len(configs))
+	for _, c := range configs {
+		args := append([]string(nil), c.Args...)
+		var env map[string]string
+		if len(c.Env) > 0 {
+			env = make(map[string]string, len(c.Env))
+			for k, v := range c.Env {
+				env[k] = v
+			}
+		}
+		out = append(out, MCPServerConfigItem{
+			Name:    c.Name,
+			Command: c.Command,
+			Args:    args,
+			Env:     env,
+		})
+	}
+	return out
 }
 
 func loadTaskItemCounts(ctx context.Context, store taskstate.Store, taskID string) taskItemCounts {

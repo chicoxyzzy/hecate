@@ -42,6 +42,39 @@ type Task struct {
 	RootTraceID        string
 	LatestTraceID      string
 	LatestRequestID    string
+	// MCPServers configures external MCP servers that an agent_loop run
+	// should bring up and expose to the LLM as additional tools. Each
+	// entry produces one stdio subprocess (`Command` + `Args`, env
+	// merged from `Env`); its tools are registered alongside the
+	// built-ins under names of the form `mcp__<server-name>__<tool>`.
+	// Empty for non-agent_loop tasks and for agent_loop tasks that
+	// don't need external tools.
+	MCPServers []MCPServerConfig
+}
+
+// MCPServerConfig describes one external MCP server an agent_loop run
+// should connect to. Persisted as part of the task payload (no schema
+// migration — the task is stored as a JSON blob in both the sqlite and
+// postgres backends).
+//
+// Env is intentionally a flat map[string]string for now. Secret
+// resolution against an external key vault is a follow-up; until then,
+// values are stored as written. Operators who don't want plaintext
+// secrets in their store should leave Env empty and set
+// per-host environment via the Hecate process itself.
+type MCPServerConfig struct {
+	// Name is the operator-chosen label used to namespace this server's
+	// tools (e.g. "filesystem" → tools become `mcp__filesystem__*`).
+	// Must be non-empty and unique within a task; the gateway rejects
+	// duplicates at create time.
+	Name string
+	// Command is the executable that speaks MCP over stdio (e.g. "npx",
+	// "uvx", or a path to a binary).
+	Command string
+	// Args are passed verbatim to the command.
+	Args []string
+	// Env is merged onto the spawned process's environment.
+	Env map[string]string
 }
 
 type TaskRun struct {

@@ -120,9 +120,19 @@ State the choice in a comment so the next reader understands the constraint.
 
 ## Testing Expectations
 
-For meaningful backend changes, add or update tests when practical.
+**Always add unit tests for new behavior.** Not "when practical" — as a default. A change without tests is incomplete. The bar is: a future contributor should be able to refactor the implementation and have the tests catch a regression in behavior. If you can't write a test for what you just added, the design is probably wrong (untestable side effects, hidden globals, etc.).
 
-Prioritize tests for:
+**Add e2e tests where they make sense.** The `e2e/` directory (build tag `e2e`, optional sub-tags `ollama` / `docker`) covers binary-startup behavior — the things that only break when the whole gateway is up. Reach for an e2e test when the change:
+
+- spans the api → orchestrator → providers / sandbox / mcp chain end-to-end
+- depends on real subprocess lifecycle (sandbox, mcp stdio host)
+- changes startup or config-loading semantics
+- adds a new SSE event sequence operators rely on
+- mutates a public HTTP contract that downstream SDKs consume
+
+Unit tests prove the seams. E2e tests prove they fit together.
+
+Prioritize unit tests for:
 
 - request → wire shape passthrough (especially across the api/providers boundary)
 - error classification (which errors map to which HTTP status)

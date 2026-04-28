@@ -52,6 +52,26 @@ export type CreateTaskPayload = {
   // spend across turns and fails the run on overage. 0 / unset =
   // no ceiling.
   budget_micros_usd?: number;
+  // External MCP servers the agent_loop run should bring up. Each
+  // entry becomes one stdio subprocess; its tools are exposed to
+  // the LLM as `mcp__<name>__<tool>`. Empty / unset = no external
+  // tools (built-ins only).
+  mcp_servers?: Array<{
+    name: string;
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }>;
+};
+
+// McpServerFormEntry is the in-form representation of one MCP server
+// row. Args + env stay as raw text in state so the operator can edit
+// them as freeform input; we parse to arrays/maps on submit.
+type McpServerFormEntry = {
+  name: string;
+  command: string;
+  argsRaw: string; // whitespace-separated tokens
+  envRaw: string;  // KEY=VALUE per line
 };
 
 type Props = {
@@ -177,6 +197,20 @@ export function NewTaskSlideOver({
   // ("$2.50") and converts to micro-USD (the wire shape) on submit.
   // Empty / 0 = no ceiling.
   const [taskBudgetUSD, setTaskBudgetUSD] = useState("");
+  // External MCP servers — only meaningful for agent_loop. Edited
+  // as raw text rows in the form; parsed into the API shape on
+  // submit. Empty array = no external MCP host (built-in tools only).
+  const [mcpServers, setMcpServers] = useState<McpServerFormEntry[]>([]);
+
+  function updateMcpServer(index: number, patch: Partial<McpServerFormEntry>) {
+    setMcpServers(prev => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+  }
+  function addMcpServer() {
+    setMcpServers(prev => [...prev, { name: "", command: "", argsRaw: "", envRaw: "" }]);
+  }
+  function removeMcpServer(index: number) {
+    setMcpServers(prev => prev.filter((_, i) => i !== index));
+  }
 
   function formIsValid(): boolean {
     if (taskKind === "shell") return taskCommand.trim() !== "";
@@ -194,6 +228,25 @@ export function NewTaskSlideOver({
     if (taskKind === "shell" && !command) return;
     if (taskKind === "git" && !command) return;
     if (taskKind === "file" && !filePath) return;
+    // MCP servers: only attach for agent_loop kind. Drop blank rows
+    // (operator added then abandoned), parse args on whitespace,
+    // parse env as KEY=VALUE per non-empty line. The gateway
+    // re-validates names/commands and returns 400 with a concrete
+    // diagnostic if any row is malformed; this layer just drops
+    // the obviously-empty rows so the user doesn't get a "name
+    // required at index 3" for a row they thought they cleared.
+    const mcpPayload =
+      taskKind === "agent_loop"
+        ? mcpServers
+            .filter(e => e.name.trim() !== "" || e.command.trim() !== "")
+            .map(e => ({
+              name: e.name.trim(),
+              command: e.command.trim(),
+              args: e.argsRaw.trim() === "" ? undefined : e.argsRaw.trim().split(/\s+/),
+              env: parseMcpEnv(e.envRaw),
+            }))
+        : [];
+
     onCreate({
       prompt: taskPrompt.trim() || (taskKind === "shell" ? command : taskKind === "git" ? `git ${command}` : filePath),
       execution_kind: taskKind,
@@ -208,6 +261,7 @@ export function NewTaskSlideOver({
       ...(taskKind === "agent_loop" && parseFloat(taskBudgetUSD) > 0
         ? { budget_micros_usd: Math.round(parseFloat(taskBudgetUSD) * 1_000_000) }
         : {}),
+      ...(mcpPayload.length > 0 ? { mcp_servers: mcpPayload } : {}),
     });
     setTaskPrompt(""); setTaskCommand(""); setTaskGitCommand(""); setTaskWorkingDir("");
     setTaskFilePath(""); setTaskFileContent(""); setTaskFileOp("write");
@@ -215,6 +269,7 @@ export function NewTaskSlideOver({
     setTaskBudgetUSD("");
     setTaskProvider("auto"); setTaskModel("");
     setTaskInPlace(false);
+    setMcpServers([]);
   }
 
   if (!open) return null;
@@ -406,6 +461,75 @@ export function NewTaskSlideOver({
             </div>
           )}
 
+          {taskKind === "agent_loop" && (
+            <div>
+              <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>
+                MCP SERVERS <span style={{ color: "var(--t3)" }}>(optional, exposes external tools as mcp__&lt;name&gt;__&lt;tool&gt;)</span>
+              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {mcpServers.map((entry, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: 8,
+                      background: "var(--bg0)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        className="input"
+                        placeholder="name (e.g. filesystem)"
+                        value={entry.name}
+                        onChange={e => updateMcpServer(i, { name: e.target.value })}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ padding: "3px 6px" }}
+                        onClick={() => removeMcpServer(i)}
+                        title="Remove this server"
+                      >
+                        <Icon d={Icons.x} size={12} />
+                      </button>
+                    </div>
+                    <input
+                      className="input"
+                      placeholder="command (e.g. npx)"
+                      value={entry.command}
+                      onChange={e => updateMcpServer(i, { command: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /workspace)"
+                      value={entry.argsRaw}
+                      onChange={e => updateMcpServer(i, { argsRaw: e.target.value })}
+                    />
+                    <textarea
+                      className="input"
+                      placeholder="env (KEY=VALUE per line, optional — values stored as written)"
+                      rows={2}
+                      style={{ resize: "vertical" }}
+                      value={entry.envRaw}
+                      onChange={e => updateMcpServer(i, { envRaw: e.target.value })}
+                    />
+                  </div>
+                ))}
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ alignSelf: "flex-start" }}
+                  onClick={addMcpServer}
+                >
+                  <Icon d={Icons.plus} size={12} /> Add MCP server
+                </button>
+              </div>
+            </div>
+          )}
+
           <div>
             <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>PROVIDER & MODEL</label>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -495,4 +619,24 @@ function WorkspacePreview({ workingDir, inPlace }: { workingDir: string; inPlace
       )}
     </div>
   );
+}
+
+// parseMcpEnv turns a freeform `KEY=VALUE` block into a flat env map.
+// Empty lines are skipped; lines without `=` are dropped (no error
+// reporting at this layer — we trust the gateway to surface a 400 with
+// a useful message if the resulting payload is unusable). Values can
+// contain `=`; we split on the FIRST one only.
+function parseMcpEnv(raw: string): Record<string, string> | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  const out: Record<string, string> = {};
+  for (const line of trimmed.split(/\r?\n/)) {
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1);
+    if (key === "") continue;
+    out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }

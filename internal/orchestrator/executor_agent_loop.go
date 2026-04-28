@@ -69,6 +69,10 @@ type AgentLoopExecutor struct {
 	gatedTools map[string]struct{}
 	httpPolicy HTTPRequestPolicy
 	httpClient *http.Client
+	// mcpFactory builds a per-run MCP host from the task's
+	// MCPServers config. nil = no MCP support; tasks that configure
+	// MCPServers will fail with a clear error.
+	mcpFactory AgentMCPHostFactory
 }
 
 // NewAgentLoopExecutor constructs the loop. A nil LLM client is
@@ -129,6 +133,16 @@ func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git
 	}
 }
 
+// SetMCPHostFactory wires the factory used to bring up per-task MCP
+// hosts. Production runners set this to DefaultMCPHostFactory at
+// startup; tests substitute an in-memory factory. nil disables MCP
+// host support — agent_loop tasks that configure MCPServers will be
+// failed at the start of Execute with a clear error rather than
+// silently dropping the configured tools.
+func (e *AgentLoopExecutor) SetMCPHostFactory(f AgentMCPHostFactory) {
+	e.mcpFactory = f
+}
+
 // isGated reports whether a tool call requires operator approval.
 func (e *AgentLoopExecutor) isGated(toolName string) bool {
 	if len(e.gatedTools) == 0 {
@@ -179,6 +193,32 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 	// later add.
 	messages := hydrateConversation(spec)
 	tools := agentToolDefinitions()
+
+	// Bring up external MCP servers if the task configured any. Their
+	// tools are appended to the built-in catalog under names of the
+	// form `mcp__<server>__<tool>`. The host owns the subprocesses and
+	// dies when this run finishes — long-lived per-task pooling is a
+	// follow-up. We fail fast rather than silently running without
+	// the configured tools: the operator asked for those tools to be
+	// available, so a half-configured run is the wrong default.
+	var mcpHost AgentMCPHost
+	if len(spec.Task.MCPServers) > 0 {
+		if e.mcpFactory == nil {
+			return e.failedFromError(spec, nil, nil, baseIndex+1, time.Now().UTC(),
+				"task configured mcp_servers but no MCP host factory is wired; this gateway build does not support external MCP servers")
+		}
+		host, err := e.mcpFactory(ctx, spec.Task.MCPServers)
+		if err != nil {
+			return e.failedFromError(spec, nil, nil, baseIndex+1, time.Now().UTC(),
+				fmt.Sprintf("start mcp servers: %v", err))
+		}
+		if host != nil {
+			mcpHost = host
+			defer func() { _ = host.Close() }()
+			tools = append(tools, host.Tools()...)
+		}
+	}
+
 	// Stable artifact ID for this run's conversation snapshot. Same
 	// ID across turns means UpsertArtifact replaces the contents in
 	// place rather than creating a new artifact each time, so the
@@ -391,7 +431,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 		// 5. Dispatch each tool call in order.
 		callsToRun := assistantMsg.ToolCalls
 		for _, toolCall := range callsToRun {
-			toolResultText, toolStep, toolArtifacts, dispatchErr := e.dispatchToolCall(ctx, spec, toolCall, nextIndex)
+			toolResultText, toolStep, toolArtifacts, dispatchErr := e.dispatchToolCall(ctx, spec, toolCall, nextIndex, mcpHost)
 			if toolStep != nil {
 				if err := upsertTaskStep(spec, *toolStep); err != nil {
 					return nil, err
@@ -484,8 +524,16 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 //   - toolArtifacts: any artifacts the tool produced
 //   - dispatchErr: non-nil for *internal* errors (unknown tool,
 //     malformed args); tool-level failures are encoded in toolResultText
-func (e *AgentLoopExecutor) dispatchToolCall(ctx context.Context, spec ExecutionSpec, call types.ToolCall, stepIndex int) (string, *types.TaskStep, []types.TaskArtifact, error) {
+func (e *AgentLoopExecutor) dispatchToolCall(ctx context.Context, spec ExecutionSpec, call types.ToolCall, stepIndex int, mcpHost AgentMCPHost) (string, *types.TaskStep, []types.TaskArtifact, error) {
 	startedAt := time.Now().UTC()
+
+	// External MCP tools surface under names of the form
+	// `mcp__<server>__<tool>`. Route them to the host before the
+	// built-in switch so a server can't accidentally collide with a
+	// built-in name.
+	if mcpHost != nil && isMCPToolName(call.Function.Name) {
+		return e.dispatchMCPToolCall(ctx, spec, call, stepIndex, startedAt, mcpHost)
+	}
 
 	// Decode the tool arguments. Each tool gets its own typed shape;
 	// see agentToolDefinitions() for the schemas. A malformed args
@@ -554,6 +602,94 @@ func (e *AgentLoopExecutor) dispatchToolCall(ctx context.Context, spec Execution
 	default:
 		return fmt.Sprintf("unknown tool: %s", call.Function.Name), nil, nil, nil
 	}
+}
+
+// isMCPToolName reports whether a tool name is in the MCP-host
+// namespace (`mcp__<server>__<tool>`). Cheap prefix check — full
+// validation happens at dispatch time when the host looks the name
+// up in its bind map.
+func isMCPToolName(name string) bool {
+	const prefix = "mcp__"
+	return len(name) > len(prefix) && name[:len(prefix)] == prefix
+}
+
+// dispatchMCPToolCall hands an MCP tool call off to the host and
+// builds the agent-loop step that records it. We don't validate the
+// arguments shape here — the upstream MCP server owns the schema and
+// will reject bad input via CallToolResult.IsError, which the LLM can
+// see and retry. Same shape as the other dispatch helpers so the
+// caller treats every tool uniformly.
+func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec ExecutionSpec, call types.ToolCall, stepIndex int, startedAt time.Time, host AgentMCPHost) (string, *types.TaskStep, []types.TaskArtifact, error) {
+	args := json.RawMessage(call.Function.Arguments)
+	if len(args) == 0 {
+		// MCP servers typically expect at least `{}` rather than an
+		// empty body. Substitute so a model that elides the
+		// arguments object doesn't trip an upstream parse error.
+		args = json.RawMessage(`{}`)
+	}
+	text, isError, err := host.Call(ctx, call.Function.Name, args)
+	finishedAt := time.Now().UTC()
+
+	status := "completed"
+	resultKind := resultFromStatus(status)
+	stepError := ""
+	if err != nil {
+		// Protocol-level failure (transport closed, RPC error, unknown
+		// tool). Surface as a tool error to the LLM with the diagnostic
+		// in the result text — the model can either retry or fall
+		// back to a different tool.
+		status = "failed"
+		resultKind = resultFromStatus(status)
+		stepError = err.Error()
+		text = fmt.Sprintf("mcp tool %q failed: %v", call.Function.Name, err)
+	} else if isError {
+		// Tool-level error. The text already carries the upstream
+		// reason; mark the step failed so the run timeline shows it
+		// in red and the next-turn message ToolError is set.
+		status = "failed"
+		resultKind = resultFromStatus(status)
+	}
+
+	step := types.TaskStep{
+		ID:         spec.NewID("step"),
+		TaskID:     spec.Task.ID,
+		RunID:      spec.Run.ID,
+		Index:      stepIndex,
+		Kind:       "tool",
+		Title:      fmt.Sprintf("%s (%s)", call.Function.Name, status),
+		Status:     status,
+		Phase:      "execution",
+		Result:     resultKind,
+		ToolName:   call.Function.Name,
+		Input:      mcpToolInputForLog(call.Function.Name, args),
+		Error:      stepError,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		RequestID:  spec.RequestID,
+		TraceID:    spec.TraceID,
+	}
+	step.OutputSummary = map[string]any{
+		"is_error":  isError || err != nil,
+		"text_size": len(text),
+	}
+	return text, &step, nil, nil
+}
+
+// mcpToolInputForLog captures the call inputs for the step's Input
+// field. Args may be arbitrarily large (file contents, etc.) — we
+// truncate so the step row stays a reasonable size in the store. The
+// full args remain in the conversation snapshot if operators need
+// them.
+func mcpToolInputForLog(name string, args json.RawMessage) map[string]any {
+	const cap = 4 * 1024
+	out := map[string]any{"tool": name}
+	if len(args) <= cap {
+		out["arguments"] = string(args)
+	} else {
+		out["arguments"] = string(args[:cap]) + "...(truncated)"
+		out["arguments_truncated_bytes"] = len(args) - cap
+	}
+	return out
 }
 
 // runSubExecutor delegates to one of the per-kind executors and

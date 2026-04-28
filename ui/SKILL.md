@@ -159,6 +159,17 @@ Current stack:
 - Vitest + Testing Library + jsdom
 - Plain CSS with design tokens in `src/styles.css` (no CSS-in-JS framework)
 
+### Toolchain: Bun, not Node
+
+This project uses **Bun** (pinned via `packageManager` in `ui/package.json`) as the package manager and script runner. There is no `package-lock.json`; the lockfile is `bun.lock`. Always use Bun commands:
+
+- `bun install` — install dependencies (not `npm install` / `yarn` / `pnpm`)
+- `bun run build` / `bun run test` / `bun run dev` — invoke scripts (not `npm run …`)
+- `bun add <pkg>` / `bun remove <pkg>` — manage dependencies
+- `bun x <tool>` is the equivalent of `npx`
+
+Scripts in `package.json` already assume Bun internally (e.g. `build` runs `bun run typecheck && vite build`), and helper scripts under `../scripts/` are invoked as `bun run …`. Don't introduce npm/yarn/pnpm-specific lockfiles, configs, or workflow steps; CI and local dev both expect Bun.
+
 Use the existing stack unless there is a strong reason to add something new.
 
 Keep dependencies light. Favor composition and small local abstractions over adding UI frameworks. Style via the design tokens (`var(--bg1)`, `var(--t0)`, `var(--accent)`, `var(--radius)`, `var(--font-mono)`, etc.) rather than per-component utility-class systems — the repo deliberately avoids the cascade of a class-based framework.
@@ -195,13 +206,23 @@ Good splits:
 
 ## Testing Expectations
 
-For meaningful UI changes, add or update tests when practical.
+**Always add unit tests for new behavior.** Not "when practical" — as a default. Vitest + Testing Library + jsdom is already wired (`bun run test`); a change without tests is incomplete. The bar is: a future contributor should be able to refactor the implementation and have the tests catch a regression in user-visible behavior. If a component is hard to test, the abstraction is probably wrong (too much fetching mixed with rendering, props that aren't clearly inputs, etc.).
 
-Prioritize tests for:
+**Add e2e tests where they make sense.** Playwright is wired (`bun run test:e2e`, with a UI mode via `test:e2e:ui`). Reach for an e2e test when the change:
+
+- spans multiple operator screens (auth → tenant context → run detail, etc.)
+- depends on the real gateway responding (SSE stream rendering, run-event replay)
+- introduces a new operator workflow (a new task creation path, a new approval flow)
+- changes navigation, routing, or top-level shell behavior
+- mutates anything that's hard to fake convincingly in a unit test (real focus management, scroll restoration, multi-tab drag-and-drop)
+
+Unit tests prove that one component does the right thing in isolation. E2e tests prove the operator journey actually works end-to-end.
+
+Prioritize unit tests for:
 
 - data-to-UI transformation
 - conditional rendering of critical states
-- operator workflows
+- form-input parsing and submit-payload shaping
 - trace/runtime inspection behavior
 
 Prefer testing behavior and outcomes over implementation details.

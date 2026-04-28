@@ -180,7 +180,9 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 	// Gated tools come from the same approval policies as
 	// task-level gating, so an operator who approves shell at the
 	// task layer also approves it inside agent_loop tool calls.
-	runner.agent = NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies), cfg.HTTPPolicy)
+	agent := NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies), cfg.HTTPPolicy)
+	agent.SetMCPHostFactory(DefaultMCPHostFactory)
+	runner.agent = agent
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
 		if policy == "" {
@@ -241,7 +243,11 @@ func (r *Runner) SetSystemPromptResolver(resolver SystemPromptResolver) {
 // service is constructed, since the chat path needs its own deps that
 // the runner doesn't otherwise know about. Nil unwires the loop.
 func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
-	r.agent = NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies), r.config.HTTPPolicy)
+	agent := NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies), r.config.HTTPPolicy)
+	// Re-bind the MCP host factory — the executor is rebuilt from
+	// scratch above, so the prior binding from NewRunner is gone.
+	agent.SetMCPHostFactory(DefaultMCPHostFactory)
+	r.agent = agent
 }
 
 // agentLoopGatedTools translates the runner's task-level approval

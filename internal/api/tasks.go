@@ -26,6 +26,21 @@ type CreateTaskRequest struct {
 	RequestedModel     string `json:"requested_model"`
 	RequestedProvider  string `json:"requested_provider"`
 	BudgetMicrosUSD    int64  `json:"budget_micros_usd"`
+	// MCPServers, when non-empty on an agent_loop task, configures
+	// external MCP servers the run should bring up and expose to the
+	// LLM. Each entry is one stdio subprocess; its tools become
+	// callable as `mcp__<name>__<tool>` alongside the built-ins.
+	MCPServers []MCPServerConfigItem `json:"mcp_servers,omitempty"`
+}
+
+// MCPServerConfigItem is the wire shape of an MCP-server entry on a
+// task. Mirrors types.MCPServerConfig — duplicated here so the API
+// package owns its JSON contract independent of the internal types.
+type MCPServerConfigItem struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 type TaskLifecycleRequest struct {
@@ -190,6 +205,10 @@ type TaskItem struct {
 	RootTraceID          string `json:"root_trace_id,omitempty"`
 	LatestTraceID        string `json:"latest_trace_id,omitempty"`
 	LatestRequestID      string `json:"latest_request_id,omitempty"`
+	// MCPServers echoes the configured external MCP servers (if any).
+	// Surfaced on the task detail so operators can see at a glance
+	// which external tool sources a run will bring up.
+	MCPServers []MCPServerConfigItem `json:"mcp_servers,omitempty"`
 }
 
 type TaskRunItem struct {
