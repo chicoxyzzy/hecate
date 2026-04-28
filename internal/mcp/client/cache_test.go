@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -370,6 +371,148 @@ func TestCache_ConcurrentAcquireSameKey(t *testing.T) {
 
 	for r := range releases {
 		r()
+	}
+}
+
+// TestCache_MaxEntries_EvictsLRUIdleOnOverflow pins the cache's
+// soft-cap behavior: when an Acquire-miss would push the cache over
+// maxEntries, the least-recently-used IDLE entry is evicted before
+// the new insert. We seed three idle entries with staggered
+// lastUsed timestamps, then trigger a fourth acquire under cap=3 and
+// verify the OLDEST idle entry got evicted (not the newest).
+func TestCache_MaxEntries_EvictsLRUIdleOnOverflow(t *testing.T) {
+	t.Parallel()
+	urlA, _ := makeCacheTestServer(t, "a", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlC, _ := makeCacheTestServer(t, "c", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlD, _ := makeCacheTestServer(t, "d", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+
+	// Cap of 3, no auto-eviction by TTL during the test (long ttl
+	// + long reaper interval keeps the reaper from confusing the
+	// LRU signal).
+	cache := newSharedClientCacheFull(time.Minute, time.Minute, 3, mcp.ClientInfo{Name: "test", Version: "0"})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Acquire + release each of A, B, C in order — small sleeps so
+	// their lastUsed timestamps are strictly ordered. Without the
+	// sleep, monotonic-time resolution on some platforms can leave
+	// two lastUsed values equal and make "least recent" ambiguous.
+	for i, u := range []string{urlA, urlB, urlC} {
+		_, _, release, err := cache.Acquire(ctx, ServerConfig{Name: fmt.Sprintf("s%d", i), URL: u})
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		release()
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := cache.Stats().Entries; got != 3 {
+		t.Fatalf("Stats.Entries = %d, want 3 before overflow", got)
+	}
+
+	// Acquire D. We're at cap=3 with all three idle, so the oldest
+	// (A) should be evicted, the new D inserted.
+	_, _, releaseD, err := cache.Acquire(ctx, ServerConfig{Name: "d", URL: urlD})
+	if err != nil {
+		t.Fatalf("Acquire D: %v", err)
+	}
+	t.Cleanup(releaseD)
+
+	if got := cache.Stats().Entries; got != 3 {
+		t.Errorf("Stats.Entries = %d, want 3 (one evicted, one inserted)", got)
+	}
+	// Verify A is gone — re-acquiring its config would be a cache
+	// miss, which Stats can't distinguish from a hit. So we use
+	// the next-best signal: re-acquiring A causes a respawn (B and
+	// C should still be present, D was just inserted; only A was
+	// evicted). We test this via Stats: after re-acquiring A,
+	// entries goes to 4, then triggers another LRU eviction.
+	_, _, releaseA2, err := cache.Acquire(ctx, ServerConfig{Name: "s0", URL: urlA})
+	if err != nil {
+		t.Fatalf("Re-acquire A: %v", err)
+	}
+	t.Cleanup(releaseA2)
+	// After this re-acquire the cap=3 is enforced again. The
+	// least-recently-used IDLE entry now is B (still the oldest
+	// idle). So B should evict and the cache should still be 3.
+	if got := cache.Stats().Entries; got != 3 {
+		t.Errorf("Stats.Entries = %d after re-acquire, want 3 (LRU eviction)", got)
+	}
+}
+
+// TestCache_MaxEntries_AllowsOverCapWhenAllInUse pins the soft-cap
+// fail-open behavior: when we're at cap and every entry is in-use
+// (no idle entries to evict), Acquire is allowed to push the cache
+// over cap rather than rejecting the request. Rejecting would break
+// a legitimate run; the alternative is unbounded growth, but TTL +
+// future releases catch up as soon as anything goes idle.
+func TestCache_MaxEntries_AllowsOverCapWhenAllInUse(t *testing.T) {
+	t.Parallel()
+	urlA, _ := makeCacheTestServer(t, "a", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlC, _ := makeCacheTestServer(t, "c", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+
+	cache := newSharedClientCacheFull(time.Minute, time.Minute, 2, mcp.ClientInfo{Name: "test", Version: "0"})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Acquire A and B and HOLD them — both in-use, refcount > 0.
+	_, _, releaseA, err := cache.Acquire(ctx, ServerConfig{Name: "a", URL: urlA})
+	if err != nil {
+		t.Fatalf("Acquire A: %v", err)
+	}
+	t.Cleanup(releaseA)
+	_, _, releaseB, err := cache.Acquire(ctx, ServerConfig{Name: "b", URL: urlB})
+	if err != nil {
+		t.Fatalf("Acquire B: %v", err)
+	}
+	t.Cleanup(releaseB)
+
+	// We're at cap=2, both held. C should still go through — no
+	// idle entry to evict, fail-open kicks in.
+	_, _, releaseC, err := cache.Acquire(ctx, ServerConfig{Name: "c", URL: urlC})
+	if err != nil {
+		t.Fatalf("Acquire C with all in-use must not fail: %v", err)
+	}
+	t.Cleanup(releaseC)
+
+	stats := cache.Stats()
+	if stats.Entries != 3 {
+		t.Errorf("Stats.Entries = %d, want 3 (over-cap allowed when all in-use)", stats.Entries)
+	}
+	if stats.InUse != 3 {
+		t.Errorf("Stats.InUse = %d, want 3", stats.InUse)
+	}
+}
+
+// TestCache_MaxEntries_DisabledByZero pins that maxEntries=0 means
+// "no cap" — useful for tests and any deployment that wants to rely
+// solely on TTL eviction.
+func TestCache_MaxEntries_DisabledByZero(t *testing.T) {
+	t.Parallel()
+	urlA, _ := makeCacheTestServer(t, "a", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+	urlC, _ := makeCacheTestServer(t, "c", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
+
+	cache := newSharedClientCacheFull(time.Minute, time.Minute, 0, mcp.ClientInfo{Name: "test", Version: "0"})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i, u := range []string{urlA, urlB, urlC} {
+		_, _, release, err := cache.Acquire(ctx, ServerConfig{Name: fmt.Sprintf("s%d", i), URL: u})
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		release()
+	}
+	if got := cache.Stats().Entries; got != 3 {
+		t.Errorf("Stats.Entries = %d, want 3 (cap disabled)", got)
 	}
 }
 

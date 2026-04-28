@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestNormalizeMCPServerConfigs_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
-			_, err := normalizeMCPServerConfigs(tc.items, nil)
+			_, err := normalizeMCPServerConfigs(tc.items, nil, 0)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -93,7 +94,7 @@ func TestNormalizeMCPServerConfigs_RefPassesThrough(t *testing.T) {
 		items := []MCPServerConfigItem{
 			{Name: "gh", Command: "npx", Env: map[string]string{"TOKEN": "$GITHUB_TOKEN"}},
 		}
-		out, err := normalizeMCPServerConfigs(items, cipher)
+		out, err := normalizeMCPServerConfigs(items, cipher, 0)
 		if err != nil {
 			t.Fatalf("normalize: %v", err)
 		}
@@ -111,7 +112,7 @@ func TestNormalizeMCPServerConfigs_NoCipherLiteralStoredAsIs(t *testing.T) {
 	items := []MCPServerConfigItem{
 		{Name: "gh", Command: "npx", Env: map[string]string{"TOKEN": "plaintext-secret"}},
 	}
-	out, err := normalizeMCPServerConfigs(items, nil)
+	out, err := normalizeMCPServerConfigs(items, nil, 0)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestNormalizeMCPServerConfigs_CipherEncryptsLiteral(t *testing.T) {
 	items := []MCPServerConfigItem{
 		{Name: "gh", Command: "npx", Env: map[string]string{"TOKEN": "my-plaintext-token"}},
 	}
-	out, err := normalizeMCPServerConfigs(items, cipher)
+	out, err := normalizeMCPServerConfigs(items, cipher, 0)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -158,7 +159,7 @@ func TestNormalizeMCPServerConfigs_AlreadyEncryptedPassesThrough(t *testing.T) {
 	items := []MCPServerConfigItem{
 		{Name: "gh", Command: "npx", Env: map[string]string{"TOKEN": already}},
 	}
-	out, err := normalizeMCPServerConfigs(items, cipher)
+	out, err := normalizeMCPServerConfigs(items, cipher, 0)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -227,7 +228,7 @@ func TestNormalizeMCPServerConfigs_ApprovalPolicyAccepted(t *testing.T) {
 			items := []MCPServerConfigItem{
 				{Name: "gh", Command: "npx", ApprovalPolicy: policy},
 			}
-			out, err := normalizeMCPServerConfigs(items, nil)
+			out, err := normalizeMCPServerConfigs(items, nil, 0)
 			if err != nil {
 				t.Fatalf("normalize: %v", err)
 			}
@@ -249,5 +250,74 @@ func TestRenderMCPServerConfigs_ApprovalPolicyShownVerbatim(t *testing.T) {
 	out := renderMCPServerConfigs(configs)
 	if got := out[0].ApprovalPolicy; got != types.MCPApprovalRequireApproval {
 		t.Errorf("ApprovalPolicy = %q, want %q", got, types.MCPApprovalRequireApproval)
+	}
+}
+
+// makeMCPItems returns n trivially-distinct MCP server entries — one
+// stdio server per index. Handy for the cap tests: the validation
+// only counts entries, the per-row content doesn't matter beyond
+// passing the structural checks (non-empty name, command set).
+func makeMCPItems(n int) []MCPServerConfigItem {
+	out := make([]MCPServerConfigItem, n)
+	for i := range out {
+		out[i] = MCPServerConfigItem{
+			Name:    fmt.Sprintf("srv-%d", i),
+			Command: "npx",
+		}
+	}
+	return out
+}
+
+// TestNormalizeMCPServerConfigs_CapAcceptsAtBoundary pins that the cap
+// is inclusive — exactly maxEntries entries is fine, only strictly
+// more rejects. Prevents an off-by-one regression where an operator
+// who configured exactly 16 servers gets rejected with a confusing
+// "exceeds 16" error.
+func TestNormalizeMCPServerConfigs_CapAcceptsAtBoundary(t *testing.T) {
+	t.Parallel()
+	const max = 4
+	out, err := normalizeMCPServerConfigs(makeMCPItems(max), nil, max)
+	if err != nil {
+		t.Fatalf("at-boundary normalize: %v", err)
+	}
+	if len(out) != max {
+		t.Errorf("len(out) = %d, want %d", len(out), max)
+	}
+}
+
+// TestNormalizeMCPServerConfigs_CapRejectsOverLimit pins that one
+// entry too many produces a 400-shaped error mentioning the actual
+// counts so the operator can correct the request without guessing.
+func TestNormalizeMCPServerConfigs_CapRejectsOverLimit(t *testing.T) {
+	t.Parallel()
+	const max = 4
+	_, err := normalizeMCPServerConfigs(makeMCPItems(max+1), nil, max)
+	if err == nil {
+		t.Fatal("expected error for over-cap entries, got nil")
+	}
+	// The message should name both numbers — operators will tweak
+	// either the request or the env var, and seeing both in the same
+	// line removes a round-trip.
+	if !strings.Contains(err.Error(), "5") || !strings.Contains(err.Error(), "4") {
+		t.Errorf("err = %q, want it to contain both counts (5 and 4)", err)
+	}
+	// And the env-var name so the operator knows which knob to turn.
+	if !strings.Contains(err.Error(), "GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK") {
+		t.Errorf("err = %q, want it to mention the env var", err)
+	}
+}
+
+// TestNormalizeMCPServerConfigs_CapDisabledByZero pins the
+// "0 or negative disables the cap" contract documented on the
+// config field. Tests that don't care about the cap pass 0; we
+// must not interpret that as "reject anything > 0 entries."
+func TestNormalizeMCPServerConfigs_CapDisabledByZero(t *testing.T) {
+	t.Parallel()
+	out, err := normalizeMCPServerConfigs(makeMCPItems(50), nil, 0)
+	if err != nil {
+		t.Fatalf("normalize with cap=0 should not enforce: %v", err)
+	}
+	if len(out) != 50 {
+		t.Errorf("len(out) = %d, want 50", len(out))
 	}
 }

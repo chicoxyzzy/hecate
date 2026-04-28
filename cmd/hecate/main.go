@@ -266,7 +266,7 @@ func main() {
 	// and tears it down on Shutdown after the runner has drained, so
 	// in-flight runs always see a live client. Zero TTL falls back to
 	// the cache's internal default (5 minutes idle eviction).
-	handler.SetMCPClientCache(orchestrator.NewAgentMCPClientCache(0))
+	handler.SetMCPClientCache(orchestrator.NewAgentMCPClientCache(0, cfg.Server.TaskMCPClientCacheMaxEntries))
 
 	server := &http.Server{
 		Addr:              cfg.Server.Address,

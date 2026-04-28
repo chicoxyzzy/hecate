@@ -47,6 +47,27 @@ type ServerConfig struct {
 	// agent_loop run can make. Acts as a runaway-cost safety net.
 	// Default 8 (set in NewAgentLoopExecutor when zero).
 	TaskAgentLoopMaxTurns int
+	// TaskMaxMCPServersPerTask caps how many entries an agent_loop
+	// task may declare under `mcp_servers`. Each entry produces one
+	// MCP client (subprocess for stdio, persistent connection for
+	// HTTP), so an unbounded list is a real-resource attack surface
+	// — a single misconfigured task could exhaust file descriptors
+	// or pin a tenant's worker on N initialize handshakes. The
+	// gateway rejects creates that exceed this with a 400 carrying
+	// a concrete diagnostic. Default 16 (set in NewHandler when
+	// zero); 0/negative disables the check entirely (not recommended
+	// outside test fixtures).
+	TaskMaxMCPServersPerTask int
+	// TaskMCPClientCacheMaxEntries caps how many distinct cached
+	// upstream clients the SharedClientCache holds at once. When
+	// inserting at-or-over this size, the cache evicts the
+	// least-recently-used IDLE entry first; if every entry is
+	// in-use it allows the over-cap insert (rejecting an Acquire
+	// would break a legitimate run). Combined with TTL eviction,
+	// this keeps a long-lived gateway from accumulating an
+	// unbounded set of cached subprocesses across tasks. Default
+	// 256 (set in NewAgentMCPClientCache when zero).
+	TaskMCPClientCacheMaxEntries int
 	// TaskAgentSystemPrompt is the global default system prompt
 	// prepended to every agent_loop conversation. Sits at the
 	// broadest layer of the four-level composition (global → tenant
@@ -304,26 +325,28 @@ func LoadFromEnv() Config {
 			BootstrapFile: getEnv("GATEWAY_BOOTSTRAP_FILE", ""),
 			// Default is "memory" to match every other backend selector
 			// (chat sessions, tasks, cache, …).
-			ControlPlaneBackend:        getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "memory"),
-			ControlPlaneKey:            getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
-			ControlPlaneSecretKey:      getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
-			TasksBackend:               getEnv("GATEWAY_TASKS_BACKEND", "memory"),
-			TaskApprovalPolicies:       splitCSV(getEnv("GATEWAY_TASK_APPROVAL_POLICIES", "shell_exec")),
-			TaskQueueBackend:           getEnv("GATEWAY_TASK_QUEUE_BACKEND", "memory"),
-			TaskQueueWorkers:           getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
-			TaskQueueBuffer:            getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
-			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
-			TaskAgentLoopMaxTurns:      getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
-			TaskAgentSystemPrompt:      getEnv("GATEWAY_TASK_AGENT_SYSTEM_PROMPT", ""),
-			TaskHTTPTimeout:            getEnvDuration("GATEWAY_TASK_HTTP_TIMEOUT", 30*time.Second),
-			TaskHTTPMaxResponseBytes:   getEnvInt("GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES", 256*1024),
-			TaskHTTPAllowPrivateIPs:    getEnvBool("GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS", false),
-			TaskHTTPAllowedHosts:       splitCSV(getEnv("GATEWAY_TASK_HTTP_ALLOWED_HOSTS", "")),
-			TaskShellAllowPrivateIPs:   getEnvBool("GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS", false),
-			TaskShellAllowedHosts:      splitCSV(getEnv("GATEWAY_TASK_SHELL_ALLOWED_HOSTS", "")),
-			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
-			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
-			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),
+			ControlPlaneBackend:          getEnv("GATEWAY_CONTROL_PLANE_BACKEND", "memory"),
+			ControlPlaneKey:              getEnv("GATEWAY_CONTROL_PLANE_KEY", "control-plane"),
+			ControlPlaneSecretKey:        getEnv("GATEWAY_CONTROL_PLANE_SECRET_KEY", ""),
+			TasksBackend:                 getEnv("GATEWAY_TASKS_BACKEND", "memory"),
+			TaskApprovalPolicies:         splitCSV(getEnv("GATEWAY_TASK_APPROVAL_POLICIES", "shell_exec")),
+			TaskQueueBackend:             getEnv("GATEWAY_TASK_QUEUE_BACKEND", "memory"),
+			TaskQueueWorkers:             getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
+			TaskQueueBuffer:              getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
+			TaskQueueLeaseSeconds:        getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
+			TaskAgentLoopMaxTurns:        getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
+			TaskMaxMCPServersPerTask:     getEnvInt("GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK", 16),
+			TaskMCPClientCacheMaxEntries: getEnvInt("GATEWAY_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES", 256),
+			TaskAgentSystemPrompt:        getEnv("GATEWAY_TASK_AGENT_SYSTEM_PROMPT", ""),
+			TaskHTTPTimeout:              getEnvDuration("GATEWAY_TASK_HTTP_TIMEOUT", 30*time.Second),
+			TaskHTTPMaxResponseBytes:     getEnvInt("GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES", 256*1024),
+			TaskHTTPAllowPrivateIPs:      getEnvBool("GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS", false),
+			TaskHTTPAllowedHosts:         splitCSV(getEnv("GATEWAY_TASK_HTTP_ALLOWED_HOSTS", "")),
+			TaskShellAllowPrivateIPs:     getEnvBool("GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS", false),
+			TaskShellAllowedHosts:        splitCSV(getEnv("GATEWAY_TASK_SHELL_ALLOWED_HOSTS", "")),
+			TaskMaxConcurrentPerTenant:   getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
+			TraceBodyCapture:             getEnvBool("GATEWAY_TRACE_BODIES", false),
+			TraceBodyMaxBytes:            getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),
 			RateLimit: RateLimitConfig{
 				Enabled:           getEnvBool("GATEWAY_RATE_LIMIT_ENABLED", false),
 				RequestsPerMinute: getEnvInt64("GATEWAY_RATE_LIMIT_RPM", 60),

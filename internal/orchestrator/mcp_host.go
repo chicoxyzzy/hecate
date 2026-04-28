@@ -201,8 +201,22 @@ func agentClientInfo() mcp.ClientInfo {
 //
 // ttl is the idle TTL for cached entries; 0 falls back to the cache's
 // internal default (5 minutes).
-func NewAgentMCPClientCache(ttl time.Duration) *mcpclient.SharedClientCache {
-	return mcpclient.NewSharedClientCache(ttl, agentClientInfo())
+//
+// maxEntries caps how many distinct upstream clients the cache holds
+// at once. When at-or-over the cap on a fresh insert, the cache evicts
+// the least-recently-used IDLE entry first; if every entry is in-use,
+// the over-cap insert is allowed (TTL eviction catches up later). 0
+// falls back to the cache's internal default (256). Negative disables
+// the cap (unbounded growth — used by tests that don't care).
+func NewAgentMCPClientCache(ttl time.Duration, maxEntries int) *mcpclient.SharedClientCache {
+	if maxEntries == 0 {
+		// Distinguish "operator left the field zero-valued" from
+		// "operator deliberately disabled the cap" by treating zero
+		// as "use the cache's default" and negative as "disabled."
+		// The orchestrator.Config field documentation calls this out.
+		return mcpclient.NewSharedClientCache(ttl, agentClientInfo())
+	}
+	return mcpclient.NewSharedClientCacheWithLimits(ttl, maxEntries, agentClientInfo())
 }
 
 // toClientServerConfigs converts the orchestrator-side config slice

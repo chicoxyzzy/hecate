@@ -56,6 +56,15 @@ type SharedClientCache struct {
 	info   mcp.ClientInfo
 	reaper time.Duration
 
+	// maxEntries is the soft cap on cached upstream count. Acquire's
+	// miss path evicts the least-recently-used IDLE entry before
+	// inserting a new one when the cache is at-or-over this size. If
+	// every entry is in-use (refcount > 0) the over-cap insert is
+	// allowed — rejecting an Acquire would break a legitimate run,
+	// and TTL eviction will catch up once anything goes idle. 0
+	// disables the cap (used by tests that don't care).
+	maxEntries int
+
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	reaperWg  sync.WaitGroup
@@ -71,29 +80,49 @@ type cacheEntry struct {
 const (
 	defaultCacheTTL       = 5 * time.Minute
 	defaultReaperInterval = 30 * time.Second
+	// defaultCacheMaxEntries is the SharedClientCache's default soft
+	// cap. 256 is generous for any real deployment (most operators
+	// use 1-3 distinct MCP servers across all their tasks) but tight
+	// enough to bound a runaway tenant or a config-permutation churn
+	// from accumulating an unbounded set of cached subprocesses.
+	defaultCacheMaxEntries = 256
 )
 
-// NewSharedClientCache builds a cache with the given idle TTL. Every
-// Client the cache spawns reports info as its MCP ClientInfo on the
-// initialize handshake, so upstream server logs identify a single
-// stable client identity (e.g. "hecate-agent-loop / <version>")
-// regardless of which run triggered the spawn.
+// NewSharedClientCache builds a cache with the given idle TTL and
+// a sensible default max-entries cap (256). Every Client the cache
+// spawns reports info as its MCP ClientInfo on the initialize
+// handshake, so upstream server logs identify a single stable client
+// identity (e.g. "hecate-agent-loop / <version>") regardless of which
+// run triggered the spawn.
 //
-// ttl <= 0 falls back to a sensible default (5 minutes). The reaper
-// runs every 30s and evicts entries that have been idle past ttl.
+// ttl <= 0 falls back to defaultCacheTTL (5 minutes). The reaper runs
+// every 30s and evicts entries idle past ttl.
+//
+// For deployments that need a different cap, see
+// NewSharedClientCacheWithLimits.
 func NewSharedClientCache(ttl time.Duration, info mcp.ClientInfo) *SharedClientCache {
-	return newSharedClientCacheWithReaper(ttl, defaultReaperInterval, info)
+	return newSharedClientCacheFull(ttl, defaultReaperInterval, defaultCacheMaxEntries, info)
 }
 
-// newSharedClientCacheWithReaper is the internal constructor that
-// also takes the reaper interval. Tests that want a tight TTL window
-// (a few hundred ms instead of 30s) call this one directly so the
-// reaper field is set BEFORE the goroutine starts — mutating it after
-// construction would race with the goroutine's own read of c.reaper
-// in reaperLoop.
+// NewSharedClientCacheWithLimits is the explicit-cap counterpart for
+// callers that want to override the max-entries cap (e.g. a deployment
+// expecting many distinct MCP servers per tenant). maxEntries <= 0
+// disables the cap entirely — only TTL eviction applies.
 //
-// reaperInterval <= 0 falls back to defaultReaperInterval.
-func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.ClientInfo) *SharedClientCache {
+// All other knobs (ttl, reaper interval) match NewSharedClientCache.
+func NewSharedClientCacheWithLimits(ttl time.Duration, maxEntries int, info mcp.ClientInfo) *SharedClientCache {
+	return newSharedClientCacheFull(ttl, defaultReaperInterval, maxEntries, info)
+}
+
+// newSharedClientCacheFull is the internal constructor that takes
+// every knob. Tests use it to drive tight TTL / reaper / cap windows
+// without racing the reaper goroutine — every field must be set
+// BEFORE the goroutine starts (mutating after construction would race
+// with the goroutine's own reads).
+//
+// Sentinel handling: ttl <= 0 → defaultCacheTTL; reaperInterval <= 0
+// → defaultReaperInterval; maxEntries <= 0 → cap disabled.
+func newSharedClientCacheFull(ttl, reaperInterval time.Duration, maxEntries int, info mcp.ClientInfo) *SharedClientCache {
 	if ttl <= 0 {
 		ttl = defaultCacheTTL
 	}
@@ -101,15 +130,24 @@ func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.
 		reaperInterval = defaultReaperInterval
 	}
 	c := &SharedClientCache{
-		entries: make(map[string]*cacheEntry),
-		ttl:     ttl,
-		info:    info,
-		reaper:  reaperInterval,
-		closeCh: make(chan struct{}),
+		entries:    make(map[string]*cacheEntry),
+		ttl:        ttl,
+		info:       info,
+		reaper:     reaperInterval,
+		maxEntries: maxEntries,
+		closeCh:    make(chan struct{}),
 	}
 	c.reaperWg.Add(1)
 	go c.reaperLoop()
 	return c
+}
+
+// newSharedClientCacheWithReaper is the legacy three-arg constructor
+// kept for tests written against the prior signature. Treats the cap
+// as disabled (0) — explicit cap tests use newSharedClientCacheFull
+// directly.
+func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.ClientInfo) *SharedClientCache {
+	return newSharedClientCacheFull(ttl, reaperInterval, 0, info)
 }
 
 // Acquire returns a Client + tools snapshot for cfg, spawning one on
@@ -161,6 +199,22 @@ func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Cli
 		c.mu.Unlock()
 		return client, tools, c.releaseFor(key), nil
 	}
+	// Cap enforcement: if we're at-or-over maxEntries before this
+	// insert, try to evict the least-recently-used IDLE entry first
+	// so the new insert doesn't grow the working set unbounded. If
+	// every entry is in-use we allow the over-cap insert anyway —
+	// blocking Acquire would break a legitimate run, and TTL eviction
+	// or future releases will catch up. Eviction happens INSIDE the
+	// lock so a concurrent Acquire can't race into the slot we're
+	// freeing; the actual Close call goes outside the lock so a slow
+	// teardown doesn't block other operations.
+	var evicted *Client
+	if c.maxEntries > 0 && len(c.entries) >= c.maxEntries {
+		if victimKey := c.pickLRUIdleLocked(); victimKey != "" {
+			evicted = c.entries[victimKey].client
+			delete(c.entries, victimKey)
+		}
+	}
 	c.entries[key] = &cacheEntry{
 		client:   client,
 		tools:    tools,
@@ -168,7 +222,30 @@ func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Cli
 		lastUsed: time.Now(),
 	}
 	c.mu.Unlock()
+	if evicted != nil {
+		_ = evicted.Close()
+	}
 	return client, tools, c.releaseFor(key), nil
+}
+
+// pickLRUIdleLocked returns the key of the least-recently-used entry
+// with refcount == 0, or "" if no idle entry exists. Caller must hold
+// c.mu. O(N) over the cache; cheap enough for a cap of a few hundred.
+func (c *SharedClientCache) pickLRUIdleLocked() string {
+	var (
+		victimKey  string
+		victimTime time.Time
+	)
+	for key, e := range c.entries {
+		if e.inUse > 0 {
+			continue
+		}
+		if victimKey == "" || e.lastUsed.Before(victimTime) {
+			victimKey = key
+			victimTime = e.lastUsed
+		}
+	}
+	return victimKey
 }
 
 // Evict removes a cached entry on demand and tears down its Client.

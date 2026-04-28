@@ -54,7 +54,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mcpServers, mcpErr := normalizeMCPServerConfigs(req.MCPServers, h.secretCipher)
+	mcpServers, mcpErr := normalizeMCPServerConfigs(req.MCPServers, h.secretCipher, h.config.Server.TaskMaxMCPServersPerTask)
 	if mcpErr != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, mcpErr.Error())
 		return
@@ -1335,7 +1335,14 @@ func renderTaskItem(task types.Task) TaskItem {
 // normalizeMCPServerConfigs converts the wire shape into the internal
 // types.MCPServerConfig slice used by the orchestrator. Trims whitespace
 // on string fields, enforces non-empty Name, rejects duplicate names,
-// and validates that exactly one of command or url is set per entry.
+// validates that exactly one of command or url is set per entry, and
+// caps the number of entries.
+//
+// maxEntries is the per-task cap. Zero or negative disables the cap
+// (used by tests that don't care about the limit). When exceeded the
+// caller surfaces this as a 400 — a malformed task configuring 1000
+// servers would otherwise burn N initialize handshakes and N file
+// descriptors before the run even started.
 //
 // Env and Header values are stored in three forms depending on cipher
 // availability:
@@ -1347,9 +1354,12 @@ func renderTaskItem(task types.Task) TaskItem {
 //
 // Returns nil for an empty input (the agent loop skips MCP-host
 // startup when MCPServers is nil/empty).
-func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Cipher) ([]types.MCPServerConfig, error) {
+func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Cipher, maxEntries int) ([]types.MCPServerConfig, error) {
 	if len(items) == 0 {
 		return nil, nil
+	}
+	if maxEntries > 0 && len(items) > maxEntries {
+		return nil, fmt.Errorf("mcp_servers: %d entries exceeds per-task cap of %d (raise GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK if you genuinely need more)", len(items), maxEntries)
 	}
 	out := make([]types.MCPServerConfig, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
