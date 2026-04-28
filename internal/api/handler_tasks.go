@@ -634,6 +634,16 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 					flusher.Flush()
 					return
 				}
+			} else if state.Approvals == nil {
+				// Historical snapshots saved before approvals were
+				// included in the SSE payload have a nil Approvals
+				// slice. Top up from the live store so the UI doesn't
+				// see "no approvals" and clear its banner. Without
+				// this, replaying an old run would briefly show then
+				// hide the approval card on every reconnect.
+				if live, liveErr := h.buildTaskRunStreamState(ctx, task.ID, runID); liveErr == nil {
+					state.Approvals = live.Approvals
+				}
 			}
 			state.Sequence = int(event.Sequence)
 			state.EventType = event.EventType
@@ -1178,6 +1188,16 @@ func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID str
 	if err != nil {
 		return TaskRunStreamEventData{}, err
 	}
+	// Approvals are listed per-task by the store; we filter to the
+	// current run because the streamed state is run-scoped. A failure
+	// here is non-fatal — emit the snapshot without approvals rather
+	// than dropping the whole stream, so the run/steps view still
+	// updates. The UI's separate /v1/tasks/{id}/approvals fetch acts
+	// as a fallback for that edge case.
+	taskApprovals, err := h.taskStore.ListApprovals(ctx, taskID)
+	if err != nil {
+		taskApprovals = nil
+	}
 
 	stepItems := make([]TaskStepItem, 0, len(steps))
 	for _, step := range steps {
@@ -1187,10 +1207,18 @@ func (h *Handler) buildTaskRunStreamState(ctx context.Context, taskID, runID str
 	for _, artifact := range artifacts {
 		artifactItems = append(artifactItems, renderTaskArtifact(artifact))
 	}
+	approvalItems := make([]TaskApprovalItem, 0, len(taskApprovals))
+	for _, approval := range taskApprovals {
+		if approval.RunID != runID {
+			continue
+		}
+		approvalItems = append(approvalItems, renderTaskApproval(approval))
+	}
 	return TaskRunStreamEventData{
 		Run:       renderTaskRun(run),
 		Steps:     stepItems,
 		Artifacts: artifactItems,
+		Approvals: approvalItems,
 	}, nil
 }
 
@@ -1200,6 +1228,17 @@ func buildTaskItem(ctx context.Context, store taskstate.Store, task types.Task) 
 	item.PendingApprovalCount = counts.PendingApprovalCount
 	item.StepCount = counts.StepCount
 	item.ArtifactCount = counts.ArtifactCount
+	// Fetch the latest run so the task list can show what model +
+	// provider actually ran (vs. what the operator requested, which
+	// may have been "auto"). One extra GetRun per task — same store
+	// hit pattern as loadTaskItemCounts already incurs. Cheap on
+	// memory/sqlite; the postgres tier indexes runs by id.
+	if strings.TrimSpace(task.LatestRunID) != "" {
+		if run, found, err := store.GetRun(ctx, task.ID, task.LatestRunID); err == nil && found {
+			item.LatestModel = run.Model
+			item.LatestProvider = run.Provider
+		}
+	}
 	return item
 }
 

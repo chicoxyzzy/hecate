@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ModelRecord } from "../../types/runtime";
+import type { ModelRecord, ProviderPresetRecord } from "../../types/runtime";
 
 // ─── Icon ────────────────────────────────────────────────────────────────────
 
@@ -550,63 +550,242 @@ export function ConfirmModal({
   );
 }
 
-// ─── ModelPicker ─────────────────────────────────────────────────────────────
-
-function groupModelRecords(models: ModelRecord[]): Array<{ provider: string; models: ModelRecord[] }> {
-  const map = new Map<string, ModelRecord[]>();
-  for (const m of models) {
-    const provider = m.metadata?.provider ?? m.owned_by ?? "unknown";
-    if (!map.has(provider)) map.set(provider, []);
-    map.get(provider)!.push(m);
-  }
-  return Array.from(map.entries()).map(([provider, models]) => ({ provider, models }));
+// ─── useFloatingDropdownStyle ────────────────────────────────────────────────
+//
+// When a dropdown lives inside a scrollable / overflow-clipped container
+// (e.g. the new-task slideover with `overflowY: auto`), the default
+// position:absolute menu gets clipped at the parent box. Switching to
+// position:fixed escapes every overflow ancestor — but then the menu
+// floats relative to the viewport, so we have to compute (top, left)
+// from the trigger's client rect at open time and on scroll/resize.
+//
+// `align` controls horizontal anchoring: "left" anchors the menu's
+// left edge to the trigger's left edge (default — used by the
+// provider picker which has narrower content). "right" anchors the
+// menu's right edge to the trigger's right edge (the model picker's
+// 300-wide menu would overflow off-screen if anchored left on a
+// narrow trigger).
+function useFloatingDropdownStyle(
+  triggerRef: React.RefObject<HTMLElement | null>,
+  open: boolean,
+  align: "left" | "right" = "left",
+): React.CSSProperties | undefined {
+  const [style, setStyle] = useState<React.CSSProperties | undefined>(undefined);
+  useEffect(() => {
+    if (!open || !triggerRef.current) {
+      setStyle(undefined);
+      return;
+    }
+    const compute = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      // Anchor BOTH axes explicitly — the global .dropdown-menu CSS
+      // pins `left: 0` and `top: calc(100% + 4px)` for the legacy
+      // absolute-positioned mode. When we switch to position:fixed,
+      // those still apply with high specificity unless we override
+      // each one. If we left `left: 0` active alongside our `right:`,
+      // the menu would stretch from the viewport's left edge to its
+      // right anchor — exactly what was happening for the right-
+      // aligned model picker.
+      const next: React.CSSProperties = {
+        position: "fixed",
+        top: r.bottom + 4,
+        zIndex: 200,
+      };
+      if (align === "right") {
+        next.right = window.innerWidth - r.right;
+        next.left = "auto";
+      } else {
+        next.left = r.left;
+        next.right = "auto";
+      }
+      setStyle(next);
+    };
+    compute();
+    // Re-anchor on scroll/resize so the menu tracks the trigger if
+    // the user scrolls the underlying container while it's open.
+    window.addEventListener("scroll", compute, true);
+    window.addEventListener("resize", compute);
+    return () => {
+      window.removeEventListener("scroll", compute, true);
+      window.removeEventListener("resize", compute);
+    };
+  }, [open, triggerRef, align]);
+  return style;
 }
 
-export function ModelPicker({ value, onChange, models }: {
+// ─── ModelPicker ─────────────────────────────────────────────────────────────
+//
+// One picker shared by every surface that needs to pick a model — the
+// chat view, the new-task slideover, and any future caller. Earlier
+// the chat had its own richer copy with search + disabled-provider
+// rendering, while shared/ui exported a simpler grouped one; the two
+// fell out of sync (e.g. cost ceiling work hadn't propagated to the
+// new-task picker). Consolidating means every surface gets the same
+// affordances: type-to-filter, sort disabled providers to the
+// bottom, key-icon for unconfigured cloud creds, optional per-row
+// provider suffix.
+//
+// All extension points are optional — callers that don't care about
+// disabled-provider rendering or the provider suffix get the same
+// look as the old simple picker minus the section headers.
+
+export function ModelPicker({
+  value, onChange, models,
+  presets,
+  disabledProviders,
+  showProvider = true,
+  triggerWidth,
+}: {
   value: string;
   onChange: (v: string) => void;
   models: ModelRecord[];
+  // Maps provider id → display name. Used to render the per-row
+  // provider suffix as a friendly name (e.g. "openai" → "OpenAI").
+  // Without it the picker falls back to the raw provider id.
+  presets?: ProviderPresetRecord[];
+  // Provider ids whose models render disabled (greyed, not clickable,
+  // with a key indicator). Map value is the tooltip explaining why
+  // ("Configure X credentials in Admin → Providers" / "Disabled in
+  // Admin → Providers"). Pass an empty/omitted map to disable.
+  disabledProviders?: Map<string, string>;
+  // Render the per-row "(provider name)" suffix. Set false when the
+  // outer provider filter is already pinned to a single provider —
+  // every row would carry the same suffix, which is just noise.
+  showProvider?: boolean;
+  // Pin the trigger to a fixed width so it aligns with siblings
+  // (chat header pairs the model picker with the provider picker).
+  // Defaults to the historical chat width of 220px; pass `undefined`
+  // to let the button size to its content.
+  triggerWidth?: number | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
   const ref = useRef<HTMLDivElement>(null);
-  const groups = groupModelRecords(models);
-  const selectedLabel = value || (models[0]?.id ?? "auto");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Right-anchored: the menu is 300px wide and the trigger is at the
+  // right side of its row in the chat header, so left-anchoring would
+  // push it off-screen on narrow viewports.
+  const floatingStyle = useFloatingDropdownStyle(triggerRef, open, "right");
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // Click-outside detection has to consider BOTH the wrap (which
+      // contains the trigger) and the floating menu (which lives at
+      // a different DOM ancestor when rendered fixed-position). Without
+      // checking the menu, clicking inside the menu would close it.
+      if (ref.current && ref.current.contains(target)) return;
+      if (target instanceof HTMLElement && target.closest(".dropdown-menu-floating")) return;
+      setOpen(false);
+      setFilter("");
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
+    else setFilter("");
+  }, [open]);
+
+  const providerName = (id: string) => presets?.find(p => p.id === id)?.name || id;
+  const matchedFilter = filter
+    ? models.filter(m => m.id.toLowerCase().includes(filter.toLowerCase()))
+    : models;
+  // Sort usable models above disabled ones — within each bucket the
+  // source order is preserved (provider-grouped, alphabetical-ish).
+  // Stable partition via two passes avoids accidentally reordering
+  // rows whose disabled state is the same.
+  const filtered = (() => {
+    if (!disabledProviders || disabledProviders.size === 0) return matchedFilter;
+    const usable: ModelRecord[] = [];
+    const disabled: ModelRecord[] = [];
+    for (const m of matchedFilter) {
+      const provider = m.metadata?.provider;
+      if (provider && disabledProviders.has(provider)) disabled.push(m);
+      else usable.push(m);
+    }
+    return [...usable, ...disabled];
+  })();
+  const label = value || (models[0]?.id ?? "model");
+  const buttonWidth = triggerWidth === undefined ? undefined : triggerWidth;
+
   return (
     <div className="dropdown-wrap" ref={ref}>
-      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)" }}>
+      <button ref={triggerRef} className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", width: buttonWidth }}>
         <Icon d={Icons.model} size={13} />
-        {selectedLabel}
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }} title={label}>
+          {label}
+        </span>
         <Icon d={Icons.chevD} size={11} />
       </button>
-      {open && (
-        <div className="dropdown-menu" style={{ minWidth: 280, maxHeight: 360, overflowY: "auto" }}>
-          {groups.length === 0 && (
-            <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--t3)" }}>No models available</div>
-          )}
-          {groups.map(group => (
-            <div key={group.provider}>
-              <div className="dropdown-section-label">{group.provider}</div>
-              {group.models.map(m => (
-                <div key={m.id} className={`dropdown-item ${m.id === value ? "selected" : ""}`}
-                  onClick={() => { onChange(m.id); setOpen(false); }}>
-                  <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.id}</span>
-                  {m.metadata?.default && <span style={{ fontSize: 9, color: "var(--teal)", fontFamily: "var(--font-mono)", marginLeft: 6 }}>default</span>}
-                  {m.id === value && <Icon d={Icons.check} size={12} />}
+      {open && floatingStyle && (
+        <div className="dropdown-menu dropdown-menu-floating" style={{ ...floatingStyle, minWidth: 300 }}>
+          <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
+            <input
+              ref={inputRef}
+              className="input"
+              style={{ fontSize: 12, padding: "4px 8px", fontFamily: "var(--font-mono)" }}
+              placeholder="Filter models…"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
+          <div style={{ maxHeight: 300, overflowY: "auto", overflowX: "hidden" }}>
+            {filtered.length === 0 && (
+              <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--t3)" }}>No models match</div>
+            )}
+            {filtered.map(m => {
+              const provider = m.metadata?.provider;
+              const reason = provider ? disabledProviders?.get(provider) : undefined;
+              const disabled = !!reason;
+              return (
+                <div
+                  key={m.id}
+                  className={`dropdown-item ${m.id === value ? "selected" : ""}`}
+                  title={reason}
+                  style={disabled ? { cursor: "not-allowed" } : undefined}
+                  onClick={() => {
+                    if (disabled) return;
+                    onChange(m.id);
+                    setOpen(false);
+                  }}>
+                  {/* Only the model id dims when disabled. Provider
+                      name keeps its t3 color so the right column reads
+                      consistently across enabled + disabled rows. */}
+                  <span
+                    style={{
+                      flex: 1, fontFamily: "var(--font-mono)", fontSize: 12,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      opacity: disabled ? 0.5 : 1,
+                    }}>
+                    {m.id}
+                  </span>
+                  {showProvider && provider && (
+                    <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", flexShrink: 0, marginLeft: 6 }}>
+                      {providerName(provider)}
+                    </span>
+                  )}
+                  {/* Reserve a fixed slot whether or not a key icon
+                      renders — keeps the right edge aligned across
+                      rows so the model-id and provider-name columns
+                      stay coherent. */}
+                  <span style={{ display: "inline-flex", flexShrink: 0, marginLeft: 6, width: 11, justifyContent: "center" }}>
+                    {disabled && (
+                      <span aria-label="credentials missing" style={{ color: "var(--red)", display: "inline-flex" }}>
+                        <Icon d={Icons.keys} size={11} />
+                      </span>
+                    )}
+                  </span>
                 </div>
-              ))}
-              <div className="dropdown-divider" />
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -675,10 +854,17 @@ export function ProviderPicker({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const floatingStyle = useFloatingDropdownStyle(triggerRef, open, "left");
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current && ref.current.contains(target)) return;
+      // The menu is now portal-style (position: fixed) and lives
+      // outside the wrap, so we have to also exempt its tree.
+      if (target instanceof HTMLElement && target.closest(".dropdown-menu-floating")) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -708,6 +894,7 @@ export function ProviderPicker({
   return (
     <div className="dropdown-wrap" ref={ref}>
       <button
+        ref={triggerRef}
         type="button"
         className="btn btn-ghost btn-sm"
         onClick={() => setOpen(o => !o)}
@@ -733,8 +920,8 @@ export function ProviderPicker({
         )}
         <Icon d={Icons.chevD} size={11} />
       </button>
-      {open && (
-        <div className="dropdown-menu" style={{ minWidth: 180 }}>
+      {open && floatingStyle && (
+        <div className="dropdown-menu dropdown-menu-floating" style={{ ...floatingStyle, minWidth: 180 }}>
           {includeAuto && (
             <>
               <div

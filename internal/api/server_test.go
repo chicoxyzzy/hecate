@@ -2574,6 +2574,92 @@ func TestTaskRunStreamSSE(t *testing.T) {
 	}
 }
 
+func TestTaskRunStream_PendingApprovalRidesAlongInSnapshot(t *testing.T) {
+	// Pre-fix: the SSE payload carried only run/steps/artifacts. The
+	// approval banner had to be loaded out-of-band via
+	// /v1/tasks/{id}/approvals and could drift from the run state —
+	// observed symptom: "the modal window for approval appears and
+	// disappears in a moment". Now every snapshot includes Approvals
+	// scoped to the streamed run, so the UI can drive the banner
+	// directly off the SSE without a separate refetch.
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	createResp := postJSONToURL(t, server.URL+"/v1/tasks", `{"title":"Approval stream","prompt":"Stream test","execution_kind":"shell","shell_command":"echo hi","working_directory":".","timeout_ms":3000}`)
+	if createResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d, body=%s", createResp.StatusCode, string(body))
+	}
+	var created TaskResponse
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	createResp.Body.Close()
+
+	startResp := postJSONToURL(t, server.URL+"/v1/tasks/"+created.Data.ID+"/start", "")
+	if startResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(startResp.Body)
+		t.Fatalf("start status = %d, body=%s", startResp.StatusCode, string(body))
+	}
+	var started TaskRunResponse
+	if err := json.NewDecoder(startResp.Body).Decode(&started); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	startResp.Body.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, server.URL+"/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/stream", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	streamCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	streamReq = streamReq.WithContext(streamCtx)
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer streamResp.Body.Close()
+
+	// Walk snapshots until we see one with the run in awaiting_approval
+	// AND a pending approval embedded. Both pieces of state must
+	// arrive together — the whole point of the fix.
+	var sawApprovalInSnapshot bool
+	for event := range readSSEEvents(t, streamResp.Body) {
+		if event.Event != "snapshot" {
+			continue
+		}
+		var payload TaskRunStreamEventResponse
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if payload.Data.Run.Status != "awaiting_approval" {
+			continue
+		}
+		// Must find a pending approval scoped to this run in the
+		// snapshot's Approvals slice. The "scoped to this run"
+		// contract is what lets the banner toggle cleanly when the
+		// user switches between runs of the same task.
+		for _, a := range payload.Data.Approvals {
+			if a.RunID == started.Data.ID && a.Status == "pending" {
+				sawApprovalInSnapshot = true
+				break
+			}
+		}
+		if sawApprovalInSnapshot {
+			break
+		}
+	}
+	cancel()
+
+	if !sawApprovalInSnapshot {
+		t.Fatal("no snapshot carried run.status=awaiting_approval together with a pending approval")
+	}
+}
+
 func TestTaskRunStreamResumeWithAfterSequence(t *testing.T) {
 	t.Parallel()
 

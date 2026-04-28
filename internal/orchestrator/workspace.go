@@ -28,8 +28,22 @@ func (m *WorkspaceManager) Provision(ctx context.Context, task types.Task, run t
 	if m == nil {
 		return "", fmt.Errorf("workspace manager is not configured")
 	}
-	workspacePath := filepath.Join(m.root, task.ID, run.ID)
 	source := workspaceSource(task)
+	// "in_place" mode: skip the clone/copy and run directly in the
+	// source directory. The sandbox AllowedRoot becomes the source
+	// path, so writes from shell_exec/file/agent_loop tools land in
+	// the operator's actual repo. Necessarily destructive — opt-in
+	// only. We require an absolute, existing source directory; if
+	// task.WorkingDirectory or task.Repo doesn't resolve to one, we
+	// reject the run rather than silently fall back to an isolated
+	// clone (which would be a surprising mode flip).
+	if strings.TrimSpace(task.WorkspaceMode) == "in_place" {
+		if source.path == "" {
+			return "", fmt.Errorf("workspace_mode=in_place requires an absolute, existing working_directory or repo path")
+		}
+		return source.path, nil
+	}
+	workspacePath := filepath.Join(m.root, task.ID, run.ID)
 	if err := provisionWorkspaceSource(ctx, workspacePath, source); err != nil {
 		return "", err
 	}

@@ -39,6 +39,17 @@ func (s *scriptedLLM) Chat(ctx context.Context, req types.ChatRequest) (*types.C
 	return s.responses[idx], nil
 }
 
+// erroringLLM returns the same canned error on every call. Used by
+// failure-path tests that need to assert the agent loop's wrapping
+// of upstream provider errors.
+type erroringLLM struct {
+	err error
+}
+
+func (e *erroringLLM) Chat(_ context.Context, _ types.ChatRequest) (*types.ChatResponse, error) {
+	return nil, e.err
+}
+
 // stubExecutor records what task it was asked to run and returns a
 // canned ExecutionResult. Saves us from spinning up a real shell
 // sandbox in unit tests.
@@ -1038,6 +1049,130 @@ func TestAgentLoop_SystemPromptPrependedOnFreshRuns(t *testing.T) {
 	}
 	if first[1].Role != "user" {
 		t.Errorf("second message not user: %+v", first[1])
+	}
+}
+
+func TestAgentLoop_AnnotatesModelLacksToolsError(t *testing.T) {
+	// Tiny / non-tool-calling models (e.g. smollm2:135m on Ollama)
+	// reject the `tools` field with a 400. The raw upstream message
+	// — "registry.ollama.ai/library/smollm2:135m does not support
+	// tools" — is technically correct but offers no remedy. The
+	// agent loop wraps it with a concrete "pick a tool-capable
+	// model" hint so the operator knows what to do next.
+	llm := &erroringLLM{err: fmt.Errorf("provider ollama call failed: upstream error (400/invalid_request_error): registry.ollama.ai/library/smollm2:135m does not support tools")}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.Run.Model = "smollm2:135m"
+	res, err := loop.Execute(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", res.Status)
+	}
+	// The friendly hint must mention the model name and the remedy
+	// so the run log is self-explanatory.
+	if !strings.Contains(res.LastError, "smollm2:135m") || !strings.Contains(res.LastError, "tool-capable") {
+		t.Errorf("LastError missing model name or remedy: %q", res.LastError)
+	}
+}
+
+func TestAgentLoop_PassesProviderHintFromRun(t *testing.T) {
+	// run.Provider is set from task.RequestedProvider at create
+	// time. The agent loop has to forward it into the ChatRequest
+	// scope so the router pins to the operator's choice — without
+	// this a task created with provider=ollama got auto-routed to
+	// OpenAI by the default router and failed with "api key is
+	// required for cloud provider openai" even when the operator
+	// only had Ollama configured.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("done")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.Run.Provider = "ollama"
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(llm.lastReqs) != 1 {
+		t.Fatalf("LLM calls = %d, want 1", len(llm.lastReqs))
+	}
+	if got := llm.lastReqs[0].Scope.ProviderHint; got != "ollama" {
+		t.Errorf("ProviderHint = %q, want %q (must mirror run.Provider)", got, "ollama")
+	}
+}
+
+func TestAgentLoop_PrependsWorkspaceEnvironmentSystemMessage(t *testing.T) {
+	// The agent loop must inform the LLM where the workspace lives,
+	// otherwise the model uses paths verbatim from the user prompt
+	// (e.g. the operator's source repo) and the sandbox rejects
+	// tool calls that target paths outside the cloned workspace.
+	// This was a real failure mode in the field — pinning it here.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("done")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	// Task.WorkingDirectory is what the runner sets via taskForRun
+	// from run.WorkspacePath — the actual sandbox root.
+	spec.Task.WorkingDirectory = "/tmp/hecate-workspaces/task_x/run_y"
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	first := llm.lastReqs[0].Messages
+	// Expect [env-system, user] (no operator system prompt set).
+	if len(first) != 2 {
+		t.Fatalf("messages = %d, want 2 (env + user); got: %+v", len(first), first)
+	}
+	if first[0].Role != "system" {
+		t.Fatalf("first message role = %q, want system", first[0].Role)
+	}
+	if !strings.Contains(first[0].Content, "/tmp/hecate-workspaces/task_x/run_y") {
+		t.Errorf("env system message missing workspace path; got: %q", first[0].Content)
+	}
+	// Reaffirms the contract the LLM must follow — sanity check
+	// that the message body actually instructs about path scoping.
+	if !strings.Contains(first[0].Content, "outside this directory") {
+		t.Errorf("env system message missing the sandbox-scope warning; got: %q", first[0].Content)
+	}
+	if first[1].Role != "user" {
+		t.Errorf("second message role = %q, want user", first[1].Role)
+	}
+}
+
+func TestAgentLoop_EnvSystemMessageStacksWithOperatorSystemPrompt(t *testing.T) {
+	// The four-layer operator system prompt and the workspace env
+	// message live as two separate system messages. The env one
+	// goes FIRST so it grounds the model in environmental fact
+	// before the operator's behavioral directives.
+	llm := &scriptedLLM{
+		responses: []*types.ChatResponse{
+			makeChatResp(makeAssistantMsg("done")),
+		},
+	}
+	loop := NewAgentLoopExecutor(llm, &stubExecutor{}, &stubExecutor{}, &stubExecutor{}, 8, nil, HTTPRequestPolicy{})
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = "/srv/workspace"
+	spec.SystemPrompt = "Operator directive: cite sources."
+	if _, err := loop.Execute(context.Background(), spec); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	first := llm.lastReqs[0].Messages
+	if len(first) != 3 {
+		t.Fatalf("messages = %d, want 3 (env + operator + user); got: %+v", len(first), first)
+	}
+	if !strings.Contains(first[0].Content, "/srv/workspace") {
+		t.Errorf("first system message should be env (workspace path); got: %q", first[0].Content)
+	}
+	if !strings.Contains(first[1].Content, "Operator directive") {
+		t.Errorf("second system message should be operator prompt; got: %q", first[1].Content)
+	}
+	if first[2].Role != "user" {
+		t.Errorf("third message role = %q, want user", first[2].Role)
 	}
 }
 

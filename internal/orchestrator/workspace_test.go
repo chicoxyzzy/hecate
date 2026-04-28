@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -84,6 +86,89 @@ func TestWorkspaceSourceRejectsRelativeAndMissingPaths(t *testing.T) {
 				t.Errorf("workspaceSource = %+v, want zero spec", got)
 			}
 		})
+	}
+}
+
+func TestWorkspaceManager_InPlaceModeReturnsSourcePathWithoutCloning(t *testing.T) {
+	// In-place mode skips the temp-dir clone — the workspace IS the
+	// source. The sandbox AllowedRoot becomes the source path so
+	// shell_exec / file / agent_loop tools can read and write the
+	// operator's actual repo. Necessarily destructive, so opt-in.
+	source := t.TempDir()
+	// Drop a marker file so we can verify the manager didn't copy.
+	marker := filepath.Join(source, "marker.txt")
+	if err := os.WriteFile(marker, []byte("from-source"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	root := t.TempDir()
+	mgr := NewWorkspaceManager(root)
+	task := types.Task{ID: "task-1", WorkspaceMode: "in_place", WorkingDirectory: source}
+	run := types.TaskRun{ID: "run-1"}
+
+	got, err := mgr.Provision(context.Background(), task, run)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if got != source {
+		t.Errorf("workspace path = %q, want source %q (in_place must NOT clone)", got, source)
+	}
+	// And the temp root should NOT have a copy under task-1/run-1.
+	cloned := filepath.Join(root, "task-1", "run-1")
+	if _, err := os.Stat(cloned); !os.IsNotExist(err) {
+		t.Errorf("expected no clone at %q, but it exists", cloned)
+	}
+}
+
+func TestWorkspaceManager_InPlaceWithoutValidSourceFails(t *testing.T) {
+	// in_place requires an absolute, existing source — silently
+	// falling back to an isolated clone would be a surprising mode
+	// flip. Reject up-front with a clear error.
+	mgr := NewWorkspaceManager(t.TempDir())
+	cases := []struct {
+		name string
+		task types.Task
+	}{
+		{"no working_directory", types.Task{ID: "t", WorkspaceMode: "in_place"}},
+		{"relative path", types.Task{ID: "t", WorkspaceMode: "in_place", WorkingDirectory: "./nope"}},
+		{"missing absolute path", types.Task{ID: "t", WorkspaceMode: "in_place", WorkingDirectory: "/this/does/not/exist/xyz"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := mgr.Provision(context.Background(), tc.task, types.TaskRun{ID: "r"})
+			if err == nil {
+				t.Fatalf("expected error for in_place with %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), "in_place") {
+				t.Errorf("error = %q, want mention of in_place", err.Error())
+			}
+		})
+	}
+}
+
+func TestWorkspaceManager_DefaultModeStillClones(t *testing.T) {
+	// Default workspace mode (empty / persistent / ephemeral) must
+	// keep the existing isolated-clone behavior so the safety
+	// guarantee doesn't silently regress.
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "marker.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	root := t.TempDir()
+	mgr := NewWorkspaceManager(root)
+	task := types.Task{ID: "task-x", WorkingDirectory: source}
+	run := types.TaskRun{ID: "run-x"}
+	got, err := mgr.Provision(context.Background(), task, run)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	want := filepath.Join(root, "task-x", "run-x")
+	if got != want {
+		t.Errorf("workspace path = %q, want %q (cloned under temp root)", got, want)
+	}
+	// And the marker copied across.
+	if _, err := os.Stat(filepath.Join(want, "marker.txt")); err != nil {
+		t.Errorf("marker not copied to clone: %v", err)
 	}
 }
 

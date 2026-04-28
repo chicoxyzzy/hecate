@@ -229,18 +229,24 @@ describe("ModelPicker", () => {
     { id: "claude-sonnet-4-6", owned_by: "anthropic", metadata: { provider: "anthropic", provider_kind: "cloud", default: false } },
   ];
 
-  it("opens on trigger click and shows models grouped by provider", async () => {
+  it("opens on trigger click and lists models flat (no section headers)", async () => {
     const user = userEvent.setup();
     render(<ModelPicker value="gpt-4o-mini" onChange={() => {}} models={models} />);
-    // Trigger reads the selected model id.
-    expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
-    // No menu yet.
+    // Trigger reads the selected model id (rendered in both the
+    // visible label span and as the title attribute on the inner
+    // span). getAllByText accommodates both occurrences.
+    expect(screen.getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
     expect(document.querySelector(".dropdown-menu")).toBeNull();
     await user.click(screen.getByRole("button"));
     expect(document.querySelector(".dropdown-menu")).toBeTruthy();
-    // Both providers render as section headers.
-    expect(screen.getByText("openai")).toBeTruthy();
-    expect(screen.getByText("anthropic")).toBeTruthy();
+    // Each row carries the provider name as a per-row suffix
+    // (showProvider defaults to true) — but the picker no longer
+    // groups under section headers like before. We verify by
+    // confirming each model id renders as its own row.
+    const menu = document.querySelector(".dropdown-menu")!;
+    expect(within(menu as HTMLElement).getByText("gpt-4o-mini")).toBeTruthy();
+    expect(within(menu as HTMLElement).getByText("gpt-4o")).toBeTruthy();
+    expect(within(menu as HTMLElement).getByText("claude-sonnet-4-6")).toBeTruthy();
   });
 
   it("calls onChange with the picked id and closes the menu", async () => {
@@ -257,11 +263,11 @@ describe("ModelPicker", () => {
     expect(document.querySelector(".dropdown-menu")).toBeNull();
   });
 
-  it("renders the empty state when no models are available", async () => {
+  it("renders 'No models match' when the input list is empty", async () => {
     const user = userEvent.setup();
     render(<ModelPicker value="" onChange={() => {}} models={[]} />);
     await user.click(screen.getByRole("button"));
-    expect(screen.getByText(/No models available/i)).toBeTruthy();
+    expect(screen.getByText(/No models match/i)).toBeTruthy();
   });
 
   it("highlights the selected row with the 'selected' class", async () => {
@@ -272,13 +278,38 @@ describe("ModelPicker", () => {
     expect(selectedRow?.textContent).toContain("gpt-4o");
   });
 
-  it("flags the model with metadata.default = true with a 'default' label", async () => {
+  it("type-to-filter narrows the visible rows", async () => {
     const user = userEvent.setup();
     render(<ModelPicker value="" onChange={() => {}} models={models} />);
     await user.click(screen.getByRole("button"));
-    // gpt-4o-mini is metadata.default=true → has the 'default' marker.
-    const defaultMarker = screen.getByText("default");
-    expect(defaultMarker).toBeTruthy();
+    const input = screen.getByPlaceholderText(/Filter models/i);
+    await user.type(input, "claude");
+    const menu = document.querySelector(".dropdown-menu")!;
+    expect(within(menu as HTMLElement).getByText("claude-sonnet-4-6")).toBeTruthy();
+    expect(within(menu as HTMLElement).queryByText("gpt-4o")).toBeNull();
+  });
+
+  it("greys out and blocks selection of disabled-provider rows", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const disabled = new Map<string, string>([
+      ["anthropic", "Disabled in Admin → Providers"],
+    ]);
+    render(
+      <ModelPicker
+        value=""
+        onChange={onChange}
+        models={models}
+        disabledProviders={disabled}
+      />,
+    );
+    await user.click(screen.getByRole("button"));
+    const menu = document.querySelector(".dropdown-menu")!;
+    // Click attempt on the disabled row — onChange must not fire and
+    // the menu stays open (lets the operator notice the tooltip).
+    await user.click(within(menu as HTMLElement).getByText("claude-sonnet-4-6"));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelector(".dropdown-menu")).toBeTruthy();
   });
 });
 

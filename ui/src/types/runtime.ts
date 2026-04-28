@@ -574,6 +574,11 @@ export type TaskRecord = {
   requested_provider?: string;
   budget_micros_usd?: number;
   latest_run_id?: string;
+  // What the most recent run actually used after routing (may
+  // differ from requested_* when the operator picked "auto" or
+  // the router substituted). Surfaced in the task list.
+  latest_model?: string;
+  latest_provider?: string;
   pending_approval_count?: number;
   step_count?: number;
   artifact_count?: number;
@@ -723,6 +728,7 @@ export type TaskRunStreamEventData = {
   event_type?: string;
   run: TaskRunRecord;
   steps?: TaskStepRecord[];
+  approvals?: TaskApprovalRecord[];
   artifacts?: TaskArtifactRecord[];
 };
 

@@ -61,15 +61,19 @@ describe("NewTaskSlideOver kind switching", () => {
     expect(screen.getByPlaceholderText(/describe the task/i)).toBeTruthy();
   });
 
-  it("hides the working-directory input for file and agent_loop kinds", async () => {
+  it("hides the working-directory input for file kind, shows it for shell/git/agent_loop", async () => {
     const { render, user } = setup();
     render();
     // Default kind shell — working dir is visible.
     expect(screen.getByPlaceholderText(/\(default\)/i)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "File" }));
+    // File tasks have their own file_path field, no separate cwd.
     expect(screen.queryByPlaceholderText(/\(default\)/i)).toBeNull();
+    // Agent_loop tasks DO show the working-directory input — needed
+    // for the "Run in place" toggle (target the operator's real
+    // repo). Switching to agent_loop should re-show it.
     await user.click(screen.getByRole("button", { name: "Agent loop" }));
-    expect(screen.queryByPlaceholderText(/\(default\)/i)).toBeNull();
+    expect(screen.getByPlaceholderText(/\(default\)/i)).toBeTruthy();
   });
 
   it("hides the description input on the agent_loop tab (the prompt IS the description)", async () => {

@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  cancelTaskRun, createTask, deleteTask, getModels, getTaskApprovals, getTaskRunArtifacts,
+  ApiError,
+  cancelTaskRun, createTask, deleteTask, getModels, getProviderPresets, getProviders,
+  getTaskApprovals, getTaskRunArtifacts,
   getTaskRuns, getTaskRunSteps, getTasks, resolveTaskApproval,
   retryTaskRun, retryTaskRunFromTurn, resumeTaskRun, startTask, streamTaskRun,
 } from "../../lib/api";
-import type { ModelRecord, TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
+import type {
+  ModelRecord,
+  ProviderPresetRecord,
+  ProviderRecord,
+  TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunRecord, TaskStepRecord,
+} from "../../types/runtime";
 import { TaskList } from "./TaskList";
 import { TaskDetail } from "./TaskDetail";
 import { NewTaskSlideOver, type CreateTaskPayload } from "./NewTaskSlideOver";
@@ -30,6 +37,14 @@ export function TasksView({ authToken, session }: Props) {
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelRecord[]>([]);
+  // Provider catalog feeds the new-task slideover's provider picker
+  // and the model picker's per-row "(provider name)" suffix. Loaded
+  // once on mount alongside models — the catalog rarely changes
+  // mid-session, so the simple one-shot fetch is enough; admin
+  // changes (enabling/disabling a provider) take effect after the
+  // operator opens a new tab or refreshes.
+  const [availableProviders, setAvailableProviders] = useState<ProviderRecord[]>([]);
+  const [providerPresets, setProviderPresets] = useState<ProviderPresetRecord[]>([]);
 
   const streamCursorRef = useRef(0);
 
@@ -85,7 +100,15 @@ export function TasksView({ authToken, session }: Props) {
 
   useEffect(() => {
     if (!session.isAuthenticated) return;
+    // Models + providers + presets feed the new-task slideover's
+    // model and provider pickers. Load all three in parallel; on
+    // failure each falls back to its empty default rather than
+    // blocking the whole page — a missing provider catalog just
+    // means the picker shows raw provider ids instead of pretty
+    // names, and a missing model list shows "no models match".
     getModels(authToken).then(res => setAvailableModels(res.data ?? [])).catch(() => {});
+    getProviders(authToken).then(res => setAvailableProviders(res.data ?? [])).catch(() => {});
+    getProviderPresets(authToken).then(res => setProviderPresets(res.data ?? [])).catch(() => {});
   }, [authToken, session.isAuthenticated]);
 
   useEffect(() => {
@@ -107,6 +130,17 @@ export function TasksView({ authToken, session }: Props) {
         });
         setSteps(payload.data.steps ?? []);
         setArtifacts(payload.data.artifacts ?? []);
+        // Approvals ride along in every snapshot now (server-side
+        // change in TaskRunStreamEventData). Treat the SSE as the
+        // source of truth so the banner stays in sync — without
+        // this, an approval created mid-stream wouldn't surface
+        // until a manual refresh, and a server-resolved one would
+        // linger in the UI for the same reason. We only overwrite
+        // when the payload actually carries the field, so older
+        // gateways that don't include it don't blank the banner.
+        if (payload.data.approvals !== undefined) {
+          setApprovals(payload.data.approvals);
+        }
         setTasks(cur => cur.map(t => t.id === selectedTaskID ? { ...t, status: payload.data.run.status } : t));
       },
       streamCursorRef.current,
@@ -130,7 +164,25 @@ export function TasksView({ authToken, session }: Props) {
     setSelectedTaskID(taskID);
     resetRunDetail();
     setNotice(null);
-    try { await loadTaskDetail(taskID); } catch { /* ignore */ }
+    try {
+      await loadTaskDetail(taskID);
+    } catch (err) {
+      // 404 here means the cached task ID is stale (gateway restarted
+      // with memory backend, tenant change, etc.). Drop the dead row
+      // from the visible list so subsequent clicks don't repeat the
+      // 404, and surface a concrete notice. Other errors fall through
+      // silently — the run pane already renders an error from the
+      // SSE state if one occurs.
+      if (err instanceof ApiError && err.status === 404) {
+        setNotice({ tone: "error", message: "That task no longer exists. Refreshing." });
+        setTasks(cur => cur.filter(t => t.id !== taskID));
+        if (selectedTaskID === taskID) {
+          setSelectedTaskID("");
+          resetRunDetail();
+        }
+        void loadTasks();
+      }
+    }
   }
 
   async function handleSelectRun(runID: string) {
@@ -283,6 +335,8 @@ export function TasksView({ authToken, session }: Props) {
       <NewTaskSlideOver
         open={newTaskOpen}
         models={availableModels}
+        providers={availableProviders}
+        providerPresets={providerPresets}
         busyAction={busyAction}
         errorMessage={notice?.tone === "error" ? notice.message : undefined}
         onClose={() => setNewTaskOpen(false)}

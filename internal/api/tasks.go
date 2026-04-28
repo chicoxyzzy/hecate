@@ -138,32 +138,40 @@ type EventsResponse struct {
 }
 
 type TaskItem struct {
-	ID                   string `json:"id"`
-	Title                string `json:"title"`
-	Prompt               string `json:"prompt"`
-	SystemPrompt         string `json:"system_prompt,omitempty"`
-	Tenant               string `json:"tenant,omitempty"`
-	User                 string `json:"user,omitempty"`
-	Repo                 string `json:"repo,omitempty"`
-	BaseBranch           string `json:"base_branch,omitempty"`
-	WorkspaceMode        string `json:"workspace_mode,omitempty"`
-	ExecutionKind        string `json:"execution_kind,omitempty"`
-	ShellCommand         string `json:"shell_command,omitempty"`
-	GitCommand           string `json:"git_command,omitempty"`
-	WorkingDirectory     string `json:"working_directory,omitempty"`
-	FileOperation        string `json:"file_operation,omitempty"`
-	FilePath             string `json:"file_path,omitempty"`
-	FileContent          string `json:"file_content,omitempty"`
-	SandboxAllowedRoot   string `json:"sandbox_allowed_root,omitempty"`
-	SandboxReadOnly      bool   `json:"sandbox_read_only,omitempty"`
-	SandboxNetwork       bool   `json:"sandbox_network,omitempty"`
-	TimeoutMS            int    `json:"timeout_ms,omitempty"`
-	Status               string `json:"status"`
-	Priority             string `json:"priority,omitempty"`
-	RequestedModel       string `json:"requested_model,omitempty"`
-	RequestedProvider    string `json:"requested_provider,omitempty"`
-	BudgetMicrosUSD      int64  `json:"budget_micros_usd,omitempty"`
-	LatestRunID          string `json:"latest_run_id,omitempty"`
+	ID                 string `json:"id"`
+	Title              string `json:"title"`
+	Prompt             string `json:"prompt"`
+	SystemPrompt       string `json:"system_prompt,omitempty"`
+	Tenant             string `json:"tenant,omitempty"`
+	User               string `json:"user,omitempty"`
+	Repo               string `json:"repo,omitempty"`
+	BaseBranch         string `json:"base_branch,omitempty"`
+	WorkspaceMode      string `json:"workspace_mode,omitempty"`
+	ExecutionKind      string `json:"execution_kind,omitempty"`
+	ShellCommand       string `json:"shell_command,omitempty"`
+	GitCommand         string `json:"git_command,omitempty"`
+	WorkingDirectory   string `json:"working_directory,omitempty"`
+	FileOperation      string `json:"file_operation,omitempty"`
+	FilePath           string `json:"file_path,omitempty"`
+	FileContent        string `json:"file_content,omitempty"`
+	SandboxAllowedRoot string `json:"sandbox_allowed_root,omitempty"`
+	SandboxReadOnly    bool   `json:"sandbox_read_only,omitempty"`
+	SandboxNetwork     bool   `json:"sandbox_network,omitempty"`
+	TimeoutMS          int    `json:"timeout_ms,omitempty"`
+	Status             string `json:"status"`
+	Priority           string `json:"priority,omitempty"`
+	RequestedModel     string `json:"requested_model,omitempty"`
+	RequestedProvider  string `json:"requested_provider,omitempty"`
+	BudgetMicrosUSD    int64  `json:"budget_micros_usd,omitempty"`
+	LatestRunID        string `json:"latest_run_id,omitempty"`
+	// LatestModel / LatestProvider are the model + provider the
+	// most recent run actually used (after routing). They differ
+	// from RequestedModel / RequestedProvider when the operator
+	// asked for "auto" or specified a model the router substituted.
+	// Surfaced on the task list so operators see at a glance which
+	// engine ran without drilling into the run detail.
+	LatestModel          string `json:"latest_model,omitempty"`
+	LatestProvider       string `json:"latest_provider,omitempty"`
 	PendingApprovalCount int    `json:"pending_approval_count,omitempty"`
 	StepCount            int    `json:"step_count,omitempty"`
 	ArtifactCount        int    `json:"artifact_count,omitempty"`
@@ -212,6 +220,14 @@ type TaskRunStreamEventData struct {
 	Run       TaskRunItem        `json:"run"`
 	Steps     []TaskStepItem     `json:"steps,omitempty"`
 	Artifacts []TaskArtifactItem `json:"artifacts,omitempty"`
+	// Approvals are this task's approvals scoped to the run being
+	// streamed. Carried in every snapshot so the UI's approval banner
+	// stays in lock-step with run.status — without this the banner
+	// could drift (e.g. a mid-loop approval gets created mid-stream
+	// but the UI wouldn't see it until the next manual refresh, and
+	// conversely a server-resolved approval might still render in the
+	// banner because the UI cached the old state).
+	Approvals []TaskApprovalItem `json:"approvals,omitempty"`
 	EventType string             `json:"event_type,omitempty"`
 }
 

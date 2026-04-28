@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { ModelRecord } from "../../types/runtime";
-import { Icon, Icons, ModelPicker } from "../shared/ui";
+import { useMemo, useState } from "react";
+import type { ModelRecord, ProviderPresetRecord, ProviderRecord } from "../../types/runtime";
+import { Icon, Icons, ModelPicker, ProviderPicker, type ProviderOption } from "../shared/ui";
 
 export type ExecutionKind = "shell" | "git" | "file" | "agent_loop";
 
@@ -43,6 +43,8 @@ export type CreateTaskPayload = {
   file_operation?: string;
   working_directory?: string;
   requested_model?: string;
+  requested_provider?: string;
+  workspace_mode?: string;
   // Per-task agent_loop system prompt — narrowest layer (after
   // global / tenant / workspace CLAUDE.md|AGENTS.md).
   system_prompt?: string;
@@ -55,13 +57,28 @@ export type CreateTaskPayload = {
 type Props = {
   open: boolean;
   models: ModelRecord[];
+  // Provider catalog from /admin/providers (status + health) plus the
+  // /v1/provider-presets list (display names). Both optional; when
+  // unset the provider picker isn't rendered and the model picker
+  // shows raw provider ids in its per-row suffix.
+  providers?: ProviderRecord[];
+  providerPresets?: ProviderPresetRecord[];
   busyAction: string;
   errorMessage?: string;
   onClose: () => void;
   onCreate: (payload: CreateTaskPayload) => void;
 };
 
-export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClose, onCreate }: Props) {
+export function NewTaskSlideOver({
+  open,
+  models,
+  providers = [],
+  providerPresets = [],
+  busyAction,
+  errorMessage,
+  onClose,
+  onCreate,
+}: Props) {
   const [taskKind, setTaskKind] = useState<ExecutionKind>("shell");
   const [taskPrompt, setTaskPrompt] = useState("");
   const [taskCommand, setTaskCommand] = useState("");
@@ -71,6 +88,61 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
   const [taskFileContent, setTaskFileContent] = useState("");
   const [taskFileOp, setTaskFileOp] = useState("write");
   const [taskModel, setTaskModel] = useState("");
+  // Provider filter — "auto" means "any provider" (the request-router
+  // picks based on the selected model). Selecting a specific provider
+  // narrows the model dropdown to that provider's catalog. Mirrors
+  // the chat surface's ProviderFilter pattern but kept local since
+  // the new-task panel is a one-shot form, not a persisted setting.
+  const [taskProvider, setTaskProvider] = useState("auto");
+  // In-place mode: run inside the source directory rather than an
+  // isolated clone. Toggling this on tells the gateway to use
+  // working_directory as the sandbox root, so writes hit the real
+  // repo. Off (default) gives the safer isolated-clone behavior.
+  const [taskInPlace, setTaskInPlace] = useState(false);
+
+  // Provider options for the picker — mirrors the chat header's
+  // provider list: filter to healthy providers, attach kind +
+  // configured flags from the preset catalog so the dropdown shows
+  // a key indicator on cloud rows. Memoized so the picker doesn't
+  // re-derive on every keystroke in the form fields.
+  const providerOptions = useMemo<ProviderOption[]>(() => {
+    return providers
+      .filter(p => p.healthy && p.name)
+      .map(p => {
+        const preset = providerPresets.find(pp => pp.id === p.name);
+        return {
+          id: p.name,
+          name: preset?.name || p.name,
+          healthy: p.healthy,
+          kind: preset?.kind ?? p.kind,
+          // Status from /admin/providers carries the credential state
+          // implicitly: healthy + available means configured.
+          configured: undefined,
+        };
+      });
+  }, [providers, providerPresets]);
+
+  // Models scoped to the selected provider. "auto" means show all.
+  // The ModelPicker still type-filters within whatever slice we hand
+  // it, so this doesn't fight the picker's internal filter.
+  const scopedModels = useMemo(() => {
+    if (taskProvider === "auto") return models;
+    return models.filter(m => m.metadata?.provider === taskProvider);
+  }, [models, taskProvider]);
+
+  // When the operator switches provider, clear the model selection if
+  // it's no longer in the scoped list. Without this the trigger
+  // button would still display the previously selected model id even
+  // though the dropdown wouldn't include it — confusing on submit
+  // because the request would carry a model that doesn't belong to
+  // the chosen provider.
+  function handleProviderChange(next: string) {
+    setTaskProvider(next);
+    if (next !== "auto" && taskModel) {
+      const stillValid = models.some(m => m.id === taskModel && m.metadata?.provider === next);
+      if (!stillValid) setTaskModel("");
+    }
+  }
   // Per-task system prompt — only meaningful for agent_loop kind.
   // Empty value falls back to the tenant / workspace / global layers.
   const [taskSystemPrompt, setTaskSystemPrompt] = useState("");
@@ -103,6 +175,8 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
       ...(taskKind === "file" ? { file_path: filePath, file_content: taskFileContent, file_operation: taskFileOp } : {}),
       ...(taskWorkingDir.trim() ? { working_directory: taskWorkingDir.trim() } : {}),
       ...(taskModel ? { requested_model: taskModel } : {}),
+      ...(taskProvider !== "auto" ? { requested_provider: taskProvider } : {}),
+      ...(taskInPlace ? { workspace_mode: "in_place" } : {}),
       ...(taskKind === "agent_loop" && taskSystemPrompt.trim() ? { system_prompt: taskSystemPrompt.trim() } : {}),
       ...(taskKind === "agent_loop" && parseFloat(taskBudgetUSD) > 0
         ? { budget_micros_usd: Math.round(parseFloat(taskBudgetUSD) * 1_000_000) }
@@ -112,6 +186,8 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
     setTaskFilePath(""); setTaskFileContent(""); setTaskFileOp("write");
     setTaskSystemPrompt("");
     setTaskBudgetUSD("");
+    setTaskProvider("auto"); setTaskModel("");
+    setTaskInPlace(false);
   }
 
   if (!open) return null;
@@ -223,7 +299,7 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
             </div>
           )}
 
-          {(taskKind === "shell" || taskKind === "git") && (
+          {(taskKind === "shell" || taskKind === "git" || taskKind === "agent_loop") && (
             <div>
               <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>WORKING DIRECTORY</label>
               <input
@@ -232,6 +308,25 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
                 value={taskWorkingDir}
                 onChange={e => setTaskWorkingDir(e.target.value)}
               />
+              {/* In-place toggle: skip the temp-dir clone and run
+                  directly in the source path. Default off (safer
+                  isolated clone). When on, the path entered above
+                  must be an absolute, existing directory or the run
+                  will fail before starting with a clear error. */}
+              <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: taskInPlace ? "var(--t0)" : "var(--t2)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={taskInPlace}
+                  onChange={e => setTaskInPlace(e.target.checked)}
+                  style={{ accentColor: "var(--teal)" }}
+                />
+                Run in place (no isolated clone)
+              </label>
+              {taskInPlace && (
+                <div style={{ fontSize: 10, color: "var(--amber)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+                  Writes from shell_exec / file / agent tools will land in this directory directly.
+                </div>
+              )}
             </div>
           )}
 
@@ -281,8 +376,26 @@ export function NewTaskSlideOver({ open, models, busyAction, errorMessage, onClo
           )}
 
           <div>
-            <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>MODEL</label>
-            <ModelPicker value={taskModel} onChange={setTaskModel} models={models} />
+            <label style={{ fontSize: 11, color: "var(--t2)", display: "block", marginBottom: 4, fontFamily: "var(--font-mono)" }}>PROVIDER & MODEL</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <ProviderPicker
+                value={taskProvider}
+                onChange={handleProviderChange}
+                options={providerOptions}
+                includeAuto
+                autoLabel="Any provider"
+              />
+              <ModelPicker
+                value={taskModel}
+                onChange={setTaskModel}
+                models={scopedModels}
+                presets={providerPresets}
+                // Hide the per-row provider suffix when a specific
+                // provider is already pinned — every row would carry
+                // the same suffix.
+                showProvider={taskProvider === "auto"}
+              />
+            </div>
           </div>
 
           {errorMessage && (

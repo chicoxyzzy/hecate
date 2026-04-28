@@ -136,6 +136,15 @@ export type CreateTaskPayload = {
   file_content?: string;
   requested_model?: string;
   requested_provider?: string;
+  // workspace_mode controls how the run's sandbox root is provisioned:
+  //   * "persistent" / "ephemeral" / unset — provision an isolated
+  //     clone or copy of the source directory (default). Writes don't
+  //     touch the source.
+  //   * "in_place" — run directly inside the source path. Sandbox
+  //     AllowedRoot becomes that path, so writes from shell_exec /
+  //     file / agent_loop tools land in the operator's actual repo.
+  //     Requires an absolute, existing working_directory or repo.
+  workspace_mode?: string;
 };
 
 export type ResolveTaskApprovalPayload = {
@@ -600,10 +609,25 @@ export function buildRequestOptions(options: RequestOptions): RequestInit {
   };
 }
 
+// ApiError preserves the HTTP status alongside the error message so
+// callers can react differently to 404s (stale resource — refresh
+// the list), 401/403 (re-auth), and 5xx (transient — retry/notify).
+// Without this, every fetchJSON failure looked the same and we
+// couldn't distinguish "task you clicked is gone" from "network is
+// down" — both surfaced as an opaque message and silent UI states.
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function fetchJSON<T>(url: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetchWithNetworkError(url, buildRequestOptions(options));
   if (!response.ok) {
-    throw new Error(await errorMessage(response, "request failed"));
+    throw new ApiError(await errorMessage(response, "request failed"), response.status);
   }
   if (response.status === 204) {
     return undefined as T;

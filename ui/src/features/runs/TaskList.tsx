@@ -83,8 +83,22 @@ export function TaskList({ tasks, selectedTaskID, loading, busyAction, onSelect,
                 {taskKindLabel(t)}
               </div>
             )}
-            <div style={{ fontSize: 10, color: "var(--t2)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
-              {t.latest_run_id ? `run: ${t.latest_run_id.slice(0, 8)}` : "not started"}
+            <div style={{ fontSize: 10, color: "var(--t2)", fontFamily: "var(--font-mono)", marginTop: 2, display: "flex", gap: 8, alignItems: "baseline", overflow: "hidden" }}>
+              <span style={{ flexShrink: 0 }}>
+                {t.latest_run_id ? `run: ${t.latest_run_id.slice(0, 8)}` : "not started"}
+              </span>
+              {/* Model + provider from the most recent run. Empty
+                  string omits — pre-LLM tasks (shell/git/file kinds
+                  with no model routing) would otherwise render an
+                  ugly "·  / " on every row. */}
+              {(t.latest_model || t.latest_provider) && (
+                <span
+                  title={t.latest_provider ? `${t.latest_model || ""} via ${t.latest_provider}` : t.latest_model}
+                  style={{ color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                  · {t.latest_model || ""}
+                  {t.latest_provider && <span style={{ color: "var(--t3)" }}> / {t.latest_provider}</span>}
+                </span>
+              )}
             </div>
           </div>
         ))}

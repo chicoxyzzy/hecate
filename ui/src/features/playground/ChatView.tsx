@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { parseInlineNodes, parseMarkdownBlocks } from "../../lib/markdown";
-import type { ModelRecord } from "../../types/runtime";
-import { CodeBlock, Icon, Icons, InlineError, ProviderPicker } from "../shared/ui";
+import { CodeBlock, Icon, Icons, InlineError, ModelPicker, ProviderPicker } from "../shared/ui";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -265,6 +264,9 @@ export function ChatView({ state, actions }: Props) {
             onChange={actions.setModel}
             models={state.providerScopedModels}
             presets={state.providerPresets}
+            // Pinned width pairs the chat header's model picker with
+            // the provider picker for a stable, non-jittery layout.
+            triggerWidth={220}
             // Show the provider suffix only when "All providers" is
             // selected — when a specific provider is filtered, the
             // suffix is redundant on every row.
@@ -475,157 +477,10 @@ export function ChatView({ state, actions }: Props) {
   );
 }
 
-function ModelPicker({ value, onChange, models, presets, disabledProviders, showProvider }: {
-  value: string;
-  onChange: (v: string) => void;
-  models: ModelRecord[];
-  presets: import("../../types/runtime").ProviderPresetRecord[];
-  // Provider ids whose models render as disabled (greyed, not
-  // clickable, with a key indicator). Map value is the tooltip
-  // explaining why ("Configure X credentials in Admin → Providers"
-  // or "Disabled in Admin → Providers").
-  disabledProviders?: Map<string, string>;
-  // Render the per-row "(provider name)" suffix. False when the
-  // outer provider filter is already pinned to a single provider —
-  // every row would carry the same suffix, which is just noise.
-  showProvider?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setFilter(""); }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 0);
-    else setFilter("");
-  }, [open]);
-
-  const providerName = (id: string) => presets.find(p => p.id === id)?.name || id;
-  const matchedFilter = filter ? models.filter(m => m.id.toLowerCase().includes(filter.toLowerCase())) : models;
-  // Sort usable models above disabled ones — within each bucket the
-  // source order is preserved (provider-grouped, alphabetical-ish).
-  // Stable partition via two passes is simpler than a comparator and
-  // avoids accidentally reordering rows whose disabled state is the
-  // same. Without this, the operator scrolls past 8 disabled claude/
-  // gpt rows before finding a llama they can actually use.
-  const filtered = (() => {
-    const usable: ModelRecord[] = [];
-    const disabled: ModelRecord[] = [];
-    for (const m of matchedFilter) {
-      const provider = m.metadata?.provider;
-      if (provider && disabledProviders?.has(provider)) {
-        disabled.push(m);
-      } else {
-        usable.push(m);
-      }
-    }
-    return [...usable, ...disabled];
-  })();
-  const label = value || (models[0]?.id ?? "model");
-
-  return (
-    <div className="dropdown-wrap" ref={ref}>
-      {/* Fixed width matches the provider picker trigger so the two
-          dropdowns next to each other read as a stable pair, not a
-          ragged set. Long model ids truncate via text-overflow:ellipsis
-          on the inner span (flex truncation needs an inner box with
-          min-width:0 — the .btn flex container alone won't ellipsize
-          a bare string child). */}
-      <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", width: 220 }}>
-        <Icon d={Icons.model} size={13} />
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }} title={label}>
-          {label}
-        </span>
-        <Icon d={Icons.chevD} size={11} />
-      </button>
-      {open && (
-        <div className="dropdown-menu" style={{ minWidth: 300, right: 0, left: "auto" }}>
-          <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
-            <input
-              ref={inputRef}
-              className="input"
-              style={{ fontSize: 12, padding: "4px 8px", fontFamily: "var(--font-mono)" }}
-              placeholder="Filter models…"
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              onClick={e => e.stopPropagation()}
-            />
-          </div>
-          <div style={{ maxHeight: 300, overflowY: "auto", overflowX: "hidden" }}>
-            {filtered.length === 0 && (
-              <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--t3)" }}>No models match</div>
-            )}
-            {filtered.map(m => {
-              const provider = m.metadata?.provider;
-              const reason = provider ? disabledProviders?.get(provider) : undefined;
-              const disabled = !!reason;
-              return (
-                <div
-                  key={m.id}
-                  className={`dropdown-item ${m.id === value ? "selected" : ""}`}
-                  title={reason}
-                  style={disabled ? { cursor: "not-allowed" } : undefined}
-                  onClick={() => {
-                    if (disabled) return;
-                    onChange(m.id);
-                    setOpen(false);
-                  }}>
-                  {/* Only the model id dims when disabled. Provider
-                      name keeps its t3 color so the right column
-                      reads consistently across enabled + disabled
-                      rows (CSS opacity inheritance would otherwise
-                      drag the muted text into something unreadable
-                      against the dark background). */}
-                  <span
-                    style={{
-                      flex: 1,
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 12,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      opacity: disabled ? 0.5 : 1,
-                    }}>
-                    {m.id}
-                  </span>
-                  {/* Model row order: id → provider-name → key (last).
-                      Hide the provider suffix when the outer filter
-                      pinned a single provider (every row would carry
-                      the same suffix). */}
-                  {showProvider && provider && (
-                    <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", flexShrink: 0, marginLeft: 6 }}>
-                      {providerName(provider)}
-                    </span>
-                  )}
-                  {/* Reserve a fixed slot whether or not a key icon
-                      renders — keeps the right edge aligned across
-                      rows so the model-id and provider-name columns
-                      stay coherent. */}
-                  <span style={{ display: "inline-flex", flexShrink: 0, marginLeft: 6, width: 11, justifyContent: "center" }}>
-                    {disabled && (
-                      <span aria-label="credentials missing" style={{ color: "var(--red)", display: "inline-flex" }}>
-                        <Icon d={Icons.keys} size={11} />
-                      </span>
-                    )}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+// (ModelPicker now lives in shared/ui — single component shared by the
+// chat header, the new-task slideover, and any future surface that
+// needs to pick a model with type-to-filter + disabled-provider
+// awareness.)
 
 function MessageRow({ id, role, model, content, time, promptTokens, completionTokens, costUsd, onCopy, copied }: {
   id: string; role: "user" | "assistant"; model?: string; content: string;

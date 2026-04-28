@@ -247,20 +247,41 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			allSteps = append(allSteps, thinkingStep)
 		} else {
 			// 1. LLM round-trip.
+			//
+			// ProviderHint carries the operator's pinned provider
+			// from task.RequestedProvider (mirrored to run.Provider
+			// at run-create time). Without it the router falls back
+			// to its default — which historically picked OpenAI for
+			// generic model ids and surfaced as "api key is required
+			// for cloud provider openai" when the operator had only
+			// configured a local provider like Ollama. Empty hint
+			// preserves the existing auto-route behavior for tasks
+			// that didn't specify a provider.
 			req := types.ChatRequest{
 				RequestID: spec.RequestID,
 				Model:     spec.Run.Model,
 				Messages:  messages,
 				Tools:     tools,
 				Scope: types.RequestScope{
-					Tenant: spec.Task.Tenant,
-					User:   spec.Task.User,
+					Tenant:       spec.Task.Tenant,
+					User:         spec.Task.User,
+					ProviderHint: spec.Run.Provider,
 				},
 			}
 			r, err := e.llm.Chat(ctx, req)
 			if err != nil {
-				failed, ferr := e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt,
-					fmt.Sprintf("LLM call failed on turn %d: %v", turn, err))
+				// Annotate the common "model doesn't support tools"
+				// failure with a concrete remedy. agent_loop relies
+				// on tool calls; tiny models like smollm2:135m or
+				// embeddings-only endpoints reject the `tools` field
+				// outright. Surfacing the model name + a "pick a
+				// tool-capable model" hint saves the operator a
+				// trip to the provider's docs.
+				message := fmt.Sprintf("LLM call failed on turn %d: %v", turn, err)
+				if isModelLacksToolsError(err) {
+					message = fmt.Sprintf("LLM call failed on turn %d: model %q does not support tool-calling, which agent_loop requires. Pick a tool-capable model (e.g. gpt-4o-mini, claude-sonnet-4-6, qwen2.5-coder for Ollama). Underlying error: %v", turn, spec.Run.Model, err)
+				}
+				failed, ferr := e.failedFromError(spec, allSteps, allArtifacts, nextIndex, turnStartedAt, message)
 				if failed != nil {
 					failed.CostMicrosUSD = costSpent
 					failed.TurnCosts = turnCosts
@@ -629,6 +650,35 @@ func (e *AgentLoopExecutor) runWithoutLLM(_ context.Context, spec ExecutionSpec)
 		OtelStatusCode:    "error",
 		OtelStatusMessage: errMsg,
 	}, nil
+}
+
+// isModelLacksToolsError detects the upstream signal that the chosen
+// model rejects the `tools` field. Different providers phrase it
+// differently, so we match a few common substrings rather than a
+// rigid status-code check. False positives just mean an extra hint
+// in the error — preferable to silently leaving the operator
+// puzzled by a "400 invalid_request_error" with no remedy.
+func isModelLacksToolsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	// Ollama: "<model> does not support tools"
+	// OpenAI: "tools is not supported with <model>" / "<model> does not support tool calls"
+	// Anthropic: "this model does not support tool use"
+	// Together AI: "this model does not support function calling"
+	for _, needle := range []string{
+		"does not support tools",
+		"does not support tool calls",
+		"does not support tool use",
+		"does not support function calling",
+		"tools is not supported",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // failedFromError appends a synthetic "agent loop failed" step that
@@ -1502,17 +1552,56 @@ func hydrateConversation(spec ExecutionSpec) []types.Message {
 			return saved
 		}
 	}
-	// Fresh run: optionally prepend the composed system prompt.
-	// Empty SystemPrompt means none of the four layers contributed
-	// (operator hasn't configured anything, no tenant prompt, no
-	// CLAUDE.md/AGENTS.md, no per-task prompt) — skip the system
-	// message entirely rather than emit an empty one.
-	messages := make([]types.Message, 0, 2)
+	// Fresh run: build the prelude as
+	//   1. environment system message (workspace path) — always present
+	//      when there's a workspace, so the LLM uses the right cwd
+	//      and absolute paths in tool calls. Without this the model
+	//      reads the user prompt's mention of "/Users/foo/myrepo"
+	//      and uses that path verbatim — which lands outside the
+	//      sandbox (an isolated clone) and the run fails with
+	//      "escapes allowed root".
+	//   2. composed operator system prompt (four layers) — global /
+	//      tenant / workspace CLAUDE.md|AGENTS.md / per-task. Empty
+	//      when none of those layers contributed.
+	//   3. user prompt.
+	messages := make([]types.Message, 0, 3)
+	if env := environmentSystemMessage(spec); env != "" {
+		messages = append(messages, types.Message{Role: "system", Content: env})
+	}
 	if strings.TrimSpace(spec.SystemPrompt) != "" {
 		messages = append(messages, types.Message{Role: "system", Content: spec.SystemPrompt})
 	}
 	messages = append(messages, types.Message{Role: "user", Content: spec.Task.Prompt})
 	return messages
+}
+
+// environmentSystemMessage produces the machine-generated system
+// message that grounds the LLM in its actual sandbox: where the
+// workspace lives and what's enforced. This is environmental fact,
+// not operator-tunable directive — kept separate from
+// spec.SystemPrompt so the operator can't accidentally elide it.
+//
+// Returns "" when there's no workspace path (shouldn't happen in
+// practice, but the runner can still drive the executor with an
+// empty path in tests).
+func environmentSystemMessage(spec ExecutionSpec) string {
+	workspace := strings.TrimSpace(spec.Task.WorkingDirectory)
+	if workspace == "" {
+		workspace = strings.TrimSpace(spec.Task.SandboxAllowedRoot)
+	}
+	if workspace == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Your workspace is at: ")
+	b.WriteString(workspace)
+	b.WriteString("\n\n")
+	b.WriteString("Use this path (or paths under it) when calling tools. ")
+	b.WriteString("`shell_exec` / `git_exec` default their working_directory to the workspace when omitted; ")
+	b.WriteString("`read_file` / `list_dir` resolve relative paths from the workspace. ")
+	b.WriteString("Tool calls that target paths outside this directory are rejected by the sandbox — ")
+	b.WriteString("don't reuse paths from the user prompt verbatim if they fall outside the workspace.")
+	return b.String()
 }
 
 // upsertConversationArtifact writes the current conversation snapshot
