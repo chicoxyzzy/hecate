@@ -1,10 +1,19 @@
-# MCP server
+# MCP integration
 
-Hecate ships with an MCP (Model Context Protocol) server that exposes its task, chat-session, and observability surfaces to MCP-aware clients — Claude Desktop, Cursor, Zed, and anything else that speaks the [MCP spec](https://modelcontextprotocol.io/).
+Hecate participates in MCP (Model Context Protocol) on both sides:
+
+1. **Hecate as MCP server** — exposes Hecate's task, chat-session, and observability surfaces to MCP-aware clients (Claude Desktop, Cursor, Zed). Operators control the agent runtime from inside their editor.
+2. **Hecate as MCP client** — `agent_loop` tasks can configure external MCP servers whose tools become callable to the LLM alongside Hecate's built-ins. Lets an agent use, say, the GitHub MCP server (to open PRs) or the filesystem MCP server (typed file access) without baking those into Hecate itself.
+
+Both sides speak [MCP spec](https://modelcontextprotocol.io/) `2025-11-25`.
+
+---
+
+## Hecate as MCP server
 
 The server runs as a subcommand of the `hecate` binary on stdio, talking back to a running gateway over its public REST API. Operators add it to their MCP client's config, and the agent runtime surfaces become callable from inside the editor.
 
-## What's available
+### What's available
 
 Seven tools — four reads and three writes:
 
@@ -20,9 +29,9 @@ Seven tools — four reads and three writes:
 
 Together the write tools turn the MCP surface into an operator-grade control plane: list tasks → see approvals → approve/reject → create new tasks → cancel runaway runs without leaving the editor.
 
-`search_traces`, HTTP/SSE transport, and the client-side integration that lets the agent runtime consume external MCP servers are tracked on the roadmap.
+`search_traces` and Streamable HTTP transport for the server side are tracked on the roadmap. The client-side direction — Hecate consuming external MCP servers — is shipped; see ["Hecate as MCP client"](#hecate-as-mcp-client) below.
 
-### Behavioral hints
+#### Behavioral hints
 
 Each tool declares MCP `annotations` so clients know whether to auto-approve invocations:
 
@@ -31,7 +40,7 @@ Each tool declares MCP `annotations` so clients know whether to auto-approve inv
 - `resolve_approval` has `destructiveHint: true` — irreversible decision, expect the client to prompt.
 - `cancel_run` has `destructiveHint: true, idempotentHint: true` — destructive but safe to retry.
 
-## Configure it
+### Configure it
 
 The MCP server is a stdio subprocess. Two environment variables control where it talks:
 
@@ -40,7 +49,7 @@ The MCP server is a stdio subprocess. Two environment variables control where it
 | `HECATE_BASE_URL` | `http://127.0.0.1:8080` | URL of the running Hecate gateway |
 | `HECATE_AUTH_TOKEN` | _required_ | The bearer token from the gateway's first-run banner (or `/data/hecate.bootstrap.json` → `admin_token`) |
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the Windows / Linux equivalent:
 
@@ -61,11 +70,11 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 
 Restart Claude Desktop. The connector should appear in the tools menu; mention `@hecate` in a conversation to invoke a tool.
 
-### Cursor / Zed / other MCP clients
+#### Cursor / Zed / other MCP clients
 
 Same shape. Cursor's `~/.cursor/mcp.json` and Zed's MCP settings both accept the `command` / `args` / `env` format above.
 
-## Verify it locally
+### Verify it locally
 
 A quick smoke test without an MCP client:
 
@@ -79,15 +88,188 @@ printf '%s\n%s\n%s\n' \
 
 Expected output: two JSON-RPC responses on stdout (initialize result + tools list). The startup line `hecate mcp-server: started on stdio, talking to ...` goes to stderr, which the protocol channel ignores.
 
-## Behavior notes
+### Behavior notes
 
 - **Tool errors are not protocol errors.** When the upstream gateway is unreachable or returns a 5xx, the tool's `CallToolResult` carries `isError: true` with the error text in the content block. The MCP envelope itself stays a successful JSON-RPC response — that's what the spec requires, and it's also what clients render meaningfully.
 - **Auth is per-process.** The token is read once at startup from `HECATE_AUTH_TOKEN` and used as `Authorization: Bearer <token>` on every gateway request. Rotate the token in the gateway and restart the MCP subprocess; there's no live re-read.
 - **One token = one principal.** The MCP server runs against whatever role the token grants — admin token sees everything, a tenant API key sees only its own tasks/sessions. Pick deliberately.
 - **Pure-Go single binary.** The MCP server has no extra dependencies; it's the same `hecate` binary you already have, dispatched by the first arg.
 
-## Spec compliance
+### Spec compliance
 
 - **Protocol version**: `2025-11-25` (current MCP revision). We track the breaking-change-free surface and adopt the additive bits that improve client UX (`title`, `annotations`, server `description`, input-validation-as-tool-error). Negotiation downgrades to whatever the client speaks.
 - **Transport**: stdio with newline-delimited JSON-RPC 2.0 messages. Streamable HTTP is on the roadmap.
 - **Capabilities declared**: `tools` only. Resources, prompts, sampling, elicitation, and the new task primitive land later.
+
+---
+
+## Hecate as MCP client
+
+The other direction: an `agent_loop` task configures one or more external MCP servers, the agent loop brings them up at run start, and their tools become callable by the LLM alongside Hecate's built-ins (`shell_exec`, `file_write`, `git_exec`, `read_file`, `list_dir`, `http_request`).
+
+A server vending tool `read_file` under the operator-chosen alias `filesystem` shows up to the LLM as `mcp__filesystem__read_file`. The double-underscore is the namespace separator; the LLM picks the namespaced name and Hecate routes the call back to the right upstream.
+
+### Configuration
+
+External servers live on the task's `mcp_servers` field at create time:
+
+```json
+POST /v1/tasks
+{
+  "execution_kind": "agent_loop",
+  "prompt": "Read README.md and summarize.",
+  "mcp_servers": [
+    {
+      "name": "fs",
+      "command": "bunx",
+      "args": ["--bun", "@modelcontextprotocol/server-filesystem", "/workspace"],
+      "approval_policy": "auto"
+    }
+  ]
+}
+```
+
+`name` is the operator-chosen alias used to namespace the server's tools. Each server entry produces one MCP client; the agent loop hands the LLM a merged tool catalog (built-ins + every server's tools) on every turn.
+
+The same shape is reachable from the UI under "New task → Agent loop → MCP SERVERS → Add MCP server".
+
+### Transports
+
+Each entry uses **exactly one** transport. The gateway rejects configs that set both or neither.
+
+| Transport | Required | Optional |
+|---|---|---|
+| **stdio** | `command` | `args`, `env` |
+| **HTTP** | `url` | `headers` |
+
+**stdio** — for local servers (`npx`, `bunx`, `uvx`, a binary on PATH):
+
+```json
+{ "name": "fs", "command": "bunx", "args": ["--bun", "@modelcontextprotocol/server-filesystem", "/workspace"] }
+```
+
+**HTTP** — for remote / cloud MCP servers, using the [Streamable HTTP](https://spec.modelcontextprotocol.io/specification/basic/transports/) protocol. Hecate handles both `application/json` (single response) and `text/event-stream` (SSE, multi-frame) responses, and threads the `Mcp-Session-Id` header across requests.
+
+```json
+{
+  "name": "github",
+  "url": "https://api.example.com/mcp",
+  "headers": { "Authorization": "Bearer $GITHUB_TOKEN" }
+}
+```
+
+### Secrets in `env` and `headers`
+
+Values in `env` (stdio) and `headers` (HTTP) are stored in one of three forms. Same rules apply to both:
+
+| Form | Example | Behavior |
+|---|---|---|
+| Process-env reference | `$GITHUB_TOKEN` | Resolved from Hecate's process environment at subprocess spawn time. The reference is what's stored on the task; the token itself never hits the database. |
+| Encrypted literal | `enc:<base64>` | AES-GCM encrypted with `GATEWAY_CONTROL_PLANE_SECRET_KEY`. Decrypted at spawn time. |
+| Bare literal | `secret-token-xyz` | Stored as-is. Acceptable for non-secret values. |
+
+Behavior of the API layer:
+
+- **On create**: any value that is NOT a `$VAR_NAME` reference and NOT already `enc:<base64>` gets auto-encrypted to `enc:...` if a control-plane key is configured, or stored bare if not.
+- **On render** (`GET /v1/tasks/...`): `$VAR_NAME` values come back verbatim; everything else (encrypted ciphertext, bare literals) is replaced with `[redacted]`. Stored secrets cannot leak through the task API.
+
+If a value arrives as `enc:...` and no control-plane key is configured, the run fails fast at spawn time with a clear error rather than forwarding ciphertext to the subprocess.
+
+### Approval policy
+
+`approval_policy` gates how tool calls dispatch. Per-server, not per-tool.
+
+| Value | Behavior |
+|---|---|
+| `auto` (default — omittable) | Tool calls dispatch immediately. |
+| `require_approval` | Every tool call to this server pauses the agent loop. The run goes to `awaiting_approval` with a pending approval record; the operator approves or rejects via `POST /v1/tasks/{id}/approvals/{approval_id}/resolve`; the same run resumes from the saved conversation and dispatches the previously-pending call. |
+| `block` | Never dispatch. The agent loop returns a tool error to the LLM ("blocked by policy") so the model picks a different path on the next turn. Distinct from `require_approval` — block is a hard refusal, not a pause. The run does NOT go to `awaiting_approval`. |
+
+The pause-and-resume machinery is the same the gateway already uses for built-in `shell_exec` gating; MCP gating reuses it without changing the runner or resume path.
+
+Per-tool granularity (e.g. allow read tools on a server while gating write tools) is on the roadmap; for now, gate the whole server or split your task across multiple server entries with different policies.
+
+### Tool namespacing
+
+A server named `github` vending `create_pr` surfaces as `mcp__github__create_pr` in the tool catalog. The split is `mcp__<server>__<tool>`. Tool names that themselves contain `__` round-trip correctly: `mcp__weird__double__under` parses as server=`weird`, tool=`double__under` — only the FIRST `__` after the server segment is treated as the separator.
+
+### Lifecycle and caching
+
+Hecate maintains a shared client cache so multiple tasks targeting the same upstream pay the spawn cost once.
+
+- **Cache key**: SHA-256 over the resolved transport fields (`Command`+`Args`+`Env` for stdio, `URL`+`Headers` for HTTP) AFTER secret resolution. The operator-chosen `name` is intentionally NOT in the key — two tasks aliasing the same upstream as `fs` and `filesystem` share one subprocess.
+- **Idle TTL**: 5 minutes. Entries with refcount=0 evict after this; in-use entries are never evicted regardless of age.
+- **Reaper interval**: 30 seconds.
+- **Reactive eviction**: a transport-closed error from a tool call drops the entry so the next task respawns, instead of being handed back the same dead client.
+
+### Shutdown
+
+On `SIGTERM`/`SIGINT` the gateway runs a 10-second graceful shutdown:
+
+1. The runner cancels every in-flight agent loop. Each loop's `defer host.Close()` releases its cached clients back to the cache.
+2. The cache closes every cached `Client`, which tears down stdio subprocesses (cooperative on EOF) and HTTP connections.
+3. The HTTP server drains pending requests and exits.
+
+Order matters and is enforced by the handler: runner first, cache second. Closing the cache before the runner drained would yank live subprocesses out from under in-flight runs.
+
+### Error handling
+
+| Failure | What you see |
+|---|---|
+| Subprocess can't spawn (`npx not found`, exec error) | Run fails at start. `last_error` carries the spawn diagnostic. |
+| `initialize` handshake fails | Run fails at start. For stdio servers, the error message includes the captured stderr — usually pinpoints missing deps, bad args, or auth failures the upstream prints before exiting. |
+| Tool call returns `isError: true` | The agent loop forwards the upstream's error text as a tool message with `is_error: true`. The LLM gets a chance to retry or pick a different tool; the run does NOT fail. |
+| Transport closed mid-run (subprocess died, HTTP server hung up) | The cache evicts the entry; the call returns a transport error to the loop, which surfaces it as a tool error on the next turn. The next task respawns. |
+| `enc:` value arrives without `GATEWAY_CONTROL_PLANE_SECRET_KEY` | Run fails fast at spawn time with a clear error. |
+
+### End-to-end examples
+
+**Filesystem server, no gating** — the simplest config:
+
+```json
+{
+  "execution_kind": "agent_loop",
+  "prompt": "Read README.md and summarize.",
+  "mcp_servers": [
+    {
+      "name": "fs",
+      "command": "bunx",
+      "args": ["--bun", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    }
+  ]
+}
+```
+
+**HTTP server with bearer token, gated** — the operator approves every call:
+
+```json
+{
+  "execution_kind": "agent_loop",
+  "prompt": "Open a PR for branch feat/x.",
+  "mcp_servers": [
+    {
+      "name": "github",
+      "url": "https://api.example.com/mcp",
+      "headers": { "Authorization": "Bearer $GITHUB_TOKEN" },
+      "approval_policy": "require_approval"
+    }
+  ]
+}
+```
+
+The `$GITHUB_TOKEN` reference resolves from Hecate's process environment at spawn time; set it in your deployment's secret manager. `require_approval` ensures the operator sees and OKs every PR-create call before it lands.
+
+**Two servers, mixed gating** — auto-allow the read-only filesystem, gate the destructive github surface:
+
+```json
+{
+  "execution_kind": "agent_loop",
+  "prompt": "Read CHANGELOG.md, then open a PR if today's section is empty.",
+  "mcp_servers": [
+    { "name": "fs",     "command": "bunx", "args": ["--bun", "@modelcontextprotocol/server-filesystem", "/workspace"] },
+    { "name": "github", "url": "https://api.example.com/mcp",
+      "headers": { "Authorization": "Bearer $GITHUB_TOKEN" },
+      "approval_policy": "require_approval" }
+  ]
+}
+```
