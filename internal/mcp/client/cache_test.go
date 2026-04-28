@@ -40,15 +40,20 @@ func makeCacheTestServer(t *testing.T, name string, tools []mcp.Tool) (url strin
 }
 
 // newCacheTestCache builds a SharedClientCache with a tight TTL and
-// reaper interval suitable for tests. Override these inside individual
-// tests when verifying TTL behavior — the helper is just a sensible
-// starting point.
+// reaper interval suitable for tests. The reaper interval is passed
+// through the unexported constructor so it's set BEFORE the reaper
+// goroutine starts — mutating c.reaper after construction would
+// race with the goroutine's read of it in reaperLoop. (An earlier
+// version of this helper did exactly that and tripped go test
+// -race; the unexported newSharedClientCacheWithReaper is the
+// race-free seam tests should use.)
+//
+// reaper == 0 falls back to the cache's internal default
+// (defaultReaperInterval = 30s) — fine for tests that don't care
+// about reaper timing.
 func newCacheTestCache(t *testing.T, ttl, reaper time.Duration) *SharedClientCache {
 	t.Helper()
-	c := NewSharedClientCache(ttl, mcp.ClientInfo{Name: "hecate-cache-test", Version: "0.0.0"})
-	if reaper > 0 {
-		c.reaper = reaper // OK to mutate before any reaperLoop iteration
-	}
+	c := newSharedClientCacheWithReaper(ttl, reaper, mcp.ClientInfo{Name: "hecate-cache-test", Version: "0.0.0"})
 	t.Cleanup(func() { _ = c.Close() })
 	return c
 }

@@ -82,14 +82,29 @@ const (
 // ttl <= 0 falls back to a sensible default (5 minutes). The reaper
 // runs every 30s and evicts entries that have been idle past ttl.
 func NewSharedClientCache(ttl time.Duration, info mcp.ClientInfo) *SharedClientCache {
+	return newSharedClientCacheWithReaper(ttl, defaultReaperInterval, info)
+}
+
+// newSharedClientCacheWithReaper is the internal constructor that
+// also takes the reaper interval. Tests that want a tight TTL window
+// (a few hundred ms instead of 30s) call this one directly so the
+// reaper field is set BEFORE the goroutine starts — mutating it after
+// construction would race with the goroutine's own read of c.reaper
+// in reaperLoop.
+//
+// reaperInterval <= 0 falls back to defaultReaperInterval.
+func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.ClientInfo) *SharedClientCache {
 	if ttl <= 0 {
 		ttl = defaultCacheTTL
+	}
+	if reaperInterval <= 0 {
+		reaperInterval = defaultReaperInterval
 	}
 	c := &SharedClientCache{
 		entries: make(map[string]*cacheEntry),
 		ttl:     ttl,
 		info:    info,
-		reaper:  defaultReaperInterval,
+		reaper:  reaperInterval,
 		closeCh: make(chan struct{}),
 	}
 	c.reaperWg.Add(1)
