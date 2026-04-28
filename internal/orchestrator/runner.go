@@ -35,6 +35,11 @@ type Config struct {
 	// values fall back to safe defaults inside the executor (30s,
 	// 256 KiB, private-IPs blocked, all public hosts allowed).
 	HTTPPolicy HTTPRequestPolicy
+	// ShellNetwork mirrors HTTPPolicy's host/IP rules onto shell_exec
+	// and git_exec when SandboxNetwork is enabled on the task. The
+	// master gate is still task.SandboxNetwork — these only refine
+	// which destinations are reachable when network IS allowed.
+	ShellNetwork ShellNetworkPolicy
 }
 
 // HTTPRequestPolicy is the agent-runtime-side projection of the
@@ -50,6 +55,17 @@ type HTTPRequestPolicy struct {
 	// are NOT inferred — entries must be exact (e.g. "api.openai.com",
 	// not "openai.com" wildcarded).
 	AllowedHosts []string
+}
+
+// ShellNetworkPolicy is the projection of `GATEWAY_TASK_SHELL_*` env
+// knobs. Used to refine egress when a task has SandboxNetwork=true:
+// the static URL parser in sandbox.validateCommand() rejects http(s)
+// URLs whose host is in a blocked range or outside the allowlist.
+// Best-effort — clever obfuscation bypasses it; for hard isolation
+// run the gateway in a network namespace or behind a filtering proxy.
+type ShellNetworkPolicy struct {
+	AllowPrivateIPs bool
+	AllowedHosts    []string
 }
 
 // SystemPromptResolver composes the four-layer agent_loop system
@@ -1055,17 +1071,19 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		systemPrompt = r.resolveSysPrompt(ctx, task.Tenant, task.SystemPrompt, run.WorkspacePath)
 	}
 	execution, err := executor.Execute(ctx, ExecutionSpec{
-		Task:             taskForRun(task, run),
-		Run:              run,
-		RequestID:        requestID,
-		TraceID:          trace.TraceID,
-		RootSpanID:       trace.RootSpanID(),
-		StartedAt:        time.Now().UTC(),
-		ResumeCheckpoint: resumeCheckpoint,
-		NewID:            defaultResourceID,
-		UpsertStep:       func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
-		UpsertArtifact:   func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
-		SystemPrompt:     systemPrompt,
+		Task:                        taskForRun(task, run),
+		Run:                         run,
+		RequestID:                   requestID,
+		TraceID:                     trace.TraceID,
+		RootSpanID:                  trace.RootSpanID(),
+		StartedAt:                   time.Now().UTC(),
+		ResumeCheckpoint:            resumeCheckpoint,
+		NewID:                       defaultResourceID,
+		UpsertStep:                  func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
+		UpsertArtifact:              func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
+		SystemPrompt:                systemPrompt,
+		ShellNetworkAllowedHosts:    r.config.ShellNetwork.AllowedHosts,
+		ShellNetworkAllowPrivateIPs: r.config.ShellNetwork.AllowPrivateIPs,
 	})
 	if err != nil {
 		recordOrchestratorRunFailed(trace, task.ID, run.ID, "executor_failed", err)

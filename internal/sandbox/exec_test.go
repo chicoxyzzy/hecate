@@ -118,6 +118,125 @@ func TestWorkerExecutorSeparatesStdoutAndStderr(t *testing.T) {
 	}
 }
 
+func TestLocalExecutor_NetworkPolicy_BlocksPrivateIPLiteral(t *testing.T) {
+	// When Network=true (operator allowed network) the sandbox still
+	// rejects URLs whose host parses as a private/loopback IP literal
+	// unless AllowPrivateIPs is also true. Mirrors the http_request
+	// tool's SSRF guard so a single config knob can apply to both
+	// surfaces.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	result, err := exec.Run(context.Background(), Command{
+		Command: `curl http://127.0.0.1:8080/secrets`,
+		Policy:  Policy{Network: true},
+		Timeout: time.Second,
+	})
+	if !IsPolicyDenied(err) {
+		t.Fatalf("Run() error = %v, want policy denial for loopback URL", err)
+	}
+	if !strings.Contains(err.Error(), "loopback") {
+		t.Errorf("error = %q, want mention of loopback", err.Error())
+	}
+	if result.ExitCode != -1 {
+		t.Errorf("exit code = %d, want -1", result.ExitCode)
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_AllowsPrivateIPWhenFlagSet(t *testing.T) {
+	// AllowPrivateIPs=true skips the private-IP block; useful for
+	// agents that legitimately need to call internal sidecars or the
+	// gateway's own admin API. Operators should document the threat
+	// model before flipping this on.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	// Use `echo` with a 127.0.0.1 URL — we just need the validator
+	// to PASS (no actual HTTP); the echo command runs locally.
+	_, err := exec.Run(context.Background(), Command{
+		Command: `echo http://127.0.0.1/probe`,
+		Policy:  Policy{Network: true, AllowPrivateIPs: true},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run() with AllowPrivateIPs=true should pass validation; got %v", err)
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_HostAllowlistEnforced(t *testing.T) {
+	// Non-empty AllowedHosts restricts URLs to exactly those hostnames
+	// (no subdomain wildcarding). A request to a host outside the
+	// allowlist is rejected before the command runs.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `curl https://evil.example.com/data`,
+		Policy: Policy{
+			Network:      true,
+			AllowedHosts: []string{"github.com", "registry.npmjs.org"},
+		},
+		Timeout: time.Second,
+	})
+	if !IsPolicyDenied(err) {
+		t.Fatalf("Run() error = %v, want policy denial for off-allowlist host", err)
+	}
+	if !strings.Contains(err.Error(), "evil.example.com") || !strings.Contains(err.Error(), "allowlist") {
+		t.Errorf("error = %q, want mention of host + allowlist", err.Error())
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_HostAllowlistAllowsListed(t *testing.T) {
+	// A URL whose host IS on the allowlist passes validation. We use
+	// an obviously-fake-but-allowed host and `echo` rather than
+	// `curl` so we don't actually hit the network in unit tests.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `echo https://github.com/foo/bar.git`,
+		Policy: Policy{
+			Network:      true,
+			AllowedHosts: []string{"github.com"},
+		},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run() with allowed host should pass; got %v", err)
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_HostAllowlistCaseInsensitive(t *testing.T) {
+	// Hostnames are case-insensitive per RFC 1035; the allowlist
+	// check shouldn't reject a valid URL just because of casing.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `echo https://GitHub.com/foo`,
+		Policy: Policy{
+			Network:      true,
+			AllowedHosts: []string{"github.com"},
+		},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("case-insensitive host match should pass; got %v", err)
+	}
+}
+
+func TestLocalExecutor_NetworkPolicy_PublicHTTPSPasses(t *testing.T) {
+	// Baseline: with Network=true and no allowlist, a public
+	// http(s) URL passes validation. Pinned to make sure the new
+	// validator doesn't accidentally over-block when the operator
+	// hasn't set any constraints beyond the master Network=true.
+	t.Parallel()
+	exec := NewLocalExecutor()
+	_, err := exec.Run(context.Background(), Command{
+		Command: `echo https://example.com/ok`,
+		Policy:  Policy{Network: true},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("public https URL with no constraints should pass; got %v", err)
+	}
+}
+
 func TestWorkerExecutorWritesFile(t *testing.T) {
 	t.Parallel()
 

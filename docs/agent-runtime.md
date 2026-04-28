@@ -65,6 +65,16 @@ The agent gets six tools by default. None require operator config beyond the app
 
 Tool argument schemas are JSON-Schema-shaped and surfaced to the LLM in the standard `tools` array on each `Chat` request. Bad arguments are returned to the model as a tool-result error string rather than failing the run, so the model can correct itself.
 
+### Network egress for shell_exec / git_exec
+
+`shell_exec` and `git_exec` are bounded by the same allowlist semantics as `http_request` when the task has `sandbox_network=true`:
+
+- HTTP/HTTPS URLs that appear as command tokens are extracted and validated.
+- Hosts that parse as a private/loopback IP literal (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, link-local, multicast) are rejected unless `GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS=true`.
+- When `GATEWAY_TASK_SHELL_ALLOWED_HOSTS` is set, only those exact hostnames are reachable. Empty = all public hosts allowed.
+
+Enforcement is **best-effort static parsing** of the command string. Tools that respect the allowlist (`curl`, `wget`, `git fetch`, `npm install`, `pip install`, etc.) get covered; clever obfuscation (base64-encoded URLs, `nc`/`telnet` raw sockets, custom-binary egress) bypasses it. For hard isolation, run the gateway in a network namespace or behind a filtering egress proxy. The default `sandbox_network=false` (no network at all) remains the strongest guarantee.
+
 ## Workspace modes
 
 Every run has a workspace — a directory the sandbox locks tools to. Two modes:
@@ -150,6 +160,8 @@ Env vars that affect agent_loop runs:
 | `GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES` | `262144` (256 KiB) | Response size cap for `http_request` |
 | `GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS` | `false` | When `false`, blocks loopback / RFC1918 / link-local destinations |
 | `GATEWAY_TASK_HTTP_ALLOWED_HOSTS` | `""` | Comma-separated exact-host allowlist; empty = all public hosts |
+| `GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS` | `false` | Same private-IP block, applied to URLs in shell_exec / git_exec commands when the task has `sandbox_network=true` |
+| `GATEWAY_TASK_SHELL_ALLOWED_HOSTS` | `""` | Same exact-host allowlist, applied to shell_exec / git_exec command URLs |
 
 Per-task fields on `POST /v1/tasks` that affect agent_loop:
 

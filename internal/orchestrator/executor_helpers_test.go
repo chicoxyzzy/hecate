@@ -112,12 +112,16 @@ func TestFileErrorKindClassification(t *testing.T) {
 }
 
 func TestTaskPolicyMaterializesSandboxFields(t *testing.T) {
-	task := types.Task{
-		SandboxAllowedRoot: "/srv/run",
-		SandboxReadOnly:    true,
-		SandboxNetwork:     true,
+	spec := ExecutionSpec{
+		Task: types.Task{
+			SandboxAllowedRoot: "/srv/run",
+			SandboxReadOnly:    true,
+			SandboxNetwork:     true,
+		},
+		ShellNetworkAllowedHosts:    []string{"github.com"},
+		ShellNetworkAllowPrivateIPs: true,
 	}
-	got := taskPolicy(task)
+	got := taskPolicy(spec)
 	if got.AllowedRoot != "/srv/run" {
 		t.Errorf("AllowedRoot = %q, want /srv/run", got.AllowedRoot)
 	}
@@ -126,5 +130,13 @@ func TestTaskPolicyMaterializesSandboxFields(t *testing.T) {
 	}
 	if !got.Network {
 		t.Error("Network should be true")
+	}
+	// The shell-network refinement fields flow through from the
+	// runner's ShellNetworkPolicy via ExecutionSpec.
+	if len(got.AllowedHosts) != 1 || got.AllowedHosts[0] != "github.com" {
+		t.Errorf("AllowedHosts = %v, want [github.com]", got.AllowedHosts)
+	}
+	if !got.AllowPrivateIPs {
+		t.Error("AllowPrivateIPs should be true")
 	}
 }

@@ -33,6 +33,12 @@ type ExecutionSpec struct {
 	// assembles it via a SystemPromptResolver before dispatching;
 	// non-agent_loop executors ignore it.
 	SystemPrompt string
+	// ShellNetwork* refines the sandbox.Policy egress rules when
+	// task.SandboxNetwork is true. Set by the runner from its
+	// ShellNetworkPolicy config; ignored when SandboxNetwork is
+	// false (the master gate denies all network access first).
+	ShellNetworkAllowedHosts    []string
+	ShellNetworkAllowPrivateIPs bool
 }
 
 type ResumeCheckpoint struct {
@@ -248,7 +254,7 @@ func (e *FileExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*Execut
 		Path:             spec.Task.FilePath,
 		Content:          spec.Task.FileContent,
 		WorkingDirectory: spec.Task.WorkingDirectory,
-		Policy:           taskPolicy(spec.Task),
+		Policy:           taskPolicy(spec),
 	}
 	var (
 		fileResult sandbox.FileResult
@@ -362,7 +368,7 @@ func executeStreamingCommand(ctx context.Context, exec sandbox.Executor, spec Ex
 		Command:          commandSpec.command,
 		WorkingDirectory: workingDirectory,
 		Timeout:          time.Duration(timeout) * time.Millisecond,
-		Policy:           taskPolicy(spec.Task),
+		Policy:           taskPolicy(spec),
 	}, func(chunk sandbox.OutputChunk) {
 		switch chunk.Stream {
 		case "stdout":
@@ -494,11 +500,22 @@ func fileErrorKind(err error) string {
 	return "file_operation_failed"
 }
 
-func taskPolicy(task types.Task) sandbox.Policy {
+// taskPolicy translates a task's sandbox fields into a sandbox.Policy.
+// The shell-network refinement (per-host allowlist, private-IP block)
+// is plumbed via ExecutionSpec.ShellNetworkAllowedHosts /
+// ShellNetworkAllowPrivateIPs — the runner sets those from its
+// runtime config before dispatch. ExecutionSpec is the single
+// per-run carrier the runner already populates, so propagating two
+// more fields keeps the executor stateless and avoids passing the
+// runtime config into every executor.
+func taskPolicy(spec ExecutionSpec) sandbox.Policy {
+	task := spec.Task
 	return sandbox.Policy{
-		AllowedRoot: task.SandboxAllowedRoot,
-		ReadOnly:    task.SandboxReadOnly,
-		Network:     task.SandboxNetwork,
+		AllowedRoot:     task.SandboxAllowedRoot,
+		ReadOnly:        task.SandboxReadOnly,
+		Network:         task.SandboxNetwork,
+		AllowedHosts:    spec.ShellNetworkAllowedHosts,
+		AllowPrivateIPs: spec.ShellNetworkAllowPrivateIPs,
 	}
 }
 

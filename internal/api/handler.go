@@ -86,6 +86,10 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 			AllowPrivateIPs:  cfg.Server.TaskHTTPAllowPrivateIPs,
 			AllowedHosts:     cfg.Server.TaskHTTPAllowedHosts,
 		},
+		ShellNetwork: orchestrator.ShellNetworkPolicy{
+			AllowPrivateIPs: cfg.Server.TaskShellAllowPrivateIPs,
+			AllowedHosts:    cfg.Server.TaskShellAllowedHosts,
+		},
 	})
 	if taskQueue != nil {
 		runner.SetQueue(taskQueue)

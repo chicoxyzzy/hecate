@@ -65,6 +65,14 @@ type ServerConfig struct {
 	// blocks private IPs unless TaskHTTPAllowPrivateIPs is true).
 	TaskHTTPAllowedHosts []string
 
+	// TaskShell* knobs govern shell_exec network egress when
+	// SandboxNetwork is true on the task. Mirrors the http_request
+	// policy so a single allowlist can apply to both surfaces. When
+	// SandboxNetwork is false (the default), shell network access is
+	// rejected outright regardless of these knobs.
+	TaskShellAllowPrivateIPs bool
+	TaskShellAllowedHosts    []string
+
 	// TraceBodyCapture enables recording (redacted) request and response bodies
 	// in the distributed trace.  Off by default; enable via GATEWAY_TRACE_BODIES=true.
 	TraceBodyCapture bool
@@ -307,6 +315,8 @@ func LoadFromEnv() Config {
 			TaskHTTPMaxResponseBytes:   getEnvInt("GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES", 256*1024),
 			TaskHTTPAllowPrivateIPs:    getEnvBool("GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS", false),
 			TaskHTTPAllowedHosts:       splitCSV(getEnv("GATEWAY_TASK_HTTP_ALLOWED_HOSTS", "")),
+			TaskShellAllowPrivateIPs:   getEnvBool("GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS", false),
+			TaskShellAllowedHosts:      splitCSV(getEnv("GATEWAY_TASK_SHELL_ALLOWED_HOSTS", "")),
 			TaskMaxConcurrentPerTenant: getEnvInt("GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT", 0),
 			TraceBodyCapture:           getEnvBool("GATEWAY_TRACE_BODIES", false),
 			TraceBodyMaxBytes:          getEnvInt("GATEWAY_TRACE_BODY_MAX_BYTES", 4096),

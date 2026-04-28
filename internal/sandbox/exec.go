@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +19,27 @@ import (
 type Policy struct {
 	AllowedRoot string
 	ReadOnly    bool
-	Network     bool
+	// Network is the master gate. When false, any command that
+	// looks like it would touch the network (curl, wget, git fetch,
+	// http(s) URLs, ...) is rejected before launch. When true, the
+	// per-URL constraints below further bound what's allowed.
+	Network bool
+	// AllowedHosts, when non-empty AND Network is true, restricts
+	// HTTP-style URLs in the command to exactly these hostnames
+	// (no subdomain wildcards). Empty means "all public hosts
+	// allowed". Mirrors the agent_loop http_request tool's
+	// allowlist semantics so a single config knob — e.g.
+	// "github.com,registry.npmjs.org" — applies to both.
+	AllowedHosts []string
+	// AllowPrivateIPs, when false AND Network is true, blocks URLs
+	// whose host parses as a loopback / RFC1918 / link-local IP
+	// literal (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1,
+	// fc00::/7, fe80::/10). Doesn't resolve DNS — that would slow
+	// every shell invocation and TOCTOU-race anyway. Operators who
+	// need internal addresses (sidecars, the gateway's own admin
+	// API) flip this to true; the threat model should be documented
+	// before doing so.
+	AllowPrivateIPs bool
 }
 
 type Command struct {
@@ -317,13 +339,116 @@ func ensureWithinAllowedRoot(path string, policy Policy) error {
 }
 
 func validateCommand(command string, policy Policy) error {
-	if !policy.Network && commandRequestsNetwork(command) {
-		return &PolicyError{Reason: "network access is disabled"}
-	}
 	if policy.ReadOnly && commandMutatesState(command) {
 		return &PolicyError{Reason: "write access is disabled"}
 	}
+	if !policy.Network {
+		if commandRequestsNetwork(command) {
+			return &PolicyError{Reason: "network access is disabled"}
+		}
+		return nil
+	}
+	// Network is allowed; enforce per-URL constraints (scheme
+	// allowlist, optional host allowlist, private-IP block) on
+	// any HTTP/HTTPS URL the command spells out. This is best-
+	// effort static parsing — clever obfuscation (base64, env
+	// var indirection, raw sockets via `nc`) bypasses it. For
+	// hard isolation, run the gateway in a network namespace or
+	// behind a filtering egress proxy.
+	for _, raw := range extractCommandURLs(command) {
+		if err := validateURLAgainstPolicy(raw, policy); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// extractCommandURLs pulls out http(s) URLs that appear as
+// whitespace-separated tokens in the command string. Designed
+// for the common cases — `curl https://x`, `wget http://y`,
+// `git clone https://github.com/foo/bar` — without trying to
+// parse the shell language. Strips trailing shell punctuation
+// (`;`, `&`, `|`, `)`, `"`, `'`) so a quoted URL doesn't end up
+// with `;` in its host.
+func extractCommandURLs(command string) []string {
+	var out []string
+	for _, token := range strings.Fields(command) {
+		// A token can have a leading quote / paren we want to
+		// drop before checking the prefix.
+		token = strings.TrimLeft(token, "'\"`(<")
+		if !(strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://")) {
+			continue
+		}
+		token = strings.TrimRight(token, ";&|)>'\"`,")
+		if token != "" {
+			out = append(out, token)
+		}
+	}
+	return out
+}
+
+// validateURLAgainstPolicy applies scheme + host + private-IP
+// rules to a single URL. Returns a PolicyError naming the
+// specific reason the URL was rejected so the operator (and the
+// LLM, when this surfaces as a tool error) can fix it.
+func validateURLAgainstPolicy(raw string, policy Policy) error {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		// Couldn't parse — be safe and reject when we can't
+		// determine the host. Real curl invocations parse
+		// cleanly; a malformed URL is suspicious here.
+		return &PolicyError{Reason: fmt.Sprintf("URL %q is not parseable", raw)}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return &PolicyError{Reason: fmt.Sprintf("scheme %q not allowed (http or https only)", u.Scheme)}
+	}
+	host := u.Hostname()
+	if host == "" {
+		return &PolicyError{Reason: fmt.Sprintf("URL %q has no host", raw)}
+	}
+	if !policy.AllowPrivateIPs {
+		if reason := checkLiteralPrivateIP(host); reason != "" {
+			return &PolicyError{Reason: fmt.Sprintf("host %q is %s", host, reason)}
+		}
+	}
+	if len(policy.AllowedHosts) > 0 && !hostInAllowlist(host, policy.AllowedHosts) {
+		return &PolicyError{Reason: fmt.Sprintf("host %q is not in the allowlist", host)}
+	}
+	return nil
+}
+
+// checkLiteralPrivateIP returns a non-empty reason when the host
+// parses as an IP literal in a blocked range. Hostnames (which
+// would require DNS resolution to classify) return "" — we
+// deliberately don't resolve DNS here; see the Policy comment.
+func checkLiteralPrivateIP(host string) string {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return ""
+	}
+	switch {
+	case ip.IsLoopback():
+		return "loopback"
+	case ip.IsPrivate():
+		return "a private network address"
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return "link-local"
+	case ip.IsUnspecified():
+		return "the unspecified address"
+	case ip.IsMulticast():
+		return "multicast"
+	}
+	return ""
+}
+
+func hostInAllowlist(host string, allowed []string) bool {
+	host = strings.ToLower(host)
+	for _, h := range allowed {
+		if strings.EqualFold(strings.TrimSpace(h), host) {
+			return true
+		}
+	}
+	return false
 }
 
 func commandRequestsNetwork(command string) bool {
