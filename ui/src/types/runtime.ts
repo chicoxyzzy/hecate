@@ -722,6 +722,19 @@ export type TaskApprovalsResponse = {
   data: TaskApprovalRecord[];
 };
 
+// TaskRunStreamTurnCost mirrors the backend `Turn` block on
+// TaskRunStreamEventData. Populated only on snapshots driven by an
+// `agent.turn.completed` event, so the UI can render a live per-turn
+// cost ledger without subscribing to the public events stream.
+export type TaskRunStreamTurnCost = {
+  turn: number;
+  step_id?: string;
+  cost_micros_usd: number;
+  run_cumulative_cost_micros_usd: number;
+  task_cumulative_cost_micros_usd: number;
+  tool_call_count?: number;
+};
+
 export type TaskRunStreamEventData = {
   sequence: number;
   terminal?: boolean;
@@ -730,6 +743,7 @@ export type TaskRunStreamEventData = {
   steps?: TaskStepRecord[];
   approvals?: TaskApprovalRecord[];
   artifacts?: TaskArtifactRecord[];
+  turn?: TaskRunStreamTurnCost;
 };
 
 export type TaskRunStreamEventResponse = {

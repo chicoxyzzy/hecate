@@ -159,6 +159,11 @@ type Props = {
   steps: TaskStepRecord[];
   artifacts: TaskArtifactRecord[];
   approvals: TaskApprovalRecord[];
+  // streamTurnCosts holds per-turn LLM spend pushed by the SSE stream
+  // (one entry per `agent.turn.completed` event). Used as a fallback
+  // for the model-step output_summary path so old runs or steps
+  // missing the cost field still show a per-turn figure.
+  streamTurnCosts: Map<number, number>;
   streamState: StreamState;
   busyAction: string;
   notice: { tone: "success" | "error"; message: string } | null;
@@ -184,7 +189,7 @@ type Props = {
 
 export function TaskDetail({
   task, run, runs, selectedRunID, steps, artifacts, approvals,
-  streamState, busyAction, notice,
+  streamTurnCosts, streamState, busyAction, notice,
   onSelectRun, onResolveApproval, onCancelRun, onRetryRun, onResumeRun, onRetryFromTurn,
   onResumeRaisingCeiling,
 }: Props) {
@@ -407,6 +412,11 @@ export function TaskDetail({
             // the LLM cost for its turn. Index N model step → turn N
             // assistant message; the viewer joins them by ordinal.
             steps={steps}
+            // Stream-pushed per-turn costs are a fallback when the
+            // model-step output_summary path doesn't carry the cost
+            // (older runs, or step writes that completed before the
+            // cost was attached). Same key (turn number).
+            streamTurnCosts={streamTurnCosts}
           />
         )}
 
@@ -555,12 +565,17 @@ function AgentConversationView({
   busy = false,
   onRetryFromTurn,
   steps = [],
+  streamTurnCosts,
 }: {
   raw: string;
   canRetryFromTurn?: boolean;
   busy?: boolean;
   onRetryFromTurn?: (turn: number) => void;
   steps?: TaskStepRecord[];
+  // streamTurnCosts is a turn → µUSD map pushed by the SSE stream.
+  // Used to fill in costs missing from the model-step output_summary
+  // path. Optional — the steps path is the primary source.
+  streamTurnCosts?: Map<number, number>;
 }) {
   let messages: AgentConversationMessage[] = [];
   try {
@@ -593,9 +608,18 @@ function AgentConversationView({
   // order. The Nth model step corresponds to the Nth assistant turn,
   // so we just zip them. Steps whose OutputSummary lacks the cost
   // field (older runs, or resumed-after-approval steps that didn't
-  // re-call the LLM) map to undefined; the bubble renders nothing
-  // in that case rather than a misleading "$0.000".
+  // re-call the LLM) map to undefined; we fall back to the SSE-
+  // streamed per-turn cost (when available) so the figure still
+  // shows up; otherwise the bubble renders nothing rather than a
+  // misleading "$0.000".
   const costByTurn = buildTurnCostMap(steps);
+  if (streamTurnCosts) {
+    for (const [turn, micros] of streamTurnCosts) {
+      if (!costByTurn.has(turn) && micros > 0) {
+        costByTurn.set(turn, micros);
+      }
+    }
+  }
 
   return (
     <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>

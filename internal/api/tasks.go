@@ -235,7 +235,26 @@ type TaskRunStreamEventData struct {
 	// conversely a server-resolved approval might still render in the
 	// banner because the UI cached the old state).
 	Approvals []TaskApprovalItem `json:"approvals,omitempty"`
-	EventType string             `json:"event_type,omitempty"`
+	// Turn carries the per-turn cost breakdown when the snapshot was
+	// driven by an `agent.turn.completed` event. It's populated only
+	// for that event type — every other snapshot leaves Turn nil.
+	// Lets the UI render a live per-turn cost ledger without having
+	// to subscribe to the public events stream separately.
+	Turn      *TaskRunStreamTurnCost `json:"turn,omitempty"`
+	EventType string                 `json:"event_type,omitempty"`
+}
+
+// TaskRunStreamTurnCost mirrors the agent.turn.completed event
+// payload one-for-one. The field names match the event keys (we read
+// them straight from the event data map) so a future generalization
+// to other turn-shaped events stays trivial.
+type TaskRunStreamTurnCost struct {
+	Turn                    int    `json:"turn"`
+	StepID                  string `json:"step_id,omitempty"`
+	CostMicrosUSD           int64  `json:"cost_micros_usd"`
+	RunCumulativeMicrosUSD  int64  `json:"run_cumulative_cost_micros_usd"`
+	TaskCumulativeMicrosUSD int64  `json:"task_cumulative_cost_micros_usd"`
+	ToolCallCount           int    `json:"tool_call_count,omitempty"`
 }
 
 type TaskRunEventItem struct {

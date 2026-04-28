@@ -628,12 +628,17 @@ func (h *Handler) HandleTaskRunStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !ok {
+				// Some events carry an overlay (e.g. agent.turn.completed
+				// passes a Turn cost block) but no full snapshot. Save
+				// the overlay across the rebuild so it survives.
+				overlayTurn := state.Turn
 				state, err = h.buildTaskRunStreamState(ctx, task.ID, runID)
 				if err != nil {
 					fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q}}\n\n", err.Error())
 					flusher.Flush()
 					return
 				}
+				state.Turn = overlayTurn
 			} else if state.Approvals == nil {
 				// Historical snapshots saved before approvals were
 				// included in the SSE payload have a nil Approvals
@@ -1483,6 +1488,16 @@ func (h *Handler) decodeTaskRunEventData(event types.TaskRunEvent) (TaskRunStrea
 	if event.Data == nil {
 		return TaskRunStreamEventData{}, false, nil
 	}
+	// `agent.turn.completed` is the per-turn cost telemetry the runner
+	// emits; its payload is a flat map (no `snapshot` envelope). We
+	// don't have enough state to fabricate a full snapshot here — the
+	// caller falls through to buildTaskRunStreamState — but we DO want
+	// to attach the per-turn breakdown so the UI can render a live
+	// cost-per-turn ledger without subscribing to /v1/events.
+	if event.EventType == "agent.turn.completed" {
+		turn := decodeTurnCostFromEventData(event.Data)
+		return TaskRunStreamEventData{Turn: turn}, false, nil
+	}
 	snapshot, ok := event.Data["snapshot"]
 	if ok {
 		raw, err := json.Marshal(snapshot)
@@ -1527,6 +1542,52 @@ func (h *Handler) decodeTaskRunEventData(event types.TaskRunEvent) (TaskRunStrea
 		return TaskRunStreamEventData{}, false, nil
 	}
 	return decoded, true, nil
+}
+
+// decodeTurnCostFromEventData lifts the per-turn cost figures out of
+// the agent.turn.completed event payload. The runner writes them as
+// a flat map; we pull the keys defensively (event.Data is map[string]any
+// after a JSON round-trip, so numerics arrive as float64).
+func decodeTurnCostFromEventData(data map[string]any) *TaskRunStreamTurnCost {
+	if data == nil {
+		return nil
+	}
+	asInt := func(v any) int {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		case int64:
+			return int(n)
+		}
+		return 0
+	}
+	asInt64 := func(v any) int64 {
+		switch n := v.(type) {
+		case float64:
+			return int64(n)
+		case int:
+			return int64(n)
+		case int64:
+			return n
+		}
+		return 0
+	}
+	asString := func(v any) string {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return ""
+	}
+	return &TaskRunStreamTurnCost{
+		Turn:                    asInt(data["turn"]),
+		StepID:                  asString(data["step_id"]),
+		CostMicrosUSD:           asInt64(data["cost_micros_usd"]),
+		RunCumulativeMicrosUSD:  asInt64(data["run_cumulative_cost_micros_usd"]),
+		TaskCumulativeMicrosUSD: asInt64(data["task_cumulative_cost_micros_usd"]),
+		ToolCallCount:           asInt(data["tool_call_count"]),
+	}
 }
 
 func (h *Handler) loadAuthorizedTask(ctx context.Context, w http.ResponseWriter, r *http.Request, principal auth.Principal) (types.Task, bool) {

@@ -59,6 +59,7 @@ function setup(propOverrides: Partial<React.ComponentProps<typeof TaskDetail>> =
     steps: [],
     artifacts: [],
     approvals: [],
+    streamTurnCosts: new Map(),
     streamState: "closed",
     busyAction: "",
     notice: null,
@@ -325,6 +326,30 @@ describe("TaskDetail agent conversation viewer", () => {
     // The header run-cost badge isn't present (run has no cost),
     // so any "$" anywhere would be a regression.
     expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
+  it("falls back to streamTurnCosts when the model step has no cost", () => {
+    // The agent.turn.completed SSE event is the canonical per-turn
+    // cost ledger. When the model step's OutputSummary doesn't
+    // carry the cost — historical runs, or steps that finalized
+    // before the cost was attached — the conversation viewer
+    // should still surface the figure from the stream.
+    const modelSteps: TaskStepRecord[] = [
+      makeStep({ id: "s-m1", index: 1, kind: "model", title: "Agent turn 1", output_summary: {} }),
+      makeStep({ id: "s-m2", index: 2, kind: "model", title: "Agent turn 2", output_summary: {} }),
+    ];
+    const streamTurnCosts = new Map<number, number>([
+      [1, 1500],     // $0.002
+      [2, 250000],   // $0.250
+    ]);
+    const { render } = setup({
+      artifacts: [makeConvoArtifact()],
+      steps: modelSteps,
+      streamTurnCosts,
+    });
+    render();
+    expect(screen.getByText(/\$0\.002/)).toBeTruthy();
+    expect(screen.getByText(/\$0\.250/)).toBeTruthy();
   });
 
   it("disables 'retry from here' while another action is in flight", () => {
