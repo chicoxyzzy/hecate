@@ -31,7 +31,7 @@ func newPoolHarness(t *testing.T, serverTools map[string][]mcp.Tool, callHandler
 	t.Helper()
 	h := &poolHarness{t: t}
 	pool := &Pool{
-		clients: make(map[string]*Client, len(serverTools)),
+		clients: make(map[string]*pooledClient, len(serverTools)),
 		bind:    make(map[string]namespacedToolBinding),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -78,7 +78,7 @@ func newPoolHarness(t *testing.T, serverTools map[string][]mcp.Tool, callHandler
 		if err != nil {
 			t.Fatalf("server %q list tools: %v", name, err)
 		}
-		pool.clients[name] = client
+		pool.clients[name] = &pooledClient{client: client}
 		for _, tt := range serverTools {
 			ns := NamespacedToolName(name, tt.Name)
 			pool.bind[ns] = namespacedToolBinding{serverName: name, toolName: tt.Name}

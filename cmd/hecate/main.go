@@ -260,6 +260,14 @@ func main() {
 	// at subprocess spawn time. SetSecretCipher is a no-op when cipher
 	// is nil (no GATEWAY_CONTROL_PLANE_SECRET_KEY configured).
 	handler.SetSecretCipher(secretCipher)
+	// MCP client cache: amortizes subprocess spawn cost across runs by
+	// holding one Client per upstream config and handing it back to
+	// later runs that configure the same server. The handler owns it
+	// and tears it down on Shutdown after the runner has drained, so
+	// in-flight runs always see a live client. Zero TTL falls back to
+	// the cache's internal default (5 minutes idle eviction).
+	handler.SetMCPClientCache(orchestrator.NewAgentMCPClientCache(0))
+
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
 		Handler:           api.NewServer(logger, handler),

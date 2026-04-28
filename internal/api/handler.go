@@ -14,6 +14,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 	"github.com/hecate/agent-runtime/internal/gateway"
+	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
 	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/ratelimit"
 	"github.com/hecate/agent-runtime/internal/secrets"
@@ -38,6 +39,13 @@ type Handler struct {
 	// when no control-plane key is configured — values are stored as-is
 	// and $VAR_NAME references are the only safe option in that case.
 	secretCipher secrets.Cipher
+	// mcpClientCache amortizes MCP subprocess spawn cost across runs.
+	// When set, the runner's host factory acquires per-server clients
+	// from the cache (sharing subprocesses between tasks with the same
+	// upstream config); when nil, every run spawns and tears down its
+	// own subprocesses. Owned by the handler — Shutdown closes it
+	// after the runner has drained.
+	mcpClientCache *mcpclient.SharedClientCache
 }
 
 type ProviderRuntime interface {
@@ -159,18 +167,64 @@ func (h *Handler) SetSecretCipher(cipher secrets.Cipher) {
 		return
 	}
 	h.secretCipher = cipher
-	h.taskRunner.SetMCPHostFactory(orchestrator.NewDefaultMCPHostFactory(cipher))
+	h.rebuildMCPHostFactory()
 }
 
-// Shutdown stops the underlying task runner — see orchestrator.Runner.Shutdown
-// for the contract. Bounded by ctx; called from cmd/hecate/main.go on SIGTERM
-// so in-flight agent loops cancel cleanly and any spawned MCP subprocesses
-// don't orphan when the gateway exits.
-func (h *Handler) Shutdown(ctx context.Context) error {
+// SetMCPClientCache wires a SharedClientCache into the runner so MCP
+// subprocesses are reused across runs instead of spawned-and-torn-down
+// per run. nil is a valid argument — it disables caching, which is
+// the existing per-run behavior. Like SetSecretCipher, intended for
+// main.go to call once during bootstrap; the cache itself is owned by
+// the handler and torn down by Shutdown after the runner drains.
+func (h *Handler) SetMCPClientCache(cache *mcpclient.SharedClientCache) {
+	h.mcpClientCache = cache
+	h.rebuildMCPHostFactory()
+}
+
+// rebuildMCPHostFactory rebuilds the runner's MCP host factory using
+// the handler's current cipher + cache fields. Called from the
+// SetSecretCipher / SetMCPClientCache setters so either one can be
+// updated without clobbering the other.
+func (h *Handler) rebuildMCPHostFactory() {
 	if h.taskRunner == nil {
+		return
+	}
+	h.taskRunner.SetMCPHostFactory(orchestrator.NewDefaultMCPHostFactory(h.secretCipher, h.mcpClientCache))
+}
+
+// Shutdown stops the underlying task runner and tears down the shared
+// MCP client cache. Bounded by ctx; called from cmd/hecate/main.go on
+// SIGTERM so in-flight agent loops cancel cleanly and any spawned MCP
+// subprocesses don't orphan when the gateway exits.
+//
+// Order matters: the runner is shut down FIRST so in-flight runs unwind
+// (their pools release cached clients back to the cache), THEN the
+// cache is closed so all cached subprocesses are torn down. Closing
+// the cache before the runner drains would tear down clients that
+// in-flight runs are still calling.
+//
+// If the runner shutdown fails (deadline exceeded, etc.), the cache
+// is still closed — orphaning subprocesses on top of a wedged runner
+// is the worst-of-both-worlds outcome we explicitly avoid.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	var runnerErr error
+	if h.taskRunner != nil {
+		runnerErr = h.taskRunner.Shutdown(ctx)
+	}
+	var cacheErr error
+	if h.mcpClientCache != nil {
+		cacheErr = h.mcpClientCache.Close()
+	}
+	switch {
+	case runnerErr != nil && cacheErr != nil:
+		return fmt.Errorf("runner shutdown: %w; mcp cache close: %v", runnerErr, cacheErr)
+	case runnerErr != nil:
+		return runnerErr
+	case cacheErr != nil:
+		return cacheErr
+	default:
 		return nil
 	}
-	return h.taskRunner.Shutdown(ctx)
 }
 
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {

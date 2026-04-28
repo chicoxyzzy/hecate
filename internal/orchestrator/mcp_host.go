@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/mcp"
 	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
@@ -42,19 +43,25 @@ type AgentMCPHost interface {
 // the run as failed — there's no partial-host fallback.
 type AgentMCPHostFactory func(ctx context.Context, configs []types.MCPServerConfig) (AgentMCPHost, error)
 
-// DefaultMCPHostFactory is the no-cipher default. Use
-// NewDefaultMCPHostFactory(cipher) via Runner.SetMCPHostFactory when
-// the control-plane cipher is available so env values stored as
-// "enc:<base64>" are decrypted at spawn time.
-var DefaultMCPHostFactory AgentMCPHostFactory = NewDefaultMCPHostFactory(nil)
+// DefaultMCPHostFactory is the no-cipher / no-cache default. Use
+// NewDefaultMCPHostFactory(cipher, cache) via Runner.SetMCPHostFactory
+// when the control-plane cipher is available (so env values stored as
+// "enc:<base64>" are decrypted at spawn time) and/or when a shared
+// client cache is wired (so subprocesses are reused across runs).
+var DefaultMCPHostFactory AgentMCPHostFactory = NewDefaultMCPHostFactory(nil, nil)
 
 // NewDefaultMCPHostFactory returns a production factory that resolves
-// secret env values and spawns one stdio subprocess per config via
-// mcpclient.NewPool. cipher may be nil — enc:-prefixed values that
-// arrive without a cipher return a clear error at spawn time so the
-// operator knows the key is missing, rather than forwarding ciphertext
-// to the subprocess.
-func NewDefaultMCPHostFactory(cipher secrets.Cipher) AgentMCPHostFactory {
+// secret env values and produces a Pool per run. cipher may be nil —
+// enc:-prefixed values that arrive without a cipher return a clear
+// error at spawn time so the operator knows the key is missing, rather
+// than forwarding ciphertext to the subprocess.
+//
+// cache may also be nil. When non-nil, every per-server client is
+// acquired from the cache and released on Pool.Close, so subsequent
+// runs that configure the same upstream skip the spawn cost. When nil,
+// the factory falls back to the existing per-run lifetime — every run
+// spawns and closes its own subprocesses.
+func NewDefaultMCPHostFactory(cipher secrets.Cipher, cache *mcpclient.SharedClientCache) AgentMCPHostFactory {
 	return func(ctx context.Context, configs []types.MCPServerConfig) (AgentMCPHost, error) {
 		if len(configs) == 0 {
 			return nil, nil
@@ -63,7 +70,13 @@ func NewDefaultMCPHostFactory(cipher secrets.Cipher) AgentMCPHostFactory {
 		if err != nil {
 			return nil, err
 		}
-		pool, err := mcpclient.NewPool(ctx, agentClientInfo(), toClientServerConfigs(resolved))
+		clientCfgs := toClientServerConfigs(resolved)
+		var pool *mcpclient.Pool
+		if cache != nil {
+			pool, err = mcpclient.NewPoolWithCache(ctx, clientCfgs, cache)
+		} else {
+			pool, err = mcpclient.NewPool(ctx, agentClientInfo(), clientCfgs)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -176,6 +189,20 @@ func resolveEnvConfigs(configs []types.MCPServerConfig, cipher secrets.Cipher) (
 // upstream server logs can correlate.
 func agentClientInfo() mcp.ClientInfo {
 	return mcp.ClientInfo{Name: "hecate-agent-loop", Version: version.Version}
+}
+
+// NewAgentMCPClientCache builds a SharedClientCache configured with
+// the same client identity that uncached agent-loop runs use. main.go
+// constructs one of these at startup, hands it to the api.Handler, and
+// the handler wires it into the runner's MCP host factory. Letting
+// orchestrator own the constructor keeps the agentClientInfo helper
+// unexported and ensures the cache and the per-run path can never
+// drift on identity strings.
+//
+// ttl is the idle TTL for cached entries; 0 falls back to the cache's
+// internal default (5 minutes).
+func NewAgentMCPClientCache(ttl time.Duration) *mcpclient.SharedClientCache {
+	return mcpclient.NewSharedClientCache(ttl, agentClientInfo())
 }
 
 // toClientServerConfigs converts the orchestrator-side config slice

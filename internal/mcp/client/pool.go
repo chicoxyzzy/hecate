@@ -71,9 +71,23 @@ type NamespacedTool struct {
 //   - Close shuts every client down. Idempotent.
 type Pool struct {
 	mu      sync.Mutex
-	clients map[string]*Client               // server name → client
+	cache   *SharedClientCache               // optional; nil = per-run lifetime
+	clients map[string]*pooledClient         // server name → client + cache release
 	tools   []NamespacedTool                 // sorted, stable
 	bind    map[string]namespacedToolBinding // namespaced name → routing info
+}
+
+// pooledClient pairs a Client with the bookkeeping the Pool needs to
+// hand it back. cfg is retained so a transport-closed error from this
+// client's calls can be matched to the cache entry for eviction.
+// release is the cache's per-acquire release func when the client
+// came from the cache, or nil when the Pool owns the client outright
+// (uncached path); Close consults it to decide whether to release or
+// shut down.
+type pooledClient struct {
+	client  *Client
+	cfg     ServerConfig
+	release func()
 }
 
 type namespacedToolBinding struct {
@@ -81,20 +95,62 @@ type namespacedToolBinding struct {
 	toolName   string
 }
 
-// NewPool spawns one stdio client per config, initializes the
-// handshake, and lists tools. Returns a fully ready pool or an error
-// (with all in-progress clients already torn down).
+// NewPool spawns one client per config, initializes the handshake,
+// and lists tools. Returns a fully ready pool or an error (with all
+// in-progress clients already torn down). Uncached: Close shuts down
+// every client. For caller-shared subprocesses across runs, see
+// NewPoolWithCache.
 //
 // info propagates to every spawned Client as their MCP ClientInfo —
 // servers log who connected, so a sensible "hecate-agent-loop /
 // <version>" identity helps operators when they read upstream logs.
 func NewPool(ctx context.Context, info mcp.ClientInfo, configs []ServerConfig) (*Pool, error) {
+	return buildPool(ctx, configs, func(ctx context.Context, cfg ServerConfig) (*Client, []mcp.Tool, func(), error) {
+		client, tools, err := spawnClient(ctx, info, cfg)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return client, tools, nil, nil
+	})
+}
+
+// NewPoolWithCache is the caching counterpart: each per-server client
+// is acquired from cache (spawning on a miss). Close releases the
+// clients back to the cache instead of shutting them down — actual
+// teardown happens via the cache's TTL eviction or its Close method.
+//
+// info comes from cache.info (set at cache construction), not as a
+// parameter here; sharing one cache across multiple identities would
+// blur upstream logs and is intentionally not supported.
+func NewPoolWithCache(ctx context.Context, configs []ServerConfig, cache *SharedClientCache) (*Pool, error) {
+	if cache == nil {
+		return nil, errors.New("mcp pool: cache is required for NewPoolWithCache (use NewPool for uncached)")
+	}
+	p, err := buildPool(ctx, configs, func(ctx context.Context, cfg ServerConfig) (*Client, []mcp.Tool, func(), error) {
+		return cache.Acquire(ctx, cfg)
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.cache = cache
+	return p, nil
+}
+
+// clientFactory is the per-config bring-up callback used by buildPool.
+// Returns the client, its tools snapshot, and an optional release func
+// (nil when the pool itself owns the client lifetime).
+type clientFactory func(ctx context.Context, cfg ServerConfig) (*Client, []mcp.Tool, func(), error)
+
+// buildPool is the shared NewPool / NewPoolWithCache implementation.
+// Validates each config, calls factory for the per-config client, and
+// stitches the namespaced tool bindings.
+func buildPool(ctx context.Context, configs []ServerConfig, factory clientFactory) (*Pool, error) {
 	p := &Pool{
-		clients: make(map[string]*Client, len(configs)),
+		clients: make(map[string]*pooledClient, len(configs)),
 		bind:    make(map[string]namespacedToolBinding),
 	}
-	// Cleanup helper: on any failure, tear down whatever's already
-	// up. Avoids leaking subprocess handles on a bad config.
+	// Cleanup on partial-failure aborts: tear down whatever's already
+	// up so a bad config doesn't leak subprocess handles or cache refs.
 	cleanup := func() {
 		_ = p.Close()
 	}
@@ -109,65 +165,24 @@ func NewPool(ctx context.Context, info mcp.ClientInfo, configs []ServerConfig) (
 			cleanup()
 			return nil, fmt.Errorf("mcp pool: duplicate server name %q", name)
 		}
-		command := strings.TrimSpace(cfg.Command)
-		rawURL := strings.TrimSpace(cfg.URL)
-		if command != "" && rawURL != "" {
+		if err := validateTransportConfig(cfg); err != nil {
 			cleanup()
-			return nil, fmt.Errorf("mcp pool: server %q: command and url are mutually exclusive", name)
-		}
-		if command == "" && rawURL == "" {
-			cleanup()
-			return nil, fmt.Errorf("mcp pool: server %q: either command or url is required", name)
+			return nil, fmt.Errorf("mcp pool: server %q: %w", name, err)
 		}
 
-		var transport Transport
-		var transportErr error
-		if rawURL != "" {
-			transport, transportErr = NewHTTPTransport(rawURL, cfg.Headers, nil)
-			if transportErr != nil {
-				cleanup()
-				return nil, fmt.Errorf("mcp pool: server %q: http: %w", name, transportErr)
-			}
-		} else {
-			cmd := exec.CommandContext(ctx, command, cfg.Args...)
-			cmd.Env = mergeEnv(os.Environ(), cfg.Env)
-			transport, transportErr = NewStdioTransport(cmd)
-			if transportErr != nil {
-				cleanup()
-				return nil, fmt.Errorf("mcp pool: server %q: spawn: %w", name, transportErr)
-			}
-		}
-		client := New(transport, info)
-		if _, err := client.Initialize(ctx); err != nil {
-			// Surface stderr from stdio servers — the JSON-RPC error
-			// alone (often "EOF") rarely names the root cause (missing
-			// deps, bad arg, auth failure). HTTP transports have no
-			// stderr; the HTTP status error already carries the detail.
-			var diag string
-			if st, ok := transport.(*StdioTransport); ok {
-				diag = st.Stderr()
-			}
-			_ = client.Close()
-			cleanup()
-			if strings.TrimSpace(diag) != "" {
-				return nil, fmt.Errorf("mcp pool: server %q: initialize: %w; stderr: %s", name, err, strings.TrimSpace(diag))
-			}
-			return nil, fmt.Errorf("mcp pool: server %q: initialize: %w", name, err)
-		}
-		serverTools, err := client.ListTools(ctx)
+		client, serverTools, release, err := factory(ctx, cfg)
 		if err != nil {
-			_ = client.Close()
 			cleanup()
-			return nil, fmt.Errorf("mcp pool: server %q: list tools: %w", name, err)
+			return nil, fmt.Errorf("mcp pool: server %q: %w", name, err)
 		}
-		p.clients[name] = client
+
+		p.clients[name] = &pooledClient{client: client, cfg: cfg, release: release}
 		for _, t := range serverTools {
 			ns := NamespacedToolName(name, t.Name)
 			if _, dup := p.bind[ns]; dup {
 				// Same upstream server vending the same tool name twice
 				// is the only realistic way to hit this; treat as a
 				// server bug and abort rather than silently shadow.
-				_ = client.Close()
 				cleanup()
 				return nil, fmt.Errorf("mcp pool: server %q vended duplicate tool %q", name, t.Name)
 			}
@@ -181,6 +196,76 @@ func NewPool(ctx context.Context, info mcp.ClientInfo, configs []ServerConfig) (
 	}
 	sort.Slice(p.tools, func(i, j int) bool { return p.tools[i].Name < p.tools[j].Name })
 	return p, nil
+}
+
+// spawnClient runs the per-config bring-up: build transport, init
+// handshake, list tools. Used by NewPool (uncached path) and by the
+// shared cache on a miss.
+func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*Client, []mcp.Tool, error) {
+	transport, err := buildTransport(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	client := New(transport, info)
+	if _, err := client.Initialize(ctx); err != nil {
+		// Surface stderr from stdio servers — the JSON-RPC error
+		// alone (often "EOF") rarely names the root cause (missing
+		// deps, bad arg, auth failure). HTTP transports have no
+		// stderr; the HTTP status error already carries the detail.
+		var diag string
+		if st, ok := transport.(*StdioTransport); ok {
+			diag = st.Stderr()
+		}
+		_ = client.Close()
+		if strings.TrimSpace(diag) != "" {
+			return nil, nil, fmt.Errorf("initialize: %w; stderr: %s", err, strings.TrimSpace(diag))
+		}
+		return nil, nil, fmt.Errorf("initialize: %w", err)
+	}
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, fmt.Errorf("list tools: %w", err)
+	}
+	return client, tools, nil
+}
+
+// validateTransportConfig enforces the stdio-XOR-HTTP invariant on a
+// single ServerConfig. Pure validation — does not touch processes or
+// network. Trims whitespace.
+func validateTransportConfig(cfg ServerConfig) error {
+	command := strings.TrimSpace(cfg.Command)
+	rawURL := strings.TrimSpace(cfg.URL)
+	if command != "" && rawURL != "" {
+		return errors.New("command and url are mutually exclusive")
+	}
+	if command == "" && rawURL == "" {
+		return errors.New("either command or url is required")
+	}
+	return nil
+}
+
+// buildTransport materializes a Transport from a (validated) config.
+// Stdio configs become a *StdioTransport over an exec.CommandContext;
+// URL configs become a *HTTPTransport with a default 5-minute client.
+// Validation is the caller's responsibility — call validateTransportConfig
+// first.
+func buildTransport(ctx context.Context, cfg ServerConfig) (Transport, error) {
+	rawURL := strings.TrimSpace(cfg.URL)
+	if rawURL != "" {
+		t, err := NewHTTPTransport(rawURL, cfg.Headers, nil)
+		if err != nil {
+			return nil, fmt.Errorf("http: %w", err)
+		}
+		return t, nil
+	}
+	cmd := exec.CommandContext(ctx, strings.TrimSpace(cfg.Command), cfg.Args...)
+	cmd.Env = mergeEnv(os.Environ(), cfg.Env)
+	t, err := NewStdioTransport(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("spawn: %w", err)
+	}
+	return t, nil
 }
 
 // Tools returns the merged tool catalog. Stable order across calls
@@ -206,38 +291,59 @@ func (p *Pool) Tools() []NamespacedTool {
 func (p *Pool) Call(ctx context.Context, name string, args json.RawMessage) (text string, isError bool, err error) {
 	p.mu.Lock()
 	bind, ok := p.bind[name]
-	client := p.clients[bind.serverName]
+	pc := p.clients[bind.serverName]
+	cache := p.cache
 	p.mu.Unlock()
 	if !ok {
 		return "", false, fmt.Errorf("mcp pool: unknown tool %q", name)
 	}
-	if client == nil {
+	if pc == nil {
 		// Defensive — shouldn't happen since bind and clients are
 		// populated together. Surface as an error rather than
 		// panicking.
 		return "", false, fmt.Errorf("mcp pool: server for tool %q is not connected", name)
 	}
-	res, err := client.CallTool(ctx, bind.toolName, args)
+	res, err := pc.client.CallTool(ctx, bind.toolName, args)
 	if err != nil {
+		// Reactive health check: if the call failed because the
+		// transport is gone, evict from cache so the next run respawns
+		// instead of being handed back the same dead client. Uncached
+		// pools own the client outright, so there's nothing to evict;
+		// the next NewPool will spawn fresh anyway.
+		if cache != nil && IsTransportClosedErr(err) {
+			cache.Evict(pc.cfg)
+		}
 		return "", false, err
 	}
 	return flattenContent(res.Content), res.IsError, nil
 }
 
-// Close tears every client down. Errors from individual clients are
+// Close tears every client down (uncached pools) or releases them
+// back to the cache (cached pools). Errors from individual closes are
 // joined into a single error so the operator sees them all without
 // losing the first failure to log truncation.
+//
+// Idempotent: a second Close is a no-op (the clients map is cleared
+// on the first call and Close re-runs over an empty map).
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	clients := p.clients
-	p.clients = make(map[string]*Client)
+	cached := p.cache != nil
+	p.clients = make(map[string]*pooledClient)
 	p.bind = make(map[string]namespacedToolBinding)
 	p.tools = nil
 	p.mu.Unlock()
 
 	var errs []error
-	for name, c := range clients {
-		if err := c.Close(); err != nil {
+	for name, pc := range clients {
+		if cached && pc.release != nil {
+			// Cached path: hand the client back to the cache. The
+			// cache decides when to actually close it via TTL or its
+			// own Close.
+			pc.release()
+			continue
+		}
+		if err := pc.client.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close %q: %w", name, err))
 		}
 	}
