@@ -50,7 +50,8 @@ Tasks are durable: a run survives process restarts, can be resumed from a termin
 flowchart TD
     Client["Task client or UI"] --> TasksApi["POST /v1/tasks/{id}/start"]
     TasksApi --> Runner["Orchestrator runner"]
-    Runner --> Queue["Run queue<br/>(memory or postgres lease)"]
+    Runner --> Workspace["Workspace manager<br/>(clone source to temp dir,<br/>or use source in_place)"]
+    Workspace --> Queue["Run queue<br/>(memory / sqlite / postgres lease)"]
 
     subgraph Workers["Workers (each with its own lease)"]
         WorkerA["Worker A"]
@@ -62,16 +63,24 @@ flowchart TD
     WorkerA -->|"heartbeat / extend_lease"| Queue
     WorkerA -->|"ack on success / nack on retryable"| Queue
 
-    WorkerA --> Approval{"Approval required?<br/>(shell_exec, git_exec, file_write,<br/>network_egress)"}
-    Approval -->|"yes — block"| Pending["pending_approval"]
-    Approval -->|"no / approved"| Sandboxd["sandboxd<br/>(out-of-process exec)"]
+    WorkerA --> PreApproval{"Pre-execution approval?<br/>(shell_exec, git_exec, file_write,<br/>network_egress policies)"}
+    PreApproval -->|"yes — block"| Pending["awaiting_approval"]
+    PreApproval -->|"no / approved"| Executor
+
+    Executor["Executor<br/>(shell / git / file / agent_loop)"]
+    Executor --> AgentLoop{"agent_loop?"}
+    AgentLoop -->|"yes"| LoopRef["See: Agent loop turn cycle<br/>(mid-loop approval gate,<br/>per-turn cost events)"]
+    AgentLoop -->|"no"| Sandboxd["sandboxd<br/>(out-of-process exec)"]
 
     Sandboxd --> State["Task state<br/>(runs, steps, artifacts)"]
+    LoopRef --> State
     Sandboxd --> RunEvents["Run events<br/>(monotonic sequence)"]
+    LoopRef --> RunEvents
 
-    State --> Snapshot["Run snapshot"]
+    State --> Snapshot["Run snapshot<br/>(includes Approvals)"]
     RunEvents --> Snapshot
     Snapshot --> Stream["GET /runs/{id}/stream<br/>(SSE, resumable via<br/>after_sequence / Last-Event-ID)"]
+    RunEvents --> PublicEvents["GET /v1/events<br/>GET /v1/events/stream<br/>(cross-run feed,<br/>tenant-scoped for non-admins)"]
 
     Queue --> Stats["GET /admin/runtime/stats<br/>(queue depth, worker count, backend)"]
     State --> Stats
@@ -79,11 +88,56 @@ flowchart TD
 
 Key invariants:
 
+- **Workspace before queue.** Every run has a workspace before a worker can claim it. Default is an isolated clone of `task.WorkingDirectory` (or `task.Repo`) under `${TMPDIR}/hecate-workspaces/<task_id>/<run_id>`; opt in to `workspace_mode=in_place` to run directly in the source. The sandbox `AllowedRoot` is the workspace path either way.
 - **Lease before work.** A worker doesn't see a `task_run` until it has claimed a lease; if it crashes, the lease expires and another worker can pick the run up. Pinned by `GATEWAY_TASK_QUEUE_LEASE_SECONDS`.
 - **Sandbox is out-of-process.** Shell, file, and git execution runs inside `cmd/sandboxd`, which the worker invokes over an exec boundary with policy controls (roots, read-only mode, timeout, network denial). A bug in the sandboxed program can't crash the gateway.
-- **Approvals are blocking.** Steps that match an approval policy halt at `pending_approval` and don't tick the lease until a `POST /approvals/{id}/resolve` arrives.
-- **Events are appended, not mutated.** Every step transition writes a `run_event` with a monotonic sequence number. The SSE stream replays from `after_sequence=N` or `Last-Event-ID`, so a disconnected client can re-join exactly where it left off.
-- **Resume creates a new attempt.** A resumed run gets a fresh `run_id`; the original run stays terminal. The new run reuses the prior workspace so file state carries forward, and gets the prior checkpoint context (last completed step, last event sequence) in step input.
+- **Approvals are blocking and come in two flavors.** Pre-execution approval (shell/git/file kinds, or `sandbox_network=true`) halts the run at `awaiting_approval` before the executor runs. Mid-loop approval (`agent_loop_tool_call`, see below) halts an `agent_loop` run after a turn produced a gated tool call. Both resolve via `POST /approvals/{id}/resolve`.
+- **Events are appended, not mutated.** Every step transition writes a `run_event` with a monotonic sequence number. The SSE stream replays from `after_sequence=N` or `Last-Event-ID`, so a disconnected client can re-join exactly where it left off. Each snapshot carries the run's approvals so the operator UI's banner stays in sync without a separate refetch.
+- **Resume creates a new attempt.** A resumed run gets a fresh `run_id`; the original run stays terminal. The new run reuses the prior workspace so file state carries forward, gets the prior checkpoint context in step input, and inherits the chain's cumulative cost via `PriorCostMicrosUSD` so the per-task ceiling holds across the full chain.
+
+## Agent loop turn cycle
+
+When an `agent_loop` run executes, the worker drives the LLM through a tool-using loop. Each turn round-trips the model, optionally pauses for approval, dispatches tools, and persists the conversation. See [`agent-runtime.md`](agent-runtime.md) for the detailed contract.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Worker
+    participant Loop as Agent Loop Executor
+    participant LLM as Provider (router-pinned)
+    participant Tools as Tool Dispatch
+    participant Sandbox as sandboxd / HTTP / FS
+    participant Store
+    Worker->>Loop: Execute(spec)
+    Loop->>Store: load conversation (resume only)
+    Note over Loop: prepend env system message<br/>(workspace path)<br/>+ four-layer system prompt
+    loop until final answer / max turns / cost ceiling
+        Loop->>LLM: Chat(messages + tools, ProviderHint)
+        LLM-->>Loop: assistant message
+        Loop->>Store: emit agent.turn.completed event<br/>persist conversation snapshot
+        alt has tool_calls
+            opt any tool gated by policy
+                Loop->>Store: persist agent_loop_tool_call approval<br/>status=awaiting_approval
+                Loop-->>Worker: pause
+            end
+            Loop->>Tools: dispatch each tool_call
+            Tools->>Sandbox: shell_exec / file_write / http_request / ...
+            Sandbox-->>Tools: result
+            Tools-->>Loop: tool_result text
+            Loop->>Store: persist updated conversation
+        else final answer
+            Loop->>Store: persist final-answer artifact
+            Loop-->>Worker: status=completed
+        end
+    end
+```
+
+Notable details:
+
+- **Workspace environment system message.** The loop prepends a machine-generated system message naming the workspace path, so the model uses the cloned cwd instead of the source path it sees in the user prompt. Without this, tool calls land outside the sandbox and fail with `escapes allowed root`.
+- **Provider hint.** `ChatRequest.Scope.ProviderHint` is set from `run.Provider` (mirrored from `task.RequestedProvider`), so the operator's pinned provider actually routes — no fallback to the default for generic model ids.
+- **Per-turn cost.** Every LLM round-trip emits an `agent.turn.completed` event with `cost_micros_usd`, `run_cumulative_cost_micros_usd`, and `task_cumulative_cost_micros_usd` (including prior runs in the resume chain). The per-task `BudgetMicrosUSD` ceiling is checked against `priorCost + costSpent` after each turn.
+- **Mid-loop approval resume.** On approve, the same run is requeued. The loop detects the trailing assistant tool_calls without resolved results, dispatches them (no second LLM call), and continues.
 
 ## Storage tiers
 

@@ -231,6 +231,17 @@ Coding-runtime operations emit their own spans, grouped by lifecycle stage:
 
 Steps carry `hecate.step.duration_ms`. Runs carry `hecate.run.duration_ms`. Queue claim events carry `hecate.queue.wait_ms` — the time the run spent in the queue between enqueue and claim.
 
+`agent_loop` runs additionally emit one `agent.turn.completed` run event per LLM round-trip, persisted on the run's event log (consumed by the per-run stream and the public `/v1/events` feed). Each event carries:
+
+- `turn` — turn number (1-indexed)
+- `step_id` — the assistant `step` produced this turn
+- `cost_micros_usd` — this turn's LLM spend in micro-USD
+- `run_cumulative_cost_micros_usd` — running total across this run only
+- `task_cumulative_cost_micros_usd` — running total across the entire resume chain (this run + every prior run via `PriorCostMicrosUSD`)
+- `tool_call_count` — how many tool calls the assistant emitted this turn
+
+The per-turn cost figure is also stamped on the corresponding model step's `OutputSummary.cost_micros_usd` so the run-replay UI surfaces it next to the turn label without a separate event subscription. See [`agent-runtime.md`](agent-runtime.md#cost-tracking) for the full cost model.
+
 ### Retention Spans
 
 Retention manager runs emit events under the `retention.run` span:

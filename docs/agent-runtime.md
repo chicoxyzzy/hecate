@@ -1,0 +1,170 @@
+# Agent Runtime
+
+Hecate's `agent_loop` execution kind runs an LLM-driven loop: the model picks tools, the runtime dispatches them, results feed back to the model, and the loop continues until the model produces a final answer or hits a safety bound (max turns, cost ceiling, approval gate). This document covers what's in v0.1: how the loop works, the built-in tools, the safety story, and the control surface.
+
+For the high-level execution flow that wraps it (queue, lease, sandbox, events), see [`architecture.md`](architecture.md#task-runtime-flow). For the API endpoints that drive it, see [`runtime-api.md`](runtime-api.md).
+
+## Loop mechanics
+
+A run with `execution_kind=agent_loop` walks turns:
+
+1. The runtime calls the LLM with the running conversation, available tool schemas, and the operator-composed system prompt.
+2. The model responds with either tool calls or a final answer.
+3. If tool calls: each is dispatched, the result is appended as a `tool` message, the loop runs another turn.
+4. If a final answer: the loop ends. The answer is persisted as a `summary` artifact.
+
+The conversation is persisted as an artifact (`agent_conversation`, JSON-encoded `[]Message`) on every turn — so a crash mid-loop, an approval pause, or a deliberate retry-from-turn all start from a known state.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Runner as Runtime
+    participant Loop as Agent Loop
+    participant LLM
+    participant Tool as Tool Dispatch
+    participant Store
+    Runner->>Loop: Execute(spec)
+    Loop->>Store: read agent_conversation (if resume)
+    loop until final answer or limit
+        Loop->>LLM: Chat(messages + tools)
+        LLM-->>Loop: assistant message
+        Loop->>Store: persist conversation snapshot
+        alt has tool_calls
+            opt any tool gated by policy
+                Loop->>Store: emit approval (status=pending)
+                Loop-->>Runner: status=awaiting_approval
+            end
+            Loop->>Tool: dispatch each tool_call
+            Tool-->>Loop: tool_result text
+            Loop->>Store: persist updated conversation
+        else final answer
+            Loop->>Store: persist final answer artifact
+            Loop-->>Runner: status=completed
+        end
+    end
+```
+
+Three things bound the loop:
+
+- **`GATEWAY_TASK_AGENT_LOOP_MAX_TURNS`** (default `8`) — hard ceiling on LLM round-trips per run. Runaway-cost safety net.
+- **`Task.BudgetMicrosUSD`** — per-task cost ceiling. Checked after each turn against `priorCost + costSpent`; failing the run preserves the assistant's last message.
+- **Approval gates** — when the model requests a gated tool, the loop pauses with `status=awaiting_approval` and emits an approval record. See below.
+
+## Built-in tools
+
+The agent gets six tools by default. None require operator config beyond the approval policies; `http_request` reads the network policy from env.
+
+| Tool | What it does | Policy |
+|---|---|---|
+| `shell_exec` | Run a shell command in the workspace | Default-gated by `shell_exec` approval; sandboxed in `cmd/sandboxd` |
+| `git_exec` | Run a git command in the workspace | Default-gated by `git_exec` approval if configured |
+| `file_write` | Write or append a file under the workspace | Default-gated by `file_write` approval if configured |
+| `read_file` | Read a file under the workspace (8 KiB cap, binary detection) | Ungated; path must resolve within the sandbox root |
+| `list_dir` | List entries under a workspace path | Ungated; path must resolve within the sandbox root |
+| `http_request` | Make an outbound HTTP request | Default-gated by `network_egress` approval; SSRF guards (private-IP block, scheme allowlist, optional host allowlist) |
+
+Tool argument schemas are JSON-Schema-shaped and surfaced to the LLM in the standard `tools` array on each `Chat` request. Bad arguments are returned to the model as a tool-result error string rather than failing the run, so the model can correct itself.
+
+## Workspace modes
+
+Every run has a workspace — a directory the sandbox locks tools to. Two modes:
+
+- **isolated clone** (default; `WorkspaceMode` empty / `persistent` / `ephemeral`) — the workspace manager copies or git-clones `task.WorkingDirectory` (or `task.Repo`) to a fresh temp dir under `${TMPDIR}/hecate-workspaces/<task_id>/<run_id>`. Writes don't touch the source. Safe by default.
+- **`in_place`** — the workspace IS `task.WorkingDirectory`. Tools write directly to the operator's source. Necessarily destructive; opt-in. Requires an absolute existing directory or the run fails up-front rather than silently flipping back to the clone behavior.
+
+The new-task UI exposes `in_place` as a "Run in place (no isolated clone)" checkbox under WORKING DIRECTORY.
+
+### Workspace environment system message
+
+Every fresh `agent_loop` run prepends a machine-generated system message that tells the model where its workspace lives:
+
+> Your workspace is at: `/var/folders/.../run_xxx`
+>
+> Use this path (or paths under it) when calling tools. `shell_exec` / `git_exec` default their working_directory to the workspace when omitted; `read_file` / `list_dir` resolve relative paths from the workspace. Tool calls that target paths outside this directory are rejected by the sandbox — don't reuse paths from the user prompt verbatim if they fall outside the workspace.
+
+Without this, the model would read `/Users/foo/myrepo` from the user prompt and use that path verbatim — landing outside the cloned sandbox and failing with `escapes allowed root`. The env message is environmental fact, kept separate from the operator-tunable system prompt so it can't be accidentally elided.
+
+## Four-layer system prompt
+
+The operator-tunable system prompt is composed from four layers, broadest first:
+
+1. **Global** — `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` (env). Applies to every agent_loop run gateway-wide.
+2. **Tenant** — `Tenant.SystemPrompt` from the control plane. Applies to every run for that tenant.
+3. **Workspace** — `CLAUDE.md` or `AGENTS.md` in the task's working directory, capped at 8 KiB. Read once per run.
+4. **Per-task** — `Task.SystemPrompt` set when the task is created.
+
+Layers are concatenated with blank lines between them. Empty layers are skipped (no wasted message). The composed prompt is the second system message in the conversation; the workspace-environment message above is the first.
+
+## Approval gating
+
+Two distinct approval flows:
+
+### Pre-execution approval
+
+Triggered when the task's `execution_kind` is `shell` / `git` / `file` (or `sandbox_network=true`) AND a matching policy is in `GATEWAY_TASK_APPROVAL_POLICIES`. The run is created in `awaiting_approval` status before it ever leaves the queue. The UI shows an amber banner with the command being approved. Approve → run becomes `queued` → executes.
+
+### Mid-loop approval (`agent_loop_tool_call`)
+
+When the LLM calls a gated tool inside an `agent_loop` run, the loop pauses. Mapping:
+
+- `shell_exec` policy → pauses on the `shell_exec` tool call
+- `network_egress` policy → pauses on the `http_request` tool call
+- (other policies map analogously)
+
+The runtime emits an approval record of kind `agent_loop_tool_call`, persists the conversation snapshot, and returns `status=awaiting_approval` for the run. The UI banner shows which tools the agent wants to use. On approve, the same run is re-queued; on resume, the loop detects the trailing assistant tool_calls without resolved results, dispatches them (no second LLM call), and continues. On reject, the run terminates `failed`.
+
+The approval banner stays in sync with the run state because approvals ride along in every SSE snapshot (`TaskRunStreamEventData.Approvals`). No separate refetch needed.
+
+## Cost tracking
+
+Per-turn LLM cost is captured at three granularities:
+
+- **`agent.turn.completed` events** — emitted by the runner once per LLM round-trip. Carry `cost_micros_usd` (this turn), `run_cumulative_cost_micros_usd` (this run only), `task_cumulative_cost_micros_usd` (full task lifetime including prior runs in the resume chain), `tool_call_count`, and the model `step_id`.
+- **Model-step `OutputSummary`** — each thinking step's `OutputSummary.cost_micros_usd` carries the same per-turn figure, so the run-replay UI surfaces it next to "turn N" without a separate event subscription.
+- **`TaskRun.TotalCostMicrosUSD` + `PriorCostMicrosUSD`** — finalized totals on the run record. Cumulative across the resume chain = `Prior + Total`.
+
+The per-task ceiling (`Task.BudgetMicrosUSD`) is checked against `priorCost + costSpent` after each turn — so a chain of resumes can't escape the ceiling by repeatedly resuming a maxed-out run.
+
+Same-run mid-approval resumes seed `costSpent` from the run's pre-pause `TotalCostMicrosUSD`, so the post-resume turns add to (rather than overwrite) the pre-pause spend.
+
+## Retry and resume
+
+Three operations land an agent_loop run back on the queue with prior context:
+
+- **Retry** — `POST /v1/tasks/{id}/runs/{run_id}/retry`. Creates a new run with the same task config but no conversation history. The cheapest "do it again from scratch" button.
+- **Resume** — `POST /v1/tasks/{id}/runs/{run_id}/resume`. Creates a new run that hydrates the source run's conversation and continues from where it left off. Used after a `failed` or `cancelled` run.
+- **Retry from turn N** — `POST /v1/tasks/{id}/runs/{run_id}/retry-from-turn` with `{ "turn": N, "reason": "..." }`. Creates a new run whose conversation is truncated to right before the Nth assistant message. Lets operators explore an alternate path from a known prior state. Turn must be in `[1, count(assistant messages)]`. The new run's step indices restart at 1; cumulative cost picks up from `source.PriorCost + source.Total`.
+
+The conversation viewer in the run-replay UI shows a `↻ retry from here` button on each assistant turn (terminal runs only).
+
+## Configuration knobs
+
+Env vars that affect agent_loop runs:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `GATEWAY_TASK_AGENT_LOOP_MAX_TURNS` | `8` | Hard ceiling on LLM round-trips per run |
+| `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` | `""` | Global (broadest) layer of the four-layer system prompt |
+| `GATEWAY_TASK_APPROVAL_POLICIES` | `shell_exec` | Comma-separated approval gates (`shell_exec`, `git_exec`, `file_write`, `network_egress`) |
+| `GATEWAY_TASK_HTTP_TIMEOUT` | `30s` | Timeout for the `http_request` tool |
+| `GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES` | `262144` (256 KiB) | Response size cap for `http_request` |
+| `GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS` | `false` | When `false`, blocks loopback / RFC1918 / link-local destinations |
+| `GATEWAY_TASK_HTTP_ALLOWED_HOSTS` | `""` | Comma-separated exact-host allowlist; empty = all public hosts |
+
+Per-task fields on `POST /v1/tasks` that affect agent_loop:
+
+- `execution_kind: "agent_loop"` — picks this runtime
+- `prompt` — the user message; required
+- `system_prompt` — narrowest layer of the four-layer composition; optional
+- `working_directory` — absolute path; required when `workspace_mode=in_place`
+- `workspace_mode` — `""` / `"persistent"` / `"ephemeral"` (all clone) or `"in_place"` (use source directly)
+- `requested_provider` / `requested_model` — pin the LLM provider and model
+- `budget_micros_usd` — per-task cost ceiling in micro-USD; `0` disables
+
+## Common failure modes
+
+- **`escapes allowed root`** — the LLM picked a path outside the workspace. The env system message normally prevents this; if you see it, check that `task.WorkingDirectory` matches what the model is using, or switch to `workspace_mode=in_place` to align them.
+- **`api key is required for cloud provider X`** — the operator pinned provider X but no credentials are configured, OR the request fell through to the default provider. The router uses `Scope.ProviderHint` from `run.Provider` (mirrored from `task.RequestedProvider`); empty hint falls back to the default model's provider.
+- **`model "X" does not support tool-calling`** — the chosen model rejects the `tools` field. Tiny / chat-only models (e.g. `smollm2:135m`) hit this. Pick a tool-capable model: `gpt-4o-mini`, `claude-sonnet-4-6`, or `qwen2.5-coder` for Ollama.
+- **`agent loop hit per-task cost ceiling`** — `Task.BudgetMicrosUSD` was exceeded across the run + prior chain. Raise the ceiling and resume to continue.
+- **`agent loop hit maxTurns=N without producing a final answer`** — the model didn't terminate. Either raise `GATEWAY_TASK_AGENT_LOOP_MAX_TURNS`, narrow the prompt, or resume to give it more turns.

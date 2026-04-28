@@ -225,8 +225,12 @@ The docker image picks SQLite for every durable subsystem so `docker compose up`
 | `GATEWAY_TASK_QUEUE_WORKERS` | `1` | Concurrency: how many runs the queue dispatches in parallel. |
 | `GATEWAY_TASK_QUEUE_BUFFER` | `128` | In-memory queue capacity (memory backend only). |
 | `GATEWAY_TASK_QUEUE_LEASE_SECONDS` | `30` | How long a worker holds a claimed run before it can be reclaimed. |
-| `GATEWAY_TASK_APPROVAL_POLICIES` | `shell_exec` | Comma-separated approval gates: `shell_exec`, `git_exec`, `file_write`, `network_egress`. |
+| `GATEWAY_TASK_APPROVAL_POLICIES` | `shell_exec` | Comma-separated approval gates: `shell_exec`, `git_exec`, `file_write`, `network_egress`. Also controls mid-loop tool gating for `agent_loop` runs. |
 | `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT` | `0` | Per-tenant concurrency cap. `0` = unlimited. |
+| `GATEWAY_TASK_AGENT_LOOP_MAX_TURNS` | `8` | Hard ceiling on LLM round-trips per `agent_loop` run. |
+| `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` | `""` | Global (broadest) layer of the four-layer agent system prompt. |
+
+Tasks of `execution_kind=agent_loop` run an LLM-driven tool-using loop with built-in `shell_exec` / `git_exec` / `file_write` / `read_file` / `list_dir` / `http_request` tools, mid-loop approval gating, per-task cost ceilings, and retry-from-turn-N for exploring alternate paths. Every run gets its own workspace — a clone of the source by default, or the source directly via `workspace_mode=in_place`. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the full contract.
 
 ### Telemetry
 
@@ -235,6 +239,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 ## Docs
 
 - [Architecture](docs/architecture.md) — request flow, lease semantics, storage tier matrix
+- [Agent runtime](docs/agent-runtime.md) — `agent_loop` tools, workspace modes, four-layer system prompt, mid-loop approval, cost tracking, retry-from-turn
 - [Deployment](docs/deployment.md) — compose profiles, image pinning, lost-token recovery, resets, backend tier choice
 - [Providers](docs/providers.md) — built-in catalog, configuration, custom providers, health/circuit breaking
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md)

@@ -2,7 +2,7 @@
 
 Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchestrated agents. The runtime is durable: a run survives process restarts, can be resumed from a terminal state, and is leased to one worker at a time so two replicas can share a queue without stepping on each other.
 
-For the high-level execution flow (lease semantics, sandbox boundary, event sequence), see [`architecture.md`](architecture.md#task-runtime-flow). For LLM client endpoints (`/v1/chat/completions`, `/v1/messages`, `/v1/models`), see [`client-integration.md`](client-integration.md).
+For the high-level execution flow (lease semantics, sandbox boundary, event sequence), see [`architecture.md`](architecture.md#task-runtime-flow). For the LLM-driven `agent_loop` execution kind specifically (tools, approval gating, cost tracking, retry-from-turn semantics), see [`agent-runtime.md`](agent-runtime.md). For LLM client endpoints (`/v1/chat/completions`, `/v1/messages`, `/v1/models`), see [`client-integration.md`](client-integration.md).
 
 ## Core resources
 
@@ -13,23 +13,65 @@ For the high-level execution flow (lease semantics, sandbox boundary, event sequ
 - `task_approval`
 - `task_run_event`
 
+### Task fields
+
+The `task` resource accepts these fields on `POST /v1/tasks`:
+
+- `execution_kind` — one of `shell`, `git`, `file`, `agent_loop`
+- `prompt` — the user-facing prompt; required for `agent_loop`, optional description for the others
+- `system_prompt` — per-task agent prompt (narrowest of the four-layer composition); `agent_loop` only
+- `shell_command` / `git_command` / `file_path` / `file_content` / `file_operation` — execution-kind-specific
+- `working_directory` — absolute path; required when `workspace_mode=in_place`
+- `workspace_mode` — `""` / `"persistent"` / `"ephemeral"` (clone behavior, default) or `"in_place"` (run directly in `working_directory`); see [`agent-runtime.md`](agent-runtime.md#workspace-modes)
+- `repo` / `base_branch` — alternate source for the workspace clone
+- `sandbox_allowed_root` / `sandbox_read_only` / `sandbox_network` — sandbox policy for shell / git / file kinds
+- `requested_provider` / `requested_model` — pin the LLM (`agent_loop`); empty falls back to gateway default
+- `budget_micros_usd` — per-task cost ceiling in micro-USD; `0` disables
+- `priority` / `timeout_ms`
+
+### Run fields
+
+`task_run` carries the cost figures the operator UI surfaces:
+
+- `total_cost_micros_usd` — this run's LLM spend (after routing).
+- `prior_cost_micros_usd` — cumulative spend of every prior run in this run's resume chain. Cumulative-across-task = `prior + total`.
+- `model` / `provider` — what was actually used (after routing). May differ from the task's `requested_*` when the operator picked auto.
+
 ## Lifecycle endpoints
 
 - `POST /v1/tasks`
 - `GET /v1/tasks`
 - `GET /v1/tasks/{id}`
+- `DELETE /v1/tasks/{id}`
 - `POST /v1/tasks/{id}/start`
 - `POST /v1/tasks/{id}/runs/{run_id}/retry`
 - `POST /v1/tasks/{id}/runs/{run_id}/resume`
+- `POST /v1/tasks/{id}/runs/{run_id}/retry-from-turn`
 - `POST /v1/tasks/{id}/runs/{run_id}/cancel`
 
-Resume semantics:
+### Resume semantics
 
-- resume is allowed when the source run is terminal (`failed` or `cancelled`)
+- resume is allowed when the source run is terminal (`completed`, `failed`, or `cancelled`)
 - resume creates a new run attempt (new `run_id`) rather than mutating the original run
 - the new run reuses the prior run workspace when available, so file state carries forward
 - optional payload: `{"reason":"..."}` to annotate the resume request
 - resumed executions include checkpoint context (source run id, last completed step, last event sequence) in step input so executors/tools can continue from the prior boundary
+- for `agent_loop` runs, the saved `agent_conversation` artifact is hydrated as the starting message history — the loop continues from where it left off rather than re-running prior turns
+- the new run inherits the chain's cumulative cost via `PriorCostMicrosUSD`, so the per-task ceiling holds across the full chain
+
+### Retry-from-turn-N semantics
+
+`POST /v1/tasks/{id}/runs/{run_id}/retry-from-turn` body:
+
+```json
+{ "turn": 2, "reason": "explore alternative" }
+```
+
+- only valid on `agent_loop` runs that produced an `agent_conversation` artifact
+- `turn` must be in `[1, count(assistant turns)]`; out-of-range turns return 400
+- creates a new run whose conversation is truncated to right before the Nth assistant message; the LLM re-issues that turn from the prior context
+- step indices on the new run restart at 1 (semantically a fresh run that happens to share prior context, not a continuation)
+- see [`agent-runtime.md`](agent-runtime.md#retry-and-resume) for the full flow
 
 ## Execution detail endpoints
 
@@ -47,13 +89,49 @@ Resume semantics:
 - `GET /v1/tasks/{id}/approvals/{approval_id}`
 - `POST /v1/tasks/{id}/approvals/{approval_id}/resolve`
 
+### Approval kinds
+
+The `kind` field on a `task_approval` is one of:
+
+- `shell_command` — pre-execution gate for `execution_kind=shell` tasks
+- `git_exec` — pre-execution gate for `execution_kind=git` tasks
+- `file_write` — pre-execution gate for `execution_kind=file` tasks
+- `network_egress` — pre-execution gate when `sandbox_network=true`
+- `agent_loop_tool_call` — mid-loop gate when an `agent_loop` run calls a gated tool (`shell_exec`, `http_request`, etc.). The reason text lists the tools the agent wants to use. See [`agent-runtime.md`](agent-runtime.md#approval-gating) for the full flow.
+
+Resolve payload: `{"decision": "approve" | "reject", "note": "..."}`. Approving an `agent_loop_tool_call` requeues the same run; the loop dispatches the approved tool calls without re-calling the LLM.
+
 ## Event and stream endpoints
+
+### Per-run events
 
 - `GET /v1/tasks/{id}/runs/{run_id}/events?after_sequence=<n>`
 - `POST /v1/tasks/{id}/runs/{run_id}/events`
 - `GET /v1/tasks/{id}/runs/{run_id}/stream?after_sequence=<n>`
 
-Stream resume also supports `Last-Event-ID`.
+Stream resume also supports `Last-Event-ID`. Each SSE snapshot carries the run state, current steps, current artifacts, AND any approvals scoped to that run — so the operator UI can drive the approval banner directly off the SSE without a separate refetch (`TaskRunStreamEventData.Approvals`).
+
+### Public events feed
+
+For external dashboards (Grafana, Slack notifiers, audit log shippers) that want one subscription instead of per-run polling:
+
+- `GET /v1/events?event_type=<csv>&task_id=<id>&after_sequence=<n>&limit=<n>` — paginated JSON list with cursor-based pagination
+- `GET /v1/events/stream?event_type=<csv>` — long-lived SSE feed; reconnect via `Last-Event-ID`
+
+Filters AND together; within a slice (`event_type` is comma-separated) the match is OR. `after_sequence` is the global event sequence cursor, strictly greater. Tenant principals are auto-scoped to their tenant's tasks; admins see all events across all tenants. Asking for a foreign `task_id` returns an empty result rather than 403 (so existence isn't leaked).
+
+### Event types
+
+Common event types you'll see in either feed:
+
+| Event | When |
+|---|---|
+| `run.created` | A run record is persisted (status `queued` or `awaiting_approval`) |
+| `run.queued` / `run.running` / `run.finished` | Lifecycle transitions |
+| `run.awaiting_approval` | A pre-execution approval is required |
+| `approval.requested` / `approval.approved` / `approval.rejected` | Approval lifecycle |
+| `agent.turn.completed` | One LLM round-trip in an `agent_loop` run finished. Carries `cost_micros_usd`, `run_cumulative_cost_micros_usd`, `task_cumulative_cost_micros_usd`, `tool_call_count`, and the model `step_id`. See [`agent-runtime.md`](agent-runtime.md#cost-tracking). |
+| `run.resumed` / `run.resume_requested` | A new run was created from a prior one (resume / retry-from-turn). Resume-from-turn events carry `retry_from_turn` |
 
 ## Queue execution model
 
@@ -89,14 +167,16 @@ sequenceDiagram
 
 ## Runtime backend and queue configuration
 
-- `GATEWAY_TASKS_BACKEND=memory|postgres`
+- `GATEWAY_TASKS_BACKEND=memory|sqlite|postgres`
 - `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
-- `GATEWAY_TASK_QUEUE_BACKEND=memory|postgres`
+- `GATEWAY_TASK_QUEUE_BACKEND=memory|sqlite|postgres`
 - `GATEWAY_TASK_QUEUE_WORKERS=<int>`
 - `GATEWAY_TASK_QUEUE_BUFFER=<int>`
 - `GATEWAY_TASK_QUEUE_LEASE_SECONDS=<int>`
 - `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT=<int>` (`0` disables the limit)
 
-When `GATEWAY_TASKS_BACKEND=postgres`, tasks/runs/steps/approvals/artifacts/run-events are persisted and the stream replay cursor is durable across restarts. When `GATEWAY_TASK_QUEUE_BACKEND=postgres`, workers claim queue items with renewable leases, so pending runs survive process restarts and can be recovered by another worker when a lease expires.
+When `GATEWAY_TASKS_BACKEND` is `sqlite` or `postgres`, tasks/runs/steps/approvals/artifacts/run-events are persisted and the stream replay cursor is durable across restarts. When `GATEWAY_TASK_QUEUE_BACKEND` is `sqlite` or `postgres`, workers claim queue items with renewable leases, so pending runs survive process restarts and can be recovered by another worker when a lease expires.
+
+For `agent_loop`-specific knobs (max turns, system-prompt layers, HTTP policy for the `http_request` tool), see [`agent-runtime.md`](agent-runtime.md#configuration-knobs).
 
 `GET /admin/runtime/stats` also reports queue health fields including queue depth, queue capacity, worker count, and `queue_backend`.
