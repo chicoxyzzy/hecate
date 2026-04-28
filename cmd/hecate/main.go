@@ -255,6 +255,11 @@ func main() {
 	)
 
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, taskStore, taskQueue, providerRuntime)
+	// Wire the cipher into the handler and its underlying runner so MCP
+	// server env values are encrypted at task-creation time and decrypted
+	// at subprocess spawn time. SetSecretCipher is a no-op when cipher
+	// is nil (no GATEWAY_CONTROL_PLANE_SECRET_KEY configured).
+	handler.SetSecretCipher(secretCipher)
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
 		Handler:           api.NewServer(logger, handler),

@@ -52,16 +52,25 @@ type Task struct {
 	MCPServers []MCPServerConfig
 }
 
+// MCPEnvEncPrefix is the storage prefix for env values that were
+// encrypted at task-creation time with the control-plane AES-GCM
+// cipher. The full stored form is "enc:<base64ciphertext>". The MCP
+// host factory decrypts these at subprocess spawn time so the plaintext
+// token is never written to the task blob.
+const MCPEnvEncPrefix = "enc:"
+
 // MCPServerConfig describes one external MCP server an agent_loop run
 // should connect to. Persisted as part of the task payload (no schema
 // migration — the task is stored as a JSON blob in both the sqlite and
 // postgres backends).
 //
-// Env is intentionally a flat map[string]string for now. Secret
-// resolution against an external key vault is a follow-up; until then,
-// values are stored as written. Operators who don't want plaintext
-// secrets in their store should leave Env empty and set
-// per-host environment via the Hecate process itself.
+// Env values are stored in one of three forms:
+//   - "$VAR_NAME" — resolved from the Hecate process environment at
+//     subprocess spawn time; the token itself is never written to the DB.
+//   - "enc:<base64>" — encrypted by the API layer with the control-plane
+//     AES-GCM key; decrypted at spawn time.
+//   - bare literal — stored as-is (acceptable for non-secret values
+//     or when no cipher key is configured).
 type MCPServerConfig struct {
 	// Name is the operator-chosen label used to namespace this server's
 	// tools (e.g. "filesystem" → tools become `mcp__filesystem__*`).
@@ -73,7 +82,8 @@ type MCPServerConfig struct {
 	Command string
 	// Args are passed verbatim to the command.
 	Args []string
-	// Env is merged onto the spawned process's environment.
+	// Env is merged onto the spawned process's environment. Values may
+	// be $VAR_NAME references, enc: ciphertext, or bare literals.
 	Env map[string]string
 }
 

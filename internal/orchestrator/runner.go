@@ -105,6 +105,11 @@ type Runner struct {
 	policies         map[string]struct{}
 	metrics          *telemetry.OrchestratorMetrics
 	resolveSysPrompt SystemPromptResolver
+	// mcpHostFactory is the factory used when building or rebuilding the
+	// agent_loop executor. Stored here so SetAgentLLMClient (which
+	// rebuilds the executor from scratch) can re-bind the same factory
+	// instead of resetting to the no-cipher default.
+	mcpHostFactory AgentMCPHostFactory
 }
 
 type StartTaskResult struct {
@@ -182,6 +187,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 	// task layer also approves it inside agent_loop tool calls.
 	agent := NewAgentLoopExecutor(nil, runner.shell, runner.file, runner.git, cfg.AgentLoopMaxTurns, agentLoopGatedTools(runner.policies), cfg.HTTPPolicy)
 	agent.SetMCPHostFactory(DefaultMCPHostFactory)
+	runner.mcpHostFactory = DefaultMCPHostFactory
 	runner.agent = agent
 	for _, policy := range cfg.ApprovalPolicies {
 		policy = strings.TrimSpace(policy)
@@ -244,10 +250,27 @@ func (r *Runner) SetSystemPromptResolver(resolver SystemPromptResolver) {
 // the runner doesn't otherwise know about. Nil unwires the loop.
 func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
 	agent := NewAgentLoopExecutor(llm, r.shell, r.file, r.git, r.config.AgentLoopMaxTurns, agentLoopGatedTools(r.policies), r.config.HTTPPolicy)
-	// Re-bind the MCP host factory — the executor is rebuilt from
-	// scratch above, so the prior binding from NewRunner is gone.
-	agent.SetMCPHostFactory(DefaultMCPHostFactory)
+	// Re-bind the stored MCP factory — the executor is rebuilt from
+	// scratch above so the prior binding is gone. Fall back to the
+	// no-cipher default if SetMCPHostFactory was never called.
+	factory := r.mcpHostFactory
+	if factory == nil {
+		factory = DefaultMCPHostFactory
+	}
+	agent.SetMCPHostFactory(factory)
 	r.agent = agent
+}
+
+// SetMCPHostFactory updates the MCP host factory on both the stored
+// field (for future SetAgentLLMClient rebuilds) and the current
+// agent_loop executor if it is an *AgentLoopExecutor. Safe to call
+// after NewRunner; intended for wiring the cipher-aware factory once
+// the control-plane key becomes available.
+func (r *Runner) SetMCPHostFactory(factory AgentMCPHostFactory) {
+	r.mcpHostFactory = factory
+	if agent, ok := r.agent.(*AgentLoopExecutor); ok {
+		agent.SetMCPHostFactory(factory)
+	}
 }
 
 // agentLoopGatedTools translates the runner's task-level approval

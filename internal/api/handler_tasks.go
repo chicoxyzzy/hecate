@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/auth"
+	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -53,7 +54,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mcpServers, mcpErr := normalizeMCPServerConfigs(req.MCPServers)
+	mcpServers, mcpErr := normalizeMCPServerConfigs(req.MCPServers, h.secretCipher)
 	if mcpErr != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, mcpErr.Error())
 		return
@@ -1337,9 +1338,16 @@ func renderTaskItem(task types.Task) TaskItem {
 // duplicate names within the same task — a duplicate would clobber the
 // tool-namespacing prefix and produce silently wrong dispatch.
 //
+// Env values are stored in three forms depending on cipher availability:
+//   - "$VAR_NAME" references are stored verbatim — resolved from the
+//     Hecate process environment at subprocess spawn time.
+//   - Literal values are encrypted with cipher when available →
+//     stored as "enc:<base64>". When cipher is nil they are stored
+//     as-is; operators should use $VAR_NAME references in that case.
+//
 // Returns nil for an empty input (the agent loop skips MCP-host
 // startup when MCPServers is nil/empty).
-func normalizeMCPServerConfigs(items []MCPServerConfigItem) ([]types.MCPServerConfig, error) {
+func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Cipher) ([]types.MCPServerConfig, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -1364,7 +1372,11 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem) ([]types.MCPServerCo
 		if len(item.Env) > 0 {
 			env = make(map[string]string, len(item.Env))
 			for k, v := range item.Env {
-				env[k] = v
+				stored, err := storeMCPEnvValue(v, cipher)
+				if err != nil {
+					return nil, fmt.Errorf("mcp_servers[%d] (%s): env %q: %w", i, name, k, err)
+				}
+				env[k] = stored
 			}
 		}
 		out = append(out, types.MCPServerConfig{
@@ -1377,8 +1389,54 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem) ([]types.MCPServerCo
 	return out, nil
 }
 
+// storeMCPEnvValue prepares a single env value for storage:
+//   - "$VAR_NAME" references are stored verbatim.
+//   - Already "enc:"-prefixed values pass through (idempotent on re-create).
+//   - Literal values are encrypted with cipher when non-nil, else stored as-is.
+func storeMCPEnvValue(v string, cipher secrets.Cipher) (string, error) {
+	if isMCPEnvRef(v) || strings.HasPrefix(v, types.MCPEnvEncPrefix) {
+		return v, nil
+	}
+	if cipher == nil {
+		return v, nil
+	}
+	ct, err := cipher.Encrypt(v)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: %w", err)
+	}
+	return types.MCPEnvEncPrefix + ct, nil
+}
+
+// isMCPEnvRef reports whether v is a $VAR_NAME reference. Mirrors the
+// same check in the orchestrator's resolveEnvValue so that both the
+// storage path (api) and the spawn path (orchestrator) agree on what
+// counts as a reference vs. a value that should be redacted or encrypted.
+func isMCPEnvRef(v string) bool {
+	if len(v) < 2 || v[0] != '$' {
+		return false
+	}
+	for i, c := range v[1:] {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c == '_':
+			// valid in any position
+		case c >= '0' && c <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // renderMCPServerConfigs is the inverse of normalizeMCPServerConfigs:
-// internal slice → wire shape on TaskItem responses.
+// internal slice → wire shape on TaskItem responses. Env values are
+// selectively redacted:
+//   - "$VAR_NAME" references are returned verbatim (they name a variable,
+//     not the secret itself).
+//   - "enc:<base64>" encrypted values and bare literals are replaced with
+//     "[redacted]" so stored tokens never leak through the task API.
 func renderMCPServerConfigs(configs []types.MCPServerConfig) []MCPServerConfigItem {
 	if len(configs) == 0 {
 		return nil
@@ -1390,7 +1448,11 @@ func renderMCPServerConfigs(configs []types.MCPServerConfig) []MCPServerConfigIt
 		if len(c.Env) > 0 {
 			env = make(map[string]string, len(c.Env))
 			for k, v := range c.Env {
-				env[k] = v
+				if isMCPEnvRef(v) {
+					env[k] = v
+				} else {
+					env[k] = "[redacted]"
+				}
 			}
 		}
 		out = append(out, MCPServerConfigItem{

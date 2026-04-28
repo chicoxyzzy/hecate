@@ -16,6 +16,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/ratelimit"
+	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/taskstate"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/internal/version"
@@ -32,6 +33,11 @@ type Handler struct {
 	taskStore       taskstate.Store
 	taskRunner      *orchestrator.Runner
 	rateLimiter     *ratelimit.Store
+	// secretCipher encrypts literal MCP server env values at task-creation
+	// time and wires the matching decrypting factory into the runner. nil
+	// when no control-plane key is configured — values are stored as-is
+	// and $VAR_NAME references are the only safe option in that case.
+	secretCipher secrets.Cipher
 }
 
 type ProviderRuntime interface {
@@ -140,6 +146,20 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		taskRunner:      runner,
 		rateLimiter:     rl,
 	}
+}
+
+// SetSecretCipher wires the control-plane AES-GCM cipher into the
+// handler and its underlying runner. The handler uses it to encrypt
+// MCP server env values at task-creation time; the runner passes it
+// to NewDefaultMCPHostFactory so the same key decrypts them at spawn.
+// Safe to call after NewHandler; intended for main.go to call once the
+// bootstrap key is resolved. A nil argument is a no-op.
+func (h *Handler) SetSecretCipher(cipher secrets.Cipher) {
+	if cipher == nil {
+		return
+	}
+	h.secretCipher = cipher
+	h.taskRunner.SetMCPHostFactory(orchestrator.NewDefaultMCPHostFactory(cipher))
 }
 
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {

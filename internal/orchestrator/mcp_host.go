@@ -3,9 +3,13 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 
 	"github.com/hecate/agent-runtime/internal/mcp"
 	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
+	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/version"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -38,18 +42,122 @@ type AgentMCPHost interface {
 // the run as failed — there's no partial-host fallback.
 type AgentMCPHostFactory func(ctx context.Context, configs []types.MCPServerConfig) (AgentMCPHost, error)
 
-// DefaultMCPHostFactory is the production factory: spawns one stdio
-// subprocess per config via mcpclient.NewPool. Wire this into
-// AgentLoopExecutor at runner construction time.
-func DefaultMCPHostFactory(ctx context.Context, configs []types.MCPServerConfig) (AgentMCPHost, error) {
+// DefaultMCPHostFactory is the no-cipher default. Use
+// NewDefaultMCPHostFactory(cipher) via Runner.SetMCPHostFactory when
+// the control-plane cipher is available so env values stored as
+// "enc:<base64>" are decrypted at spawn time.
+var DefaultMCPHostFactory AgentMCPHostFactory = NewDefaultMCPHostFactory(nil)
+
+// NewDefaultMCPHostFactory returns a production factory that resolves
+// secret env values and spawns one stdio subprocess per config via
+// mcpclient.NewPool. cipher may be nil — enc:-prefixed values that
+// arrive without a cipher return a clear error at spawn time so the
+// operator knows the key is missing, rather than forwarding ciphertext
+// to the subprocess.
+func NewDefaultMCPHostFactory(cipher secrets.Cipher) AgentMCPHostFactory {
+	return func(ctx context.Context, configs []types.MCPServerConfig) (AgentMCPHost, error) {
+		if len(configs) == 0 {
+			return nil, nil
+		}
+		resolved, err := resolveEnvConfigs(configs, cipher)
+		if err != nil {
+			return nil, err
+		}
+		pool, err := mcpclient.NewPool(ctx, agentClientInfo(), toClientServerConfigs(resolved))
+		if err != nil {
+			return nil, err
+		}
+		return &poolMCPHost{pool: pool}, nil
+	}
+}
+
+// isEnvRef reports whether v is a $VAR_NAME reference. Accepted syntax
+// is a dollar sign followed by a POSIX env-var name: the first
+// character must be [A-Za-z_] and subsequent characters [A-Za-z0-9_].
+// A bare "$", "$123", or "$foo-bar" are not valid references.
+func isEnvRef(v string) bool {
+	if len(v) < 2 || v[0] != '$' {
+		return false
+	}
+	for i, c := range v[1:] {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c == '_':
+			// valid in any position
+		case c >= '0' && c <= '9':
+			if i == 0 {
+				return false // can't start with a digit
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// resolveEnvValue resolves a single env value at subprocess spawn time:
+//
+//   - "$VAR_NAME" — looked up via os.LookupEnv; errors if unset or empty
+//     (an empty token is almost always a misconfiguration).
+//   - "enc:<base64>" — decrypted with cipher; errors if cipher is nil
+//     (key not configured) or decryption fails.
+//   - starts with "$" but is not a valid name → error (malformed reference).
+//   - anything else → returned as a literal, unchanged.
+func resolveEnvValue(serverName, key, value string, cipher secrets.Cipher) (string, error) {
+	switch {
+	case strings.HasPrefix(value, types.MCPEnvEncPrefix):
+		if cipher == nil {
+			return "", fmt.Errorf("mcp server %q: env %q: value is encrypted (enc:) but no control-plane secret key is configured", serverName, key)
+		}
+		plaintext, err := cipher.Decrypt(value[len(types.MCPEnvEncPrefix):])
+		if err != nil {
+			return "", fmt.Errorf("mcp server %q: env %q: decrypt: %w", serverName, key, err)
+		}
+		return plaintext, nil
+
+	case len(value) > 0 && value[0] == '$':
+		if !isEnvRef(value) {
+			return "", fmt.Errorf("mcp server %q: env %q: %q looks like a variable reference but is not a valid env-var name (expected $NAME)", serverName, key, value)
+		}
+		varName := value[1:]
+		resolved, exists := os.LookupEnv(varName)
+		if !exists {
+			return "", fmt.Errorf("mcp server %q: env %q: $%s is not set in the runtime environment", serverName, key, varName)
+		}
+		if resolved == "" {
+			return "", fmt.Errorf("mcp server %q: env %q: $%s is set but empty", serverName, key, varName)
+		}
+		return resolved, nil
+
+	default:
+		return value, nil
+	}
+}
+
+// resolveEnvConfigs resolves every env value in each config. Returns a
+// new slice without mutating the originals. The first resolution error
+// aborts the whole set — a partial-resolution pool would spawn servers
+// with wrong or missing credentials.
+func resolveEnvConfigs(configs []types.MCPServerConfig, cipher secrets.Cipher) ([]types.MCPServerConfig, error) {
 	if len(configs) == 0 {
-		return nil, nil
+		return configs, nil
 	}
-	pool, err := mcpclient.NewPool(ctx, agentClientInfo(), toClientServerConfigs(configs))
-	if err != nil {
-		return nil, err
+	out := make([]types.MCPServerConfig, len(configs))
+	for i, cfg := range configs {
+		resolved := cfg
+		if len(cfg.Env) > 0 {
+			env := make(map[string]string, len(cfg.Env))
+			for k, v := range cfg.Env {
+				rv, err := resolveEnvValue(cfg.Name, k, v, cipher)
+				if err != nil {
+					return nil, err
+				}
+				env[k] = rv
+			}
+			resolved.Env = env
+		}
+		out[i] = resolved
 	}
-	return &poolMCPHost{pool: pool}, nil
+	return out, nil
 }
 
 // agentClientInfo is what every spawned MCP server sees as the
