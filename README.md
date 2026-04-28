@@ -53,7 +53,7 @@ Open the UI, paste the token, and the first-run wizard walks you through connect
 
 The browser remembers the token in `localStorage`; subsequent visits go straight to the dashboard. To pre-seed providers, drop a `.env` next to `docker-compose.yml` before booting — see [`docs/providers.md`](docs/providers.md) for the catalog.
 
-For Postgres/Ollama compose profiles, image pinning, lost-token recovery, and reset commands, see [`docs/deployment.md`](docs/deployment.md). Building from source: [`docs/development.md`](docs/development.md).
+Operating the docker stack — Postgres/Ollama profiles, image pinning, recovering a lost admin token, resetting state — is in [`docs/deployment.md`](docs/deployment.md). Setting up a local source build with hot-reload is in [`docs/development.md`](docs/development.md).
 
 ## Architecture
 
