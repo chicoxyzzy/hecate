@@ -635,6 +635,7 @@ export function ModelPicker({
   value, onChange, models,
   presets,
   disabledProviders,
+  modelWarnings,
   showProvider = true,
   triggerWidth,
 }: {
@@ -650,6 +651,15 @@ export function ModelPicker({
   // ("Configure X credentials in Admin → Providers" / "Disabled in
   // Admin → Providers"). Pass an empty/omitted map to disable.
   disabledProviders?: Map<string, string>;
+  // Per-model non-blocking warnings keyed by model id. The model
+  // stays selectable, but a small ⚠ icon renders next to its row
+  // with the value as a tooltip. Used by the new-task panel to
+  // flag models known to lack tool-calling support (e.g.
+  // smollm2:135m, embeddings models) — operators can still pick
+  // them if they know what they're doing, but the visual cue
+  // saves a confused round-trip when the agent loop fails with
+  // "model does not support tool-calling".
+  modelWarnings?: Map<string, string>;
   // Render the per-row "(provider name)" suffix. Set false when the
   // outer provider filter is already pinned to a single provider —
   // every row would carry the same suffix, which is just noise.
@@ -744,11 +754,17 @@ export function ModelPicker({
               const provider = m.metadata?.provider;
               const reason = provider ? disabledProviders?.get(provider) : undefined;
               const disabled = !!reason;
+              const warning = !disabled ? modelWarnings?.get(m.id) : undefined;
+              // Title combines warning (if any) with the disabled
+              // reason. We skip the warning when the row is already
+              // disabled — the disabled tooltip is the more
+              // important signal.
+              const rowTitle = disabled ? reason : warning;
               return (
                 <div
                   key={m.id}
                   className={`dropdown-item ${m.id === value ? "selected" : ""}`}
-                  title={reason}
+                  title={rowTitle}
                   style={disabled ? { cursor: "not-allowed" } : undefined}
                   onClick={() => {
                     if (disabled) return;
@@ -771,16 +787,21 @@ export function ModelPicker({
                       {providerName(provider)}
                     </span>
                   )}
-                  {/* Reserve a fixed slot whether or not a key icon
-                      renders — keeps the right edge aligned across
-                      rows so the model-id and provider-name columns
-                      stay coherent. */}
+                  {/* Reserve a fixed slot whether or not a key/warning
+                      icon renders — keeps the right edge aligned
+                      across rows so the model-id and provider-name
+                      columns stay coherent. Disabled (red key) wins
+                      over warning (amber ⚠) when both could fire. */}
                   <span style={{ display: "inline-flex", flexShrink: 0, marginLeft: 6, width: 11, justifyContent: "center" }}>
-                    {disabled && (
+                    {disabled ? (
                       <span aria-label="credentials missing" style={{ color: "var(--red)", display: "inline-flex" }}>
                         <Icon d={Icons.keys} size={11} />
                       </span>
-                    )}
+                    ) : warning ? (
+                      <span aria-label={warning} style={{ color: "var(--amber)", display: "inline-flex" }}>
+                        <Icon d={Icons.warning} size={11} />
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               );

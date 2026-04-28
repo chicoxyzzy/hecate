@@ -219,3 +219,78 @@ describe("NewTaskSlideOver feedback", () => {
     expect(screen.getByRole("button", { name: /creating/i })).toBeTruthy();
   });
 });
+
+describe("NewTaskSlideOver workspace preview", () => {
+  it("shows the isolated-clone preview by default for shell tasks", () => {
+    const { render } = setup();
+    render();
+    // Default kind is shell — working directory is visible, so the
+    // preview line should render with the temp-dir clone pattern.
+    expect(screen.getByText(/isolated clone at/i)).toBeTruthy();
+    expect(screen.getByText(/hecate-workspaces/)).toBeTruthy();
+  });
+
+  it("switches to in-place messaging when 'Run in place' is checked", async () => {
+    const { render, user } = setup();
+    render();
+    // Need an absolute path for the in-place preview to validate.
+    const wdInput = screen.getByPlaceholderText(/\(default\)/i);
+    await user.type(wdInput, "/Users/me/project");
+    const inPlace = screen.getByLabelText(/Run in place/i);
+    await user.click(inPlace);
+    expect(screen.getByText(/writes land here directly/i)).toBeTruthy();
+    // The isolated-clone path text must NOT appear once in-place is on.
+    expect(screen.queryByText(/isolated clone at/i)).toBeNull();
+  });
+
+  it("flags missing path when in-place is on but WORKING DIRECTORY is empty", async () => {
+    const { render, user } = setup();
+    render();
+    await user.click(screen.getByLabelText(/Run in place/i));
+    expect(screen.getByText(/needs an absolute WORKING DIRECTORY/i)).toBeTruthy();
+  });
+
+  it("flags relative path when in-place is on but path isn't absolute", async () => {
+    const { render, user } = setup();
+    render();
+    const wdInput = screen.getByPlaceholderText(/\(default\)/i);
+    await user.type(wdInput, "./relative/path");
+    await user.click(screen.getByLabelText(/Run in place/i));
+    expect(screen.getByText(/needs an absolute path/i)).toBeTruthy();
+  });
+});
+
+describe("NewTaskSlideOver model warnings (agent_loop)", () => {
+  // Models known to lack tool-calling. The picker flags them with
+  // a non-blocking ⚠ — operators can still pick if they know what
+  // they're doing, but the visual cue saves a wasted run.
+  const mixedModels = [
+    { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } },
+    { id: "smollm2:135m", owned_by: "ollama", metadata: { provider: "ollama", provider_kind: "local", default: false } },
+    { id: "qwen2.5-coder:7b", owned_by: "ollama", metadata: { provider: "ollama", provider_kind: "local", default: false } },
+    { id: "nomic-embed-text", owned_by: "ollama", metadata: { provider: "ollama", provider_kind: "local", default: false } },
+  ];
+
+  it("flags non-tool-capable models on the agent_loop tab", async () => {
+    const { render, user } = setup({ models: mixedModels });
+    render();
+    await user.click(screen.getByRole("button", { name: "Agent loop" }));
+    // Open the model picker so rows render.
+    const modelTrigger = screen.getAllByRole("button").find(b => b.textContent?.includes("model") || b.textContent?.includes("gpt-4o-mini"));
+    if (modelTrigger) await user.click(modelTrigger);
+    // smollm2 + nomic-embed should each have an aria-labeled
+    // warning icon; gpt-4o-mini and qwen2.5-coder must not.
+    const warnings = screen.getAllByLabelText(/Likely doesn't support tool-calling/i);
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does NOT flag any models on the shell tab (warnings only matter for agent_loop)", async () => {
+    const { render, user } = setup({ models: mixedModels });
+    render();
+    // Default kind is shell. Open the model picker.
+    const modelTrigger = screen.getAllByRole("button").find(b => b.textContent?.includes("model") || b.textContent?.includes("gpt-4o-mini"));
+    if (modelTrigger) await user.click(modelTrigger);
+    // No warning icons should render for non-agent_loop tasks.
+    expect(screen.queryAllByLabelText(/Likely doesn't support tool-calling/i)).toHaveLength(0);
+  });
+});

@@ -143,6 +143,33 @@ export function NewTaskSlideOver({
       if (!stillValid) setTaskModel("");
     }
   }
+
+  // Models known not to support tool-calling. Surfaced as
+  // non-blocking warnings on the picker rows when the operator is
+  // creating an agent_loop task (other execution kinds don't use
+  // tools). Conservative list — substring match in lowercase, only
+  // patterns where we're confident the model lacks tools. False
+  // positives are worse than false negatives here: a wrongly-flagged
+  // model is still selectable, but a wrongly-unflagged model just
+  // produces the friendlier runtime error we already ship.
+  const noToolsWarnings = useMemo<Map<string, string>>(() => {
+    if (taskKind !== "agent_loop") return new Map();
+    const noToolsHint = "Likely doesn't support tool-calling — agent_loop runs will fail. Try qwen2.5-coder, gpt-4o-mini, or claude-sonnet.";
+    const patterns: RegExp[] = [
+      /^smollm/i,        // Ollama smollm / smollm2 (any size) — chat-only
+      /^tinyllama/i,     // Ollama tinyllama
+      /^gemma:2b/i,      // small Gemma — no native tool support
+      /^phi:?[12](\.|:|$)/i, // phi:1, phi:2 (phi3+ does support tools)
+      /^llama2/i,        // base llama2 — no native function calling
+      /embed/i,          // embeddings models (nomic-embed-text, text-embedding-ada-002, etc.)
+      /^all-minilm/i,    // sentence-transformers
+    ];
+    const out = new Map<string, string>();
+    for (const m of models) {
+      if (patterns.some(p => p.test(m.id))) out.set(m.id, noToolsHint);
+    }
+    return out;
+  }, [models, taskKind]);
   // Per-task system prompt — only meaningful for agent_loop kind.
   // Empty value falls back to the tenant / workspace / global layers.
   const [taskSystemPrompt, setTaskSystemPrompt] = useState("");
@@ -322,11 +349,15 @@ export function NewTaskSlideOver({
                 />
                 Run in place (no isolated clone)
               </label>
-              {taskInPlace && (
-                <div style={{ fontSize: 10, color: "var(--amber)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
-                  Writes from shell_exec / file / agent tools will land in this directory directly.
-                </div>
-              )}
+              {/* Workspace preview — always visible so the operator
+                  knows up-front where writes will land. The
+                  isolated-clone path uses ${TMPDIR}/hecate-workspaces/
+                  {task_id}/{run_id}; we render the pattern rather
+                  than a concrete path because task/run ids don't
+                  exist until create-time. The in-place case
+                  reflects the actual entered path so the operator
+                  can sanity-check before submitting. */}
+              <WorkspacePreview workingDir={taskWorkingDir} inPlace={taskInPlace} />
             </div>
           )}
 
@@ -394,6 +425,11 @@ export function NewTaskSlideOver({
                 // provider is already pinned — every row would carry
                 // the same suffix.
                 showProvider={taskProvider === "auto"}
+                // Non-blocking ⚠ marker on models that probably
+                // can't tool-call (agent_loop only). The runtime
+                // error message we ship is friendly, but flagging
+                // up-front saves a wasted run.
+                modelWarnings={noToolsWarnings}
               />
             </div>
           </div>
@@ -411,6 +447,52 @@ export function NewTaskSlideOver({
           <button className="btn" onClick={onClose}>Cancel</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// WorkspacePreview tells the operator where writes will land on
+// task creation. Isolated-clone mode (default) renders the path
+// pattern; in-place mode renders the resolved source path with an
+// amber warning that writes will mutate the source. Validation
+// here is intentionally light — the gateway rejects malformed
+// in-place paths at run-create time with a concrete error; we
+// only flag the obvious missing-path case so the operator
+// notices before submitting.
+function WorkspacePreview({ workingDir, inPlace }: { workingDir: string; inPlace: boolean }) {
+  const trimmed = workingDir.trim();
+  const isAbs = trimmed.startsWith("/") || /^[A-Za-z]:\\/.test(trimmed);
+  if (inPlace) {
+    if (!trimmed) {
+      return (
+        <div style={{ fontSize: 10, color: "var(--red)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+          ⚠ In-place mode needs an absolute WORKING DIRECTORY — the run will fail without it.
+        </div>
+      );
+    }
+    if (!isAbs) {
+      return (
+        <div style={{ fontSize: 10, color: "var(--red)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+          ⚠ In-place mode needs an absolute path — relative paths are rejected.
+        </div>
+      );
+    }
+    return (
+      <div style={{ fontSize: 10, color: "var(--amber)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+        Workspace: <span style={{ color: "var(--t1)" }}>{trimmed}</span> · writes land here directly
+      </div>
+    );
+  }
+  // Isolated-clone (default).
+  return (
+    <div style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+      Workspace: isolated clone at{" "}
+      <span style={{ color: "var(--t2)" }}>{"${TMPDIR}/hecate-workspaces/<task_id>/<run_id>"}</span>
+      {trimmed && (
+        <>
+          {" "}· cloned from <span style={{ color: "var(--t2)" }}>{trimmed}</span>
+        </>
+      )}
     </div>
   );
 }
