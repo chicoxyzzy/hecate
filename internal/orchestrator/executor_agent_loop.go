@@ -53,11 +53,13 @@ func (f AgentLLMClientFunc) Chat(ctx context.Context, req types.ChatRequest) (*t
 //     as the final answer
 //  4. Loop until done or MaxTurns hits
 //
-// We don't gate mid-loop tool calls on approvals for v0.1 — the
-// approval gate fires once at the task level, and the agent then runs
-// to completion. Mid-loop approval (pause-and-resume the conversation)
-// is a v0.2 feature; it needs persisted conversation state and
-// explicit resume semantics.
+// Mid-loop tool calls can be gated on approvals: when the LLM
+// requests a tool whose name is in `gatedTools` (e.g. shell_exec,
+// http_request), the loop pauses before dispatching, persists the
+// conversation, and emits an approval record. On operator approve,
+// the same run is re-queued; the loop detects the trailing
+// assistant tool_calls without resolved results and dispatches them
+// without a second LLM call.
 type AgentLoopExecutor struct {
 	llm        AgentLLMClient
 	shell      Executor
@@ -1304,7 +1306,7 @@ func (e *AgentLoopExecutor) httpRequestTool(ctx context.Context, spec ExecutionS
 // than relying on the http client's transport, because we want to
 // inspect the IPs BEFORE the connection happens. A cleaner long-term
 // solution wraps net.Dialer.Control with the same check (which also
-// catches DNS rebinding). For v0.1 this is enough.
+// catches DNS rebinding) — tracked separately.
 func checkPublicHost(ctx context.Context, host string) string {
 	// Literal IP shortcut.
 	if ip := net.ParseIP(host); ip != nil {

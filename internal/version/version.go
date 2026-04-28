@@ -3,7 +3,7 @@
 // it without an import cycle.
 //
 // Defaults to "dev" for local builds. goreleaser overrides it via
-// `-ldflags '-X github.com/hecate/agent-runtime/internal/version.Version=v0.1.0'`
+// `-ldflags '-X github.com/hecate/agent-runtime/internal/version.Version=<git tag>'`
 // during a release build, and the value is surfaced on /healthz so the
 // UI status bar can show what's actually running.
 package version

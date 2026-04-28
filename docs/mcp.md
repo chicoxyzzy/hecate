@@ -6,7 +6,7 @@ The server runs as a subcommand of the `hecate` binary on stdio, talking back to
 
 ## What's available
 
-Four tools in v0.1, all read-mostly:
+Four tools, all read-mostly:
 
 | Tool | Description |
 |---|---|
@@ -15,7 +15,7 @@ Four tools in v0.1, all read-mostly:
 | `list_chat_sessions` | Recent chat sessions: id, title, tenant, turn count |
 | `summarize_recent_traffic` | Aggregated request stats: by-provider breakdown, error rate, avg latency |
 
-More tools (create_task, resolve_approval, search_traces) land in v0.2 alongside HTTP/SSE transport and the **client-side** integration that lets the agent runtime consume external MCP servers.
+Write tools (create_task, resolve_approval, search_traces), HTTP/SSE transport, and the client-side integration that lets the agent runtime consume external MCP servers are tracked on the roadmap.
 
 ## Configure it
 
@@ -75,5 +75,5 @@ Expected output: two JSON-RPC responses on stdout (initialize result + tools lis
 ## Spec compliance
 
 - **Protocol version**: `2025-11-25` (current MCP revision). We track the breaking-change-free surface and adopt the additive bits that improve client UX (`title`, `annotations`, server `description`, input-validation-as-tool-error). Negotiation downgrades to whatever the client speaks.
-- **Transport**: stdio with newline-delimited JSON-RPC 2.0 messages. Streamable HTTP is on the v0.2 roadmap.
+- **Transport**: stdio with newline-delimited JSON-RPC 2.0 messages. Streamable HTTP is on the roadmap.
 - **Capabilities declared**: `tools` only. Resources, prompts, sampling, elicitation, and the new task primitive land later.

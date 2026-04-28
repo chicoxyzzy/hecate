@@ -222,13 +222,15 @@ describe("status bar version chip", () => {
   });
 
   it("renders the version when /healthz returned one", () => {
-    renderWorkspace({ status: "ok", time: "2026-04-25T00:00:00Z", version: "v0.1.0" });
+    const sampleVersion = "test-build-abc123";
+    renderWorkspace({ status: "ok", time: "2026-04-25T00:00:00Z", version: sampleVersion });
 
     // Version sits inside the status bar; scope the query so a stray
-    // "v0.1.0" elsewhere on screen wouldn't false-positive the test.
+    // version string elsewhere on screen wouldn't false-positive the
+    // test.
     const statusbar = document.querySelector(".hecate-statusbar");
     expect(statusbar).not.toBeNull();
-    expect(statusbar!.textContent).toContain("v0.1.0");
+    expect(statusbar!.textContent).toContain(sampleVersion);
   });
 
   it("hides the version chip when /healthz did not include one", () => {

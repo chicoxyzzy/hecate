@@ -1,6 +1,6 @@
 # Agent Runtime
 
-Hecate's `agent_loop` execution kind runs an LLM-driven loop: the model picks tools, the runtime dispatches them, results feed back to the model, and the loop continues until the model produces a final answer or hits a safety bound (max turns, cost ceiling, approval gate). This document covers what's in v0.1: how the loop works, the built-in tools, the safety story, and the control surface.
+Hecate's `agent_loop` execution kind runs an LLM-driven loop: the model picks tools, the runtime dispatches them, results feed back to the model, and the loop continues until the model produces a final answer or hits a safety bound (max turns, cost ceiling, approval gate). This document covers how the loop works, the built-in tools, the safety story, and the control surface.
 
 For the high-level execution flow that wraps it (queue, lease, sandbox, events), see [`architecture.md`](architecture.md#task-runtime-flow). For the API endpoints that drive it, see [`runtime-api.md`](runtime-api.md).
 

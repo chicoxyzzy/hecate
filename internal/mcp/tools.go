@@ -8,25 +8,25 @@ import (
 	"strings"
 )
 
-// RegisterDefaultTools wires the v0.1 tool set onto the supplied
+// RegisterDefaultTools wires the default tool set onto the supplied
 // server. Every tool here dispatches through the HTTPClient — the MCP
 // server is a translator, not a re-implementation of Hecate's core.
 //
 // Tool design conventions:
 //   - inputSchema is JSON Schema 2020-12 (what MCP clients expect).
 //     Properties are typed and described; required fields are marked.
-//   - Tool output is always plain text (one block) for v0.1. Rich
-//     content (markdown tables, JSON dumps) is rendered as text the
-//     client formats. We may switch to structured `resource` blocks
-//     once clients render them better.
+//   - Tool output is always plain text (one block). Rich content
+//     (markdown tables, JSON dumps) is rendered as text the client
+//     formats. We may switch to structured `resource` blocks once
+//     clients render them better.
 //   - Errors that originate at the upstream HTTP layer become the
 //     handler's error return → CallToolResult with isError=true.
 func RegisterDefaultTools(s *Server, client *HTTPClient) {
-	// All four v0.1 tools are read-only inspections of the gateway
+	// All four current tools are read-only inspections of the gateway
 	// state; we declare ReadOnlyHint=true so MCP-aware clients can
 	// auto-approve invocations without an "are you sure?" prompt.
-	// Write tools (create_task, resolve_approval) land in v0.2 and
-	// will set DestructiveHint where appropriate.
+	// Future write tools (create_task, resolve_approval) will set
+	// DestructiveHint where appropriate.
 	readOnly := &ToolAnnotations{ReadOnlyHint: BoolPtr(true)}
 
 	s.RegisterTool(Tool{

@@ -2995,14 +2995,13 @@ func TestTaskCreateRepoLocalProfileAppliesDefaults(t *testing.T) {
 }
 
 func TestTaskStartAgentLoopWithoutLLM_FailsInRunNotAtQueue(t *testing.T) {
-	// Pre-v0.1 there was a feature flag (GATEWAY_TASK_ENABLE_AGENT_EXECUTOR)
-	// that gated agent_loop at the queue boundary — start would 500
-	// with "agent_loop execution kind is disabled". The flag was
-	// removed once the runtime stabilized; agent_loop is now
-	// unconditionally available. Without an LLM configured the run
-	// still fails, but it does so inside the run with an actionable
-	// error step the operator can see in the timeline, not at the
-	// queue boundary where the run never even appears.
+	// agent_loop is unconditionally available — there used to be a
+	// feature flag (GATEWAY_TASK_ENABLE_AGENT_EXECUTOR) gating it at
+	// the queue boundary, but it was removed once the runtime
+	// stabilized. Without an LLM configured the run still fails, but
+	// it does so inside the run with an actionable error step the
+	// operator can see in the timeline, not at the queue boundary
+	// where the run never even appears.
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -3026,7 +3025,7 @@ func TestTaskStartAgentLoopWithoutLLM_FailsInRunNotAtQueue(t *testing.T) {
 func TestTaskStartFileExecutesFileStep(t *testing.T) {
 	// File-execution tasks (execution_kind=file) write a file and
 	// produce a "file" step. agent_loop used to also run this path
-	// deterministically as a fallback, but in v0.1 agent_loop means
+	// deterministically as a fallback, but agent_loop now means
 	// "LLM-driven" — without an LLM it fails fast. Tests that need a
 	// no-LLM path use the explicit kinds, like this one.
 	t.Parallel()

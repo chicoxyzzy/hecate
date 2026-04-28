@@ -9,8 +9,8 @@
 // Transport: stdio with newline-delimited JSON messages. Each line is a
 // complete JSON-RPC 2.0 envelope. Frames are NOT length-prefixed (LSP
 // uses Content-Length headers; MCP-stdio doesn't). HTTP/SSE transport
-// is planned for v0.2 and will share the dispatcher in server.go but
-// have its own framing.
+// is planned and will share the dispatcher in server.go but have its
+// own framing.
 //
 // Spec target: protocol version "2025-11-25" — the current MCP
 // revision as of this writing. We track the breaking-change-free
@@ -27,9 +27,9 @@
 //   - server description (2025-11-25 minor): optional human-readable
 //     context exposed during initialize
 //
-// Out of scope for v0.1: OAuth / Streamable HTTP / elicitation / tasks
-// primitive / resource links / sampling. None apply to stdio-only,
-// tools-only servers.
+// Currently out of scope: OAuth / Streamable HTTP / elicitation /
+// tasks primitive / resource links / sampling. None apply to
+// stdio-only, tools-only servers.
 package mcp
 
 import "encoding/json"
@@ -136,9 +136,9 @@ type ClientInfo struct {
 }
 
 // InitializeResult is the initialize response. We declare only the
-// `tools` capability for v0.1 — resources, prompts, sampling come in
-// later releases. The `logging` capability is not declared (we don't
-// emit MCP-formatted log notifications yet); host stderr from the
+// `tools` capability — resources, prompts, sampling come in later
+// releases. The `logging` capability is not declared (we don't emit
+// MCP-formatted log notifications yet); host stderr from the
 // subprocess instead.
 type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
@@ -224,8 +224,8 @@ type CallToolParams struct {
 }
 
 // CallToolResult is the body of the tools/call response. MCP allows
-// rich content blocks (text, image, resource); we emit text-only for
-// v0.1 because every tool we ship returns string output.
+// rich content blocks (text, image, resource); we emit text-only
+// because every tool we ship returns string output.
 type CallToolResult struct {
 	Content []ContentBlock `json:"content"`
 	// IsError surfaces tool-level failures (the call dispatched but the
