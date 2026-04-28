@@ -317,16 +317,30 @@ func TestAgentLoop_UnknownToolBecomesToolError(t *testing.T) {
 	if res.Status != "completed" {
 		t.Errorf("Status = %q, want completed", res.Status)
 	}
-	// Tool message must carry the "unknown tool" hint.
+	// Tool message must carry the "unknown tool" hint AND be flagged
+	// as ToolError so Anthropic-bound providers can emit
+	// is_error=true on the wire (without it, the model only sees
+	// error context as free-form text and may not reliably
+	// distinguish failures from successful results).
 	secondReq := llm.lastReqs[1]
 	hasUnknown := false
+	hasErrorFlag := false
 	for _, m := range secondReq.Messages {
-		if m.Role == "tool" && strings.Contains(m.Content, "unknown tool") {
+		if m.Role != "tool" {
+			continue
+		}
+		if strings.Contains(m.Content, "unknown tool") {
 			hasUnknown = true
+		}
+		if m.ToolError {
+			hasErrorFlag = true
 		}
 	}
 	if !hasUnknown {
 		t.Errorf("expected unknown-tool tool message; got: %+v", secondReq.Messages)
+	}
+	if !hasErrorFlag {
+		t.Errorf("expected ToolError=true on the failed tool message; got: %+v", secondReq.Messages)
 	}
 }
 

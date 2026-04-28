@@ -44,6 +44,10 @@ type anthropicMessagesRequest struct {
 	Stream        bool                       `json:"stream,omitempty"`
 	// Extended thinking: {"type":"enabled","budget_tokens":N}
 	Thinking json.RawMessage `json:"thinking,omitempty"`
+	// ServiceTier passes through the operator's tier preference
+	// (`auto`, `standard_only`, etc.). Empty omits the field —
+	// Anthropic then picks per its default policy.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 type anthropicMessagesMetadata struct {
@@ -66,8 +70,16 @@ type anthropicContentBlock struct {
 	Input json.RawMessage `json:"input,omitempty"`
 	// tool_result
 	ToolUseID string `json:"tool_use_id,omitempty"`
-	// Content reused as tool_result content string (omitted for other types)
-	ResultContent string `json:"content,omitempty"`
+	// ResultContent is the tool_result content payload. Anthropic
+	// accepts either a JSON string OR a JSON array of nested
+	// content blocks (text/image/etc.) — we use json.RawMessage so
+	// either shape can be sent on the wire. The toolResultBlock
+	// builder picks the shape based on whether the source message
+	// has structured ContentBlocks.
+	ResultContent json.RawMessage `json:"content,omitempty"`
+	// IsError flags a tool_result as a failed tool call. Anthropic
+	// uses it to feed clearer failure context to the model.
+	IsError bool `json:"is_error,omitempty"`
 	// prompt caching
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 	// extended thinking
@@ -333,6 +345,9 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	}
 	if len(req.Thinking) > 0 {
 		wireReq.Thinking = req.Thinking
+	}
+	if strings.TrimSpace(req.ServiceTier) != "" {
+		wireReq.ServiceTier = strings.TrimSpace(req.ServiceTier)
 	}
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
@@ -606,16 +621,65 @@ func contentBlocksToAnthropicBlocks(cbs []types.ContentBlock) []anthropicContent
 }
 
 // toolResultBlock converts a tool-role message into a tool_result content block.
+//
+// Picks the content shape based on the source:
+//   - If the message has ContentBlocks (e.g. inbound /v1/messages
+//     callers passed a structured array, possibly with images or
+//     cache_control), emit those as a JSON array — Anthropic accepts
+//     a heterogeneous content array on tool_results.
+//   - Otherwise emit msg.Content as a JSON string. The historical
+//     wire shape; agent-loop tool dispatches go through this branch.
+//
+// is_error is forwarded from msg.ToolError so the model gets a
+// proper failure signal instead of having to infer it from text.
 func toolResultBlock(msg types.Message) anthropicContentBlock {
-	// If the message carries ContentBlocks for the result content, inline them
-	// as a structured content array on the tool_result (Anthropic supports this).
-	// For simplicity we just use the flattened Content string here; the SDK
-	// typically sends plain text results.
-	return anthropicContentBlock{
-		Type:          "tool_result",
-		ToolUseID:     msg.ToolCallID,
-		ResultContent: msg.Content,
+	block := anthropicContentBlock{
+		Type:      "tool_result",
+		ToolUseID: msg.ToolCallID,
+		IsError:   msg.ToolError,
 	}
+	if len(msg.ContentBlocks) > 0 {
+		// Re-serialize the source blocks into the shape Anthropic
+		// expects on tool_result content. We pass through text and
+		// image blocks (the two the API accepts here); other types
+		// are dropped to avoid confusing the upstream parser.
+		type nested struct {
+			Type         string          `json:"type"`
+			Text         string          `json:"text,omitempty"`
+			Source       json.RawMessage `json:"source,omitempty"`
+			CacheControl json.RawMessage `json:"cache_control,omitempty"`
+		}
+		nestedBlocks := make([]nested, 0, len(msg.ContentBlocks))
+		for _, cb := range msg.ContentBlocks {
+			switch cb.Type {
+			case "", "text":
+				nestedBlocks = append(nestedBlocks, nested{
+					Type:         "text",
+					Text:         cb.Text,
+					CacheControl: cb.CacheControl,
+				})
+			case "image":
+				// Image blocks carry their `source` as a json.RawMessage
+				// in the gateway's pass-through model. Preserve as-is.
+				nestedBlocks = append(nestedBlocks, nested{
+					Type:         "image",
+					Source:       cb.Input, // image source is reused under the Input field in the gateway model
+					CacheControl: cb.CacheControl,
+				})
+			}
+		}
+		if len(nestedBlocks) > 0 {
+			if raw, err := json.Marshal(nestedBlocks); err == nil {
+				block.ResultContent = raw
+				return block
+			}
+		}
+	}
+	if msg.Content != "" {
+		raw, _ := json.Marshal(msg.Content)
+		block.ResultContent = raw
+	}
+	return block
 }
 
 func anthropicResponseToMessage(blocks []anthropicContentBlock) types.Message {
@@ -726,6 +790,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 	}
 	if len(req.Thinking) > 0 {
 		wireReq.Thinking = req.Thinking
+	}
+	if strings.TrimSpace(req.ServiceTier) != "" {
+		wireReq.ServiceTier = strings.TrimSpace(req.ServiceTier)
 	}
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))

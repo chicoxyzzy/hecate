@@ -405,10 +405,29 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 				}
 				allArtifacts = append(allArtifacts, art)
 			}
+			// Mark the tool message as errored on any failure
+			// path so Anthropic providers can emit is_error=true
+			// on the wire (OpenAI-shaped providers ignore it; the
+			// error context is also in the result content).
+			//
+			//   - dispatchErr != nil: internal failure surfaced by
+			//     the dispatcher (rare; most errors are encoded in
+			//     toolResultText).
+			//   - toolStep == nil: dispatcher couldn't run the
+			//     tool at all — bad args, unknown tool, missing
+			//     sub-executor. The result text describes the
+			//     failure.
+			//   - toolStep.Status == "failed": tool ran but exited
+			//     non-zero / errored at runtime (sandbox rejected,
+			//     non-zero exit, file system error, HTTP non-2xx).
+			isToolError := dispatchErr != nil ||
+				toolStep == nil ||
+				(toolStep != nil && toolStep.Status == "failed")
 			messages = append(messages, types.Message{
 				Role:       "tool",
 				Content:    toolResultText,
 				ToolCallID: toolCall.ID,
+				ToolError:  isToolError,
 			})
 			_ = dispatchErr
 		}

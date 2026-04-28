@@ -358,6 +358,40 @@ func TestNormalizeAnthropicRequestPassesThinking(t *testing.T) {
 // Feature 5: thinking/redacted_thinking blocks survive inbound conversion
 // ---------------------------------------------------------------------------
 
+// TestConvertAnthropicInboundMessagePreservesToolResultIsError pins
+// the round-trip: when an inbound /v1/messages caller hands us a
+// tool_result with is_error=true (e.g. they're proxying through
+// Hecate to upstream Anthropic), the flag must land on the
+// internal types.Message.ToolError so the outbound provider can
+// re-emit it. Pre-fix the field was silently dropped at this
+// boundary.
+func TestConvertAnthropicInboundMessagePreservesToolResultIsError(t *testing.T) {
+	t.Parallel()
+	content := `[
+		{"type":"tool_result","tool_use_id":"toolu_a","content":"command not found","is_error":true}
+	]`
+	msg := AnthropicInboundMessage{
+		Role:    "user",
+		Content: json.RawMessage(content),
+	}
+	msgs, err := convertAnthropicInboundMessage(msg)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Role != "tool" {
+		t.Fatalf("role = %q, want tool", msgs[0].Role)
+	}
+	if !msgs[0].ToolError {
+		t.Errorf("ToolError = false, want true (is_error must round-trip through the gateway)")
+	}
+	if msgs[0].ToolCallID != "toolu_a" {
+		t.Errorf("ToolCallID = %q, want toolu_a", msgs[0].ToolCallID)
+	}
+}
+
 func TestConvertAnthropicInboundMessageThinkingBlocks(t *testing.T) {
 	t.Parallel()
 	content := `[

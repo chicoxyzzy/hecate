@@ -465,6 +465,12 @@ func convertAnthropicInboundMessage(m AnthropicInboundMessage) ([]types.Message,
 				Content:       resultText,
 				ContentBlocks: resultBlocks,
 				ToolCallID:    b.ToolUseID,
+				// Preserve the is_error flag so the round-trip to
+				// upstream Anthropic carries the failure signal —
+				// the inbound side previously dropped it, which
+				// meant the model would only see error context as
+				// free-form text.
+				ToolError: b.IsError,
 			})
 		case "thinking":
 			contentBlocks = append(contentBlocks, types.ContentBlock{

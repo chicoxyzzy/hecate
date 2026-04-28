@@ -566,3 +566,245 @@ func TestAnthropicProviderStreamForwardsCacheUsage(t *testing.T) {
 		t.Errorf("prompt_tokens_details.cached_tokens = %v, want 2000", got)
 	}
 }
+
+// TestAnthropicProviderToolResultIsErrorRoundTrip verifies that a
+// tool-role message with ToolError=true produces is_error=true on
+// the wire. The model uses this to decide whether to retry or
+// fall back; without it, errors are indistinguishable from
+// successful results that happen to mention failure in their text.
+func TestAnthropicProviderToolResultIsErrorRoundTrip(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_e1",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ack"}},
+			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 1},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "claude-opus-4-5",
+		Messages: []types.Message{
+			{Role: "user", Content: "do the thing"},
+			{
+				Role: "assistant",
+				ToolCalls: []types.ToolCall{{
+					ID:       "toolu_1",
+					Type:     "function",
+					Function: types.ToolCallFunction{Name: "shell_exec", Arguments: `{"cmd":"oops"}`},
+				}},
+			},
+			{
+				Role:       "tool",
+				Content:    "command not found: oops",
+				ToolCallID: "toolu_1",
+				ToolError:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	// Walk to the user message holding the tool_result and confirm is_error.
+	msgs, _ := captured["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("no messages on wire")
+	}
+	// tool_result lives on a user message (Anthropic's convention)
+	// after the assistant tool_use turn.
+	var found bool
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		if mm["role"] != "user" {
+			continue
+		}
+		blocks, _ := mm["content"].([]any)
+		for _, b := range blocks {
+			bb, _ := b.(map[string]any)
+			if bb["type"] != "tool_result" {
+				continue
+			}
+			if bb["is_error"] != true {
+				t.Errorf("tool_result is_error = %v, want true", bb["is_error"])
+			}
+			if bb["tool_use_id"] != "toolu_1" {
+				t.Errorf("tool_use_id = %v, want toolu_1", bb["tool_use_id"])
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("did not find a tool_result block on the wire; messages=%+v", msgs)
+	}
+}
+
+// TestAnthropicProviderToolResultMultiBlockContent verifies that
+// when the source tool message carries structured ContentBlocks
+// (e.g. text + image, the path inbound /v1/messages takes when a
+// caller hands us multi-block tool results), they're emitted as a
+// JSON array on the wire instead of being flattened to a string.
+// The string form remains the default — only multi-block triggers
+// the array path.
+func TestAnthropicProviderToolResultMultiBlockContent(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_mb1",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "got it"}},
+			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 1},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+
+	cc := json.RawMessage(`{"type":"ephemeral"}`)
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model: "claude-opus-4-5",
+		Messages: []types.Message{
+			{Role: "user", Content: "describe"},
+			{
+				Role: "assistant",
+				ToolCalls: []types.ToolCall{{
+					ID:       "toolu_2",
+					Type:     "function",
+					Function: types.ToolCallFunction{Name: "screenshot", Arguments: `{}`},
+				}},
+			},
+			{
+				Role:       "tool",
+				Content:    "fallback string",
+				ToolCallID: "toolu_2",
+				ContentBlocks: []types.ContentBlock{
+					{Type: "text", Text: "screenshot summary", CacheControl: cc},
+					// "image" with a `source` blob (tested as raw JSON
+					// pass-through; the gateway model puts image
+					// source under the Input field for content blocks).
+					{Type: "image", Input: json.RawMessage(`{"type":"base64","media_type":"image/png","data":"iVBORw0K"}`)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	msgs, _ := captured["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("no messages on wire")
+	}
+	var arr []any
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		if mm["role"] != "user" {
+			continue
+		}
+		blocks, _ := mm["content"].([]any)
+		for _, b := range blocks {
+			bb, _ := b.(map[string]any)
+			if bb["type"] != "tool_result" {
+				continue
+			}
+			// content must be an array (not a string) since the
+			// source had multi-block ContentBlocks.
+			arr, _ = bb["content"].([]any)
+		}
+	}
+	if arr == nil {
+		t.Fatal("tool_result content not found / not an array; multi-block path didn't fire")
+	}
+	if len(arr) != 2 {
+		t.Fatalf("nested content blocks = %d, want 2 (text + image)", len(arr))
+	}
+	first, _ := arr[0].(map[string]any)
+	if first["type"] != "text" || first["text"] != "screenshot summary" {
+		t.Errorf("first block = %+v, want text/screenshot summary", first)
+	}
+	if first["cache_control"] == nil {
+		t.Errorf("first block dropped cache_control: %+v", first)
+	}
+	second, _ := arr[1].(map[string]any)
+	if second["type"] != "image" {
+		t.Errorf("second block = %+v, want image", second)
+	}
+	if second["source"] == nil {
+		t.Errorf("image block missing source: %+v", second)
+	}
+}
+
+// TestAnthropicProviderServiceTierPassthrough confirms the
+// ServiceTier field on ChatRequest reaches the wire as
+// service_tier, and that the empty default omits it (so older
+// gateways and Anthropic clients see no behavioral change).
+func TestAnthropicProviderServiceTierPassthrough(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		tier string
+		want any // nil = field absent on wire
+	}{
+		{"empty omits field", "", nil},
+		{"auto", "auto", "auto"},
+		{"standard_only", "standard_only", "standard_only"},
+		// Whitespace gets trimmed at the provider boundary so
+		// operator config typos don't reach the upstream.
+		{"trimmed", "  priority  ", "priority"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var captured map[string]any
+			provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+				_ = json.NewDecoder(r.Body).Decode(&captured)
+				body, _ := json.Marshal(map[string]any{
+					"id":          "msg_t1",
+					"model":       "claude-opus-4-5",
+					"role":        "assistant",
+					"stop_reason": "end_turn",
+					"content":     []map[string]any{{"type": "text", "text": "ok"}},
+					"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(string(body))),
+				}, nil
+			})
+			_, err := provider.Chat(context.Background(), types.ChatRequest{
+				Model:       "claude-opus-4-5",
+				Messages:    []types.Message{{Role: "user", Content: "hi"}},
+				ServiceTier: tc.tier,
+			})
+			if err != nil {
+				t.Fatalf("Chat() error = %v", err)
+			}
+			got, present := captured["service_tier"]
+			switch {
+			case tc.want == nil && present:
+				t.Errorf("service_tier present on wire (=%v) but should be omitted for empty input", got)
+			case tc.want != nil && !present:
+				t.Errorf("service_tier absent on wire; want %q", tc.want)
+			case tc.want != nil && got != tc.want:
+				t.Errorf("service_tier = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}

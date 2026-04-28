@@ -24,6 +24,11 @@ type ChatRequest struct {
 	Thinking json.RawMessage
 	// Anthropic beta features (e.g. ["interleaved-thinking-2025-02-19"])
 	Betas []string
+	// ServiceTier requests an Anthropic service tier — `auto`,
+	// `standard_only`, etc. Empty means the upstream picks. Passed
+	// through verbatim on the wire so newer tier names work without
+	// a code change. OpenAI-compat providers ignore the field.
+	ServiceTier string
 }
 
 type RequestScope struct {
@@ -90,6 +95,13 @@ type Message struct {
 	Name          string         `json:"name,omitempty"`
 	ToolCallID    string         `json:"tool_call_id,omitempty"`
 	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
+	// ToolError marks a tool-role message as a failed tool call so
+	// providers that distinguish error results (Anthropic's
+	// is_error on tool_result blocks) can pass that signal upstream.
+	// The model uses it to decide whether to retry, fall back, or
+	// report failure; without it, the model has to guess from the
+	// content text.
+	ToolError bool `json:"tool_error,omitempty"`
 }
 
 type ChatResponse struct {
