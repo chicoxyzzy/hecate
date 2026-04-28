@@ -1370,6 +1370,10 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Ciphe
 			return nil, fmt.Errorf("mcp_servers[%d]: duplicate name %q", i, name)
 		}
 		seen[name] = struct{}{}
+		policy := strings.TrimSpace(item.ApprovalPolicy)
+		if !types.IsValidMCPApprovalPolicy(policy) {
+			return nil, fmt.Errorf("mcp_servers[%d] (%s): approval_policy %q is invalid; must be one of \"auto\", \"require_approval\", \"block\"", i, name, policy)
+		}
 		// Defensive copies — callers may reuse the request struct.
 		args := append([]string(nil), item.Args...)
 		env, err := storeSecretMap(item.Env, cipher, fmt.Sprintf("mcp_servers[%d] (%s): env", i, name))
@@ -1381,12 +1385,13 @@ func normalizeMCPServerConfigs(items []MCPServerConfigItem, cipher secrets.Ciphe
 			return nil, err
 		}
 		out = append(out, types.MCPServerConfig{
-			Name:    name,
-			Command: command,
-			Args:    args,
-			Env:     env,
-			URL:     rawURL,
-			Headers: headers,
+			Name:           name,
+			Command:        command,
+			Args:           args,
+			Env:            env,
+			URL:            rawURL,
+			Headers:        headers,
+			ApprovalPolicy: policy,
 		})
 	}
 	return out, nil
@@ -1466,12 +1471,13 @@ func renderMCPServerConfigs(configs []types.MCPServerConfig) []MCPServerConfigIt
 	for _, c := range configs {
 		args := append([]string(nil), c.Args...)
 		out = append(out, MCPServerConfigItem{
-			Name:    c.Name,
-			Command: c.Command,
-			Args:    args,
-			Env:     redactSecretMap(c.Env),
-			URL:     c.URL,
-			Headers: redactSecretMap(c.Headers),
+			Name:           c.Name,
+			Command:        c.Command,
+			Args:           args,
+			Env:            redactSecretMap(c.Env),
+			URL:            c.URL,
+			Headers:        redactSecretMap(c.Headers),
+			ApprovalPolicy: c.ApprovalPolicy,
 		})
 	}
 	return out

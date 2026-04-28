@@ -64,6 +64,13 @@ func TestNormalizeMCPServerConfigs_Validation(t *testing.T) {
 			},
 			wantErr: "duplicate name",
 		},
+		{
+			desc: "invalid approval_policy value",
+			items: []MCPServerConfigItem{
+				{Name: "gh", Command: "npx", ApprovalPolicy: "yolo"},
+			},
+			wantErr: "approval_policy",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
@@ -207,5 +214,40 @@ func TestRenderMCPServerConfigs_EmptyEnvOmitted(t *testing.T) {
 	out := renderMCPServerConfigs(configs)
 	if out[0].Env != nil {
 		t.Errorf("Env = %v, want nil for config with no env", out[0].Env)
+	}
+}
+
+// TestNormalizeMCPServerConfigs_ApprovalPolicyAccepted: every recognized
+// policy value (and the empty default) round-trips through normalize.
+func TestNormalizeMCPServerConfigs_ApprovalPolicyAccepted(t *testing.T) {
+	t.Parallel()
+	cases := []string{"", types.MCPApprovalAuto, types.MCPApprovalRequireApproval, types.MCPApprovalBlock}
+	for _, policy := range cases {
+		t.Run("policy="+policy, func(t *testing.T) {
+			items := []MCPServerConfigItem{
+				{Name: "gh", Command: "npx", ApprovalPolicy: policy},
+			}
+			out, err := normalizeMCPServerConfigs(items, nil)
+			if err != nil {
+				t.Fatalf("normalize: %v", err)
+			}
+			if got := out[0].ApprovalPolicy; got != policy {
+				t.Errorf("ApprovalPolicy = %q, want %q", got, policy)
+			}
+		})
+	}
+}
+
+// TestRenderMCPServerConfigs_ApprovalPolicyShownVerbatim: the policy is
+// not a secret — it appears in API responses unchanged so the UI can
+// render the operator's chosen gate accurately.
+func TestRenderMCPServerConfigs_ApprovalPolicyShownVerbatim(t *testing.T) {
+	t.Parallel()
+	configs := []types.MCPServerConfig{
+		{Name: "gh", Command: "npx", ApprovalPolicy: types.MCPApprovalRequireApproval},
+	}
+	out := renderMCPServerConfigs(configs)
+	if got := out[0].ApprovalPolicy; got != types.MCPApprovalRequireApproval {
+		t.Errorf("ApprovalPolicy = %q, want %q", got, types.MCPApprovalRequireApproval)
 	}
 }

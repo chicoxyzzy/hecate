@@ -46,6 +46,10 @@ type MCPServerConfigItem struct {
 	// HTTP transport (mutually exclusive with command):
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	// ApprovalPolicy gates how the agent loop dispatches tool calls
+	// from this server. One of "auto" | "require_approval" | "block";
+	// empty = auto. See pkg/types task.go for the contract.
+	ApprovalPolicy string `json:"approval_policy,omitempty"`
 }
 
 type TaskLifecycleRequest struct {

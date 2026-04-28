@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -143,13 +144,44 @@ func (e *AgentLoopExecutor) SetMCPHostFactory(f AgentMCPHostFactory) {
 	e.mcpFactory = f
 }
 
-// isGated reports whether a tool call requires operator approval.
-func (e *AgentLoopExecutor) isGated(toolName string) bool {
-	if len(e.gatedTools) == 0 {
-		return false
+// isGated reports whether a tool call requires operator approval. Two
+// independent sources contribute:
+//
+//   - The static gateway-wide gated-tool set (e.gatedTools), populated
+//     from GATEWAY_TASK_APPROVAL_POLICIES at startup. Built-in tools
+//     like shell_exec live here.
+//   - The task's per-server MCP approval policy. An MCP tool name
+//     (`mcp__<server>__<tool>`) is gated when its server is configured
+//     with ApprovalPolicy = "require_approval".
+//
+// task is the task being executed; we need it to resolve MCP policy.
+// Callers that don't have a task at hand pass types.Task{} — the static
+// set still applies.
+func (e *AgentLoopExecutor) isGated(toolName string, task types.Task) bool {
+	if _, ok := e.gatedTools[toolName]; ok {
+		return true
 	}
-	_, ok := e.gatedTools[toolName]
-	return ok
+	return mcpServerPolicy(toolName, task) == types.MCPApprovalRequireApproval
+}
+
+// mcpServerPolicy resolves the per-server approval policy for a
+// namespaced MCP tool name. Returns "" for non-MCP tools, for MCP
+// names whose server is not configured on the task, or for servers
+// that left ApprovalPolicy empty (interpreted as auto).
+func mcpServerPolicy(toolName string, task types.Task) string {
+	if !isMCPToolName(toolName) {
+		return ""
+	}
+	server, _, ok := mcpclient.SplitNamespacedToolName(toolName)
+	if !ok {
+		return ""
+	}
+	for _, cfg := range task.MCPServers {
+		if cfg.Name == server {
+			return cfg.ApprovalPolicy
+		}
+	}
+	return ""
 }
 
 // Execute runs the loop. Steps and artifacts produced by each turn
@@ -407,7 +439,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (*E
 			// the same run is re-queued and we re-enter the loop
 			// with the same conversation tail — this branch is
 			// short-circuited by the resume-detection above.
-			gatedNames := e.gatedToolsInTurn(assistantMsg.ToolCalls)
+			gatedNames := e.gatedToolsInTurn(assistantMsg.ToolCalls, spec.Task)
 			if len(gatedNames) > 0 {
 				approval := buildApprovalForTurn(spec, turn, gatedNames, turnStartedAt)
 				awaitingStep := buildAwaitingApprovalStep(spec, nextIndex, turn, turnStartedAt, approval)
@@ -627,6 +659,41 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 		// arguments object doesn't trip an upstream parse error.
 		args = json.RawMessage(`{}`)
 	}
+
+	// Block policy: never call upstream. Emit a failed step and feed
+	// a tool-error message back to the LLM so the model can pick a
+	// different path on the next turn. Operators use this to disable
+	// risky tool surfaces (e.g. write-side GitHub tools) without
+	// editing the upstream server's tool catalog.
+	if mcpServerPolicy(call.Function.Name, spec.Task) == types.MCPApprovalBlock {
+		finishedAt := time.Now().UTC()
+		text := fmt.Sprintf("mcp tool %q is blocked by the configured approval policy on this task; pick a different tool", call.Function.Name)
+		step := types.TaskStep{
+			ID:         spec.NewID("step"),
+			TaskID:     spec.Task.ID,
+			RunID:      spec.Run.ID,
+			Index:      stepIndex,
+			Kind:       "tool",
+			Title:      fmt.Sprintf("%s (blocked)", call.Function.Name),
+			Status:     "failed",
+			Phase:      "execution",
+			Result:     resultFromStatus("failed"),
+			ToolName:   call.Function.Name,
+			Input:      mcpToolInputForLog(call.Function.Name, args),
+			Error:      "blocked by mcp approval policy",
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			RequestID:  spec.RequestID,
+			TraceID:    spec.TraceID,
+		}
+		step.OutputSummary = map[string]any{
+			"is_error":  true,
+			"blocked":   true,
+			"text_size": len(text),
+		}
+		return text, &step, nil, nil
+	}
+
 	text, isError, err := host.Call(ctx, call.Function.Name, args)
 	finishedAt := time.Now().UTC()
 
@@ -1591,15 +1658,14 @@ func truncateConversationToTurn(messages []types.Message, turn int) ([]types.Mes
 }
 
 // gatedToolsInTurn returns the names of gated tools that appear in
-// this turn's tool calls. Empty if no gating applies.
-func (e *AgentLoopExecutor) gatedToolsInTurn(calls []types.ToolCall) []string {
-	if len(e.gatedTools) == 0 {
-		return nil
-	}
+// this turn's tool calls. Empty if no gating applies. Considers both
+// the static gated-tool set and per-server MCP approval policy on the
+// task — see isGated for the contract.
+func (e *AgentLoopExecutor) gatedToolsInTurn(calls []types.ToolCall, task types.Task) []string {
 	seen := make(map[string]struct{}, len(calls))
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
-		if !e.isGated(c.Function.Name) {
+		if !e.isGated(c.Function.Name, task) {
 			continue
 		}
 		if _, dup := seen[c.Function.Name]; dup {

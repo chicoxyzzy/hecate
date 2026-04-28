@@ -59,6 +59,40 @@ type Task struct {
 // token is never written to the task blob.
 const MCPEnvEncPrefix = "enc:"
 
+// MCP approval policy values. These control whether the agent loop
+// dispatches an MCP tool call from the configured server immediately,
+// pauses for operator approval, or refuses to call it at all.
+//
+//   - MCPApprovalAuto: dispatch immediately. Equivalent to leaving
+//     the field empty.
+//   - MCPApprovalRequireApproval: pause the agent loop on every call
+//     to a tool from this server, emit an approval record, and resume
+//     dispatch only after the operator approves.
+//   - MCPApprovalBlock: never dispatch; the agent loop returns a tool
+//     error to the LLM ("blocked by policy") so the model can pick a
+//     different tool without involving the operator.
+//
+// Per-server granularity is intentional: real configs almost always
+// gate or trust an entire server (the github server stays gated, the
+// filesystem server stays auto). Per-tool gating is a follow-up.
+const (
+	MCPApprovalAuto            = "auto"
+	MCPApprovalRequireApproval = "require_approval"
+	MCPApprovalBlock           = "block"
+)
+
+// IsValidMCPApprovalPolicy reports whether v is a recognized policy
+// value. Empty string is accepted as the implicit auto default — the
+// API layer does not require operators to spell it out.
+func IsValidMCPApprovalPolicy(v string) bool {
+	switch v {
+	case "", MCPApprovalAuto, MCPApprovalRequireApproval, MCPApprovalBlock:
+		return true
+	default:
+		return false
+	}
+}
+
 // MCPServerConfig describes one external MCP server an agent_loop run
 // should connect to. Persisted as part of the task payload (no schema
 // migration — the task is stored as a JSON blob in both the sqlite and
@@ -92,6 +126,11 @@ type MCPServerConfig struct {
 	// Headers are sent on every HTTP request. Values follow the same
 	// $VAR_NAME / enc: / literal rules as Env values.
 	Headers map[string]string
+	// ApprovalPolicy gates how the agent loop dispatches tool calls
+	// from this server. One of "auto" | "require_approval" | "block",
+	// or empty (interpreted as auto). See the MCPApproval* constants
+	// above for the contract. Per-server, not per-tool.
+	ApprovalPolicy string
 }
 
 type TaskRun struct {
