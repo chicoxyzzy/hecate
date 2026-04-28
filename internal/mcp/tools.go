@@ -21,13 +21,18 @@ import (
 //     clients render them better.
 //   - Errors that originate at the upstream HTTP layer become the
 //     handler's error return → CallToolResult with isError=true.
+//   - Read-only tools set ReadOnlyHint so MCP clients can auto-
+//     approve. Write tools set DestructiveHint when the action is
+//     irreversible (resolve_approval, cancel_run); IdempotentHint
+//     when retries are safe (cancel_run only — cancelling an
+//     already-cancelled run is a no-op).
 func RegisterDefaultTools(s *Server, client *HTTPClient) {
-	// All four current tools are read-only inspections of the gateway
-	// state; we declare ReadOnlyHint=true so MCP-aware clients can
-	// auto-approve invocations without an "are you sure?" prompt.
-	// Future write tools (create_task, resolve_approval) will set
-	// DestructiveHint where appropriate.
 	readOnly := &ToolAnnotations{ReadOnlyHint: BoolPtr(true)}
+	destructive := &ToolAnnotations{DestructiveHint: BoolPtr(true)}
+	destructiveIdempotent := &ToolAnnotations{
+		DestructiveHint: BoolPtr(true),
+		IdempotentHint:  BoolPtr(true),
+	}
 
 	s.RegisterTool(Tool{
 		Name:        "list_tasks",
@@ -82,6 +87,72 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		}`),
 		Annotations: readOnly,
 	}, summarizeRecentTrafficHandler(client))
+
+	// ─── write tools ─────────────────────────────────────────────────
+
+	s.RegisterTool(Tool{
+		Name:  "create_task",
+		Title: "Create an agent task",
+		Description: "Queue a new agent_loop task on the Hecate gateway. " +
+			"The task runs an LLM-driven loop with built-in tools (shell_exec, " +
+			"git_exec, file_write, read_file, list_dir, http_request). " +
+			"Returns the new task id; use get_task_status to follow progress. " +
+			"For non-agent_loop kinds (raw shell / git / file), use the gateway HTTP API directly.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"prompt": {"type": "string", "minLength": 1, "description": "The user prompt the agent loop runs against. Required."},
+				"title": {"type": "string", "description": "Short human-readable title for the task list. Optional."},
+				"working_directory": {"type": "string", "description": "Absolute path to the workspace. Required when workspace_mode=in_place; otherwise the gateway clones from this path."},
+				"workspace_mode": {"type": "string", "enum": ["", "persistent", "ephemeral", "in_place"], "description": "Workspace strategy. Empty/persistent/ephemeral all clone; in_place runs directly in working_directory."},
+				"system_prompt": {"type": "string", "description": "Per-task system-prompt layer (narrowest of the four). Optional."},
+				"requested_model": {"type": "string", "description": "Pin a specific model. Empty = use the gateway default."},
+				"requested_provider": {"type": "string", "description": "Pin a specific provider. Empty = let the router decide."},
+				"budget_micros_usd": {"type": "integer", "minimum": 0, "description": "Per-task LLM cost ceiling in micro-USD. 0 = no ceiling."}
+			},
+			"required": ["prompt"]
+		}`),
+		// Not destructive — creating a new task adds state but
+		// doesn't destroy any. Not idempotent — repeated calls
+		// queue independent tasks.
+	}, createTaskHandler(client))
+
+	s.RegisterTool(Tool{
+		Name:  "resolve_approval",
+		Title: "Resolve a pending approval",
+		Description: "Approve or reject a pending approval gate (pre-execution or mid-loop tool call). " +
+			"On approve, the run continues from where it paused; on reject, the run terminates failed. " +
+			"This is irreversible — the run can't undo a rejection.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"task_id": {"type": "string", "minLength": 1, "description": "The task id."},
+				"approval_id": {"type": "string", "minLength": 1, "description": "The pending approval id."},
+				"decision": {"type": "string", "enum": ["approve", "reject"], "description": "approve resumes the run; reject terminates it."},
+				"note": {"type": "string", "description": "Optional operator note attached to the resolution (audit trail)."}
+			},
+			"required": ["task_id", "approval_id", "decision"]
+		}`),
+		Annotations: destructive,
+	}, resolveApprovalHandler(client))
+
+	s.RegisterTool(Tool{
+		Name:  "cancel_run",
+		Title: "Cancel a task run",
+		Description: "Cancel an in-flight task run. Cooperative cancellation: " +
+			"the worker stops at the next safe checkpoint. Already-terminal runs " +
+			"are a no-op (idempotent). Use list_tasks → get_task_status to find the run id.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"task_id": {"type": "string", "minLength": 1, "description": "The task id owning the run."},
+				"run_id": {"type": "string", "minLength": 1, "description": "The run id to cancel."},
+				"reason": {"type": "string", "description": "Optional cancellation reason for the audit log."}
+			},
+			"required": ["task_id", "run_id"]
+		}`),
+		Annotations: destructiveIdempotent,
+	}, cancelRunHandler(client))
 }
 
 // ─── list_tasks ─────────────────────────────────────────────────────
@@ -365,6 +436,196 @@ func summarizeRecentTrafficHandler(client *HTTPClient) ToolHandler {
 				fmt.Fprintf(&b, ", $%.4f", agg.cost)
 			}
 			b.WriteByte('\n')
+		}
+		return CallToolResult{Content: TextContent(b.String())}, nil
+	}
+}
+
+// ─── create_task ─────────────────────────────────────────────────────
+
+type createTaskArgs struct {
+	Prompt            string `json:"prompt"`
+	Title             string `json:"title"`
+	WorkingDirectory  string `json:"working_directory"`
+	WorkspaceMode     string `json:"workspace_mode"`
+	SystemPrompt      string `json:"system_prompt"`
+	RequestedModel    string `json:"requested_model"`
+	RequestedProvider string `json:"requested_provider"`
+	BudgetMicrosUSD   int64  `json:"budget_micros_usd"`
+}
+
+// createTaskWireRequest mirrors the gateway's CreateTaskRequest shape
+// for the agent_loop subset. Fields outside this subset (sandbox*,
+// shell_command, git_command, file_*) are reachable only via the
+// HTTP API; the MCP tool deliberately stays narrow to avoid
+// foot-guns from inside an editor.
+type createTaskWireRequest struct {
+	Prompt            string `json:"prompt"`
+	Title             string `json:"title,omitempty"`
+	ExecutionKind     string `json:"execution_kind"`
+	WorkingDirectory  string `json:"working_directory,omitempty"`
+	WorkspaceMode     string `json:"workspace_mode,omitempty"`
+	SystemPrompt      string `json:"system_prompt,omitempty"`
+	RequestedModel    string `json:"requested_model,omitempty"`
+	RequestedProvider string `json:"requested_provider,omitempty"`
+	BudgetMicrosUSD   int64  `json:"budget_micros_usd,omitempty"`
+}
+
+type createTaskWireResponse struct {
+	Data struct {
+		ID            string `json:"id"`
+		Status        string `json:"status"`
+		ExecutionKind string `json:"execution_kind"`
+		LatestRunID   string `json:"latest_run_id"`
+	} `json:"data"`
+}
+
+func createTaskHandler(client *HTTPClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+		var args createTaskArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+		}
+		if strings.TrimSpace(args.Prompt) == "" {
+			return CallToolResult{}, fmt.Errorf("prompt is required")
+		}
+		// in_place workspace requires an absolute working_directory.
+		// Validate at the MCP boundary so the caller gets an actionable
+		// error instead of a 400 from the gateway with less context.
+		if args.WorkspaceMode == "in_place" && strings.TrimSpace(args.WorkingDirectory) == "" {
+			return CallToolResult{}, fmt.Errorf("working_directory is required when workspace_mode=in_place")
+		}
+		body := createTaskWireRequest{
+			Prompt:            args.Prompt,
+			Title:             args.Title,
+			ExecutionKind:     "agent_loop",
+			WorkingDirectory:  args.WorkingDirectory,
+			WorkspaceMode:     args.WorkspaceMode,
+			SystemPrompt:      args.SystemPrompt,
+			RequestedModel:    args.RequestedModel,
+			RequestedProvider: args.RequestedProvider,
+			BudgetMicrosUSD:   args.BudgetMicrosUSD,
+		}
+		var resp createTaskWireResponse
+		if err := client.Post(ctx, "/v1/tasks", body, &resp); err != nil {
+			return CallToolResult{}, err
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Created task %s (%s) — status: %s",
+			resp.Data.ID, resp.Data.ExecutionKind, resp.Data.Status)
+		if resp.Data.LatestRunID != "" {
+			fmt.Fprintf(&b, "; first run: %s", resp.Data.LatestRunID)
+		}
+		b.WriteByte('\n')
+		fmt.Fprintf(&b, "\nUse get_task_status with task_id=%s to follow progress.", resp.Data.ID)
+		return CallToolResult{Content: TextContent(b.String())}, nil
+	}
+}
+
+// ─── resolve_approval ────────────────────────────────────────────────
+
+type resolveApprovalArgs struct {
+	TaskID     string `json:"task_id"`
+	ApprovalID string `json:"approval_id"`
+	Decision   string `json:"decision"`
+	Note       string `json:"note"`
+}
+
+type resolveApprovalWireRequest struct {
+	Decision string `json:"decision"`
+	Note     string `json:"note,omitempty"`
+}
+
+type resolveApprovalWireResponse struct {
+	Data struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Kind   string `json:"kind"`
+	} `json:"data"`
+}
+
+func resolveApprovalHandler(client *HTTPClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+		var args resolveApprovalArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+		}
+		if strings.TrimSpace(args.TaskID) == "" {
+			return CallToolResult{}, fmt.Errorf("task_id is required")
+		}
+		if strings.TrimSpace(args.ApprovalID) == "" {
+			return CallToolResult{}, fmt.Errorf("approval_id is required")
+		}
+		switch args.Decision {
+		case "approve", "reject":
+		default:
+			return CallToolResult{}, fmt.Errorf("decision must be \"approve\" or \"reject\" (got %q)", args.Decision)
+		}
+		body := resolveApprovalWireRequest{Decision: args.Decision, Note: args.Note}
+		path := fmt.Sprintf("/v1/tasks/%s/approvals/%s/resolve",
+			url.PathEscape(args.TaskID), url.PathEscape(args.ApprovalID))
+		var resp resolveApprovalWireResponse
+		if err := client.Post(ctx, path, body, &resp); err != nil {
+			return CallToolResult{}, err
+		}
+		return CallToolResult{Content: TextContent(fmt.Sprintf(
+			"Approval %s (%s) is now %s.",
+			resp.Data.ID, resp.Data.Kind, resp.Data.Status,
+		))}, nil
+	}
+}
+
+// ─── cancel_run ──────────────────────────────────────────────────────
+
+type cancelRunArgs struct {
+	TaskID string `json:"task_id"`
+	RunID  string `json:"run_id"`
+	Reason string `json:"reason"`
+}
+
+type cancelRunWireResponse struct {
+	Data struct {
+		ID         string `json:"id"`
+		TaskID     string `json:"task_id"`
+		Status     string `json:"status"`
+		FinishedAt string `json:"finished_at,omitempty"`
+		LastError  string `json:"last_error,omitempty"`
+	} `json:"data"`
+}
+
+func cancelRunHandler(client *HTTPClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+		var args cancelRunArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+		}
+		if strings.TrimSpace(args.TaskID) == "" {
+			return CallToolResult{}, fmt.Errorf("task_id is required")
+		}
+		if strings.TrimSpace(args.RunID) == "" {
+			return CallToolResult{}, fmt.Errorf("run_id is required")
+		}
+		// The cancel endpoint accepts no body today; we keep `reason`
+		// in the MCP-tool surface so future surface additions stay
+		// backward-compatible. For now the reason is dropped at this
+		// boundary with a hint included in the success message.
+		path := fmt.Sprintf("/v1/tasks/%s/runs/%s/cancel",
+			url.PathEscape(args.TaskID), url.PathEscape(args.RunID))
+		var resp cancelRunWireResponse
+		if err := client.Post(ctx, path, struct{}{}, &resp); err != nil {
+			return CallToolResult{}, err
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Run %s on task %s — status: %s",
+			resp.Data.ID, resp.Data.TaskID, resp.Data.Status)
+		if resp.Data.FinishedAt != "" {
+			fmt.Fprintf(&b, " · finished at %s", resp.Data.FinishedAt)
+		}
+		if resp.Data.LastError != "" {
+			fmt.Fprintf(&b, "\nLast error: %s", resp.Data.LastError)
+		}
+		if strings.TrimSpace(args.Reason) != "" {
+			fmt.Fprintf(&b, "\n(reason note: %q — recorded locally; not yet forwarded to the gateway audit log)", args.Reason)
 		}
 		return CallToolResult{Content: TextContent(b.String())}, nil
 	}

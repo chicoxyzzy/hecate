@@ -6,16 +6,30 @@ The server runs as a subcommand of the `hecate` binary on stdio, talking back to
 
 ## What's available
 
-Four tools, all read-mostly:
+Seven tools — four reads and three writes:
 
-| Tool | Description |
-|---|---|
-| `list_tasks` | Recent agent tasks: id, title, status, execution kind, step count |
-| `get_task_status` | Detailed status of one task by id, including its latest run |
-| `list_chat_sessions` | Recent chat sessions: id, title, tenant, turn count |
-| `summarize_recent_traffic` | Aggregated request stats: by-provider breakdown, error rate, avg latency |
+| Tool | Kind | Description |
+|---|---|---|
+| `list_tasks` | read | Recent agent tasks: id, title, status, execution kind, step count |
+| `get_task_status` | read | Detailed status of one task by id, including its latest run |
+| `list_chat_sessions` | read | Recent chat sessions: id, title, tenant, turn count |
+| `summarize_recent_traffic` | read | Aggregated request stats: by-provider breakdown, error rate, avg latency |
+| `create_task` | write | Queue a new `agent_loop` task with optional title / working_directory / model / provider / budget. Returns the new task id |
+| `resolve_approval` | write (destructive) | Approve or reject a pending approval gate (pre-execution or mid-loop). Approve resumes; reject terminates the run as failed |
+| `cancel_run` | write (destructive, idempotent) | Cancel an in-flight task run. Cooperative — the worker stops at the next safe checkpoint |
 
-Write tools (create_task, resolve_approval, search_traces), HTTP/SSE transport, and the client-side integration that lets the agent runtime consume external MCP servers are tracked on the roadmap.
+Together the write tools turn the MCP surface into an operator-grade control plane: list tasks → see approvals → approve/reject → create new tasks → cancel runaway runs without leaving the editor.
+
+`search_traces`, HTTP/SSE transport, and the client-side integration that lets the agent runtime consume external MCP servers are tracked on the roadmap.
+
+### Behavioral hints
+
+Each tool declares MCP `annotations` so clients know whether to auto-approve invocations:
+
+- Reads have `readOnlyHint: true` — auto-approve safe.
+- `create_task` has no destructive hint (creating new state ≠ destroying existing).
+- `resolve_approval` has `destructiveHint: true` — irreversible decision, expect the client to prompt.
+- `cancel_run` has `destructiveHint: true, idempotentHint: true` — destructive but safe to retry.
 
 ## Configure it
 
