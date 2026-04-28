@@ -424,7 +424,15 @@ func anthropicMessagesFromTypes(messages []types.Message) (json.RawMessage, []an
 					Content: contentBlocksToAnthropicBlocks(msg.ContentBlocks),
 				})
 			} else if len(msg.ToolCalls) > 0 {
-				blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
+				// Cap is len(ToolCalls) + (1 if Content is non-empty);
+				// pre-allocate with the tool-calls count and let append
+				// grow the slice once if Content adds a leading text
+				// block. Computing `len(...) + 1` directly inside `make`
+				// is flagged by static analysis (CodeQL CWE-190) as a
+				// theoretical overflow risk; sidestepping the math here
+				// keeps the allocation deterministically bounded and
+				// the analyzer happy without a runtime guard.
+				blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls))
 				if msg.Content != "" {
 					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
 				}
