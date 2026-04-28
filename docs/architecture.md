@@ -103,64 +103,50 @@ When an `agent_loop` run executes, the worker drives the LLM through a tool-usin
 sequenceDiagram
     autonumber
     participant Worker
-    participant Loop as Agent Loop Executor
-    participant LLM as Provider (router-pinned)
-    participant Tools as Tool Dispatch
-    participant Sandbox as sandboxd / HTTP / FS
+    participant Loop
+    participant LLM
+    participant Tools
+    participant Sandbox
     participant Store
-    Worker->>Loop: Execute(spec)
-    Loop->>Store: load conversation (resume only)
-    Note over Loop: prepend env system message<br/>(workspace path)<br/>+ four-layer system prompt
-    loop until final answer / max turns / cost ceiling
-        Loop->>LLM: Chat(messages + tools, ProviderHint)
+    Worker->>Loop: Execute
+    Loop->>Store: load conversation if resume
+    Note over Loop: prepend workspace env message<br/>plus four-layer system prompt
+    loop turn cycle
+        Loop->>LLM: Chat with messages, tools, and ProviderHint
         LLM-->>Loop: assistant message
-        Loop->>Store: emit agent.turn.completed event<br/>persist conversation snapshot
-        alt has tool_calls
+        Loop->>Store: emit agent.turn.completed event
+        Loop->>Store: persist conversation snapshot
+        alt assistant emitted tool_calls
             opt any tool gated by policy
-                Loop->>Store: persist agent_loop_tool_call approval<br/>status=awaiting_approval
-                Loop-->>Worker: pause
+                Loop->>Store: persist agent_loop_tool_call approval
+                Loop-->>Worker: pause as awaiting_approval
             end
             Loop->>Tools: dispatch each tool_call
-            Tools->>Sandbox: shell_exec / file_write / http_request / ...
+            Tools->>Sandbox: shell_exec or file_write or http_request
             Sandbox-->>Tools: result
-            Tools-->>Loop: tool_result text
+            Tools-->>Loop: tool result text
             Loop->>Store: persist updated conversation
-        else final answer
+        else assistant emitted final answer
             Loop->>Store: persist final-answer artifact
-            Loop-->>Worker: status=completed
+            Loop-->>Worker: status completed
         end
     end
 ```
 
-Notable details:
+Three runtime invariants worth pinning (full mechanics in [`agent-runtime.md`](agent-runtime.md)):
 
 - **Workspace environment system message.** The loop prepends a machine-generated system message naming the workspace path, so the model uses the cloned cwd instead of the source path it sees in the user prompt. Without this, tool calls land outside the sandbox and fail with `escapes allowed root`.
 - **Provider hint.** `ChatRequest.Scope.ProviderHint` is set from `run.Provider` (mirrored from `task.RequestedProvider`), so the operator's pinned provider actually routes — no fallback to the default for generic model ids.
-- **Per-turn cost.** Every LLM round-trip emits an `agent.turn.completed` event with `cost_micros_usd`, `run_cumulative_cost_micros_usd`, and `task_cumulative_cost_micros_usd` (including prior runs in the resume chain). The per-task `BudgetMicrosUSD` ceiling is checked against `priorCost + costSpent` after each turn.
-- **Mid-loop approval resume.** On approve, the same run is requeued. The loop detects the trailing assistant tool_calls without resolved results, dispatches them (no second LLM call), and continues.
+- **Cost ceiling is task-cumulative.** The per-task `BudgetMicrosUSD` is checked against `priorCost + costSpent` after each turn, where `priorCost` includes every prior run in the resume chain. A chain of resumes can't escape the ceiling.
 
 ## Storage tiers
 
-Three tiers, picked per subsystem:
+Three tiers — `memory`, `sqlite`, `postgres` — picked per subsystem via `GATEWAY_*_BACKEND` env vars. The bare binary defaults to `memory` everywhere; the docker image defaults to `sqlite` so `docker compose up` survives restarts. The semantic cache is the one subsystem with no `sqlite` option (indexed vector similarity needs the `sqlite-vec` extension, and the pure-Go SQLite driver can't load native extensions); single-node deploys that need persistent semantic search should run Postgres for that subsystem only.
 
-- **`memory`** — in-process, ephemeral. Default. Right for tests and local iteration.
-- **`sqlite`** — single-file durable store via a pure-Go driver (modernc.org/sqlite, no CGO). Right for single-node production.
-- **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
+The full per-subsystem matrix and footnotes live in [`README.md`](../README.md#storage-backends) — single source of truth. Implementation notes worth pinning here:
 
-| Component | `memory` | `sqlite` | `postgres` |
-|---|---|---|---|
-| Control plane (tenants, keys, providers, policy, pricebook) | ✓ | ✓ | ✓ |
-| Chat sessions | ✓ | ✓ | ✓ |
-| Tasks (runs, steps, artifacts, approvals, events) | ✓ | ✓ | ✓ |
-| Task queue (leases) | ✓ | ✓ | ✓ |
-| Exact response cache | ✓ | ✓ | ✓ |
-| Semantic cache | ✓ | — | ✓ |
-| Budget accounts and history | ✓ | ✓ | ✓ |
-| Retention run history | ✓ | ✓ | ✓ |
-
-The semantic cache has no SQLite backend: indexed vector similarity needs the sqlite-vec extension, and our pure-Go SQLite driver can't load native extensions. Single-node deploys that need persistent semantic search should run Postgres for that subsystem only — the rest of state can still live in SQLite.
-
-A single `GATEWAY_SQLITE_PATH` (default `.data/hecate.db`) and a single `POSTGRES_DSN` configure the shared clients. SQLite's task queue uses `BEGIN IMMEDIATE` plus `UPDATE … RETURNING` for atomic claim under WAL; Postgres uses `SELECT … FOR UPDATE SKIP LOCKED`. Both are race-tested.
+- One `GATEWAY_SQLITE_PATH` and one `POSTGRES_DSN` configure the shared clients across all opted-in subsystems.
+- SQLite's task queue uses `BEGIN IMMEDIATE` plus `UPDATE … RETURNING` for atomic claim under WAL; Postgres uses `SELECT … FOR UPDATE SKIP LOCKED`. Both are race-tested.
 
 ## Why two flows in one binary
 

@@ -55,12 +55,8 @@ For local (non-Docker) development resets, see [`development.md`](development.md
 
 ## Choosing a backend tier
 
-Three tiers, picked per subsystem via `GATEWAY_*_BACKEND` env vars:
+Three tiers per subsystem (`memory` / `sqlite` / `postgres`); see [Storage backends](../README.md#storage-backends) for the full matrix and per-subsystem footnotes. Deployment-specific notes:
 
-- **`memory`** — in-process, ephemeral. Right for tests and local iteration via the bare binary.
-- **`sqlite`** — single-file durable store at `GATEWAY_SQLITE_PATH` (default `/data/hecate.db` in the docker image). **Default for the docker image** so `docker compose up` persists tenants / keys / pricebook / tasks / chat sessions across restarts without extra config. Right for single-node production.
-- **`postgres`** — multi-node production. Required for the semantic cache (pgvector).
-
-The semantic cache has no SQLite backend and stays on `memory` in the docker image — see the README's Storage backends section for the full matrix and the rationale.
-
-To opt out of SQLite persistence in docker (e.g. ephemeral test stack), set `GATEWAY_*_BACKEND=memory` for the subsystems you want ephemeral, either in `.env` or via compose env overrides.
+- The docker image **defaults to `sqlite`** for every durable subsystem, persisting state at `GATEWAY_SQLITE_PATH` (default `/data/hecate.db` on the `hecate-data` volume). This is why `docker compose up` keeps tenants, keys, pricebook, tasks, and chat sessions across restarts with no extra config.
+- The semantic cache has no SQLite backend and stays on `memory` in the docker image. To get persistent semantic search, switch just that subsystem to Postgres (`GATEWAY_SEMANTIC_CACHE_BACKEND=postgres`).
+- To make any subsystem ephemeral in docker, override its backend via `.env` or compose env: `GATEWAY_TASKS_BACKEND=memory`, etc.

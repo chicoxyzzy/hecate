@@ -39,9 +39,7 @@ Hecate accepts either:
 
 Token sources:
 
-- `GATEWAY_AUTH_TOKEN` — admin token. Auto-generated on first run when unset; printed once to stderr inside a `Hecate first-run setup` banner and persisted in the bootstrap file (mode 0600) under `GATEWAY_DATA_DIR`. The default location is `.data/hecate.bootstrap.json` for local builds (`make serve`) and `/data/hecate.bootstrap.json` inside the Docker image. Read it back at any time:
-  - Local: `jq -r .admin_token .data/hecate.bootstrap.json`
-  - Docker: `docker compose cp hecate:/data/hecate.bootstrap.json - | tar -xO | jq -r .admin_token`
+- `GATEWAY_AUTH_TOKEN` — admin token. Auto-generated on first run when unset; printed once to stderr inside a `Hecate first-run setup` banner and persisted in the bootstrap file (mode 0600) under `GATEWAY_DATA_DIR`. To read it back later, see [Recovering a lost admin token](deployment.md#recovering-a-lost-admin-token) (docker) or [development.md § Reset state](development.md#reset-state) (local).
 - Control-plane API keys — recommended for non-admin client access. Create them through the operator UI's Access tab once you've signed in with the admin token.
 
 If both headers are present, Hecate uses `Authorization` first.

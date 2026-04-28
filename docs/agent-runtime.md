@@ -18,28 +18,28 @@ The conversation is persisted as an artifact (`agent_conversation`, JSON-encoded
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Runner as Runtime
-    participant Loop as Agent Loop
+    participant Runner
+    participant Loop
     participant LLM
-    participant Tool as Tool Dispatch
+    participant Tools
     participant Store
-    Runner->>Loop: Execute(spec)
-    Loop->>Store: read agent_conversation (if resume)
-    loop until final answer or limit
-        Loop->>LLM: Chat(messages + tools)
+    Runner->>Loop: Execute
+    Loop->>Store: load saved conversation if resume
+    loop turn cycle
+        Loop->>LLM: Chat with messages and tool schemas
         LLM-->>Loop: assistant message
         Loop->>Store: persist conversation snapshot
-        alt has tool_calls
+        alt assistant emitted tool_calls
             opt any tool gated by policy
-                Loop->>Store: emit approval (status=pending)
-                Loop-->>Runner: status=awaiting_approval
+                Loop->>Store: persist approval as pending
+                Loop-->>Runner: pause as awaiting_approval
             end
-            Loop->>Tool: dispatch each tool_call
-            Tool-->>Loop: tool_result text
+            Loop->>Tools: dispatch each tool_call
+            Tools-->>Loop: tool result text
             Loop->>Store: persist updated conversation
-        else final answer
-            Loop->>Store: persist final answer artifact
-            Loop-->>Runner: status=completed
+        else assistant emitted final answer
+            Loop->>Store: persist final-answer artifact
+            Loop-->>Runner: status completed
         end
     end
 ```
