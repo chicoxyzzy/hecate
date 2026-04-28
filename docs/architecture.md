@@ -103,32 +103,32 @@ When an `agent_loop` run executes, the worker drives the LLM through a tool-usin
 sequenceDiagram
     autonumber
     participant Worker
-    participant Loop
+    participant Agent
     participant LLM
     participant Tools
     participant Sandbox
     participant Store
-    Worker->>Loop: Execute
-    Loop->>Store: load conversation if resume
-    Note over Loop: prepend workspace env message<br/>plus four-layer system prompt
+    Worker->>Agent: Execute
+    Agent->>Store: load conversation if resume
+    Note over Agent: prepend workspace env message<br/>plus four-layer system prompt
     loop turn cycle
-        Loop->>LLM: Chat with messages, tools, and ProviderHint
-        LLM-->>Loop: assistant message
-        Loop->>Store: emit agent.turn.completed event
-        Loop->>Store: persist conversation snapshot
+        Agent->>LLM: Chat with messages, tools, and ProviderHint
+        LLM-->>Agent: assistant message
+        Agent->>Store: emit agent.turn.completed event
+        Agent->>Store: persist conversation snapshot
         alt assistant emitted tool_calls
             opt any tool gated by policy
-                Loop->>Store: persist agent_loop_tool_call approval
-                Loop-->>Worker: pause as awaiting_approval
+                Agent->>Store: persist agent_loop_tool_call approval
+                Agent-->>Worker: pause as awaiting_approval
             end
-            Loop->>Tools: dispatch each tool_call
+            Agent->>Tools: dispatch each tool_call
             Tools->>Sandbox: shell_exec or file_write or http_request
             Sandbox-->>Tools: result
-            Tools-->>Loop: tool result text
-            Loop->>Store: persist updated conversation
+            Tools-->>Agent: tool result text
+            Agent->>Store: persist updated conversation
         else assistant emitted final answer
-            Loop->>Store: persist final-answer artifact
-            Loop-->>Worker: status completed
+            Agent->>Store: persist final-answer artifact
+            Agent-->>Worker: status completed
         end
     end
 ```

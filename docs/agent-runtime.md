@@ -19,27 +19,27 @@ The conversation is persisted as an artifact (`agent_conversation`, JSON-encoded
 sequenceDiagram
     autonumber
     participant Runner
-    participant Loop
+    participant Agent
     participant LLM
     participant Tools
     participant Store
-    Runner->>Loop: Execute
-    Loop->>Store: load saved conversation if resume
+    Runner->>Agent: Execute
+    Agent->>Store: load saved conversation if resume
     loop turn cycle
-        Loop->>LLM: Chat with messages and tool schemas
-        LLM-->>Loop: assistant message
-        Loop->>Store: persist conversation snapshot
+        Agent->>LLM: Chat with messages and tool schemas
+        LLM-->>Agent: assistant message
+        Agent->>Store: persist conversation snapshot
         alt assistant emitted tool_calls
             opt any tool gated by policy
-                Loop->>Store: persist approval as pending
-                Loop-->>Runner: pause as awaiting_approval
+                Agent->>Store: persist approval as pending
+                Agent-->>Runner: pause as awaiting_approval
             end
-            Loop->>Tools: dispatch each tool_call
-            Tools-->>Loop: tool result text
-            Loop->>Store: persist updated conversation
+            Agent->>Tools: dispatch each tool_call
+            Tools-->>Agent: tool result text
+            Agent->>Store: persist updated conversation
         else assistant emitted final answer
-            Loop->>Store: persist final-answer artifact
-            Loop-->>Runner: status completed
+            Agent->>Store: persist final-answer artifact
+            Agent-->>Runner: status completed
         end
     end
 ```
