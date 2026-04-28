@@ -34,11 +34,13 @@ package mcp
 
 import "encoding/json"
 
-// declaredProtocolVersion is what the server reports during the
+// DeclaredProtocolVersion is what the server reports during the
 // initialize handshake. Clients negotiate down to a version they speak;
 // if a client sends a different version, we still accept it and reply
-// with our supported version.
-const declaredProtocolVersion = "2025-11-25"
+// with our supported version. Exported so the server subpackage (which
+// owns the handshake) can read it without an unexported-cross-package
+// dance, and so the client subpackage can mirror it on its own side.
+const DeclaredProtocolVersion = "2025-11-25"
 
 // JSON-RPC 2.0 wire types.
 //

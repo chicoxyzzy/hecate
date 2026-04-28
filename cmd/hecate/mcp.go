@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/hecate/agent-runtime/internal/mcp"
+	"github.com/hecate/agent-runtime/internal/mcp/server"
 	"github.com/hecate/agent-runtime/internal/version"
 )
 
@@ -44,10 +44,10 @@ func runMCPServer() {
 		os.Exit(2)
 	}
 
-	server := mcp.NewServer("hecate", version.Version)
-	server.SetDescription("Hecate gateway: read-only inspection of tasks, chat sessions, and recent traffic.")
-	client := mcp.NewHTTPClient(baseURL, authToken)
-	mcp.RegisterDefaultTools(server, client)
+	srv := server.NewServer("hecate", version.Version)
+	srv.SetDescription("Hecate gateway: read-only inspection of tasks, chat sessions, and recent traffic.")
+	client := server.NewGatewayClient(baseURL, authToken)
+	server.RegisterDefaultTools(srv, client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,7 +63,7 @@ func runMCPServer() {
 	}()
 
 	fmt.Fprintln(os.Stderr, "hecate mcp-server: started on stdio, talking to "+baseURL)
-	if err := server.Serve(ctx, os.Stdin, os.Stdout); err != nil {
+	if err := srv.Serve(ctx, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "hecate mcp-server: "+err.Error())
 		os.Exit(1)
 	}

@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"bufio"
@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/hecate/agent-runtime/internal/mcp"
 )
 
 // Server is the MCP server core. Wire it with RegisterTool, then call
@@ -20,7 +22,7 @@ import (
 // the parent process kills us, we exit. That matches how Claude
 // Desktop / Cursor / Zed manage MCP subprocesses today.
 type Server struct {
-	info  ServerInfo
+	info  mcp.ServerInfo
 	tools toolRegistry
 
 	// Mutex guards writes to the output stream — multiple goroutines
@@ -34,7 +36,7 @@ type Server struct {
 // Cursor's @-mention, etc.); pick something operators recognize.
 func NewServer(name, version string) *Server {
 	return &Server{
-		info: ServerInfo{Name: name, Version: version},
+		info: mcp.ServerInfo{Name: name, Version: version},
 		tools: toolRegistry{
 			byName: make(map[string]registeredTool),
 		},
@@ -53,7 +55,7 @@ func (s *Server) SetDescription(d string) { s.info.Description = d }
 // schema must be a JSON Schema document (json.RawMessage) describing
 // the tool's `arguments` shape — clients use it for autocomplete /
 // validation. Pass json.RawMessage("{}") for "any object".
-func (s *Server) RegisterTool(tool Tool, handler ToolHandler) {
+func (s *Server) RegisterTool(tool mcp.Tool, handler ToolHandler) {
 	s.tools.byName[tool.Name] = registeredTool{
 		descriptor: tool,
 		handler:    handler,
@@ -114,15 +116,15 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 // at the parse layer become JSON-RPC error responses (or are silently
 // dropped for notifications, per spec).
 func (s *Server) handleMessage(ctx context.Context, raw []byte, out io.Writer) {
-	var req Request
+	var req mcp.Request
 	if err := json.Unmarshal(raw, &req); err != nil {
 		// Parse error — we don't know the ID so send a best-effort
 		// error response with a null ID, per JSON-RPC §5.1.
-		s.writeResponse(out, errorResponse(nil, NewError(ErrCodeParseError, "parse error: "+err.Error())))
+		s.writeResponse(out, errorResponse(nil, mcp.NewError(mcp.ErrCodeParseError, "parse error: "+err.Error())))
 		return
 	}
 	if req.JSONRPC != "2.0" {
-		s.writeResponse(out, errorResponse(req.ID, NewError(ErrCodeInvalidRequest, "jsonrpc must be \"2.0\"")))
+		s.writeResponse(out, errorResponse(req.ID, mcp.NewError(mcp.ErrCodeInvalidRequest, "jsonrpc must be \"2.0\"")))
 		return
 	}
 
@@ -152,7 +154,7 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, out io.Writer) {
 //
 // Unknown methods get a -32601 (method not found) response so MCP
 // clients that probe optional capabilities don't see hard failures.
-func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
+func (s *Server) dispatch(ctx context.Context, req *mcp.Request) (any, *mcp.RPCError) {
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(req)
@@ -166,44 +168,44 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 	case "ping":
 		return struct{}{}, nil
 	default:
-		return nil, NewError(ErrCodeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
+		return nil, mcp.NewError(mcp.ErrCodeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
 	}
 }
 
-func (s *Server) handleInitialize(req *Request) (any, *RPCError) {
-	var params InitializeParams
+func (s *Server) handleInitialize(req *mcp.Request) (any, *mcp.RPCError) {
+	var params mcp.InitializeParams
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			return nil, NewError(ErrCodeInvalidParams, "invalid initialize params: "+err.Error())
+			return nil, mcp.NewError(mcp.ErrCodeInvalidParams, "invalid initialize params: "+err.Error())
 		}
 	}
 	// We accept whatever protocol version the client requested but
 	// reply with our own — clients are expected to negotiate down if
 	// they support multiple versions.
-	return InitializeResult{
-		ProtocolVersion: declaredProtocolVersion,
-		Capabilities: ServerCapabilities{
-			Tools: &ToolsCapability{},
+	return mcp.InitializeResult{
+		ProtocolVersion: mcp.DeclaredProtocolVersion,
+		Capabilities: mcp.ServerCapabilities{
+			Tools: &mcp.ToolsCapability{},
 		},
 		ServerInfo: s.info,
 	}, nil
 }
 
-func (s *Server) handleListTools() (any, *RPCError) {
-	return ListToolsResult{Tools: s.tools.list()}, nil
+func (s *Server) handleListTools() (any, *mcp.RPCError) {
+	return mcp.ListToolsResult{Tools: s.tools.list()}, nil
 }
 
-func (s *Server) handleCallTool(ctx context.Context, req *Request) (any, *RPCError) {
+func (s *Server) handleCallTool(ctx context.Context, req *mcp.Request) (any, *mcp.RPCError) {
 	// A malformed tools/call envelope itself (e.g. completely invalid
 	// JSON in `params`) is a protocol error — the client got the
 	// shape wrong, not the model. Keep this as JSON-RPC -32602.
-	var params CallToolParams
+	var params mcp.CallToolParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return nil, NewError(ErrCodeInvalidParams, "invalid tools/call params: "+err.Error())
+		return nil, mcp.NewError(mcp.ErrCodeInvalidParams, "invalid tools/call params: "+err.Error())
 	}
 	tool, ok := s.tools.byName[params.Name]
 	if !ok {
-		return nil, NewError(ErrCodeInvalidParams, fmt.Sprintf("unknown tool: %s", params.Name))
+		return nil, mcp.NewError(mcp.ErrCodeInvalidParams, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
 	// Tool-level error → CallToolResult with isError=true.
 	// Per MCP 2025-11-25 (minor change #5): "input validation errors
@@ -213,8 +215,8 @@ func (s *Server) handleCallTool(ctx context.Context, req *Request) (any, *RPCErr
 	// handler) becomes a tool result the model can read and adjust.
 	result, err := tool.handler(ctx, params.Arguments)
 	if err != nil {
-		return CallToolResult{
-			Content: TextContent(err.Error()),
+		return mcp.CallToolResult{
+			Content: mcp.TextContent(err.Error()),
 			IsError: true,
 		}, nil
 	}
@@ -223,14 +225,14 @@ func (s *Server) handleCallTool(ctx context.Context, req *Request) (any, *RPCErr
 
 // ─── Output ──────────────────────────────────────────────────────────
 
-func (s *Server) writeResponse(out io.Writer, resp Response) {
+func (s *Server) writeResponse(out io.Writer, resp mcp.Response) {
 	body, err := json.Marshal(resp)
 	if err != nil {
 		// Should never happen — every field is JSON-marshalable by
 		// construction. Log to stderr (the dispatcher's logger isn't
 		// available here) and drop.
 		fmt.Fprintf(out, `{"jsonrpc":"2.0","id":null,"error":{"code":%d,"message":%q}}`+"\n",
-			ErrCodeInternalError, "internal: marshal response: "+err.Error())
+			mcp.ErrCodeInternalError, "internal: marshal response: "+err.Error())
 		return
 	}
 	s.writeMu.Lock()
@@ -239,16 +241,16 @@ func (s *Server) writeResponse(out io.Writer, resp Response) {
 	_, _ = out.Write([]byte("\n"))
 }
 
-func successResponse(id *json.RawMessage, result any) Response {
+func successResponse(id *json.RawMessage, result any) mcp.Response {
 	raw, err := json.Marshal(result)
 	if err != nil {
-		return errorResponse(id, NewError(ErrCodeInternalError, "marshal result: "+err.Error()))
+		return errorResponse(id, mcp.NewError(mcp.ErrCodeInternalError, "marshal result: "+err.Error()))
 	}
-	return Response{JSONRPC: "2.0", ID: id, Result: raw}
+	return mcp.Response{JSONRPC: "2.0", ID: id, Result: raw}
 }
 
-func errorResponse(id *json.RawMessage, e *RPCError) Response {
-	return Response{JSONRPC: "2.0", ID: id, Error: e}
+func errorResponse(id *json.RawMessage, e *mcp.RPCError) mcp.Response {
+	return mcp.Response{JSONRPC: "2.0", ID: id, Error: e}
 }
 
 // ─── Tool registry ───────────────────────────────────────────────────
@@ -258,10 +260,10 @@ func errorResponse(id *json.RawMessage, e *RPCError) Response {
 // into their own typed shape. Returning a non-nil error becomes a
 // tool-level failure (CallToolResult with isError=true); returning a
 // CallToolResult lets the handler set the content blocks directly.
-type ToolHandler func(ctx context.Context, args json.RawMessage) (CallToolResult, error)
+type ToolHandler func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error)
 
 type registeredTool struct {
-	descriptor Tool
+	descriptor mcp.Tool
 	handler    ToolHandler
 }
 
@@ -273,8 +275,8 @@ type toolRegistry struct {
 // `order` slice rather than relying on map iteration so the wire
 // output is stable across runs — clients cache lists and a churning
 // order would invalidate caches needlessly.
-func (r toolRegistry) list() []Tool {
-	out := make([]Tool, 0, len(r.byName))
+func (r toolRegistry) list() []mcp.Tool {
+	out := make([]mcp.Tool, 0, len(r.byName))
 	for _, t := range r.byName {
 		out = append(out, t.descriptor)
 	}
@@ -285,7 +287,7 @@ func (r toolRegistry) list() []Tool {
 	return out
 }
 
-func sortToolsByName(tools []Tool) {
+func sortToolsByName(tools []mcp.Tool) {
 	for i := 1; i < len(tools); i++ {
 		for j := i; j > 0 && tools[j-1].Name > tools[j].Name; j-- {
 			tools[j-1], tools[j] = tools[j], tools[j-1]

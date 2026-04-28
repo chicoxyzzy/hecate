@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func TestTool_ListTasks_FormatsRows(t *testing.T) {
 			]}`))
 		},
 	})
-	client := NewHTTPClient(srv.URL, token)
+	client := NewGatewayClient(srv.URL, token)
 	server := NewServer("hecate-test", "0.0.0")
 	RegisterDefaultTools(server, client)
 
@@ -81,7 +81,7 @@ func TestTool_ListTasks_EmptyState(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 	result, err := registeredToolFor(t, server, "list_tasks")(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -93,7 +93,7 @@ func TestTool_ListTasks_EmptyState(t *testing.T) {
 
 func TestTool_GetTaskStatus_RequiresID(t *testing.T) {
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "get_task_status")(context.Background(), json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "task_id is required") {
 		t.Fatalf("want task_id required error, got: %v", err)
@@ -108,7 +108,7 @@ func TestTool_GetTaskStatus_FormatsDetail(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 	result, err := registeredToolFor(t, server, "get_task_status")(context.Background(),
 		json.RawMessage(`{"task_id":"abc-123"}`))
 	if err != nil {
@@ -136,7 +136,7 @@ func TestTool_ListChatSessions_TenantFilter(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 	result, err := registeredToolFor(t, server, "list_chat_sessions")(context.Background(),
 		json.RawMessage(`{"limit":5,"tenant":"team-a"}`))
 	if err != nil {
@@ -160,7 +160,7 @@ func TestTool_SummarizeTraffic_AggregatesByProvider(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 	result, err := registeredToolFor(t, server, "summarize_recent_traffic")(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -201,7 +201,7 @@ func TestTool_CreateTask_PostsAgentLoopAndSummarizes(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 
 	args := json.RawMessage(`{"prompt":"summarize the working dir","title":"Summarize","requested_model":"claude-opus-4-5"}`)
 	result, err := registeredToolFor(t, server, "create_task")(context.Background(), args)
@@ -218,7 +218,7 @@ func TestTool_CreateTask_PostsAgentLoopAndSummarizes(t *testing.T) {
 
 func TestTool_CreateTask_RequiresPrompt(t *testing.T) {
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "create_task")(context.Background(), json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "prompt is required") {
 		t.Fatalf("want prompt-required error, got: %v", err)
@@ -231,7 +231,7 @@ func TestTool_CreateTask_RequiresWorkingDirectoryForInPlaceMode(t *testing.T) {
 	// catch it locally so the operator gets a clear error inside the
 	// editor instead of a "400 invalid_request_error" passthrough.
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "create_task")(context.Background(),
 		json.RawMessage(`{"prompt":"do the thing","workspace_mode":"in_place"}`))
 	if err == nil || !strings.Contains(err.Error(), "working_directory is required") {
@@ -262,7 +262,7 @@ func TestTool_ResolveApproval_ApprovePostsDecision(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 
 	args := json.RawMessage(`{"task_id":"task-1","approval_id":"appr-9","decision":"approve","note":"looks safe"}`)
 	result, err := registeredToolFor(t, server, "resolve_approval")(context.Background(), args)
@@ -279,7 +279,7 @@ func TestTool_ResolveApproval_ApprovePostsDecision(t *testing.T) {
 
 func TestTool_ResolveApproval_RejectsInvalidDecision(t *testing.T) {
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "resolve_approval")(context.Background(),
 		json.RawMessage(`{"task_id":"t","approval_id":"a","decision":"maybe"}`))
 	if err == nil || !strings.Contains(err.Error(), `decision must be "approve" or "reject"`) {
@@ -293,7 +293,7 @@ func TestTool_ResolveApproval_RequiresIDs(t *testing.T) {
 	// the validation error from the MCP tool so the operator gets
 	// the right hint without a round-trip.
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "resolve_approval")(context.Background(),
 		json.RawMessage(`{"approval_id":"a","decision":"approve"}`))
 	if err == nil || !strings.Contains(err.Error(), "task_id is required") {
@@ -319,7 +319,7 @@ func TestTool_CancelRun_PostsAndSummarizes(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 
 	args := json.RawMessage(`{"task_id":"task-2","run_id":"run-3","reason":"runaway loop"}`)
 	result, err := registeredToolFor(t, server, "cancel_run")(context.Background(), args)
@@ -336,7 +336,7 @@ func TestTool_CancelRun_PostsAndSummarizes(t *testing.T) {
 
 func TestTool_CancelRun_RequiresIDs(t *testing.T) {
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 	_, err := registeredToolFor(t, server, "cancel_run")(context.Background(),
 		json.RawMessage(`{"run_id":"r"}`))
 	if err == nil || !strings.Contains(err.Error(), "task_id is required") {
@@ -356,7 +356,7 @@ func TestTool_CancelRun_RequiresIDs(t *testing.T) {
 // too conservative = friction on every read.
 func TestTool_WriteToolAnnotations(t *testing.T) {
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient("http://unused", ""))
+	RegisterDefaultTools(server, NewGatewayClient("http://unused", ""))
 
 	cases := []struct {
 		name              string
@@ -424,7 +424,7 @@ func TestTool_UpstreamError_BubblesAsToolError(t *testing.T) {
 		},
 	})
 	server := NewServer("t", "0")
-	RegisterDefaultTools(server, NewHTTPClient(srv.URL, token))
+	RegisterDefaultTools(server, NewGatewayClient(srv.URL, token))
 	_, err := registeredToolFor(t, server, "list_tasks")(context.Background(), json.RawMessage(`{}`))
 	// Tool returns the error directly; the dispatcher wraps it in
 	// CallToolResult.IsError=true, but at this seam we just see the

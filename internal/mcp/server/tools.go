@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"context"
@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/hecate/agent-runtime/internal/mcp"
 )
 
 // RegisterDefaultTools wires the default tool set onto the supplied
-// server. Every tool here dispatches through the HTTPClient — the MCP
+// server. Every tool here dispatches through the GatewayClient — the MCP
 // server is a translator, not a re-implementation of Hecate's core.
 //
 // Tool design conventions:
@@ -26,15 +28,15 @@ import (
 //     irreversible (resolve_approval, cancel_run); IdempotentHint
 //     when retries are safe (cancel_run only — cancelling an
 //     already-cancelled run is a no-op).
-func RegisterDefaultTools(s *Server, client *HTTPClient) {
-	readOnly := &ToolAnnotations{ReadOnlyHint: BoolPtr(true)}
-	destructive := &ToolAnnotations{DestructiveHint: BoolPtr(true)}
-	destructiveIdempotent := &ToolAnnotations{
-		DestructiveHint: BoolPtr(true),
-		IdempotentHint:  BoolPtr(true),
+func RegisterDefaultTools(s *Server, client *GatewayClient) {
+	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: mcp.BoolPtr(true)}
+	destructive := &mcp.ToolAnnotations{DestructiveHint: mcp.BoolPtr(true)}
+	destructiveIdempotent := &mcp.ToolAnnotations{
+		DestructiveHint: mcp.BoolPtr(true),
+		IdempotentHint:  mcp.BoolPtr(true),
 	}
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:        "list_tasks",
 		Title:       "List recent tasks",
 		Description: "List recent agent tasks tracked by the Hecate gateway. Returns each task's id, title, status, and execution kind.",
@@ -47,7 +49,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		Annotations: readOnly,
 	}, listTasksHandler(client))
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:        "get_task_status",
 		Title:       "Get task status",
 		Description: "Get the current status of a specific Hecate task by id, including its latest run and step count.",
@@ -61,7 +63,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		Annotations: readOnly,
 	}, getTaskStatusHandler(client))
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:        "list_chat_sessions",
 		Title:       "List chat sessions",
 		Description: "List recent chat sessions on the Hecate gateway. Returns each session's id, title, turn count, and last-updated time.",
@@ -75,7 +77,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		Annotations: readOnly,
 	}, listChatSessionsHandler(client))
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:        "summarize_recent_traffic",
 		Title:       "Summarize recent traffic",
 		Description: "Summarize recent gateway request activity: total count, by-provider breakdown, error rate, and average latency.",
@@ -90,7 +92,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 
 	// ─── write tools ─────────────────────────────────────────────────
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:  "create_task",
 		Title: "Create an agent task",
 		Description: "Queue a new agent_loop task on the Hecate gateway. " +
@@ -117,7 +119,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		// queue independent tasks.
 	}, createTaskHandler(client))
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:  "resolve_approval",
 		Title: "Resolve a pending approval",
 		Description: "Approve or reject a pending approval gate (pre-execution or mid-loop tool call). " +
@@ -136,7 +138,7 @@ func RegisterDefaultTools(s *Server, client *HTTPClient) {
 		Annotations: destructive,
 	}, resolveApprovalHandler(client))
 
-	s.RegisterTool(Tool{
+	s.RegisterTool(mcp.Tool{
 		Name:  "cancel_run",
 		Title: "Cancel a task run",
 		Description: "Cancel an in-flight task run. Cooperative cancellation: " +
@@ -174,8 +176,8 @@ type listTasksResponse struct {
 	} `json:"data"`
 }
 
-func listTasksHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func listTasksHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args listTasksArgs
 		if len(raw) > 0 {
 			_ = json.Unmarshal(raw, &args)
@@ -188,10 +190,10 @@ func listTasksHandler(client *HTTPClient) ToolHandler {
 
 		var resp listTasksResponse
 		if err := client.Get(ctx, "/v1/tasks", q, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		if len(resp.Data) == 0 {
-			return CallToolResult{Content: TextContent("No tasks yet.")}, nil
+			return mcp.CallToolResult{Content: mcp.TextContent("No tasks yet.")}, nil
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Found %d task(s):\n\n", len(resp.Data))
@@ -207,7 +209,7 @@ func listTasksHandler(client *HTTPClient) ToolHandler {
 			}
 			b.WriteByte('\n')
 		}
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 
@@ -234,18 +236,18 @@ type getTaskStatusResponse struct {
 	} `json:"data"`
 }
 
-func getTaskStatusHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func getTaskStatusHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args getTaskStatusArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+			return mcp.CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if strings.TrimSpace(args.TaskID) == "" {
-			return CallToolResult{}, fmt.Errorf("task_id is required")
+			return mcp.CallToolResult{}, fmt.Errorf("task_id is required")
 		}
 		var resp getTaskStatusResponse
 		if err := client.Get(ctx, "/v1/tasks/"+url.PathEscape(args.TaskID), nil, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		t := resp.Data
 		var b strings.Builder
@@ -279,7 +281,7 @@ func getTaskStatusHandler(client *HTTPClient) ToolHandler {
 		if t.UpdatedAt != "" {
 			fmt.Fprintf(&b, "Updated: %s\n", t.UpdatedAt)
 		}
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 
@@ -300,8 +302,8 @@ type listChatSessionsResponse struct {
 	} `json:"data"`
 }
 
-func listChatSessionsHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func listChatSessionsHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args listChatSessionsArgs
 		if len(raw) > 0 {
 			_ = json.Unmarshal(raw, &args)
@@ -315,10 +317,10 @@ func listChatSessionsHandler(client *HTTPClient) ToolHandler {
 
 		var resp listChatSessionsResponse
 		if err := client.Get(ctx, "/v1/chat/sessions", q, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		if len(resp.Data) == 0 {
-			return CallToolResult{Content: TextContent("No chat sessions yet.")}, nil
+			return mcp.CallToolResult{Content: mcp.TextContent("No chat sessions yet.")}, nil
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Found %d chat session(s):\n\n", len(resp.Data))
@@ -336,7 +338,7 @@ func listChatSessionsHandler(client *HTTPClient) ToolHandler {
 			}
 			b.WriteByte('\n')
 		}
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 
@@ -361,8 +363,8 @@ type traceListResponse struct {
 	} `json:"data"`
 }
 
-func summarizeRecentTrafficHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func summarizeRecentTrafficHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args summarizeArgs
 		if len(raw) > 0 {
 			_ = json.Unmarshal(raw, &args)
@@ -375,10 +377,10 @@ func summarizeRecentTrafficHandler(client *HTTPClient) ToolHandler {
 
 		var resp traceListResponse
 		if err := client.Get(ctx, "/v1/traces", q, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		if len(resp.Data) == 0 {
-			return CallToolResult{Content: TextContent("No recent traffic.")}, nil
+			return mcp.CallToolResult{Content: mcp.TextContent("No recent traffic.")}, nil
 		}
 
 		// Aggregate by provider; track error count and latency.
@@ -437,7 +439,7 @@ func summarizeRecentTrafficHandler(client *HTTPClient) ToolHandler {
 			}
 			b.WriteByte('\n')
 		}
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 
@@ -480,20 +482,20 @@ type createTaskWireResponse struct {
 	} `json:"data"`
 }
 
-func createTaskHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func createTaskHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args createTaskArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+			return mcp.CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if strings.TrimSpace(args.Prompt) == "" {
-			return CallToolResult{}, fmt.Errorf("prompt is required")
+			return mcp.CallToolResult{}, fmt.Errorf("prompt is required")
 		}
 		// in_place workspace requires an absolute working_directory.
 		// Validate at the MCP boundary so the caller gets an actionable
 		// error instead of a 400 from the gateway with less context.
 		if args.WorkspaceMode == "in_place" && strings.TrimSpace(args.WorkingDirectory) == "" {
-			return CallToolResult{}, fmt.Errorf("working_directory is required when workspace_mode=in_place")
+			return mcp.CallToolResult{}, fmt.Errorf("working_directory is required when workspace_mode=in_place")
 		}
 		body := createTaskWireRequest{
 			Prompt:            args.Prompt,
@@ -508,7 +510,7 @@ func createTaskHandler(client *HTTPClient) ToolHandler {
 		}
 		var resp createTaskWireResponse
 		if err := client.Post(ctx, "/v1/tasks", body, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Created task %s (%s) — status: %s",
@@ -518,7 +520,7 @@ func createTaskHandler(client *HTTPClient) ToolHandler {
 		}
 		b.WriteByte('\n')
 		fmt.Fprintf(&b, "\nUse get_task_status with task_id=%s to follow progress.", resp.Data.ID)
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 
@@ -544,31 +546,31 @@ type resolveApprovalWireResponse struct {
 	} `json:"data"`
 }
 
-func resolveApprovalHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func resolveApprovalHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args resolveApprovalArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+			return mcp.CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if strings.TrimSpace(args.TaskID) == "" {
-			return CallToolResult{}, fmt.Errorf("task_id is required")
+			return mcp.CallToolResult{}, fmt.Errorf("task_id is required")
 		}
 		if strings.TrimSpace(args.ApprovalID) == "" {
-			return CallToolResult{}, fmt.Errorf("approval_id is required")
+			return mcp.CallToolResult{}, fmt.Errorf("approval_id is required")
 		}
 		switch args.Decision {
 		case "approve", "reject":
 		default:
-			return CallToolResult{}, fmt.Errorf("decision must be \"approve\" or \"reject\" (got %q)", args.Decision)
+			return mcp.CallToolResult{}, fmt.Errorf("decision must be \"approve\" or \"reject\" (got %q)", args.Decision)
 		}
 		body := resolveApprovalWireRequest{Decision: args.Decision, Note: args.Note}
 		path := fmt.Sprintf("/v1/tasks/%s/approvals/%s/resolve",
 			url.PathEscape(args.TaskID), url.PathEscape(args.ApprovalID))
 		var resp resolveApprovalWireResponse
 		if err := client.Post(ctx, path, body, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
-		return CallToolResult{Content: TextContent(fmt.Sprintf(
+		return mcp.CallToolResult{Content: mcp.TextContent(fmt.Sprintf(
 			"Approval %s (%s) is now %s.",
 			resp.Data.ID, resp.Data.Kind, resp.Data.Status,
 		))}, nil
@@ -593,17 +595,17 @@ type cancelRunWireResponse struct {
 	} `json:"data"`
 }
 
-func cancelRunHandler(client *HTTPClient) ToolHandler {
-	return func(ctx context.Context, raw json.RawMessage) (CallToolResult, error) {
+func cancelRunHandler(client *GatewayClient) ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
 		var args cancelRunArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+			return mcp.CallToolResult{}, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if strings.TrimSpace(args.TaskID) == "" {
-			return CallToolResult{}, fmt.Errorf("task_id is required")
+			return mcp.CallToolResult{}, fmt.Errorf("task_id is required")
 		}
 		if strings.TrimSpace(args.RunID) == "" {
-			return CallToolResult{}, fmt.Errorf("run_id is required")
+			return mcp.CallToolResult{}, fmt.Errorf("run_id is required")
 		}
 		// The cancel endpoint accepts no body today; we keep `reason`
 		// in the MCP-tool surface so future surface additions stay
@@ -613,7 +615,7 @@ func cancelRunHandler(client *HTTPClient) ToolHandler {
 			url.PathEscape(args.TaskID), url.PathEscape(args.RunID))
 		var resp cancelRunWireResponse
 		if err := client.Post(ctx, path, struct{}{}, &resp); err != nil {
-			return CallToolResult{}, err
+			return mcp.CallToolResult{}, err
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Run %s on task %s — status: %s",
@@ -627,7 +629,7 @@ func cancelRunHandler(client *HTTPClient) ToolHandler {
 		if strings.TrimSpace(args.Reason) != "" {
 			fmt.Fprintf(&b, "\n(reason note: %q — recorded locally; not yet forwarded to the gateway audit log)", args.Reason)
 		}
-		return CallToolResult{Content: TextContent(b.String())}, nil
+		return mcp.CallToolResult{Content: mcp.TextContent(b.String())}, nil
 	}
 }
 

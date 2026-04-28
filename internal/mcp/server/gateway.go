@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// HTTPClient is the thin layer the MCP server uses to talk to a running
+// GatewayClient is the thin layer the MCP server uses to talk to a running
 // Hecate gateway over its public REST API. Every tool dispatches
 // through here — there's no shortcut into the gateway's in-process
 // services because the MCP server is meant to run as a separate
@@ -20,18 +20,18 @@ import (
 //
 // The auth token is the same one operators paste into the UI on first
 // load; we send it as a Bearer header on every request.
-type HTTPClient struct {
+type GatewayClient struct {
 	BaseURL    string
 	AuthToken  string
 	HTTPClient *http.Client
 }
 
-// NewHTTPClient constructs an HTTPClient with a default 30-second
+// NewGatewayClient constructs a GatewayClient with a default 30-second
 // timeout. The timeout is deliberately generous: queue-stat queries
 // can be slow on a busy postgres-backed deploy, and the MCP client
 // (Claude Desktop / Cursor) has its own user-facing wait UI.
-func NewHTTPClient(baseURL, token string) *HTTPClient {
-	return &HTTPClient{
+func NewGatewayClient(baseURL, token string) *GatewayClient {
+	return &GatewayClient{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		AuthToken:  token,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
@@ -41,16 +41,16 @@ func NewHTTPClient(baseURL, token string) *HTTPClient {
 // Get issues a GET against `path` (joined onto BaseURL) and decodes
 // the JSON body into out. `query` parameters are appended verbatim;
 // empty values are dropped so callers can pass "" for optional fields.
-func (c *HTTPClient) Get(ctx context.Context, path string, query url.Values, out any) error {
+func (c *GatewayClient) Get(ctx context.Context, path string, query url.Values, out any) error {
 	return c.do(ctx, http.MethodGet, path, query, nil, out)
 }
 
 // Post issues a POST with a JSON body.
-func (c *HTTPClient) Post(ctx context.Context, path string, body any, out any) error {
+func (c *GatewayClient) Post(ctx context.Context, path string, body any, out any) error {
 	return c.do(ctx, http.MethodPost, path, nil, body, out)
 }
 
-func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
+func (c *GatewayClient) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
 	u := c.BaseURL + path
 	if len(query) > 0 {
 		u = u + "?" + cleanQuery(query).Encode()

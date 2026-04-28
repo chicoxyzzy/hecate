@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hecate/agent-runtime/internal/mcp"
 )
 
 // rwPipe wires an io.Pipe with a closer hook so we can simulate stdin
@@ -97,19 +99,19 @@ func TestServer_Initialize(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("got %d responses, want 1", len(resp))
 	}
-	var r Response
+	var r mcp.Response
 	if err := json.Unmarshal([]byte(resp[0]), &r); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if r.Error != nil {
 		t.Fatalf("initialize errored: %+v", r.Error)
 	}
-	var result InitializeResult
+	var result mcp.InitializeResult
 	if err := json.Unmarshal(r.Result, &result); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}
 	if result.ServerInfo.Name != "hecate-test" {
-		t.Errorf("ServerInfo.Name = %q, want hecate-test", result.ServerInfo.Name)
+		t.Errorf("mcp.ServerInfo.Name = %q, want hecate-test", result.ServerInfo.Name)
 	}
 	if result.ProtocolVersion != "2025-11-25" {
 		t.Errorf("ProtocolVersion = %q, want 2025-11-25", result.ProtocolVersion)
@@ -137,10 +139,10 @@ func TestServer_UnknownMethodReturnsMethodNotFound(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("got %d responses, want 1", len(resp))
 	}
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &r)
-	if r.Error == nil || r.Error.Code != ErrCodeMethodNotFound {
-		t.Fatalf("got error %+v, want code %d", r.Error, ErrCodeMethodNotFound)
+	if r.Error == nil || r.Error.Code != mcp.ErrCodeMethodNotFound {
+		t.Fatalf("got error %+v, want code %d", r.Error, mcp.ErrCodeMethodNotFound)
 	}
 }
 
@@ -154,13 +156,13 @@ func TestServer_ParseErrorRecovers(t *testing.T) {
 	if len(resp) != 2 {
 		t.Fatalf("got %d responses, want 2 (parse error + ping)", len(resp))
 	}
-	var first, second Response
+	var first, second mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &first)
 	_ = json.Unmarshal([]byte(resp[1]), &second)
 	// Order isn't guaranteed (each line dispatched in its own
 	// goroutine) — just look for one parse error and one ping result.
-	hasParseError := (first.Error != nil && first.Error.Code == ErrCodeParseError) ||
-		(second.Error != nil && second.Error.Code == ErrCodeParseError)
+	hasParseError := (first.Error != nil && first.Error.Code == mcp.ErrCodeParseError) ||
+		(second.Error != nil && second.Error.Code == mcp.ErrCodeParseError)
 	hasPingResult := first.Error == nil || second.Error == nil
 	if !hasParseError || !hasPingResult {
 		t.Fatalf("expected one parse error + one ping success, got %s and %s", resp[0], resp[1])
@@ -169,14 +171,14 @@ func TestServer_ParseErrorRecovers(t *testing.T) {
 
 func TestServer_ListTools(t *testing.T) {
 	register := func(s *Server) {
-		s.RegisterTool(Tool{
+		s.RegisterTool(mcp.Tool{
 			Name:        "echo",
 			Title:       "Echo back",
 			Description: "echo back input",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`),
-			Annotations: &ToolAnnotations{ReadOnlyHint: BoolPtr(true)},
-		}, func(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-			return CallToolResult{Content: TextContent(string(args))}, nil
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: mcp.BoolPtr(true)},
+		}, func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+			return mcp.CallToolResult{Content: mcp.TextContent(string(args))}, nil
 		})
 	}
 	resp := runServer(t, []string{
@@ -185,9 +187,9 @@ func TestServer_ListTools(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("got %d responses, want 1", len(resp))
 	}
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &r)
-	var result ListToolsResult
+	var result mcp.ListToolsResult
 	_ = json.Unmarshal(r.Result, &result)
 	if len(result.Tools) != 1 || result.Tools[0].Name != "echo" {
 		t.Fatalf("tools = %+v, want one echo", result.Tools)
@@ -224,20 +226,20 @@ func TestServer_InitializeResponse_HasDescription(t *testing.T) {
 	_ = in.w.Close()
 	<-done
 
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(outBuf.String()), &r)
-	var result InitializeResult
+	var result mcp.InitializeResult
 	_ = json.Unmarshal(r.Result, &result)
 	if result.ServerInfo.Description != "a test server" {
-		t.Fatalf("ServerInfo.Description = %q, want 'a test server'", result.ServerInfo.Description)
+		t.Fatalf("mcp.ServerInfo.Description = %q, want 'a test server'", result.ServerInfo.Description)
 	}
 }
 
 func TestServer_CallTool_Success(t *testing.T) {
 	register := func(s *Server) {
-		s.RegisterTool(Tool{Name: "ping-tool", InputSchema: json.RawMessage(`{}`)},
-			func(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-				return CallToolResult{Content: TextContent("pong")}, nil
+		s.RegisterTool(mcp.Tool{Name: "ping-tool", InputSchema: json.RawMessage(`{}`)},
+			func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+				return mcp.CallToolResult{Content: mcp.TextContent("pong")}, nil
 			})
 	}
 	resp := runServer(t, []string{
@@ -246,9 +248,9 @@ func TestServer_CallTool_Success(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("got %d responses, want 1", len(resp))
 	}
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &r)
-	var result CallToolResult
+	var result mcp.CallToolResult
 	_ = json.Unmarshal(r.Result, &result)
 	if len(result.Content) != 1 || result.Content[0].Text != "pong" {
 		t.Fatalf("Content = %+v, want one text block 'pong'", result.Content)
@@ -263,20 +265,20 @@ func TestServer_CallTool_HandlerErrorIsToolLevel(t *testing.T) {
 	// returned as CallToolResult with isError=true. This is the MCP
 	// contract: protocol errors and tool errors are different things.
 	register := func(s *Server) {
-		s.RegisterTool(Tool{Name: "boom", InputSchema: json.RawMessage(`{}`)},
-			func(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-				return CallToolResult{}, errors.New("upstream is down")
+		s.RegisterTool(mcp.Tool{Name: "boom", InputSchema: json.RawMessage(`{}`)},
+			func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+				return mcp.CallToolResult{}, errors.New("upstream is down")
 			})
 	}
 	resp := runServer(t, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"boom","arguments":{}}}`,
 	}, register)
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &r)
 	if r.Error != nil {
 		t.Fatalf("handler error became JSON-RPC error: %+v", r.Error)
 	}
-	var result CallToolResult
+	var result mcp.CallToolResult
 	_ = json.Unmarshal(r.Result, &result)
 	if !result.IsError {
 		t.Fatalf("IsError should be true; got %+v", result)
@@ -290,9 +292,9 @@ func TestServer_CallTool_UnknownToolIsInvalidParams(t *testing.T) {
 	resp := runServer(t, []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"missing","arguments":{}}}`,
 	}, nil)
-	var r Response
+	var r mcp.Response
 	_ = json.Unmarshal([]byte(resp[0]), &r)
-	if r.Error == nil || r.Error.Code != ErrCodeInvalidParams {
-		t.Fatalf("got %+v, want code %d", r.Error, ErrCodeInvalidParams)
+	if r.Error == nil || r.Error.Code != mcp.ErrCodeInvalidParams {
+		t.Fatalf("got %+v, want code %d", r.Error, mcp.ErrCodeInvalidParams)
 	}
 }
