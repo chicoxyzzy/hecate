@@ -349,6 +349,7 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 	if strings.TrimSpace(req.ServiceTier) != "" {
 		wireReq.ServiceTier = strings.TrimSpace(req.ServiceTier)
 	}
+	p.warnResponseFormatDropped(req)
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
 		for _, t := range req.Tools {
@@ -432,6 +433,25 @@ func anthropicUsageToTypes(u anthropicUsage) types.Usage {
 		CachedPromptTokens: u.CacheReadInputTokens,
 		TotalTokens:        prompt + u.OutputTokens + u.CacheReadInputTokens,
 	}
+}
+
+// warnResponseFormatDropped logs once per request when the caller
+// asked for OpenAI-style structured output but the route landed on
+// an Anthropic provider that has no direct equivalent. We don't
+// fail the request — the model usually still produces something
+// usable — but the operator deserves to know the constraint was
+// silently dropped. Operators wanting strict structured output on
+// Anthropic should use `tools` + `tool_choice` instead.
+func (p *AnthropicProvider) warnResponseFormatDropped(req types.ChatRequest) {
+	if len(req.ResponseFormat) == 0 || p.logger == nil {
+		return
+	}
+	p.logger.Warn("response_format dropped on Anthropic route",
+		slog.String("provider", p.Name()),
+		slog.String("model", req.Model),
+		slog.String("response_format", string(req.ResponseFormat)),
+		slog.String("hint", "Anthropic has no direct response_format equivalent; use tools + tool_choice for structured output"),
+	)
 }
 
 func (p *AnthropicProvider) applyHeaders(req *http.Request) {
@@ -794,6 +814,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req types.ChatReques
 	if strings.TrimSpace(req.ServiceTier) != "" {
 		wireReq.ServiceTier = strings.TrimSpace(req.ServiceTier)
 	}
+	p.warnResponseFormatDropped(req)
 	if len(req.Tools) > 0 {
 		wireReq.Tools = make([]anthropicTool, 0, len(req.Tools))
 		for _, t := range req.Tools {

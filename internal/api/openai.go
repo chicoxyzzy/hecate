@@ -14,6 +14,11 @@ type OpenAIChatCompletionRequest struct {
 	Tools        []OpenAITool        `json:"tools,omitempty"`
 	ToolChoice   json.RawMessage     `json:"tool_choice,omitempty"`
 	Stream       bool                `json:"stream,omitempty"`
+	// ResponseFormat carries the OpenAI structured-output knob:
+	// {"type":"text"|"json_object"|"json_schema",...}. Passed
+	// through verbatim to OpenAI-compat upstreams; Anthropic
+	// upstreams log-and-drop it (no direct equivalent).
+	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
 }
 
 type OpenAITool struct {
@@ -66,6 +71,21 @@ type OpenAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// PromptTokensDetails surfaces the breakdown of prompt-side
+	// tokens, mirroring OpenAI's own response shape. We currently
+	// populate `cached_tokens` from internal Usage.CachedPromptTokens
+	// (Anthropic upstreams set this; OpenAI upstreams report it
+	// natively). Pointer so callers that don't care don't see the
+	// nested object at all — keeps backwards compat for clients that
+	// were sniffing for `usage.prompt_tokens_details === undefined`.
+	PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// OpenAIPromptTokensDetails matches the shape OpenAI returns. Only
+// `cached_tokens` is populated today; `audio_tokens` would be added
+// alongside multi-modal support.
+type OpenAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 type OpenAIModelsResponse struct {

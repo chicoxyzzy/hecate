@@ -316,17 +316,18 @@ func normalizeChatRequest(req OpenAIChatCompletionRequest, requestID string, pri
 	scope := requestscope.Build(principal, tenant, req.Provider)
 
 	return types.ChatRequest{
-		RequestID:    requestID,
-		SessionID:    req.SessionID,
-		SessionTitle: req.SessionTitle,
-		Model:        req.Model,
-		Messages:     messages,
-		Temperature:  req.Temperature,
-		MaxTokens:    req.MaxTokens,
-		Scope:        scope,
-		Tools:        tools,
-		ToolChoice:   req.ToolChoice,
-		Stream:       req.Stream,
+		RequestID:      requestID,
+		SessionID:      req.SessionID,
+		SessionTitle:   req.SessionTitle,
+		Model:          req.Model,
+		Messages:       messages,
+		Temperature:    req.Temperature,
+		MaxTokens:      req.MaxTokens,
+		Scope:          scope,
+		Tools:          tools,
+		ToolChoice:     req.ToolChoice,
+		Stream:         req.Stream,
+		ResponseFormat: req.ResponseFormat,
 	}, nil
 }
 
@@ -361,17 +362,29 @@ func renderChatCompletionResponse(resp *types.ChatResponse) OpenAIChatCompletion
 		})
 	}
 
+	usage := OpenAIUsage{
+		PromptTokens:     resp.Usage.PromptTokens,
+		CompletionTokens: resp.Usage.CompletionTokens,
+		TotalTokens:      resp.Usage.TotalTokens,
+	}
+	// Surface cache-read tokens in the OpenAI prompt_tokens_details
+	// shape so /v1/chat/completions clients see what the gateway
+	// actually billed for. Without this, an Anthropic upstream's
+	// cache hits showed up only in internal billing, never on the
+	// wire — making per-request cost reconciliation harder for
+	// operators reading raw response bodies.
+	if resp.Usage.CachedPromptTokens > 0 {
+		usage.PromptTokensDetails = &OpenAIPromptTokensDetails{
+			CachedTokens: resp.Usage.CachedPromptTokens,
+		}
+	}
 	return OpenAIChatCompletionResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
 		Created: resp.CreatedAt.Unix(),
 		Model:   resp.Model,
 		Choices: choices,
-		Usage: OpenAIUsage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
+		Usage:   usage,
 	}
 }
 

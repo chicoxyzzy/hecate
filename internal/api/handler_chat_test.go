@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hecate/agent-runtime/internal/auth"
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/pkg/types"
@@ -290,5 +291,89 @@ func TestChatCompletionsRequiresAuthWhenConfigured(t *testing.T) {
 	}
 	if payload.Error.Type != "unauthorized" {
 		t.Errorf("error.type = %q, want unauthorized", payload.Error.Type)
+	}
+}
+
+// TestRenderChatCompletionResponseSurfacesCachedTokens pins the
+// new prompt_tokens_details.cached_tokens path: when an upstream
+// reports cache reads (Anthropic's cache_read_input_tokens or
+// OpenAI's prompt_tokens_details.cached_tokens), the wire response
+// to /v1/chat/completions clients must surface the figure under
+// the same OpenAI-canonical key. Without this, operators couldn't
+// reconcile per-request cost from raw response bodies.
+func TestRenderChatCompletionResponseSurfacesCachedTokens(t *testing.T) {
+	t.Parallel()
+	resp := &types.ChatResponse{
+		ID:    "chatcmpl-cache-1",
+		Model: "claude-opus-4-5",
+		Choices: []types.ChatChoice{{
+			Index:        0,
+			Message:      types.Message{Role: "assistant", Content: "ok"},
+			FinishReason: "stop",
+		}},
+		Usage: types.Usage{
+			PromptTokens:       100,
+			CompletionTokens:   5,
+			CachedPromptTokens: 80,
+			TotalTokens:        185,
+		},
+	}
+	got := renderChatCompletionResponse(resp)
+	if got.Usage.PromptTokensDetails == nil {
+		t.Fatalf("Usage.PromptTokensDetails is nil; want populated when CachedPromptTokens > 0")
+	}
+	if got.Usage.PromptTokensDetails.CachedTokens != 80 {
+		t.Errorf("CachedTokens = %d, want 80", got.Usage.PromptTokensDetails.CachedTokens)
+	}
+	if got.Usage.PromptTokens != 100 || got.Usage.CompletionTokens != 5 || got.Usage.TotalTokens != 185 {
+		t.Errorf("flat totals drifted: %+v", got.Usage)
+	}
+}
+
+// TestRenderChatCompletionResponseOmitsDetailsWhenNoCacheTokens —
+// pointer-omitempty contract: a response with no cache reads must
+// not surface a `prompt_tokens_details` object at all (clients
+// sniffing for `usage.prompt_tokens_details === undefined` should
+// continue to see undefined).
+func TestRenderChatCompletionResponseOmitsDetailsWhenNoCacheTokens(t *testing.T) {
+	t.Parallel()
+	resp := &types.ChatResponse{
+		ID:      "chatcmpl-nocache",
+		Model:   "gpt-4o-mini",
+		Choices: []types.ChatChoice{{Index: 0, Message: types.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+		Usage:   types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}
+	got := renderChatCompletionResponse(resp)
+	if got.Usage.PromptTokensDetails != nil {
+		t.Errorf("PromptTokensDetails should be nil when CachedPromptTokens == 0; got %+v", got.Usage.PromptTokensDetails)
+	}
+	wire, err := json.Marshal(got.Usage)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(wire), "prompt_tokens_details") {
+		t.Errorf("wire JSON unexpectedly contains prompt_tokens_details: %s", wire)
+	}
+}
+
+// TestNormalizeChatRequestCapturesResponseFormat verifies the
+// inbound parser preserves the structured-output knob onto
+// ChatRequest. Without this, the OpenAI provider has nothing to
+// pass through.
+func TestNormalizeChatRequestCapturesResponseFormat(t *testing.T) {
+	t.Parallel()
+	rf := json.RawMessage(`{"type":"json_schema","json_schema":{"name":"r","schema":{"type":"object"}}}`)
+	hi := "hi"
+	req := OpenAIChatCompletionRequest{
+		Model:          "gpt-4o-mini",
+		Messages:       []OpenAIChatMessage{{Role: "user", Content: &hi}},
+		ResponseFormat: rf,
+	}
+	internal, err := normalizeChatRequest(req, "req-1", auth.Principal{})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if string(internal.ResponseFormat) != string(rf) {
+		t.Errorf("ResponseFormat = %s, want %s", internal.ResponseFormat, rf)
 	}
 }

@@ -38,6 +38,11 @@ type openAIChatCompletionRequest struct {
 	Tools       []openAITool        `json:"tools,omitempty"`
 	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
 	Stream      bool                `json:"stream,omitempty"`
+	// ResponseFormat is the OpenAI structured-output knob, passed
+	// through verbatim. Most OpenAI-compat upstreams (real OpenAI,
+	// Together, Groq, vLLM with hermes/grammar) honor it; Ollama
+	// ignores unknown fields silently.
+	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
 }
 
 type openAITool struct {
@@ -89,6 +94,16 @@ type openAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// PromptTokensDetails carries the cache-token breakdown OpenAI
+	// (and OpenAI-compat providers like Together / Groq) return
+	// when prompt caching is in play. We pull `cached_tokens` into
+	// internal Usage.CachedPromptTokens so the gateway pricebook
+	// applies the cached-input rate just like the Anthropic path.
+	PromptTokensDetails *openAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+type openAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 type openAIErrorEnvelope struct {
@@ -325,14 +340,15 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 	}
 
 	wireReq := openAIChatCompletionRequest{
-		Model:       req.Model,
-		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stop:        append([]string(nil), req.StopSequences...),
-		User:        requestscope.Normalize(req.Scope).User,
-		ToolChoice:  req.ToolChoice,
+		Model:          req.Model,
+		Messages:       make([]openAIChatMessage, 0, len(req.Messages)),
+		MaxTokens:      req.MaxTokens,
+		Temperature:    req.Temperature,
+		TopP:           req.TopP,
+		Stop:           append([]string(nil), req.StopSequences...),
+		User:           requestscope.Normalize(req.Scope).User,
+		ToolChoice:     req.ToolChoice,
+		ResponseFormat: req.ResponseFormat,
 	}
 	for _, msg := range req.Messages {
 		wireMsg := openAIChatMessage{
@@ -445,16 +461,20 @@ func (p *OpenAICompatibleProvider) chatUpstream(ctx context.Context, req types.C
 		model = req.Model
 	}
 
+	usage := types.Usage{
+		PromptTokens:     wireResp.Usage.PromptTokens,
+		CompletionTokens: wireResp.Usage.CompletionTokens,
+		TotalTokens:      wireResp.Usage.TotalTokens,
+	}
+	if d := wireResp.Usage.PromptTokensDetails; d != nil {
+		usage.CachedPromptTokens = d.CachedTokens
+	}
 	return &types.ChatResponse{
 		ID:        wireResp.ID,
 		Model:     model,
 		CreatedAt: createdAt,
 		Choices:   choices,
-		Usage: types.Usage{
-			PromptTokens:     wireResp.Usage.PromptTokens,
-			CompletionTokens: wireResp.Usage.CompletionTokens,
-			TotalTokens:      wireResp.Usage.TotalTokens,
-		},
+		Usage:     usage,
 	}, nil
 }
 
@@ -464,15 +484,16 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req types.Cha
 	}
 
 	wireReq := openAIChatCompletionRequest{
-		Model:       req.Model,
-		Messages:    make([]openAIChatMessage, 0, len(req.Messages)),
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stop:        append([]string(nil), req.StopSequences...),
-		User:        requestscope.Normalize(req.Scope).User,
-		ToolChoice:  req.ToolChoice,
-		Stream:      true,
+		Model:          req.Model,
+		Messages:       make([]openAIChatMessage, 0, len(req.Messages)),
+		MaxTokens:      req.MaxTokens,
+		Temperature:    req.Temperature,
+		TopP:           req.TopP,
+		Stop:           append([]string(nil), req.StopSequences...),
+		User:           requestscope.Normalize(req.Scope).User,
+		ToolChoice:     req.ToolChoice,
+		ResponseFormat: req.ResponseFormat,
+		Stream:         true,
 	}
 	for _, msg := range req.Messages {
 		wireMsg := openAIChatMessage{

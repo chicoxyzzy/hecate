@@ -29,6 +29,16 @@ type ChatRequest struct {
 	// through verbatim on the wire so newer tier names work without
 	// a code change. OpenAI-compat providers ignore the field.
 	ServiceTier string
+	// ResponseFormat is the OpenAI `response_format` field:
+	//   {"type":"text"} | {"type":"json_object"} |
+	//   {"type":"json_schema","json_schema":{...}}
+	// We carry it as raw JSON to stay forward-compatible with new
+	// shapes (e.g. structured-output extensions). OpenAI-compat
+	// providers pass it through verbatim. Anthropic providers log
+	// and drop it (Anthropic has no direct equivalent — operators
+	// should use `tools` + `tool_choice` for structured output, or
+	// the dedicated `output_format` field on newer Claude APIs).
+	ResponseFormat json.RawMessage
 }
 
 type RequestScope struct {

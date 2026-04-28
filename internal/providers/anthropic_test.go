@@ -808,3 +808,42 @@ func TestAnthropicProviderServiceTierPassthrough(t *testing.T) {
 		})
 	}
 }
+
+// TestAnthropicProviderResponseFormatDroppedNotPropagated pins that
+// the Anthropic provider does NOT forward an OpenAI-style
+// response_format on the wire (Anthropic has no equivalent). The
+// gateway logs a warning instead — verified separately via the
+// captured slog output. This test is the wire-level guard so a
+// future regression that accidentally adds the field (e.g. via a
+// generic field-copy refactor) gets caught.
+func TestAnthropicProviderResponseFormatDroppedNotPropagated(t *testing.T) {
+	t.Parallel()
+	var captured map[string]any
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_rf_drop",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+	_, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:          "claude-opus-4-5",
+		Messages:       []types.Message{{Role: "user", Content: "hi"}},
+		ResponseFormat: json.RawMessage(`{"type":"json_object"}`),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, present := captured["response_format"]; present {
+		t.Errorf("response_format leaked onto Anthropic wire: %v", captured["response_format"])
+	}
+}
