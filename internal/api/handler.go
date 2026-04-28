@@ -162,6 +162,17 @@ func (h *Handler) SetSecretCipher(cipher secrets.Cipher) {
 	h.taskRunner.SetMCPHostFactory(orchestrator.NewDefaultMCPHostFactory(cipher))
 }
 
+// Shutdown stops the underlying task runner — see orchestrator.Runner.Shutdown
+// for the contract. Bounded by ctx; called from cmd/hecate/main.go on SIGTERM
+// so in-flight agent loops cancel cleanly and any spawned MCP subprocesses
+// don't orphan when the gateway exits.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	if h.taskRunner == nil {
+		return nil
+	}
+	return h.taskRunner.Shutdown(ctx)
+}
+
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",

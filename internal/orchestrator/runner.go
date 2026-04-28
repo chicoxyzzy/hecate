@@ -86,22 +86,35 @@ type ShellNetworkPolicy struct {
 type SystemPromptResolver func(ctx context.Context, tenantID, perTaskPrompt, workspacePath string) string
 
 type Runner struct {
-	logger           *slog.Logger
-	store            taskstate.Store
-	tracer           profiler.Tracer
-	exec             Executor
-	shell            Executor
-	file             Executor
-	git              Executor
-	agent            Executor
-	workspaces       *WorkspaceManager
-	config           Config
-	queue            RunQueue
-	queueLease       time.Duration
-	workerID         string
-	jobMu            sync.Mutex
-	queueMu          sync.RWMutex
-	jobs             map[string]context.CancelFunc
+	logger     *slog.Logger
+	store      taskstate.Store
+	tracer     profiler.Tracer
+	exec       Executor
+	shell      Executor
+	file       Executor
+	git        Executor
+	agent      Executor
+	workspaces *WorkspaceManager
+	config     Config
+	queue      RunQueue
+	queueLease time.Duration
+	workerID   string
+	jobMu      sync.Mutex
+	queueMu    sync.RWMutex
+	jobs       map[string]context.CancelFunc
+	// workerCtx is the lifetime context for queue-worker goroutines and
+	// every in-flight job they process. Shutdown cancels this; processQueue
+	// observes the cancel and stops claiming new work, and every job's
+	// context is parented from it so cancellation cascades into running
+	// agent loops (which in turn close their MCP hosts via the existing
+	// defer chain).
+	workerCtx    context.Context
+	workerCancel context.CancelFunc
+	// workerWg tracks both the worker goroutines and in-flight jobs.
+	// Shutdown waits on it so the gateway doesn't return from main()
+	// while a run's still finalizing into the store.
+	workerWg         sync.WaitGroup
+	shutdownOnce     sync.Once
 	policies         map[string]struct{}
 	metrics          *telemetry.OrchestratorMetrics
 	resolveSysPrompt SystemPromptResolver
@@ -162,21 +175,24 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		queueLease = 30 * time.Second
 	}
 	queue := NewMemoryRunQueue(queueBuffer, queueLease)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
 	runner := &Runner{
-		logger:     logger,
-		store:      store,
-		tracer:     tracer,
-		exec:       NewStubExecutor(),
-		shell:      NewShellExecutor(worker),
-		file:       NewFileExecutor(worker),
-		git:        NewGitExecutor(worker),
-		workspaces: NewWorkspaceManager(""),
-		config:     cfg,
-		queue:      queue,
-		queueLease: queueLease,
-		workerID:   defaultWorkerID(),
-		jobs:       make(map[string]context.CancelFunc),
-		policies:   make(map[string]struct{}),
+		logger:       logger,
+		store:        store,
+		tracer:       tracer,
+		exec:         NewStubExecutor(),
+		shell:        NewShellExecutor(worker),
+		file:         NewFileExecutor(worker),
+		git:          NewGitExecutor(worker),
+		workspaces:   NewWorkspaceManager(""),
+		config:       cfg,
+		queue:        queue,
+		queueLease:   queueLease,
+		workerID:     defaultWorkerID(),
+		jobs:         make(map[string]context.CancelFunc),
+		policies:     make(map[string]struct{}),
+		workerCtx:    workerCtx,
+		workerCancel: workerCancel,
 	}
 	// LLM client + max-turns are wired post-construction via
 	// SetAgentLLMClient — main.go injects the gateway.Service after
@@ -204,6 +220,7 @@ func NewRunner(logger *slog.Logger, store taskstate.Store, tracer profiler.Trace
 		workers = 1
 	}
 	for worker := 0; worker < workers; worker++ {
+		runner.workerWg.Add(1)
 		go runner.processQueue()
 	}
 	return runner
@@ -889,15 +906,40 @@ func (r *Runner) cancelRunWithMessage(ctx context.Context, task types.Task, run 
 }
 
 func (r *Runner) processQueue() {
+	defer r.workerWg.Done()
 	for {
+		// Fast-exit when shutdown has fired. The two select-on-ctx
+		// blocks below also catch this, but checking up-front keeps a
+		// freshly-cancelled worker from issuing one last Claim against
+		// the store on its way out.
+		if r.workerCtx.Err() != nil {
+			return
+		}
 		q := r.getQueue()
 		if q == nil {
-			time.Sleep(200 * time.Millisecond)
+			// No queue wired (transient during boot). Bounded sleep
+			// instead of a hot loop, but unblock immediately on
+			// shutdown so the goroutine returns inside the deadline.
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-r.workerCtx.Done():
+				return
+			}
 			continue
 		}
-		claim, ok, err := q.Claim(context.Background(), r.workerID, 2*time.Second)
+		claim, ok, err := q.Claim(r.workerCtx, r.workerID, 2*time.Second)
 		if err != nil {
-			time.Sleep(150 * time.Millisecond)
+			// Claim failure may be transient (lock contention, brief
+			// store hiccup) OR shutdown — distinguish so a real error
+			// gets a brief backoff while a cancelled context exits.
+			if r.workerCtx.Err() != nil {
+				return
+			}
+			select {
+			case <-time.After(150 * time.Millisecond):
+			case <-r.workerCtx.Done():
+				return
+			}
 			continue
 		}
 		if !ok {
@@ -944,7 +986,15 @@ func (r *Runner) processQueuedRun(claim QueueClaim) {
 	trace := r.tracer.Start(requestID)
 	defer trace.Finalize()
 
-	jobCtx, jobCancel := context.WithCancel(context.Background())
+	// Parent jobCtx off the runner's worker context so Shutdown
+	// cascades cancellation into the agent loop, which in turn closes
+	// its MCP host (via the existing defer host.Close chain) — that's
+	// what stops orphaned subprocesses on gateway exit. workerWg counts
+	// this job so Shutdown's drain wait covers it as well as the
+	// claiming goroutine itself.
+	jobCtx, jobCancel := context.WithCancel(r.workerCtx)
+	r.workerWg.Add(1)
+	defer r.workerWg.Done()
 	r.registerJob(run.ID, jobCancel)
 	defer r.unregisterJob(run.ID)
 	defer jobCancel()
@@ -1079,6 +1129,56 @@ func (r *Runner) enqueueRun(taskID, runID string) error {
 		return fmt.Errorf("run queue is not configured")
 	}
 	return q.Enqueue(context.Background(), QueueJob{TaskID: taskID, RunID: runID})
+}
+
+// Shutdown stops the runner's queue workers, cancels every in-flight
+// agent loop, and waits for them to finalize. Two reasons it matters:
+//
+//   - In-flight runs may have spawned MCP subprocesses. Without
+//     cancellation those subprocesses orphan when the gateway exits;
+//     cancelling jobCtx propagates through the agent loop to its
+//     deferred host.Close, which tears the subprocesses down.
+//   - Even non-MCP runs need to flush their final UpdateRun /
+//     UpdateTask calls so an SIGTERM mid-execution doesn't leave the
+//     run row stuck in "running".
+//
+// Bounded by ctx — callers pass a deadline (10–30s is typical). On
+// deadline expiry Shutdown returns ctx.Err() and the caller can decide
+// whether to force-exit; the in-flight goroutines remain cancelled and
+// will continue draining in the background until the process exits.
+//
+// Idempotent: a second call after the first returns immediately with
+// the same drain semantics (any goroutines already finished are not
+// re-waited). Safe to call from multiple goroutines.
+func (r *Runner) Shutdown(ctx context.Context) error {
+	r.shutdownOnce.Do(func() {
+		// Cancel the worker lifetime context first — this stops new
+		// queue claims and (because every jobCtx is parented from it)
+		// cascades cancellation into running agent loops.
+		r.workerCancel()
+		// Belt-and-braces: also fire each registered job's cancel
+		// directly, in case any future code path detaches a jobCtx
+		// from workerCtx. Iterating r.jobs under jobMu is what the
+		// existing CancelRun path does.
+		r.jobMu.Lock()
+		for _, cancel := range r.jobs {
+			cancel()
+		}
+		r.jobMu.Unlock()
+	})
+	// Wait for all worker goroutines AND in-flight jobs to finish,
+	// or for the caller's deadline to expire.
+	done := make(chan struct{})
+	go func() {
+		r.workerWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *Runner) registerJob(runID string, cancel context.CancelFunc) {

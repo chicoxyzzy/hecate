@@ -322,6 +322,16 @@ func main() {
 	logger.Info("gateway shutting down")
 	retentionCancel()
 	pricebookImportCancel()
+	// Stop the task runner before closing the HTTP server. The HTTP
+	// layer only enqueues jobs and is quick to drain; the long-poll
+	// is the agent loop running in queue workers, which may have
+	// spawned MCP subprocesses. Cancelling here propagates through
+	// the runner's worker context into running jobs, which run their
+	// deferred Pool.Close → Transport.Close chain so subprocesses
+	// don't orphan when main returns.
+	if err := handler.Shutdown(ctx); err != nil {
+		logger.Warn("task runner shutdown did not complete in deadline", slog.Any("error", err))
+	}
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown failed", slog.Any("error", err))
 		os.Exit(1)
