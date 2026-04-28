@@ -53,25 +53,51 @@ export type CreateTaskPayload = {
   // no ceiling.
   budget_micros_usd?: number;
   // External MCP servers the agent_loop run should bring up. Each
-  // entry becomes one stdio subprocess; its tools are exposed to
-  // the LLM as `mcp__<name>__<tool>`. Empty / unset = no external
-  // tools (built-ins only).
+  // entry becomes either one stdio subprocess (command/args/env) or
+  // one HTTP/SSE client (url/headers); its tools are exposed to the
+  // LLM as `mcp__<name>__<tool>`. approval_policy gates how those
+  // tool calls dispatch — see the orchestrator-side contract on
+  // pkg/types.MCPApproval* constants. Empty array / unset = no
+  // external tools (built-ins only).
   mcp_servers?: Array<{
     name: string;
-    command: string;
+    command?: string;
     args?: string[];
     env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+    approval_policy?: McpApprovalPolicy;
   }>;
 };
 
+// McpServerTransport selects which set of fields the operator fills
+// in. stdio (default) = subprocess via command + args + env. http =
+// remote via url + headers. The two are mutually exclusive at the
+// gateway, so the form enforces one-or-the-other on a per-row basis.
+type McpServerTransport = "stdio" | "http";
+
+// McpApprovalPolicy mirrors pkg/types.MCPApproval*. Empty string
+// (only used in form state, not on the wire) means "no explicit
+// choice" → the gateway interprets that as auto. The form normalizes
+// to omitting the field on submit when the operator left it at the
+// default.
+export type McpApprovalPolicy = "auto" | "require_approval" | "block";
+
 // McpServerFormEntry is the in-form representation of one MCP server
-// row. Args + env stay as raw text in state so the operator can edit
-// them as freeform input; we parse to arrays/maps on submit.
+// row. Args / env / headers stay as raw text in state so the operator
+// can edit them as freeform input; we parse to arrays/maps on submit.
 type McpServerFormEntry = {
   name: string;
+  transport: McpServerTransport;
+  // stdio transport
   command: string;
-  argsRaw: string; // whitespace-separated tokens
-  envRaw: string;  // KEY=VALUE per line
+  argsRaw: string;    // whitespace-separated tokens
+  envRaw: string;     // KEY=VALUE per line
+  // http transport
+  url: string;
+  headersRaw: string; // KEY=VALUE per line — same parser as envRaw
+  // common
+  approvalPolicy: McpApprovalPolicy;
 };
 
 type Props = {
@@ -206,7 +232,19 @@ export function NewTaskSlideOver({
     setMcpServers(prev => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
   }
   function addMcpServer() {
-    setMcpServers(prev => [...prev, { name: "", command: "", argsRaw: "", envRaw: "" }]);
+    setMcpServers(prev => [
+      ...prev,
+      {
+        name: "",
+        transport: "stdio",
+        command: "",
+        argsRaw: "",
+        envRaw: "",
+        url: "",
+        headersRaw: "",
+        approvalPolicy: "auto",
+      },
+    ]);
   }
   function removeMcpServer(index: number) {
     setMcpServers(prev => prev.filter((_, i) => i !== index));
@@ -230,21 +268,41 @@ export function NewTaskSlideOver({
     if (taskKind === "file" && !filePath) return;
     // MCP servers: only attach for agent_loop kind. Drop blank rows
     // (operator added then abandoned), parse args on whitespace,
-    // parse env as KEY=VALUE per non-empty line. The gateway
-    // re-validates names/commands and returns 400 with a concrete
-    // diagnostic if any row is malformed; this layer just drops
-    // the obviously-empty rows so the user doesn't get a "name
-    // required at index 3" for a row they thought they cleared.
+    // parse env / headers as KEY=VALUE per non-empty line. The
+    // gateway re-validates names/commands/urls and returns 400 with
+    // a concrete diagnostic if any row is malformed; this layer
+    // just drops obviously-empty rows so the user doesn't get a
+    // "name required at index 3" for a row they thought they cleared.
+    //
+    // Per-row, only the active transport's fields are emitted —
+    // mixing command + url is a hard error at the gateway, so we
+    // never send both even if the operator's stale state for the
+    // inactive side is still in memory.
     const mcpPayload =
       taskKind === "agent_loop"
         ? mcpServers
-            .filter(e => e.name.trim() !== "" || e.command.trim() !== "")
-            .map(e => ({
-              name: e.name.trim(),
-              command: e.command.trim(),
-              args: e.argsRaw.trim() === "" ? undefined : e.argsRaw.trim().split(/\s+/),
-              env: parseMcpEnv(e.envRaw),
-            }))
+            .filter(e => e.name.trim() !== "" || e.command.trim() !== "" || e.url.trim() !== "")
+            .map(e => {
+              const base: NonNullable<CreateTaskPayload["mcp_servers"]>[number] = { name: e.name.trim() };
+              if (e.transport === "stdio") {
+                base.command = e.command.trim();
+                if (e.argsRaw.trim() !== "") base.args = e.argsRaw.trim().split(/\s+/);
+                const env = parseKeyValueLines(e.envRaw);
+                if (env) base.env = env;
+              } else {
+                base.url = e.url.trim();
+                const headers = parseKeyValueLines(e.headersRaw);
+                if (headers) base.headers = headers;
+              }
+              // Omit approval_policy when it's the default ("auto")
+              // — the gateway treats absence as auto, and sending it
+              // explicitly on every row would make API responses
+              // noisier without changing behavior.
+              if (e.approvalPolicy && e.approvalPolicy !== "auto") {
+                base.approval_policy = e.approvalPolicy;
+              }
+              return base;
+            })
         : [];
 
     onCreate({
@@ -497,26 +555,80 @@ export function NewTaskSlideOver({
                         <Icon d={Icons.x} size={12} />
                       </button>
                     </div>
-                    <input
-                      className="input"
-                      placeholder="command (e.g. npx)"
-                      value={entry.command}
-                      onChange={e => updateMcpServer(i, { command: e.target.value })}
+                    {/* Transport pill — stdio (subprocess) vs http
+                        (remote MCP). Switching between them swaps
+                        the field set below. We keep both sides'
+                        state around so flipping back doesn't lose
+                        the operator's typing. */}
+                    <PillToggle
+                      ariaLabel={`Server ${i + 1} transport`}
+                      options={[
+                        { value: "stdio", label: "stdio" },
+                        { value: "http", label: "HTTP" },
+                      ]}
+                      value={entry.transport}
+                      onChange={v => updateMcpServer(i, { transport: v as McpServerTransport })}
                     />
-                    <input
-                      className="input"
-                      placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /workspace)"
-                      value={entry.argsRaw}
-                      onChange={e => updateMcpServer(i, { argsRaw: e.target.value })}
-                    />
-                    <textarea
-                      className="input"
-                      placeholder="env (KEY=VALUE per line, optional — values stored as written)"
-                      rows={2}
-                      style={{ resize: "vertical" }}
-                      value={entry.envRaw}
-                      onChange={e => updateMcpServer(i, { envRaw: e.target.value })}
-                    />
+                    {entry.transport === "stdio" && (
+                      <>
+                        <input
+                          className="input"
+                          placeholder="command (e.g. npx)"
+                          value={entry.command}
+                          onChange={e => updateMcpServer(i, { command: e.target.value })}
+                        />
+                        <input
+                          className="input"
+                          placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /workspace)"
+                          value={entry.argsRaw}
+                          onChange={e => updateMcpServer(i, { argsRaw: e.target.value })}
+                        />
+                        <textarea
+                          className="input"
+                          placeholder="env (KEY=VALUE per line — encrypted at rest when a control-plane key is configured; $VAR_NAME refers to gateway env)"
+                          rows={2}
+                          style={{ resize: "vertical" }}
+                          value={entry.envRaw}
+                          onChange={e => updateMcpServer(i, { envRaw: e.target.value })}
+                        />
+                      </>
+                    )}
+                    {entry.transport === "http" && (
+                      <>
+                        <input
+                          className="input"
+                          placeholder="url (e.g. https://api.example.com/mcp)"
+                          value={entry.url}
+                          onChange={e => updateMcpServer(i, { url: e.target.value })}
+                        />
+                        <textarea
+                          className="input"
+                          placeholder="headers (KEY=VALUE per line, e.g. Authorization=Bearer $GITHUB_TOKEN — same secret rules as env)"
+                          rows={2}
+                          style={{ resize: "vertical" }}
+                          value={entry.headersRaw}
+                          onChange={e => updateMcpServer(i, { headersRaw: e.target.value })}
+                        />
+                      </>
+                    )}
+                    {/* Approval policy: auto (default) dispatches
+                        immediately; require_approval pauses every
+                        tool call until the operator approves;
+                        block refuses every call (the LLM sees a
+                        tool error and can pick a different path). */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+                      <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>APPROVAL</span>
+                      <PillToggle
+                        ariaLabel={`Server ${i + 1} approval policy`}
+                        options={[
+                          { value: "auto", label: "auto" },
+                          { value: "require_approval", label: "require approval" },
+                          { value: "block", label: "block" },
+                        ]}
+                        value={entry.approvalPolicy}
+                        onChange={v => updateMcpServer(i, { approvalPolicy: v as McpApprovalPolicy })}
+                      />
+                    </div>
                   </div>
                 ))}
                 <button
@@ -621,12 +733,14 @@ function WorkspacePreview({ workingDir, inPlace }: { workingDir: string; inPlace
   );
 }
 
-// parseMcpEnv turns a freeform `KEY=VALUE` block into a flat env map.
-// Empty lines are skipped; lines without `=` are dropped (no error
-// reporting at this layer — we trust the gateway to surface a 400 with
-// a useful message if the resulting payload is unusable). Values can
-// contain `=`; we split on the FIRST one only.
-function parseMcpEnv(raw: string): Record<string, string> | undefined {
+// parseKeyValueLines turns a freeform `KEY=VALUE` block into a flat
+// map. Used for both MCP env and HTTP headers — the wire shape is
+// identical (Record<string,string>) and the rules are the same:
+// empty lines skipped, lines without `=` dropped, values can contain
+// `=` (we split on the FIRST one only). No error reporting at this
+// layer — we trust the gateway to surface a 400 with a useful
+// message if the resulting payload is unusable.
+function parseKeyValueLines(raw: string): Record<string, string> | undefined {
   const trimmed = raw.trim();
   if (trimmed === "") return undefined;
   const out: Record<string, string> = {};
@@ -639,4 +753,63 @@ function parseMcpEnv(raw: string): Record<string, string> | undefined {
     out[key] = value;
   }
   return Object.keys(out).length === 0 ? undefined : out;
+}
+
+// PillToggle is a horizontal segmented control. Mirrors the
+// KindTab pattern used at the top of the form (selected = teal
+// background; idle = transparent), but parameterized so we can
+// reuse it for both the per-row MCP transport (stdio/http) and the
+// approval policy (auto/require_approval/block) without inventing
+// new visual treatments. Same border / radius tokens as the
+// EXECUTION KIND tab strip up top.
+function PillToggle<T extends string>({
+  ariaLabel,
+  options,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  options: Array<{ value: T; label: string }>;
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      style={{
+        display: "inline-flex",
+        gap: 4,
+        background: "var(--bg2)",
+        borderRadius: "var(--radius)",
+        padding: 3,
+        border: "1px solid var(--border)",
+      }}
+    >
+      {options.map(opt => {
+        const selected = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: selected ? "var(--teal)" : "transparent",
+              color: selected ? "var(--bg0)" : "var(--t2)",
+              border: "none",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              transition: "background 0.1s, color 0.1s",
+              fontWeight: selected ? 600 : 400,
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
