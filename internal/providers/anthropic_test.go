@@ -350,3 +350,219 @@ func TestAnthropicChatUpstreamSendsCacheControlBlocks(t *testing.T) {
 		t.Fatalf("messages[0] missing cache_control, got: %s", msgBytes)
 	}
 }
+
+// TestAnthropicProviderCapturesCacheReadTokens pins the prompt-cache
+// usage path: when the upstream returns cache_read_input_tokens, it
+// must land in Usage.CachedPromptTokens (so the pricebook applies
+// the cache rate). The prior adapter dropped the field entirely,
+// which made cache hits silently bill at the full input rate.
+func TestAnthropicProviderCapturesCacheReadTokens(t *testing.T) {
+	t.Parallel()
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_c1",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage": map[string]any{
+				"input_tokens":            10,
+				"output_tokens":           3,
+				"cache_read_input_tokens": 1000,
+			},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+
+	resp, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:    "claude-opus-4-5",
+		Messages: []types.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if got := resp.Usage.PromptTokens; got != 10 {
+		t.Errorf("PromptTokens = %d, want 10 (input_tokens only)", got)
+	}
+	if got := resp.Usage.CachedPromptTokens; got != 1000 {
+		t.Errorf("CachedPromptTokens = %d, want 1000 (mapped from cache_read_input_tokens)", got)
+	}
+	if got := resp.Usage.CompletionTokens; got != 3 {
+		t.Errorf("CompletionTokens = %d, want 3", got)
+	}
+	// Total includes everything billed: fresh input + cache reads + output.
+	if got := resp.Usage.TotalTokens; got != 1013 {
+		t.Errorf("TotalTokens = %d, want 1013 (10 + 1000 + 3)", got)
+	}
+}
+
+// TestAnthropicProviderFoldsCacheCreationIntoPromptTokens verifies
+// the second cache bucket — cache writes — gets counted (folded
+// into PromptTokens at the fresh rate). The prior adapter dropped
+// these too. The fold trade-off is documented on anthropicUsage:
+// when the pricebook gains a cache-write rate, this becomes a
+// dedicated Usage field.
+func TestAnthropicProviderFoldsCacheCreationIntoPromptTokens(t *testing.T) {
+	t.Parallel()
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_c2",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage": map[string]any{
+				"input_tokens":                100,
+				"output_tokens":               5,
+				"cache_creation_input_tokens": 500,
+			},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+
+	resp, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:    "claude-opus-4-5",
+		Messages: []types.Message{{Role: "user", Content: "write to cache"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if got := resp.Usage.PromptTokens; got != 600 {
+		t.Errorf("PromptTokens = %d, want 600 (100 fresh + 500 cache_creation)", got)
+	}
+	if got := resp.Usage.CachedPromptTokens; got != 0 {
+		t.Errorf("CachedPromptTokens = %d, want 0 (cache_creation is NOT a cache read)", got)
+	}
+	if got := resp.Usage.TotalTokens; got != 605 {
+		t.Errorf("TotalTokens = %d, want 605 (600 input-side + 5 output)", got)
+	}
+}
+
+// TestAnthropicProviderUsageBackwardCompat — a response with
+// neither cache field present (the common case before prompt
+// caching is enabled) must produce the same Usage shape as before
+// the cache-fields change. Guards against accidentally requiring
+// the new fields or shifting behavior on un-cached requests.
+func TestAnthropicProviderUsageBackwardCompat(t *testing.T) {
+	t.Parallel()
+	provider := newAnthropicTestProvider(t, func(r *http.Request) (*http.Response, error) {
+		body, _ := json.Marshal(map[string]any{
+			"id":          "msg_b1",
+			"model":       "claude-opus-4-5",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage":       map[string]any{"input_tokens": 14, "output_tokens": 5},
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})
+	resp, err := provider.Chat(context.Background(), types.ChatRequest{
+		Model:    "claude-opus-4-5",
+		Messages: []types.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Usage.PromptTokens != 14 || resp.Usage.CompletionTokens != 5 || resp.Usage.TotalTokens != 19 {
+		t.Errorf("Usage = %+v, want {PromptTokens:14 CompletionTokens:5 TotalTokens:19}", resp.Usage)
+	}
+	if resp.Usage.CachedPromptTokens != 0 {
+		t.Errorf("CachedPromptTokens = %d, want 0 (no cache fields present)", resp.Usage.CachedPromptTokens)
+	}
+}
+
+// TestAnthropicProviderStreamForwardsCacheUsage verifies the
+// streaming path carries cache token counts through to the final
+// usage chunk. The prior adapter dropped the message_start usage
+// entirely and emitted prompt_tokens=0 for every streamed
+// response — invisible billing bug.
+//
+// We feed a synthetic SSE stream into translateAnthropicSSE
+// directly (rather than wiring up an HTTP server) so the test
+// stays focused on the translation contract.
+func TestAnthropicProviderStreamForwardsCacheUsage(t *testing.T) {
+	t.Parallel()
+
+	// Anthropic SSE: message_start carries the input/cache buckets;
+	// message_delta carries running output_tokens; message_stop
+	// closes the stream.
+	src := strings.NewReader(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_s1","model":"claude-opus-4-5","usage":{"input_tokens":50,"output_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":300}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"))
+
+	var dst strings.Builder
+	if err := translateAnthropicSSE(context.Background(), "claude-opus-4-5", src, &dst); err != nil {
+		t.Fatalf("translateAnthropicSSE: %v", err)
+	}
+
+	// Find the usage chunk emitted on message_delta. It's the only
+	// chunk with a non-empty `usage` object.
+	var lastUsage map[string]any
+	for _, line := range strings.Split(dst.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		body := strings.TrimPrefix(line, "data: ")
+		if body == "[DONE]" {
+			continue
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(body), &chunk); err != nil {
+			continue
+		}
+		if u, ok := chunk["usage"].(map[string]any); ok && len(u) > 0 {
+			lastUsage = u
+		}
+	}
+	if lastUsage == nil {
+		t.Fatalf("no usage chunk found in stream output: %s", dst.String())
+	}
+
+	// PromptTokens = input_tokens(50) + cache_creation(300) = 350.
+	if got := lastUsage["prompt_tokens"]; got != float64(350) {
+		t.Errorf("prompt_tokens = %v, want 350", got)
+	}
+	if got := lastUsage["completion_tokens"]; got != float64(12) {
+		t.Errorf("completion_tokens = %v, want 12", got)
+	}
+	// Total = 350 prompt + 2000 cache reads + 12 output = 2362.
+	if got := lastUsage["total_tokens"]; got != float64(2362) {
+		t.Errorf("total_tokens = %v, want 2362", got)
+	}
+	// cached_tokens lives under prompt_tokens_details, mirroring
+	// OpenAI's prompt-cache shape so downstream consumers don't
+	// need a provider-specific accessor.
+	details, ok := lastUsage["prompt_tokens_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("prompt_tokens_details missing/not an object; got: %v", lastUsage["prompt_tokens_details"])
+	}
+	if got := details["cached_tokens"]; got != float64(2000) {
+		t.Errorf("prompt_tokens_details.cached_tokens = %v, want 2000", got)
+	}
+}

@@ -95,6 +95,23 @@ type anthropicMessagesResponse struct {
 type anthropicUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// CacheReadInputTokens are tokens served from a prior turn's
+	// prompt cache. Anthropic bills these at a steeply discounted
+	// rate (typically 0.1× the base input rate). The API returns
+	// them disjoint from input_tokens, so we map them to
+	// types.Usage.CachedPromptTokens — which the pricebook scales
+	// at CachedInputMicrosUSDPerMillionTokens.
+	CacheReadInputTokens int `json:"cache_read_input_tokens,omitempty"`
+	// CacheCreationInputTokens are tokens written to the cache on
+	// this turn (charged at ~1.25× base rate at Anthropic).
+	// Hecate's pricebook has no separate cache-write rate yet, so
+	// we fold these into Usage.PromptTokens at the fresh rate
+	// (under-charges by ~20% per cache-write token vs. Anthropic's
+	// listed rate, but at least counts them — the prior adapter
+	// dropped them entirely). When the pricebook gains a
+	// CacheCreationMicrosUSDPerMillionTokens rate, split this back
+	// out into a dedicated Usage field.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 type anthropicModelsResponse struct {
@@ -380,12 +397,26 @@ func (p *AnthropicProvider) chatUpstream(ctx context.Context, req types.ChatRequ
 			Message:      msg,
 			FinishReason: finishReason,
 		}},
-		Usage: types.Usage{
-			PromptTokens:     wireResp.Usage.InputTokens,
-			CompletionTokens: wireResp.Usage.OutputTokens,
-			TotalTokens:      wireResp.Usage.InputTokens + wireResp.Usage.OutputTokens,
-		},
+		Usage: anthropicUsageToTypes(wireResp.Usage),
 	}, nil
+}
+
+// anthropicUsageToTypes maps Anthropic's three-bucket usage
+// (input / cache_read / cache_creation) onto Hecate's two-bucket
+// pricebook model (PromptTokens / CachedPromptTokens). Cache reads
+// land in their own bucket so the pricebook applies the cache rate;
+// cache creations fold into PromptTokens at the fresh rate (see
+// anthropicUsage docs for the trade-off). TotalTokens is the sum
+// of all three input variants plus output, matching what the
+// operator is actually billed for.
+func anthropicUsageToTypes(u anthropicUsage) types.Usage {
+	prompt := u.InputTokens + u.CacheCreationInputTokens
+	return types.Usage{
+		PromptTokens:       prompt,
+		CompletionTokens:   u.OutputTokens,
+		CachedPromptTokens: u.CacheReadInputTokens,
+		TotalTokens:        prompt + u.OutputTokens + u.CacheReadInputTokens,
+	}
 }
 
 func (p *AnthropicProvider) applyHeaders(req *http.Request) {
@@ -746,14 +777,18 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 		Type  string          `json:"type"`
 		Index int             `json:"index"`
 		Delta json.RawMessage `json:"delta"`
-		// message_start
+		// message_start carries the initial usage, including
+		// input_tokens AND the cache buckets when prompt caching
+		// is in use. The prior adapter only captured ID/model and
+		// dropped the usage entirely, so streamed responses
+		// reported zero prompt tokens and never billed cache
+		// reads/writes. Capture the full shape now so the final
+		// usage chunk we emit downstream matches the non-stream
+		// Chat() path.
 		Message *struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
-			Usage *struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			ID    string         `json:"id"`
+			Model string         `json:"model"`
+			Usage anthropicUsage `json:"usage"`
 		} `json:"message"`
 		// content_block_start
 		ContentBlock *struct {
@@ -761,10 +796,11 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"content_block"`
-		// message_delta usage
-		Usage *struct {
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		// message_delta usage — Anthropic re-sends the running
+		// totals here as output progresses; the final value (at
+		// the message_delta with stop_reason set) is the
+		// authoritative count.
+		Usage *anthropicUsage `json:"usage"`
 	}
 
 	type deltaPayload struct {
@@ -782,6 +818,12 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 		toolBlocks = make(map[int]struct{ id, name string })
 		// track open thinking blocks by index (value = true once opened)
 		thinkingBlocks = make(map[int]bool)
+		// usageSnapshot accumulates token counts seen across
+		// message_start (initial input + cache buckets) and the
+		// running message_delta usage frames (output tokens). We
+		// emit it on the final usage chunk so downstream cost
+		// accounting sees the same shape as the non-stream path.
+		usageSnapshot anthropicUsage
 	)
 
 	writeChunk := func(data any) error {
@@ -826,6 +868,13 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 				if ev.Message.Model != "" {
 					model = ev.Message.Model
 				}
+				// Capture the initial usage snapshot. Anthropic's
+				// message_start has the final input_tokens + cache
+				// counts already populated; output_tokens is zero
+				// at this point and will grow via message_delta.
+				usageSnapshot.InputTokens = ev.Message.Usage.InputTokens
+				usageSnapshot.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+				usageSnapshot.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
 			}
 			// Send role delta
 			if err := writeChunk(map[string]any{
@@ -962,11 +1011,31 @@ func translateAnthropicSSE(ctx context.Context, model string, src io.Reader, dst
 			if finishReason == "" {
 				finishReason = "stop"
 			}
-			// Usage chunk
-			usage := map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+			// Anthropic re-sends the latest output_tokens count on
+			// every message_delta. The cache buckets are stable
+			// across the run (they're determined at message_start),
+			// so we keep what we captured earlier and only update
+			// output_tokens here.
 			if ev.Usage != nil {
-				usage["completion_tokens"] = ev.Usage.OutputTokens
-				usage["total_tokens"] = ev.Usage.OutputTokens
+				usageSnapshot.OutputTokens = ev.Usage.OutputTokens
+			}
+			// Translate to OpenAI's flat usage shape. PromptTokens
+			// folds in cache writes (see anthropicUsageToTypes
+			// docs); cache reads ride alongside as
+			// prompt_tokens_details.cached_tokens, the same key
+			// OpenAI uses, so a downstream that already knows
+			// the OpenAI prompt-cache shape sees a familiar
+			// payload.
+			normalized := anthropicUsageToTypes(usageSnapshot)
+			usage := map[string]any{
+				"prompt_tokens":     normalized.PromptTokens,
+				"completion_tokens": normalized.CompletionTokens,
+				"total_tokens":      normalized.TotalTokens,
+			}
+			if normalized.CachedPromptTokens > 0 {
+				usage["prompt_tokens_details"] = map[string]any{
+					"cached_tokens": normalized.CachedPromptTokens,
+				}
 			}
 			if err := writeChunk(map[string]any{
 				"id":      completionID,
