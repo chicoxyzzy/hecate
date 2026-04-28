@@ -42,7 +42,6 @@ type ServerConfig struct {
 	TaskQueueWorkers           int
 	TaskQueueBuffer            int
 	TaskQueueLeaseSeconds      int
-	TaskEnableAgentExecutor    bool
 	TaskMaxConcurrentPerTenant int
 	// TaskAgentLoopMaxTurns caps how many LLM round-trips an
 	// agent_loop run can make. Acts as a runaway-cost safety net.
@@ -302,7 +301,6 @@ func LoadFromEnv() Config {
 			TaskQueueWorkers:           getEnvInt("GATEWAY_TASK_QUEUE_WORKERS", 1),
 			TaskQueueBuffer:            getEnvInt("GATEWAY_TASK_QUEUE_BUFFER", 128),
 			TaskQueueLeaseSeconds:      getEnvInt("GATEWAY_TASK_QUEUE_LEASE_SECONDS", 30),
-			TaskEnableAgentExecutor:    getEnvBool("GATEWAY_TASK_ENABLE_AGENT_EXECUTOR", false),
 			TaskAgentLoopMaxTurns:      getEnvInt("GATEWAY_TASK_AGENT_LOOP_MAX_TURNS", 8),
 			TaskAgentSystemPrompt:      getEnv("GATEWAY_TASK_AGENT_SYSTEM_PROMPT", ""),
 			TaskHTTPTimeout:            getEnvDuration("GATEWAY_TASK_HTTP_TIMEOUT", 30*time.Second),

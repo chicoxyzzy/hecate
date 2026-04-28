@@ -2844,17 +2844,32 @@ func TestTaskCreateRepoLocalProfileAppliesDefaults(t *testing.T) {
 	}
 }
 
-func TestTaskStartAgentLoopDisabledByDefault(t *testing.T) {
+func TestTaskStartAgentLoopWithoutLLM_FailsInRunNotAtQueue(t *testing.T) {
+	// Pre-v0.1 there was a feature flag (GATEWAY_TASK_ENABLE_AGENT_EXECUTOR)
+	// that gated agent_loop at the queue boundary — start would 500
+	// with "agent_loop execution kind is disabled". The flag was
+	// removed once the runtime stabilized; agent_loop is now
+	// unconditionally available. Without an LLM configured the run
+	// still fails, but it does so inside the run with an actionable
+	// error step the operator can see in the timeline, not at the
+	// queue boundary where the run never even appears.
 	t.Parallel()
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
 	tasks := newTaskTestClient(t, handler)
 
-	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Agent loop disabled","prompt":"Disabled","execution_kind":"agent_loop","file_operation":"write","file_path":"disabled.txt","file_content":"hello"}`)
-	rec := tasks.mustRequestStatus(http.StatusInternalServerError, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
-	if !strings.Contains(rec.Body.String(), "agent_loop execution kind is disabled") {
-		t.Fatalf("error body = %s", rec.Body.String())
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Agent loop no LLM","prompt":"No LLM wired","execution_kind":"agent_loop"}`)
+	// Start succeeds — no flag gate any more.
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "queued" {
+		t.Fatalf("started run status = %q, want queued", started.Data.Status)
+	}
+	// Run terminates failed; the failure surfaces in last_error so
+	// operators see why directly on the run record.
+	finished := waitForRunStatusWithClient(tasks, created.Data.ID, started.Data.ID, "failed")
+	if !strings.Contains(finished.Data.LastError, "LLM") {
+		t.Fatalf("LastError = %q, want mention of LLM (no client configured)", finished.Data.LastError)
 	}
 }
 

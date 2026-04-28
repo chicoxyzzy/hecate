@@ -78,7 +78,6 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 		QueueWorkers:           cfg.Server.TaskQueueWorkers,
 		QueueBuffer:            cfg.Server.TaskQueueBuffer,
 		QueueLeaseSeconds:      cfg.Server.TaskQueueLeaseSeconds,
-		EnableAgentExecutor:    cfg.Server.TaskEnableAgentExecutor,
 		MaxConcurrentPerTenant: cfg.Server.TaskMaxConcurrentPerTenant,
 		AgentLoopMaxTurns:      cfg.Server.TaskAgentLoopMaxTurns,
 		HTTPPolicy: orchestrator.HTTPRequestPolicy{

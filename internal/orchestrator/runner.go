@@ -25,7 +25,6 @@ type Config struct {
 	QueueWorkers           int
 	QueueBuffer            int
 	QueueLeaseSeconds      int
-	EnableAgentExecutor    bool
 	MaxConcurrentPerTenant int
 	// AgentLoopMaxTurns caps how many LLM round-trips a single
 	// agent_loop run can make. Default 8 (set in NewAgentLoopExecutor
@@ -450,9 +449,6 @@ func (r *Runner) startTaskWithOptions(ctx context.Context, task types.Task, idge
 	}
 	if r.workspaces == nil {
 		return nil, fmt.Errorf("workspace manager is not configured")
-	}
-	if strings.TrimSpace(task.ExecutionKind) == "agent_loop" && !r.config.EnableAgentExecutor {
-		return nil, fmt.Errorf("agent_loop execution kind is disabled")
 	}
 
 	requestID := strings.TrimSpace(telemetry.RequestIDFromContext(ctx))
