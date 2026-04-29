@@ -919,6 +919,27 @@ func newFakeOpenAIUpstream(t *testing.T, responseBody string) *httptest.Server {
 	}))
 }
 
+func newFakeOpenAIErrorUpstream(t *testing.T, status int, responseBody string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			writeFakeOpenAIModels(w)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		fmt.Fprint(w, responseBody)
+	}))
+}
+
 // newFakeOpenAIStreamingUpstream starts an httptest.Server that streams
 // well-formed OpenAI SSE chunks for a given content string.
 func newFakeOpenAIStreamingUpstream(t *testing.T, id, model, content string) *httptest.Server {
@@ -1232,6 +1253,101 @@ func TestGatewayViaRealProviderUpstreamUnavailable(t *testing.T) {
 	if resp.StatusCode < 500 || resp.StatusCode > 599 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("status = %d, want 5xx for unreachable upstream, body=%s", resp.StatusCode, b)
+	}
+}
+
+func TestGatewayViaRealProviderAuthFailureContract(t *testing.T) {
+	t.Parallel()
+
+	upstream := newFakeOpenAIErrorUpstream(t, http.StatusUnauthorized, `{
+		"error": {
+			"message": "Incorrect API key provided",
+			"type": "invalid_request_error",
+			"code": "invalid_api_key"
+		}
+	}`)
+	defer upstream.Close()
+
+	gatewaySrv := newGatewayServerWithRealProvider(t, upstream.URL, "openai", "gpt-4o-mini")
+	defer gatewaySrv.Close()
+
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
+	resp := gatewayPost(t, gatewaySrv.URL+"/v1/chat/completions", body, nil)
+	raw := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502, body=%s", resp.StatusCode, raw)
+	}
+	assertOpenAIErrorType(t, raw, errCodeProviderAuthFailed)
+	if resp.Header.Get("X-Request-Id") == "" {
+		t.Error("X-Request-Id = empty")
+	}
+}
+
+func TestCodexClientUnsupportedModelContract(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{},
+	}
+	srv := newGatewayServer(t, provider, config.Config{})
+	defer srv.Close()
+
+	body := `{"model":"does-not-exist","messages":[{"role":"user","content":"hi"}]}`
+	resp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	raw := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, raw)
+	}
+	assertOpenAIErrorType(t, raw, errCodeUnsupportedModel)
+	if provider.CallCount() != 0 {
+		t.Fatalf("provider call count = %d, want 0 because router should reject unsupported model", provider.CallCount())
+	}
+}
+
+func TestCodexClientMissingPricePreflightContract(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "unpriced-alpha-model",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "unpriced-alpha-model",
+			Models:       []string{"unpriced-alpha-model"},
+		},
+		response: &types.ChatResponse{},
+	}
+	srv := newGatewayServer(t, provider, config.Config{
+		Router:    config.RouterConfig{DefaultModel: "unpriced-alpha-model"},
+		Pricebook: config.PricebookConfig{UnknownModelPolicy: "error"},
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			FailoverEnabled: true,
+		},
+	})
+	defer srv.Close()
+
+	body := `{"model":"unpriced-alpha-model","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	resp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	raw := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusFailedDependency {
+		t.Fatalf("status = %d, want 424, body=%s", resp.StatusCode, raw)
+	}
+	assertOpenAIErrorType(t, raw, errCodePriceMissing)
+	if provider.CallCount() != 0 {
+		t.Fatalf("provider call count = %d, want 0 because missing price should fail preflight", provider.CallCount())
 	}
 }
 
@@ -1581,6 +1697,85 @@ func TestGatewayTraceEndpointShowsRequestSpans(t *testing.T) {
 	}
 }
 
+func TestGatewayTraceEndpointShowsSkippedRouteCandidate(t *testing.T) {
+	t.Parallel()
+
+	localProvider := &fakeProvider{
+		name:         "ollama",
+		defaultModel: "llama3.1:8b",
+		capabilities: providers.Capabilities{
+			Name:         "ollama",
+			Kind:         providers.KindLocal,
+			DefaultModel: "llama3.1:8b",
+			Models:       []string{"llama3.1:8b"},
+		},
+		response: &types.ChatResponse{},
+	}
+	cloudProvider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4.1-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4.1-mini",
+			Models:       []string{"gpt-4.1-mini"},
+		},
+		response: &types.ChatResponse{
+			ID:    "chatcmpl-route-diag",
+			Model: "gpt-4.1-mini",
+			Choices: []types.ChatChoice{{
+				Message:      types.Message{Role: "assistant", Content: "routed"},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 8, CompletionTokens: 2, TotalTokens: 10},
+		},
+	}
+	srv := httptest.NewServer(newTestHTTPHandlerForProviders(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		[]providers.Provider{localProvider, cloudProvider},
+		config.Config{Router: config.RouterConfig{DefaultModel: "llama3.1:8b"}},
+	))
+	defer srv.Close()
+
+	body := `{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hi"}]}`
+	chatResp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	requestID := chatResp.Header.Get("X-Request-Id")
+	raw := readBody(t, chatResp)
+	if chatResp.StatusCode != http.StatusOK {
+		t.Fatalf("chat status = %d, want 200, body=%s", chatResp.StatusCode, raw)
+	}
+	if requestID == "" {
+		t.Fatal("X-Request-Id = empty, cannot query trace")
+	}
+
+	traceResp, err := http.Get(srv.URL + "/v1/traces?request_id=" + requestID)
+	if err != nil {
+		t.Fatalf("GET /v1/traces error = %v", err)
+	}
+	traceRaw := readBody(t, traceResp)
+	if traceResp.StatusCode != http.StatusOK {
+		t.Fatalf("trace status = %d, body=%s", traceResp.StatusCode, traceRaw)
+	}
+
+	var trace TraceResponse
+	if err := json.Unmarshal(traceRaw, &trace); err != nil {
+		t.Fatalf("Unmarshal() error = %v, body=%s", err, traceRaw)
+	}
+	if trace.Data.Route.FinalProvider != "openai" {
+		t.Fatalf("route.final_provider = %q, want openai", trace.Data.Route.FinalProvider)
+	}
+
+	foundSkippedLocal := false
+	for _, candidate := range trace.Data.Route.Candidates {
+		if candidate.Provider == "ollama" && candidate.Outcome == "skipped" && candidate.SkipReason == "unsupported_model" {
+			foundSkippedLocal = true
+		}
+	}
+	if !foundSkippedLocal {
+		t.Fatalf("missing skipped ollama unsupported_model candidate: %+v", trace.Data.Route.Candidates)
+	}
+}
+
 // TestClaudeCodeClientTraceEndpointShowsAnthropicRequest verifies that a
 // /v1/messages request is also traceable via the GET /v1/traces endpoint.
 func TestClaudeCodeClientTraceEndpointShowsAnthropicRequest(t *testing.T) {
@@ -1641,6 +1836,22 @@ func TestClaudeCodeClientTraceEndpointShowsAnthropicRequest(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func assertOpenAIErrorType(t *testing.T, raw []byte, want string) {
+	t.Helper()
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode OpenAI error: %v; body=%s", err, raw)
+	}
+	if payload.Error.Type != want && payload.Error.Code != want {
+		t.Fatalf("error type/code = %q/%q, want %s; body=%s", payload.Error.Type, payload.Error.Code, want, raw)
+	}
+}
 
 // keys returns the keys of a string→int map for diagnostic messages.
 func keys(m map[string]int) []string {
