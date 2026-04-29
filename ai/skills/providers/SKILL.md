@@ -35,6 +35,8 @@ The polymorphic content type (`UnmarshalJSON` / `MarshalJSON` for string-or-arra
 
 Adding a passthrough wire field. This is the most-redone task in the providers package; the chain is canonical and lives here.
 
+> **Plan first.** Wire-field additions cross `pkg/types/`, `internal/api/`, `internal/providers/`, and tests at every layer — exactly the cross-package ripple that triggers a written plan per [`../../core/workflow.md`](../../core/workflow.md). Use the shape in [`../../tasks/planning.md`](../../tasks/planning.md) (problem framing → constraints → recommendation → acceptance criteria → migration notes) before starting on step 1.
+
 1. **`pkg/types/chat.go`** — add the field to `ChatRequest` with a comment explaining the pointer-vs-value choice (see [`../../core/engineering-standards.md`](../../core/engineering-standards.md)).
 2. **`internal/api/openai.go`** — add the field to `OpenAIChatCompletionRequest` with `json:"x,omitempty"`.
 3. **`internal/api/handler_chat.go`** — copy the field through in `normalizeChatRequest`'s return value.
