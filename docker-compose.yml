@@ -3,7 +3,6 @@
 #
 # Optional services live behind profiles so they don't start by default:
 #   docker compose --profile postgres up    # adds Postgres for state
-#   docker compose --profile ollama up      # adds Ollama on :11434
 #
 # ── Local inference from Docker ──────────────────────────────────────────────
 # Hecate discovers models by calling /v1/models on each local provider.
@@ -21,9 +20,6 @@
 #   LM Studio: Settings → Local Server → Server bind host → 0.0.0.0
 #
 #   llama.cpp / LocalAI: pass --host 0.0.0.0 to the server binary
-#
-# Alternatively, run Ollama inside Docker so no bind change is needed:
-#   docker compose --profile ollama up
 #
 # When the hecate image isn't on a registry yet, this builds locally from
 # the Dockerfile in the same directory. Once published, the `image:` tag
@@ -63,7 +59,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    profiles: ["postgres", "full"]
+    profiles: ["postgres"]
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: hecate
@@ -80,16 +76,6 @@ services:
       retries: 20
     restart: unless-stopped
 
-  ollama:
-    profiles: ["ollama", "full"]
-    image: ollama/ollama:0.5.7
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-    restart: unless-stopped
-
 volumes:
   hecate-data:
   postgres-data:
-  ollama-models:
