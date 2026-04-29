@@ -1,0 +1,54 @@
+# Hecate agent instructions
+
+This directory is the canonical, vendor-neutral instruction layer for working on the Hecate repository. It is shared by Claude Code, Codex, Cursor, and any other agentic coding tool. Tool-specific entry points (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/`) are thin adapters that point here; the substance lives in this directory.
+
+## Layout
+
+```
+ai/
+  README.md                       this file
+  core/
+    project-context.md            what Hecate is, repo layout, rings, storage tiers, toolchain pins
+    engineering-standards.md      project-wide coding/style standards (backend + UI)
+    workflow.md                   default operating loop, planning triggers, commit etiquette
+    verification.md               build/test ladders, done criteria, manual smoke expectations
+  tasks/
+    planning.md                   how to write a plan when "stop and plan first" fires
+    implementation.md             how to implement once a plan exists
+    debugging.md                  how to debug deliberately
+    refactoring.md                how to reshape code without changing behavior
+    code-review.md                review rubric and output format
+  roles/
+    architect.md                  planning-shaped role
+    tester.md                     test-strategy role
+    devops.md                     delivery-readiness role
+  skills/
+    backend/SKILL.md              Go backend skill (anything outside ui/)
+    ui/SKILL.md                   React UI skill (ui/)
+    providers/SKILL.md            internal/providers/ skill (parallel-struct boundary, seven-step chain)
+    architect/SKILL.md            planning skill (pointer)
+    tester/SKILL.md               test-strategy skill (pointer)
+    devops/SKILL.md               delivery skill (pointer)
+```
+
+## Where to start
+
+- **First time in this repo**: read [`core/project-context.md`](core/project-context.md), then [`core/workflow.md`](core/workflow.md).
+- **Backend work** (anything outside `ui/`): also read [`skills/backend/SKILL.md`](skills/backend/SKILL.md).
+- **UI work** (`ui/`): also read [`skills/ui/SKILL.md`](skills/ui/SKILL.md).
+- **Provider adapters** (`internal/providers/`): also read [`skills/providers/SKILL.md`](skills/providers/SKILL.md) — the canonical home for the seven-step "add a wire field" chain.
+- **Planning a substantial change**: see [`roles/architect.md`](roles/architect.md) and [`tasks/planning.md`](tasks/planning.md).
+- **Reviewing code** (yours or another agent's): see [`tasks/code-review.md`](tasks/code-review.md).
+
+## Relationship to other agent surfaces
+
+- `/AGENTS.md` and `/ui/AGENTS.md` and `/internal/providers/AGENTS.md` — the codebase map. `AGENTS.md` is also auto-loaded by Hecate's own `agent_loop` as the workspace prompt layer (8 KiB cap), so it has dual purpose. It points here for conventions and recipes that don't need to live in a token-constrained surface.
+- `/CLAUDE.md` — thin Claude Code adapter that points here.
+- `/.cursor/rules/` — thin Cursor adapter that points here.
+- `/.claude/commands/*.md` — slash commands (`/race`, `/typecheck`, `/test-affected`).
+
+This directory is the canonical source. Those are adapters.
+
+## Repo policy
+
+Shared agent guidance is repository-owned and committed. There is no `.local` override layer and no personal customization tier. If a rule belongs in agent context, it lives here, in the open, under version control.

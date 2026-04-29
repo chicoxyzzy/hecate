@@ -1,0 +1,103 @@
+---
+name: hecate-backend
+description: Use when working on the Hecate Go backend — gateway, agent runtime, providers, sandbox, storage. Keeps backend work aligned with Hecate's "operator-grade control plane, runtime-aware" thesis.
+---
+
+# Hecate backend skill
+
+Use this skill for any work outside `ui/`. The React UI has its own skill at [`../ui/SKILL.md`](../ui/SKILL.md). For the `internal/providers/` package specifically, also reach for [`../providers/SKILL.md`](../providers/SKILL.md) — it owns the api↔providers boundary and the seven-step "add a wire field" chain.
+
+## Canonical guidance lives here
+
+Don't duplicate. This skill is the backend lens; the rules themselves live in:
+
+- [`../../core/project-context.md`](../../core/project-context.md) — repo layout, rings, storage tiers, toolchain pins, risky areas.
+- [`../../core/engineering-standards.md`](../../core/engineering-standards.md) — field-shape rules, parallel-struct rule, anti-patterns.
+- [`../../core/workflow.md`](../../core/workflow.md) — operating loop, planning triggers, commit etiquette.
+- [`../../core/verification.md`](../../core/verification.md) — verification ladders, race-suite floor, done criteria.
+
+## Product lens
+
+The backend should feel like:
+
+- A single-binary control plane.
+- A deny-by-default policy enforcer.
+- A runtime-aware proxy that explains its decisions.
+- A debugging surface — every request leaves a trace, every cost is itemized, every approval is logged.
+
+It should not feel like:
+
+- A thin pass-through with marketing on top.
+- A configurable framework where you bring your own everything.
+- A research demo that works in one provider's happy path.
+
+Default to operator confidence: clear status, clear errors, deterministic state, no surprises on restart.
+
+## Engineering thesis
+
+Calm, durable, and explicit. Code should age well — the runtime is supposed to live for years, not iterations.
+
+Prefer single binary, single port, embedded UI (`//go:embed ui/dist`); deterministic startup with env-driven config; backend tier choice surfaced as a config knob, never inferred; explicit error wrapping with cause chains; standard library first, well-known third party second, novel deps last.
+
+## Operator priorities
+
+Every endpoint, every config knob, every error message should answer:
+
+1. What did the gateway just decide?
+2. Why did it decide that?
+3. What did it cost / how long did it take?
+4. What happens if it fails next time — retry, fallback, fail?
+5. How do I find the trace for this in OTel?
+
+When choosing between "elegant" and "operationally explicit," choose explicit.
+
+## Hecate-specific backend rules
+
+- **Auth is a path-level decision.** `/v1/chat/completions` accepts tenant API keys; `/admin/*` requires admin bearer. `/v1/tasks/*` accepts both. Don't blur these.
+- **Tenant scoping is automatic.** Once a request has a tenant principal, every subsequent store query gets `WHERE tenant = ?` injected. New endpoints must respect this — never bypass via the admin path.
+- **Sandbox is out-of-process.** Shell, file, git execution runs inside `cmd/sandboxd`, invoked over an exec boundary. A buggy tool can't crash the gateway. New tools follow the same pattern.
+- **Approvals are blocking.** Pre-execution and mid-loop approvals halt the run; the run record persists in `awaiting_approval` until resolved. New gates use the same `TaskApproval` shape.
+- **Events are appended, not mutated.** Every state transition writes a `run_event` with a monotonic sequence. The SSE stream replays from `after_sequence`. New event types go in `docs/events.md`.
+- **Cost is in micro-USD.** All money is `int64` in micro-USD (`1_000_000` = $1). Never `float64` for money — pricebook lookups, budgets, ledger entries all stay integer.
+- **OTel is first-class.** Every request gets a trace ID surfaced in the response header (`X-Trace-Id`) and persisted on the run record. New code paths add spans, not just log lines.
+
+## Backend recipes
+
+### Add a passthrough field end-to-end
+
+The seven-step chain spans `pkg/types/` → `internal/api/` → `internal/providers/` and tests at every layer. Canonical version: [`../providers/SKILL.md`](../providers/SKILL.md). Forgetting to plumb the field into the streaming `wireReq` is the most common bug.
+
+### Add an MCP tool
+
+`internal/mcp/tools.go`:
+
+1. Append a `s.RegisterTool(...)` call in `RegisterDefaultTools` with `Annotations` set (`ReadOnlyHint`, `DestructiveHint`, `IdempotentHint` as appropriate).
+2. Add a `<name>Handler` returning `ToolHandler` further down.
+3. Update the `docs/mcp.md` tool table.
+4. Tests in `internal/mcp/tools_test.go` using the `fakeGateway` helper.
+
+### Add a persisted run-event type
+
+1. `internal/orchestrator/runner.go` → call `r.emitRunEvent(ctx, taskID, runID, "your.event.type", ..., extraDataMap)` at the right life-cycle moment.
+2. Document the event and its payload in `docs/events.md`.
+3. If high-cardinality, wire into `internal/retention/retention.go` as a new subsystem (see `turn_events` for the pattern).
+
+## Test helper cheat-sheet
+
+| Helper | File | Use for |
+|---|---|---|
+| `testRoundTripperFunc` | `internal/providers/provider_test_helpers_test.go` | Stub HTTP transport for provider tests |
+| `newAnthropicTestProvider` | `internal/providers/tooluse_test.go` | Anthropic provider with cached caps (skips discovery) |
+| `newTestHTTPHandler` / `*WithConfig` / `*ForProviders` | `internal/api/server_test.go` | In-process gateway handler |
+| `fakeUpstreamCapturing` | `e2e/gateway_test.go` | E2E: capture what gateway forwarded to upstream |
+| `hecateServer` | `e2e/gateway_test.go` | E2E: spawn the real binary on a free port |
+
+## Backend gotchas
+
+- **modernc/sqlite TIME-as-text format** — the driver writes `time.Time` using Go's default `time.Time.String()` format (`2026-04-28 02:37:38.4524 +0000 UTC`), which doesn't lex-compare with RFC3339Nano cutoffs and breaks the retention sweep silently. Always write timestamps as `t.UTC().Format(time.RFC3339Nano)` explicitly when the column is TEXT (see `internal/taskstate/sqlite.go` `AppendRunEvent`).
+- **Capability cache seeding** for provider tests — see [`../providers/SKILL.md`](../providers/SKILL.md) for the snippet. Without it the discovery path panics on a nil request body.
+- **Pricebook preflight** — cloud-kind providers in tests trigger a pricebook lookup. `PROVIDER_FAKE_KIND=local` bypasses it for synthetic models in e2e.
+
+## Done criteria
+
+See [`../../core/verification.md`](../../core/verification.md). Race suite is the floor for runtime/backend work, not a nice-to-have.

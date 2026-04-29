@@ -1,0 +1,31 @@
+---
+description: Core repository conventions
+globs:
+alwaysApply: true
+---
+
+# Hecate core rules
+
+Hecate is an open-source AI gateway and agent-task runtime. A single Go binary embeds the React operator UI, mediates OpenAI- and Anthropic-shaped client traffic, runs queued `agent_loop` tasks with policy and approval gates, and emits OpenTelemetry traces for everything it does.
+
+The canonical, vendor-neutral instruction layer for this repo lives in [`ai/`](../../ai/README.md). Start there. This file is a thin Cursor adapter listing the top-level non-negotiables.
+
+## Non-negotiables
+
+- **Architecture rings.** `pkg/types/` → `internal/api/` → `internal/providers/`. Cross-ring imports go inward only. `internal/orchestrator/` sits above providers, called by api.
+- **Storage tier rule.** Every persisted thing mirrors three tiers — memory (default, in-process), sqlite (`modernc.org`, no CGO), postgres (`pgx`).
+- **Auth is path-level.** `/v1/...` accepts tenant API keys; `/admin/...` requires admin bearer; `/v1/tasks/*` accepts both. Don't blur these.
+- **Tenant scoping is automatic.** Every store query gets `WHERE tenant = ?` injected once a request has a tenant principal. Do not bypass via the admin path.
+- **Cost is `int64` micro-USD.** Never `float64`. `1_000_000` = `$1`.
+- **OTel is first-class.** New code paths add spans, not just log lines. Trace IDs surface in `X-Trace-Id`.
+- **The api↔providers parallel-struct rule.** `OpenAIChatMessage` (capital `O`, in `internal/api/`) and `openAIChatMessage` (lowercase `o`, in `internal/providers/`) duplicate the JSON shape on purpose. Mirror fields when adding; do not unify.
+- **Don't auto-commit.** Propose Conventional Commits messages; the operator merges. Use `chore(agent):` for agent-doc-only changes.
+- **No emojis** in code or copy unless explicitly requested.
+- **No plan, phase, or release labels** in commit messages or code comments. No `P0`, `Phase 2`, `#15`, `Milestone N`. The plan lives in chat; the repo record is permanent.
+
+## Pointers
+
+- Full project context: [`ai/core/project-context.md`](../../ai/core/project-context.md).
+- Project-wide conventions: [`ai/core/engineering-standards.md`](../../ai/core/engineering-standards.md).
+- Operating loop: [`ai/core/workflow.md`](../../ai/core/workflow.md).
+- Verification ladders: [`ai/core/verification.md`](../../ai/core/verification.md).
