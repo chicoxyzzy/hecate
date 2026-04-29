@@ -204,7 +204,7 @@ export function ChatView({ state, actions }: Props) {
         </div>
       )}
 
-      {/* Chat main */}
+      {/* Chats main */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0, position: "relative" }}>
         {/* Topbar */}
         <div style={{ height: "var(--topbar-h)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", padding: "0 12px", gap: 8, flexShrink: 0, background: "var(--bg1)" }}>

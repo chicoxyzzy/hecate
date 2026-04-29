@@ -10,6 +10,7 @@ import {
   describeHealthStatus,
   describeRouteReason,
   describeRouteRecovery,
+  describeRouteSkipReason,
   filterModelsByKind,
   filterModelsByProvider,
   findModelInTrace,
@@ -465,5 +466,22 @@ describe("runtime-utils", () => {
     expect(describeBudgetScope({ ...base, tenant: "team-a", provider: "openai" })).toBe(
       "tenant_provider / tenant team-a / provider openai",
     );
+  });
+
+  it("describeRouteSkipReason labels known and unknown skip reasons", () => {
+    expect(describeRouteSkipReason("budget_denied")).toBe("Budget denied");
+    expect(describeRouteSkipReason("policy_denied")).toBe("Policy denied");
+    expect(describeRouteSkipReason("preflight_price_missing")).toBe("Missing price");
+    expect(describeRouteSkipReason("provider_not_found")).toBe("Provider missing");
+    expect(describeRouteSkipReason("route_denied")).toBe("Route denied");
+    expect(describeRouteSkipReason("provider_retry_exhausted")).toBe("Retry exhausted");
+    expect(describeRouteSkipReason("provider_unavailable")).toBe("Provider unavailable");
+    expect(describeRouteSkipReason("provider_slow")).toBe("Slower than peers");
+    expect(describeRouteSkipReason("provider_less_stable")).toBe("Recent failures");
+    expect(describeRouteSkipReason("provider_rate_limited")).toBe("Cooling down after upstream 429");
+    // Unknown code falls back to titleized form
+    expect(describeRouteSkipReason("some_new_reason")).toBe("Some New Reason");
+    // Missing value returns empty string
+    expect(describeRouteSkipReason(undefined)).toBe("");
   });
 });

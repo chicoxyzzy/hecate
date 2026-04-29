@@ -161,6 +161,9 @@ export function describeRouteSkipReason(reason?: string): string {
     route_denied: "Route denied",
     provider_retry_exhausted: "Retry exhausted",
     provider_unavailable: "Provider unavailable",
+    provider_slow: "Slower than peers",
+    provider_less_stable: "Recent failures",
+    provider_rate_limited: "Cooling down after upstream 429",
   };
   return labels[reason] ?? titleizeIdentifier(reason);
 }

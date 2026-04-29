@@ -116,7 +116,7 @@ Use product UI copy, not marketing copy.
 Good section labels:
 
 - Session
-- Playground
+- Chats
 - Provider Routing
 - Runtime Output
 - Trace

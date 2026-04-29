@@ -1602,9 +1602,9 @@ function deriveSessionState(sessionInfo: SessionResponse["data"] | null): Sessio
 
   const capabilities =
     kind === "admin"
-      ? ["Playground access", "Model catalog", "Provider status", "Budget admin", "Control-plane admin"]
+      ? ["Chats access", "Model catalog", "Provider status", "Budget admin", "Control-plane admin"]
       : kind === "tenant"
-        ? ["Playground access", "Model catalog"]
+        ? ["Chats access", "Model catalog"]
         : kind === "anonymous"
           ? ["Health view", "Authentication setup"]
           : ["No confirmed access"];
