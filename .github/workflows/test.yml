@@ -194,7 +194,7 @@ jobs:
           path: /tmp
 
       - name: Cache Ollama model weights
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.ollama/models
           # Bump the suffix to force a fresh pull when you change the model.
@@ -205,7 +205,7 @@ jobs:
       # rate limits / hub outages.
       - name: Cache Ollama Docker image
         id: ollama-image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /tmp/ollama-image.tar
           key: docker-ollama-0.5.7
@@ -328,7 +328,7 @@ jobs:
       # Cache Playwright browser binaries (~150 MB) keyed on bun.lock so the
       # cache invalidates whenever @playwright/test is bumped.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
