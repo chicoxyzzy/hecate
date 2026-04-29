@@ -66,6 +66,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux.HandleFunc("POST /admin/control-plane/pricebook/import/preview", handler.HandleControlPlanePricebookImportPreview)
 	mux.HandleFunc("POST /admin/control-plane/pricebook/import/apply", handler.HandleControlPlanePricebookImportApply)
 	mux.HandleFunc("GET /admin/providers", handler.HandleProviderStatus)
+	mux.HandleFunc("GET /admin/providers/history", handler.HandleProviderHealthHistory)
 	mux.HandleFunc("GET /admin/runtime/stats", handler.HandleRuntimeStats)
 	mux.HandleFunc("GET /admin/mcp/cache", handler.HandleMCPCacheStats)
 	mux.HandleFunc("POST /v1/mcp/probe", handler.HandleMCPProbe)

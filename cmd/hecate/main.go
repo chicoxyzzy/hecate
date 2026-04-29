@@ -168,10 +168,12 @@ func main() {
 		os.Exit(1)
 	}
 	providerRegistry := providerRuntime.Registry()
-	healthTracker := providers.NewMemoryHealthTrackerWithLatency(
+	providerHistoryStore := buildProviderHistoryStore(cfg, logger, postgresClient, sqliteClient)
+	healthTracker := providers.NewMemoryHealthTrackerWithHistory(
 		cfg.Provider.HealthThreshold,
 		cfg.Provider.HealthCooldown,
 		cfg.Provider.HealthLatencyDegradedThreshold,
+		providerHistoryStore,
 	)
 
 	staticPricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
@@ -234,6 +236,7 @@ func main() {
 		governorEngine,
 		providerRegistry,
 		healthTracker,
+		providerHistoryStore,
 		pricebook,
 		tracer,
 		metrics,
@@ -406,6 +409,7 @@ func buildGatewayDependencies(
 	governorEngine governor.Governor,
 	providerRegistry providers.Registry,
 	healthTracker providers.HealthTracker,
+	providerHistoryStore providers.HealthHistoryStore,
 	pricebook billing.Pricebook,
 	tracer profiler.Tracer,
 	metrics *telemetry.Metrics,
@@ -431,6 +435,7 @@ func buildGatewayDependencies(
 		Governor:          governorEngine,
 		Providers:         providerRegistry,
 		HealthTracker:     healthTracker,
+		ProviderHistory:   providerHistoryStore,
 		Pricebook:         pricebook,
 		Tracer:            tracer,
 		Metrics:           metrics,
@@ -513,6 +518,27 @@ func buildRetentionHistoryStore(cfg config.Config, logger *slog.Logger, postgres
 		return store
 	default:
 		return retention.NewMemoryHistoryStore()
+	}
+}
+
+func buildProviderHistoryStore(cfg config.Config, logger *slog.Logger, postgresClient *storage.PostgresClient, sqliteClient *storage.SQLiteClient) providers.HealthHistoryStore {
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider.HistoryBackend)) {
+	case "postgres":
+		store, err := providers.NewPostgresHealthHistoryStore(context.Background(), postgresClient, "provider_health_history")
+		if err != nil {
+			logger.Error("provider health history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	case "sqlite":
+		store, err := providers.NewSQLiteHealthHistoryStore(context.Background(), sqliteClient, "provider_health_history")
+		if err != nil {
+			logger.Error("provider health history store init failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return store
+	default:
+		return providers.NewMemoryHealthHistoryStore()
 	}
 }
 

@@ -252,6 +252,25 @@ type ProviderStatus struct {
 	Error               string
 }
 
+type ProviderHealthHistoryEntry struct {
+	Provider            string
+	ProviderKind        string
+	Event               string
+	Status              string
+	Available           bool
+	Error               string
+	ErrorClass          string
+	LatencyMS           int64
+	ConsecutiveFailures int
+	TotalSuccesses      int64
+	TotalFailures       int64
+	Timeouts            int64
+	ServerErrors        int64
+	RateLimits          int64
+	OpenUntil           time.Time
+	Timestamp           time.Time
+}
+
 type BudgetStatus struct {
 	Key                string
 	Scope              string

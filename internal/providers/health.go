@@ -53,6 +53,7 @@ type MemoryHealthTracker struct {
 	failureThreshold         int
 	cooldown                 time.Duration
 	latencyDegradedThreshold time.Duration
+	history                  HealthHistoryStore
 	providers                map[string]HealthState
 	now                      func() time.Time
 }
@@ -62,6 +63,10 @@ func NewMemoryHealthTracker(failureThreshold int, cooldown time.Duration) *Memor
 }
 
 func NewMemoryHealthTrackerWithLatency(failureThreshold int, cooldown, latencyDegradedThreshold time.Duration) *MemoryHealthTracker {
+	return NewMemoryHealthTrackerWithHistory(failureThreshold, cooldown, latencyDegradedThreshold, nil)
+}
+
+func NewMemoryHealthTrackerWithHistory(failureThreshold int, cooldown, latencyDegradedThreshold time.Duration, history HealthHistoryStore) *MemoryHealthTracker {
 	if failureThreshold <= 0 {
 		failureThreshold = 3
 	}
@@ -72,6 +77,7 @@ func NewMemoryHealthTrackerWithLatency(failureThreshold int, cooldown, latencyDe
 		failureThreshold:         failureThreshold,
 		cooldown:                 cooldown,
 		latencyDegradedThreshold: latencyDegradedThreshold,
+		history:                  history,
 		providers:                make(map[string]HealthState),
 		now:                      time.Now,
 	}
@@ -107,6 +113,7 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 			state.LastErrorClass = ""
 		}
 		t.providers[provider] = state
+		t.appendHistory(provider, healthHistoryEventForSuccess(state), state, now)
 		return
 	}
 
@@ -135,14 +142,19 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 		state.Status = HealthStatusOpen
 		state.OpenUntil = now.Add(t.cooldown)
 		t.providers[provider] = state
+		t.appendHistory(provider, "cooldown_opened", state, now)
 		return
 	}
 	if state.ConsecutiveFailures >= t.failureThreshold {
 		state.Available = false
 		state.Status = HealthStatusOpen
 		state.OpenUntil = now.Add(t.cooldown)
+		t.providers[provider] = state
+		t.appendHistory(provider, "cooldown_opened", state, now)
+		return
 	}
 	t.providers[provider] = state
+	t.appendHistory(provider, "failure", state, now)
 }
 
 func HealthStateReason(state HealthState) string {
@@ -176,6 +188,7 @@ func (t *MemoryHealthTracker) State(provider string) HealthState {
 				updated.Status = HealthStatusHalfOpen
 				t.providers[provider] = updated
 				state = updated
+				t.appendHistory(provider, "cooldown_recovered", updated, t.now())
 			}
 			t.mu.Unlock()
 		}
@@ -189,6 +202,20 @@ func (t *MemoryHealthTracker) State(provider string) HealthState {
 	state.Available = false
 	state.Status = HealthStatusOpen
 	return state
+}
+
+func (t *MemoryHealthTracker) appendHistory(provider, event string, state HealthState, now time.Time) {
+	if t == nil || t.history == nil || provider == "" || event == "" {
+		return
+	}
+	_ = t.history.Append(context.Background(), buildHealthHistoryRecord(provider, event, state, now))
+}
+
+func healthHistoryEventForSuccess(state HealthState) string {
+	if state.LastErrorClass == "latency" {
+		return "slow_success"
+	}
+	return "success"
 }
 
 func FormatHealthStateError(provider string, state HealthState) string {

@@ -40,6 +40,7 @@ type Dependencies struct {
 	Governor        governor.Governor
 	Providers       providers.Registry
 	HealthTracker   providers.HealthTracker
+	ProviderHistory providers.HealthHistoryStore
 	Pricebook       billing.Pricebook
 	Tracer          profiler.Tracer
 	Metrics         *telemetry.Metrics
@@ -77,6 +78,7 @@ type Service struct {
 	metrics           *telemetry.Metrics
 	retention         *retention.Manager
 	pricebook         billing.Pricebook
+	providerHistory   providers.HealthHistoryStore
 	chatSessions      chatstate.Store
 	providers         providers.Registry
 	traceBodyCapture  bool
@@ -95,6 +97,10 @@ type ModelsResult struct {
 
 type ProviderStatusResult struct {
 	Providers []types.ProviderStatus
+}
+
+type ProviderHealthHistoryResult struct {
+	Entries []types.ProviderHealthHistoryEntry
 }
 
 type BudgetStatusResult struct {
@@ -234,6 +240,7 @@ func NewService(deps Dependencies) *Service {
 		metrics:           deps.Metrics,
 		retention:         deps.Retention,
 		pricebook:         deps.Pricebook,
+		providerHistory:   deps.ProviderHistory,
 		chatSessions:      deps.ChatSessions,
 		providers:         deps.Providers,
 		traceBodyCapture:  deps.TraceBodyCapture,
@@ -692,6 +699,54 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 	}
 
 	return &ProviderStatusResult{Providers: statuses}, nil
+}
+
+func (s *Service) ProviderHealthHistory(ctx context.Context, provider string, limit int) (*ProviderHealthHistoryResult, error) {
+	if s.providerHistory == nil {
+		return &ProviderHealthHistoryResult{}, nil
+	}
+	records, err := s.providerHistory.List(ctx, providers.HealthHistoryFilter{
+		Provider: provider,
+		Limit:    limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	kindByProvider := make(map[string]string, 8)
+	for _, entry := range s.catalog.Snapshot(ctx) {
+		kindByProvider[entry.Name] = string(entry.Kind)
+	}
+	out := make([]types.ProviderHealthHistoryEntry, 0, len(records))
+	for _, record := range records {
+		item := types.ProviderHealthHistoryEntry{
+			Provider:            record.Provider,
+			ProviderKind:        kindByProvider[record.Provider],
+			Event:               record.Event,
+			Status:              record.Status,
+			Available:           record.Available,
+			Error:               record.Error,
+			ErrorClass:          record.ErrorClass,
+			LatencyMS:           record.LatencyMS,
+			ConsecutiveFailures: record.ConsecutiveFailures,
+			TotalSuccesses:      record.TotalSuccesses,
+			TotalFailures:       record.TotalFailures,
+			Timeouts:            record.Timeouts,
+			ServerErrors:        record.ServerErrors,
+			RateLimits:          record.RateLimits,
+		}
+		if record.OpenUntil != "" {
+			if ts, err := time.Parse(time.RFC3339Nano, record.OpenUntil); err == nil {
+				item.OpenUntil = ts
+			}
+		}
+		if record.Timestamp != "" {
+			if ts, err := time.Parse(time.RFC3339Nano, record.Timestamp); err == nil {
+				item.Timestamp = ts
+			}
+		}
+		out = append(out, item)
+	}
+	return &ProviderHealthHistoryResult{Entries: out}, nil
 }
 
 func providerCredentialReady(state string) bool {

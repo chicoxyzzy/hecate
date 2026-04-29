@@ -75,6 +75,16 @@ Each provider has a per-process health tracker. After a configurable threshold o
 
 When `GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD` is set to a positive duration, successful calls that take at-or-above that latency mark the provider `degraded` with health reason `latency` instead of `healthy`. Degraded providers remain routable, but the router scores them behind healthy peers and route diagnostics surface them as `provider_slow` with the last observed latency.
 
+The current snapshot lives at `GET /admin/providers`. A short persisted event history now also lives at `GET /admin/providers/history`, with optional `provider` and `limit` query params. History rows are operator-facing state transitions such as:
+
+- `success`
+- `slow_success`
+- `failure`
+- `cooldown_opened`
+- `cooldown_recovered`
+
+Each row includes the resulting health status, error class, last observed latency, and current failure counters so operators can answer whether a provider is transiently failing, rate-limited, or just getting slow over time.
+
 The Providers tab shows the current state on each card:
 
 - 🟢 **Healthy** — recent successful traffic

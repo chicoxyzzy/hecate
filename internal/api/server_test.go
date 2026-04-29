@@ -968,6 +968,78 @@ func TestProviderStatusReturnsRateLimitedRoutingBlockReason(t *testing.T) {
 	}
 }
 
+func TestProviderHealthHistoryReturnsRecentEvents(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		capabilities: providers.Capabilities{
+			Name:            "openai",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "gpt-4o-mini",
+			Models:          []string{"gpt-4o-mini"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+	}
+	registry := providers.NewRegistry(provider)
+	historyStore := providers.NewMemoryHealthHistoryStore()
+	health := providers.NewMemoryHealthTrackerWithHistory(3, time.Minute, 0, historyStore)
+	health.RecordFailure("openai", &providers.UpstreamError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit", Message: "slow down"})
+	providerCatalog := catalog.NewRegistryCatalog(registry, health)
+	budgetStore := governor.NewMemoryBudgetStore()
+	service := gateway.NewService(gateway.Dependencies{
+		Logger:          logger,
+		Cache:           cache.NewMemoryStore(time.Minute),
+		Router:          router.NewRuleRouter("gpt-4o-mini", providerCatalog),
+		Catalog:         providerCatalog,
+		Governor:        governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
+		Providers:       registry,
+		HealthTracker:   health,
+		ProviderHistory: historyStore,
+		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
+			OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+		}, defaultPricebookForTests()),
+		Tracer: profiler.NewInMemoryTracer(nil),
+	})
+	handler := NewServer(logger, NewHandler(config.Config{Provider: config.ProviderConfig{HistoryLimit: 10}}, logger, service, nil, nil, nil))
+	client := newAPITestClient(t, handler)
+
+	response := mustRequestJSON[ProviderHealthHistoryResponse](client, http.MethodGet, "/admin/providers/history?provider=openai&limit=1", "")
+	if response.Object != "provider_health_history" {
+		t.Fatalf("object = %q, want provider_health_history", response.Object)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("history count = %d, want 1", len(response.Data))
+	}
+	item := response.Data[0]
+	if item.Provider != "openai" {
+		t.Fatalf("provider = %q, want openai", item.Provider)
+	}
+	if item.ProviderKind != "cloud" {
+		t.Fatalf("provider_kind = %q, want cloud", item.ProviderKind)
+	}
+	if item.Event != "cooldown_opened" {
+		t.Fatalf("event = %q, want cooldown_opened", item.Event)
+	}
+	if item.Status != "open" {
+		t.Fatalf("status = %q, want open", item.Status)
+	}
+	if item.ErrorClass != "rate_limit" {
+		t.Fatalf("error_class = %q, want rate_limit", item.ErrorClass)
+	}
+	if item.RateLimits != 1 {
+		t.Fatalf("rate_limits = %d, want 1", item.RateLimits)
+	}
+	if item.OpenUntil == "" {
+		t.Fatal("open_until is empty, want cooldown deadline")
+	}
+	if item.Timestamp == "" {
+		t.Fatal("timestamp is empty, want event time")
+	}
+}
+
 func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -3795,7 +3867,13 @@ func newTestHTTPHandlerForProviders(logger *slog.Logger, items []providers.Provi
 
 func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.Provider, cfg config.Config, cpStore controlplane.Store) http.Handler {
 	registry := providers.NewRegistry(items...)
-	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
+	providerHistoryStore := providers.NewMemoryHealthHistoryStore()
+	healthTracker := providers.NewMemoryHealthTrackerWithHistory(
+		cfg.Provider.HealthThreshold,
+		cfg.Provider.HealthCooldown,
+		cfg.Provider.HealthLatencyDegradedThreshold,
+		providerHistoryStore,
+	)
 	providerCatalog := catalog.NewRegistryCatalog(registry, healthTracker)
 	budgetStore := governor.NewMemoryBudgetStore()
 	governorCfg := mergeGovernorDefaults(cfg.Governor)
@@ -3850,11 +3928,12 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 			RetryBackoff:    cfg.Provider.RetryBackoff,
 			FailoverEnabled: cfg.Provider.FailoverEnabled,
 		},
-		Router:        routerEngine,
-		Catalog:       providerCatalog,
-		Governor:      governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
-		Providers:     registry,
-		HealthTracker: healthTracker,
+		Router:          routerEngine,
+		Catalog:         providerCatalog,
+		Governor:        governor.NewStaticGovernor(governorCfg, budgetStore, budgetStore),
+		Providers:       registry,
+		HealthTracker:   healthTracker,
+		ProviderHistory: providerHistoryStore,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
 		}, pricebookCfg),

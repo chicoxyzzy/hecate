@@ -82,6 +82,64 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleProviderHealthHistory(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	limit := h.config.Provider.HistoryLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+
+	result, err := h.service.ProviderHealthHistory(ctx, provider, limit)
+	if err != nil {
+		telemetry.Error(h.logger, ctx, "gateway.providers.history.failed",
+			slog.String("event.name", "gateway.providers.history.failed"),
+			slog.Any("error", err),
+		)
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	data := make([]ProviderHealthHistoryResponseItem, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		item := ProviderHealthHistoryResponseItem{
+			Provider:            entry.Provider,
+			ProviderKind:        entry.ProviderKind,
+			Event:               entry.Event,
+			Status:              entry.Status,
+			Available:           entry.Available,
+			Error:               entry.Error,
+			ErrorClass:          entry.ErrorClass,
+			LatencyMS:           entry.LatencyMS,
+			ConsecutiveFailures: entry.ConsecutiveFailures,
+			TotalSuccesses:      entry.TotalSuccesses,
+			TotalFailures:       entry.TotalFailures,
+			Timeouts:            entry.Timeouts,
+			ServerErrors:        entry.ServerErrors,
+			RateLimits:          entry.RateLimits,
+		}
+		if !entry.OpenUntil.IsZero() {
+			item.OpenUntil = entry.OpenUntil.UTC().Format(time.RFC3339Nano)
+		}
+		if !entry.Timestamp.IsZero() {
+			item.Timestamp = entry.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		data = append(data, item)
+	}
+
+	WriteJSON(w, http.StatusOK, ProviderHealthHistoryResponse{
+		Object: "provider_health_history",
+		Data:   data,
+	})
+}
+
 func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {

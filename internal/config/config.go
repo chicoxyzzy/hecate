@@ -142,6 +142,8 @@ type ProviderConfig struct {
 	HealthThreshold                int
 	HealthCooldown                 time.Duration
 	HealthLatencyDegradedThreshold time.Duration
+	HistoryBackend                 string
+	HistoryLimit                   int
 }
 
 type ChatConfig struct {
@@ -381,6 +383,8 @@ func LoadFromEnv() Config {
 			HealthThreshold:                getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
 			HealthCooldown:                 getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
 			HealthLatencyDegradedThreshold: getEnvDuration("GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD", 0),
+			HistoryBackend:                 getEnv("GATEWAY_PROVIDER_HISTORY_BACKEND", "memory"),
+			HistoryLimit:                   getEnvInt("GATEWAY_PROVIDER_HISTORY_LIMIT", 100),
 		},
 		Chat: ChatConfig{
 			SessionsBackend: getEnv("GATEWAY_CHAT_SESSIONS_BACKEND", "memory"),
@@ -517,6 +521,7 @@ func (c Config) Validate() error {
 	validateBackend("GATEWAY_BUDGET_BACKEND", c.Governor.BudgetBackend, "memory", "sqlite", "postgres")
 	validateBackend("GATEWAY_RETENTION_HISTORY_BACKEND", c.Retention.HistoryBackend, "memory", "sqlite", "postgres")
 	validateBackend("GATEWAY_SEMANTIC_CACHE_BACKEND", c.Cache.Semantic.Backend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_PROVIDER_HISTORY_BACKEND", c.Provider.HistoryBackend, "memory", "sqlite", "postgres")
 
 	if postgresRequired(c) && strings.TrimSpace(c.Postgres.DSN) == "" {
 		errs = append(errs, errors.New("POSTGRES_DSN is required when any backend is postgres"))
@@ -550,6 +555,9 @@ func (c Config) Validate() error {
 	}
 	if c.Provider.HealthLatencyDegradedThreshold < 0 {
 		errs = append(errs, errors.New("GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD must be zero or positive"))
+	}
+	if c.Provider.HistoryLimit < 0 {
+		errs = append(errs, errors.New("GATEWAY_PROVIDER_HISTORY_LIMIT must be zero or positive"))
 	}
 	if c.Server.TaskQueueWorkers <= 0 {
 		errs = append(errs, errors.New("GATEWAY_TASK_QUEUE_WORKERS must be positive"))
@@ -592,6 +600,7 @@ func postgresRequired(cfg Config) bool {
 		cfg.Chat.SessionsBackend == "postgres" ||
 		cfg.Server.TasksBackend == "postgres" ||
 		cfg.Server.TaskQueueBackend == "postgres" ||
+		cfg.Provider.HistoryBackend == "postgres" ||
 		cfg.Retention.HistoryBackend == "postgres"
 }
 

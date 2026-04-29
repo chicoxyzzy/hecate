@@ -291,6 +291,11 @@ type ProviderStatusResponse struct {
 	Data   []ProviderStatusResponseItem `json:"data"`
 }
 
+type ProviderHealthHistoryResponse struct {
+	Object string                              `json:"object"`
+	Data   []ProviderHealthHistoryResponseItem `json:"data"`
+}
+
 type ProviderPresetResponse struct {
 	Object string                       `json:"object"`
 	Data   []ProviderPresetResponseItem `json:"data"`
@@ -415,6 +420,25 @@ type ProviderStatusResponseItem struct {
 	ServerErrors        int64    `json:"server_errors,omitempty"`
 	RateLimits          int64    `json:"rate_limits,omitempty"`
 	Error               string   `json:"error,omitempty"`
+}
+
+type ProviderHealthHistoryResponseItem struct {
+	Provider            string `json:"provider"`
+	ProviderKind        string `json:"provider_kind,omitempty"`
+	Event               string `json:"event"`
+	Status              string `json:"status"`
+	Available           bool   `json:"available"`
+	Error               string `json:"error,omitempty"`
+	ErrorClass          string `json:"error_class,omitempty"`
+	LatencyMS           int64  `json:"latency_ms,omitempty"`
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+	TotalSuccesses      int64  `json:"total_successes,omitempty"`
+	TotalFailures       int64  `json:"total_failures,omitempty"`
+	Timeouts            int64  `json:"timeouts,omitempty"`
+	ServerErrors        int64  `json:"server_errors,omitempty"`
+	RateLimits          int64  `json:"rate_limits,omitempty"`
+	OpenUntil           string `json:"open_until,omitempty"`
+	Timestamp           string `json:"timestamp,omitempty"`
 }
 
 type ProviderPresetResponseItem struct {

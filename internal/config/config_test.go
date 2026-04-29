@@ -146,6 +146,7 @@ func TestValidateRejectsImpossibleRuntimeValues(t *testing.T) {
 	cfg.Provider.MaxAttempts = 0
 	cfg.Provider.HealthThreshold = -1
 	cfg.Provider.HealthLatencyDegradedThreshold = -time.Millisecond
+	cfg.Provider.HistoryLimit = -1
 	cfg.Server.TaskQueueWorkers = 0
 	cfg.Server.TaskQueueBuffer = -1
 	cfg.Server.RateLimit.Enabled = true
@@ -166,6 +167,7 @@ func TestValidateRejectsImpossibleRuntimeValues(t *testing.T) {
 		"GATEWAY_PROVIDER_MAX_ATTEMPTS",
 		"GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD",
 		"GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD",
+		"GATEWAY_PROVIDER_HISTORY_LIMIT",
 		"GATEWAY_TASK_QUEUE_WORKERS",
 		"GATEWAY_TASK_QUEUE_BUFFER",
 		"GATEWAY_RATE_LIMIT_RPM",
