@@ -19,11 +19,11 @@ function setup(stateOverrides = {}, actionOverrides = {}) {
 }
 
 describe("AdminView tabs", () => {
-  it("renders all five tabs", () => {
+  it("renders the operator tab labels", () => {
     const { state, actions } = setup();
     render(<AdminView state={state} actions={actions} />);
-    for (const tab of ["keys", "tenants", "budget", "usage", "retention"]) {
-      expect(screen.getAllByText(tab, { exact: false }).length).toBeGreaterThan(0);
+    for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention", "Clients"]) {
+      expect(screen.getByRole("button", { name: tab })).toBeTruthy();
     }
   });
 
@@ -36,21 +36,21 @@ describe("AdminView tabs", () => {
   it("switches to tenants tab on click", async () => {
     const { state, actions, user } = setup();
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "tenants" }));
+    await user.click(screen.getByRole("button", { name: "Tenants" }));
     expect(await screen.findByText(/New tenant/i)).toBeTruthy();
   });
 
   it("switches to retention tab on click", async () => {
     const { state, actions, user } = setup();
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "retention" }));
+    await user.click(screen.getByRole("button", { name: "Retention" }));
     expect(await screen.findByText(/Subsystems to prune/i)).toBeTruthy();
   });
 
   it("switches to budget tab and shows admin-required hint when no budget", async () => {
     const { state, actions, user } = setup({ budget: null });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "budget" }));
+    await user.click(screen.getByRole("button", { name: "Balances" }));
     expect(await screen.findByText(/Admin access required/i)).toBeTruthy();
   });
 });
@@ -75,7 +75,7 @@ describe("AdminView retention tab", () => {
   it("shows known subsystems as toggle chips", async () => {
     const { state, actions, user } = setup();
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "retention" }));
+    await user.click(screen.getByRole("button", { name: "Retention" }));
     for (const sub of ["trace_snapshots", "budget_events", "audit_events", "exact_cache", "semantic_cache"]) {
       expect(await screen.findByText(sub)).toBeTruthy();
     }
@@ -85,7 +85,7 @@ describe("AdminView retention tab", () => {
     const setRetentionSubsystems = vi.fn();
     const { state, actions, user } = setup({}, { setRetentionSubsystems });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "retention" }));
+    await user.click(screen.getByRole("button", { name: "Retention" }));
     await user.click(await screen.findByText("audit_events"));
     expect(setRetentionSubsystems).toHaveBeenCalledWith("audit_events");
   });
@@ -94,7 +94,7 @@ describe("AdminView retention tab", () => {
     const runRetention = vi.fn(async () => undefined);
     const { state, actions, user } = setup({}, { runRetention });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "retention" }));
+    await user.click(screen.getByRole("button", { name: "Retention" }));
     await user.click(await screen.findByRole("button", { name: /Run now/i }));
     expect(runRetention).toHaveBeenCalled();
   });
@@ -118,7 +118,7 @@ describe("AdminView policy tab", () => {
   it("renders the empty state when no rules are configured", async () => {
     const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     expect(await screen.findByText(/No policy rules/i)).toBeTruthy();
   });
 
@@ -142,7 +142,7 @@ describe("AdminView policy tab", () => {
       ]),
     });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
 
     // Each row's id renders as mono.
     expect(await screen.findByText("deny-cloud")).toBeTruthy();
@@ -164,7 +164,7 @@ describe("AdminView policy tab", () => {
   it("'New rule' opens the SlideOver with the empty form", async () => {
     const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     await user.click(screen.getByRole("button", { name: /New rule/i }));
     expect(await screen.findByRole("dialog", { name: /New policy rule/i })).toBeTruthy();
     // The deny radio is selected by default — the reason field shows.
@@ -174,7 +174,7 @@ describe("AdminView policy tab", () => {
   it("switching to rewrite_model swaps the reason input for the target-model input", async () => {
     const { state, actions, user } = setup({ adminConfig: adminConfigWith([]) });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     await user.click(screen.getByRole("button", { name: /New rule/i }));
     // Click the rewrite_model radio.
     await user.click(screen.getByLabelText("rewrite_model"));
@@ -192,7 +192,7 @@ describe("AdminView policy tab", () => {
       { upsertPolicyRule },
     );
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     await user.click(screen.getByRole("button", { name: /New rule/i }));
     await user.type(screen.getByPlaceholderText(/deny-cloud-for-team-a/i), "deny-test");
     await user.type(screen.getByPlaceholderText(/team-a is local-only/i), "test reason");
@@ -211,7 +211,7 @@ describe("AdminView policy tab", () => {
       ]),
     });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     await user.click(screen.getByText("deny-cloud"));
     expect(await screen.findByRole("dialog", { name: /Edit policy rule/i })).toBeTruthy();
     // The id field should have the existing id pre-filled.
@@ -230,7 +230,7 @@ describe("AdminView policy tab", () => {
       { deletePolicyRule },
     );
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "policy" }));
+    await user.click(screen.getByRole("button", { name: "Policy" }));
     await user.click(screen.getByRole("button", { name: /Delete rule deny-cloud/i }));
     const dialog = await screen.findByRole("dialog", { name: /Delete policy rule/i });
     expect(dialog).toBeTruthy();
@@ -243,7 +243,7 @@ describe("AdminView usage tab", () => {
   it("shows empty state when ledger is empty", async () => {
     const { state, actions, user } = setup({ requestLedger: [] });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "usage" }));
+    await user.click(screen.getByRole("button", { name: "Usage" }));
     expect(await screen.findByText(/No usage events recorded yet/i)).toBeTruthy();
   });
 
@@ -254,7 +254,7 @@ describe("AdminView usage tab", () => {
       ],
     });
     render(<AdminView state={state} actions={actions} />);
-    await user.click(screen.getByRole("button", { name: "usage" }));
+    await user.click(screen.getByRole("button", { name: "Usage" }));
     expect(await screen.findByText("req-1")).toBeTruthy();
     expect(await screen.findByText("team-a")).toBeTruthy();
   });

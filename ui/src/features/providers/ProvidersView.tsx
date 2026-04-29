@@ -52,9 +52,6 @@ export function ProvidersView({ state, actions }: Props) {
     return ai !== bi ? ai - bi : a.localeCompare(b);
   };
 
-  const allCloudIDs = configuredProviders.filter(p => p.kind === "cloud").map(p => p.id).sort(stableSort);
-  const allLocalIDs = configuredProviders.filter(p => p.kind === "local").map(p => p.id).sort(stableSort);
-
   // The CP response is the source of truth for enabled state — it has been
   // conflict-resolved server-side. Runtime status (state.providers) is only used
   // for health, not for the toggle itself.
@@ -67,11 +64,14 @@ export function ProvidersView({ state, actions }: Props) {
   }
 
   const configuredByName = new Map(configuredProviders.filter(p => p.base_url).map(p => [p.name, p]));
+  const allConfiguredIDs = configuredProviders.map(p => p.id).sort(stableSort);
   const conflictMap = buildConflictMap(
-    [...allCloudIDs, ...allLocalIDs],
+    allConfiguredIDs,
     configuredByName,
     state.providerPresets,
   );
+  const cloudIDs = configuredProviders.filter(p => p.kind === "cloud").map(p => p.id).sort(stableSort);
+  const localIDs = configuredProviders.filter(p => p.kind === "local").map(p => p.id).sort(stableSort);
 
   const selectedConfig = selectedID ? configuredByID.get(selectedID) ?? null : null;
   const selectedStatus = selectedID ? statusByName.get(selectedID) : null;
@@ -105,11 +105,12 @@ export function ProvidersView({ state, actions }: Props) {
     });
   }
 
-  const cloudEnabledCount = allCloudIDs.filter(id => resolveEnabled(id)).length;
-  const localEnabledCount = allLocalIDs.filter(id => resolveEnabled(id)).length;
+  const cloudEnabledCount = cloudIDs.filter(id => resolveEnabled(id)).length;
+  const localEnabledCount = localIDs.filter(id => resolveEnabled(id)).length;
   const readyCount = state.providers.filter(p => p.routing_ready).length;
   const blockedCount = state.providers.filter(p => p.routing_ready === false).length;
   const unhealthyCount = state.providers.filter(p => !p.healthy).length;
+  const misconfiguredCount = state.providers.filter((provider) => provider.credential_state === "missing").length;
 
   function statusTone(status?: string): "healthy" | "degraded" | "down" | "disabled" {
     switch (status) {
@@ -206,6 +207,21 @@ export function ProvidersView({ state, actions }: Props) {
     );
   }
 
+  function renderSection(title: string, subtitle: string, ids: string[]) {
+    if (ids.length === 0) return null;
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>{title}</span>
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>{subtitle}</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 10, marginBottom: 24 }}>
+          {ids.map(id => renderCard(id))}
+        </div>
+      </>
+    );
+  }
+
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
       {/* Provider list */}
@@ -214,32 +230,17 @@ export function ProvidersView({ state, actions }: Props) {
           <Badge status="ok" label={`${readyCount} route ready`} />
           <Badge status={blockedCount > 0 ? "warn" : "ok"} label={`${blockedCount} blocked`} />
           <Badge status={unhealthyCount > 0 ? "error" : "ok"} label={`${unhealthyCount} unhealthy`} />
+          <Badge status={misconfiguredCount > 0 ? "warn" : "ok"} label={`${misconfiguredCount} missing credentials`} />
         </div>
-
-        {/* Cloud */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Cloud providers</span>
-          <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>
-            {cloudEnabledCount}/{allCloudIDs.length} enabled
-          </span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 10, marginBottom: 24 }}>
-          {allCloudIDs.map(id => renderCard(id))}
-        </div>
-
-        {/* Local */}
-        {allLocalIDs.length > 0 && (
-          <>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Local inference</span>
-              <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>
-                {localEnabledCount}/{allLocalIDs.length} connected
-              </span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 10 }}>
-              {allLocalIDs.map(id => renderCard(id))}
-            </div>
-          </>
+        {renderSection(
+          "Cloud providers",
+          `${cloudEnabledCount}/${cloudIDs.length} enabled`,
+          cloudIDs,
+        )}
+        {renderSection(
+          "Local inference",
+          `${localEnabledCount}/${localIDs.length} connected`,
+          localIDs,
         )}
       </div>
 

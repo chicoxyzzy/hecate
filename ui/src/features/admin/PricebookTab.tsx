@@ -400,6 +400,12 @@ export function PricebookTab({ state, actions }: Props) {
 
   return (
     <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Pricing</span>
+        <span style={{ fontSize: 11, color: "var(--t3)" }}>Manage cloud-model pricebook entries and import upstream pricing proposals.</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{unified.length} models</span>
+      </div>
+
       {/* Status tabs — primary segmentation. Border-bottom on the
           container makes the active tab's underline merge with the
           page rule, matching the AdminView tab visual. */}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord, ConfiguredPolicyRuleRecord } from "../../types/runtime";
 import type { PolicyRuleUpsertPayload } from "../../lib/api";
@@ -14,8 +14,18 @@ type Props = {
 // Adding a new tab means: add the id here, add a body conditional in
 // the render, and add a content component. Don't duplicate the list
 // — both the tab bar and the localStorage validator read from this.
-const TABS = ["keys", "tenants", "policy", "budget", "usage", "pricebook", "integrations", "retention"] as const;
+const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "policy", "retention", "integrations"] as const;
 type Tab = (typeof TABS)[number];
+const TAB_LABELS: Record<Tab, string> = {
+  keys: "Keys",
+  tenants: "Tenants",
+  budget: "Balances",
+  usage: "Usage",
+  pricebook: "Pricing",
+  policy: "Policy",
+  retention: "Retention",
+  integrations: "Clients",
+};
 
 const TAB_STORAGE_KEY = "hecate.adminTab";
 
@@ -57,7 +67,7 @@ export function AdminView({ state, actions }: Props) {
               textTransform: "uppercase",
               letterSpacing: "0.04em",
             }}>
-            {t}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -73,6 +83,33 @@ export function AdminView({ state, actions }: Props) {
         {tab === "integrations" && <IntegrationsTab />}
         {tab === "retention"    && <RetentionTab state={state} actions={actions} />}
       </div>
+    </div>
+  );
+}
+
+function SectionHeader({
+  title,
+  description,
+  meta,
+  actions,
+}: {
+  title: string;
+  description?: string;
+  meta?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: description ? 3 : 0 }}>{title}</div>
+        {description && (
+          <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45 }}>{description}</div>
+        )}
+      </div>
+      {meta && (
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)", whiteSpace: "nowrap" }}>{meta}</span>
+      )}
+      {actions && <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>{actions}</div>}
     </div>
   );
 }
@@ -164,25 +201,27 @@ function KeysTab({ state, actions }: Props) {
 
   return (
     <>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>API keys</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{apiKeys.length} total</span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          {tenantNames.length > 0 && (
-            <select className="select" value={filterTenant} onChange={e => setFilterTenant(e.target.value)}>
-              <option value="all">All tenants</option>
-              {tenantNames.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-          )}
-          <button className="btn btn-sm" onClick={() => setRotateOpen(true)}>
-            <Icon d={Icons.refresh} size={13} /> Rotate key
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={openNewKey}>
-            <Icon d={Icons.plus} size={13} /> New key
-          </button>
-        </div>
-      </div>
+      <SectionHeader
+        title="API keys"
+        description="Issue and rotate control-plane credentials."
+        meta={`${apiKeys.length} total`}
+        actions={
+          <>
+            {tenantNames.length > 0 && (
+              <select className="select" value={filterTenant} onChange={e => setFilterTenant(e.target.value)}>
+                <option value="all">All tenants</option>
+                {tenantNames.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            )}
+            <button className="btn btn-sm" onClick={() => setRotateOpen(true)}>
+              <Icon d={Icons.refresh} size={13} /> Rotate key
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={openNewKey}>
+              <Icon d={Icons.plus} size={13} /> New key
+            </button>
+          </>
+        }
+      />
 
       {/* Keys grouped by tenant */}
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -422,20 +461,23 @@ function TenantsTab({ state, actions }: Props) {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Tenants</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{tenants.length} total</span>
-        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={() => {
-          setNewOpen(true);
-          setCreateError("");
-          actions.setTenantFormName("");
-          actions.setTenantFormID("");
-          actions.setTenantFormProviders([]);
-          actions.setTenantFormModels([]);
-        }}>
-          <Icon d={Icons.plus} size={13} /> New tenant
-        </button>
-      </div>
+      <SectionHeader
+        title="Tenants"
+        description="Scope access and model/provider allowances."
+        meta={`${tenants.length} total`}
+        actions={
+          <button className="btn btn-primary btn-sm" onClick={() => {
+            setNewOpen(true);
+            setCreateError("");
+            actions.setTenantFormName("");
+            actions.setTenantFormID("");
+            actions.setTenantFormProviders([]);
+            actions.setTenantFormModels([]);
+          }}>
+            <Icon d={Icons.plus} size={13} /> New tenant
+          </button>
+        }
+      />
 
       {tenants.length > 0 ? (
         <div className="card" style={{ overflow: "hidden" }}>
@@ -713,13 +755,16 @@ function PolicyTab({ state, actions }: Props) {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Policy rules</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>{rules.length} total</span>
-        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={openNew}>
-          <Icon d={Icons.plus} size={13} /> New rule
-        </button>
-      </div>
+      <SectionHeader
+        title="Policy"
+        description="Deny or rewrite requests before they route."
+        meta={`${rules.length} total`}
+        actions={
+          <button className="btn btn-primary btn-sm" onClick={openNew}>
+            <Icon d={Icons.plus} size={13} /> New rule
+          </button>
+        }
+      />
 
       {rules.length > 0 ? (
         <div className="card" style={{ overflow: "hidden" }}>
@@ -959,7 +1004,10 @@ function BudgetTab({ state, actions }: Props) {
 
   return (
     <>
-      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 10 }}>Account budget</div>
+      <SectionHeader
+        title="Balances and limits"
+        description="Track credits, balance, and warning thresholds."
+      />
       <div className="card" style={{ padding: "14px 16px", marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>{budget.scope}</span>
@@ -1067,11 +1115,16 @@ function UsageTab({ state }: { state: Props["state"] }) {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Token usage log</span>
-        <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>live</span>
-        <Dot color="green" />
-      </div>
+      <SectionHeader
+        title="Request ledger"
+        description="Review live request usage, token counts, and request IDs."
+        actions={
+          <>
+            <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>live</span>
+            <Dot color="green" />
+          </>
+        }
+      />
       {ledger.length > 0 ? (
         <div className="card" style={{ overflow: "hidden" }}>
           <table className="table" style={{ tableLayout: "fixed" }}>
@@ -1150,10 +1203,16 @@ function RetentionTab({ state, actions }: Props) {
 
   return (
     <>
+      <SectionHeader
+        title="Retention"
+        description="Prune stored traces, budgets, audit events, and cache data."
+        meta={`${runs.length} run${runs.length === 1 ? "" : "s"}`}
+      />
+
       {/* Controls */}
       <div className="card" style={{ padding: "14px 16px", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-          <span style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)" }}>Subsystems to prune</span>
+          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Subsystems to prune</span>
           <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>
             {selectedSet.size === 0 ? "all" : `${selectedSet.size} selected`}
           </span>
@@ -1194,7 +1253,7 @@ function RetentionTab({ state, actions }: Props) {
       {lastRun && (
         <div className="card" style={{ padding: "14px 16px", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)" }}>Last run</span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>Last run</span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t3)" }}>
               {relativeTime(lastRun.finished_at)}
             </span>
@@ -1237,7 +1296,7 @@ function RetentionTab({ state, actions }: Props) {
       )}
 
       {/* History */}
-      <div style={{ fontSize: 12, fontWeight: 500, color: "var(--t1)", marginBottom: 8 }}>History</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 8 }}>History</div>
       {runs.length > 0 ? (
         <div className="card" style={{ overflow: "hidden" }}>
           {runs.slice(0, 20).map((r, i) => {
@@ -1296,7 +1355,7 @@ export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
     <>
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 4 }}>
-          Point a coding client at this gateway
+          Client setup
         </div>
         <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
           Copy the env vars below into your shell (or your client's settings) to route Codex,
@@ -1349,4 +1408,3 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </div>
   );
 }
-
