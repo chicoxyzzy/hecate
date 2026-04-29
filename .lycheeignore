@@ -20,6 +20,10 @@
 ^https://api\.x\.ai
 ^https://generativelanguage\.googleapis\.com
 
+# MCP specification site — TLS handshake fails from CI runners (SNI/CA issue),
+# but the URL is real and intentionally referenced in agent-instruction docs.
+^https://spec\.modelcontextprotocol\.io
+
 # Documentation example placeholders, not real endpoints.
 ^https://api\.example\.com
 ^https://example\.com

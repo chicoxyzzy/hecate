@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race vet coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke docs-env-check verify-alpha reset-dev reset-docker screenshots
+.PHONY: test test-race vet coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke docs-env-check check-links verify-alpha reset-dev reset-docker screenshots
 
 # build produces a single self-contained hecate binary with the UI bundle
 # embedded. The UI is built first so //go:embed picks up the real assets;
@@ -101,6 +101,22 @@ docs-env-check:
 	@test -f docs/release.md
 	@test -f docs/known-limitations.md
 	@! rg -n 'GATEWAY_POLICY_RULES_JSON|GATEWAY_PRICEBOOK_JSON|GATEWAY_PROVIDERS|PROVIDER_[A-Z0-9_]+_(PROTOCOL|API_VERSION|TIMEOUT)' README.md docs .env.example internal/config e2e .github
+
+# check-links runs lychee against all markdown and .mdc files to catch broken
+# relative links and dead external URLs. Mirrors the CI Links workflow.
+# Install lychee via: brew install lychee  OR  cargo install lychee
+check-links:
+	@command -v lychee >/dev/null 2>&1 || { \
+	  echo "lychee not installed."; \
+	  echo "  macOS:  brew install lychee"; \
+	  echo "  Cargo:  cargo install lychee"; \
+	  exit 1; \
+	}
+	lychee --no-progress --include-fragments \
+	  --exclude-path .gomodcache \
+	  --exclude-path ui/node_modules \
+	  --exclude-path .claude/skills \
+	  './**/*.md' './**/*.mdc'
 
 # verify-alpha is the public-alpha release gate. It intentionally runs only
 # non-destructive checks, but it is not cheap: Docker and UI e2e can take a bit.
