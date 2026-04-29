@@ -8,6 +8,20 @@ Reference for every event Hecate emits to its persisted run-event log, surfaced 
 
 These are **persisted events** (rows in the `task_state_run_events` table). They are a different stream from OTel spans — spans live in your tracing backend; events live in the gateway's storage tier and are subscriber-friendly. See [telemetry.md](telemetry.md) for OTel.
 
+## Contents
+
+- [Quick reference](#quick-reference)
+- [Common payload structure](#common-payload-structure)
+- [Run lifecycle](#run-lifecycle)
+- [Steps](#steps)
+- [Artifacts](#artifacts)
+- [Approvals](#approvals)
+- [Agent loop](#agent-loop)
+- [MCP](#mcp)
+- [Housekeeping](#housekeeping)
+- [Subscribing tips](#subscribing-tips)
+- [Related docs](#related-docs)
+
 ## Quick reference
 
 | Event type | Group | When |

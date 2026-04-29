@@ -7,6 +7,26 @@ Hecate participates in MCP (Model Context Protocol) on both sides:
 
 Both sides speak [MCP spec](https://modelcontextprotocol.io/) `2025-11-25`.
 
+## Contents
+
+- [Hecate as MCP server](#hecate-as-mcp-server) — expose Hecate to Claude Desktop / Cursor / Zed
+  - [What's available](#whats-available)
+  - [Configure it](#configure-it)
+  - [Verify it locally](#verify-it-locally)
+  - [Behavior notes](#behavior-notes)
+  - [Spec compliance](#spec-compliance)
+- [Hecate as MCP client](#hecate-as-mcp-client) — call external MCP servers from `agent_loop` tasks
+  - [Configuration](#configuration)
+  - [Transports](#transports)
+  - [Secrets in `env` and `headers`](#secrets-in-env-and-headers)
+  - [Approval policy](#approval-policy)
+  - [Tool namespacing](#tool-namespacing)
+  - [Lifecycle and caching](#lifecycle-and-caching)
+  - [Resource limits](#resource-limits)
+  - [Shutdown](#shutdown)
+  - [Error handling](#error-handling)
+  - [End-to-end examples](#end-to-end-examples)
+
 ---
 
 ## Hecate as MCP server
@@ -105,7 +125,9 @@ Expected output: two JSON-RPC responses on stdout (initialize result + tools lis
 
 ## Hecate as MCP client
 
-The other direction: an `agent_loop` task configures one or more external MCP servers, the agent loop brings them up at run start, and their tools become callable by the LLM alongside Hecate's built-ins (`shell_exec`, `file_write`, `git_exec`, `read_file`, `list_dir`, `http_request`).
+> The other half of the MCP integration: external MCP servers as tool sources for `agent_loop` tasks. The section above (Hecate as MCP server) is independent — read either standalone.
+
+An `agent_loop` task configures one or more external MCP servers, the agent loop brings them up at run start, and their tools become callable by the LLM alongside Hecate's built-ins (`shell_exec`, `file_write`, `git_exec`, `read_file`, `list_dir`, `http_request`).
 
 A server vending tool `read_file` under the operator-chosen alias `filesystem` shows up to the LLM as `mcp__filesystem__read_file`. The double-underscore is the namespace separator; the LLM picks the namespaced name and Hecate routes the call back to the right upstream.
 

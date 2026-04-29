@@ -4,6 +4,24 @@ Hecate exposes a coding-runtime API surface under `/v1/tasks` for client-orchest
 
 For the high-level execution flow (lease semantics, sandbox boundary, event sequence), see [`architecture.md`](architecture.md#task-runtime-flow). For the LLM-driven `agent_loop` execution kind specifically (tools, approval gating, cost tracking, retry-from-turn semantics), see [`agent-runtime.md`](agent-runtime.md). For LLM client endpoints (`/v1/chat/completions`, `/v1/messages`, `/v1/models`), see [`client-integration.md`](client-integration.md).
 
+## Contents
+
+- [Core resources](#core-resources)
+  - [Task fields](#task-fields)
+  - [Run fields](#run-fields)
+- [Lifecycle endpoints](#lifecycle-endpoints)
+  - [Resume semantics](#resume-semantics)
+  - [Retry-from-turn-N semantics](#retry-from-turn-n-semantics)
+- [Execution detail endpoints](#execution-detail-endpoints)
+- [Approval endpoints](#approval-endpoints)
+  - [Approval kinds](#approval-kinds)
+  - [Approval policy configuration](#approval-policy-configuration)
+- [Event and stream endpoints](#event-and-stream-endpoints)
+- [Queue execution model](#queue-execution-model)
+- [Runtime backend and queue configuration](#runtime-backend-and-queue-configuration)
+- [Health and discovery endpoints](#health-and-discovery-endpoints)
+- [Rate-limit headers on chat / messages](#rate-limit-headers-on-chat--messages)
+
 ## Core resources
 
 - `task`
@@ -27,6 +45,7 @@ The `task` resource accepts these fields on `POST /v1/tasks`:
 - `sandbox_allowed_root` / `sandbox_read_only` / `sandbox_network` — sandbox policy for shell / git / file kinds
 - `requested_provider` / `requested_model` — pin the LLM (`agent_loop`); empty falls back to gateway default
 - `budget_micros_usd` — per-task cost ceiling in micro-USD; `0` disables
+- `mcp_servers` — `agent_loop`-only array of external MCP server configs whose tools join the LLM's tool catalog under `mcp__<name>__<tool>` aliases. Each entry picks one transport (stdio: `command` + optional `args` / `env`; HTTP: `url` + optional `headers`), and may set `approval_policy` (`auto` / `require_approval` / `block`). Capped per-task by `GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK`. Full schema, secret handling, and lifecycle in [`mcp.md#hecate-as-mcp-client`](mcp.md#hecate-as-mcp-client).
 - `priority` / `timeout_ms`
 
 ### Run fields
@@ -101,6 +120,19 @@ The `kind` field on a `task_approval` is one of:
 
 Resolve payload: `{"decision": "approve" | "reject", "note": "..."}`. Approving an `agent_loop_tool_call` requeues the same run; the loop dispatches the approved tool calls without re-calling the LLM.
 
+### Approval policy configuration
+
+`GATEWAY_TASK_APPROVAL_POLICIES` (default `shell_exec`) is a comma-separated allowlist of which approval gates are active across the task runtime. It controls both pre-execution gates on `shell` / `git` / `file` tasks **and** mid-loop gates inside `agent_loop` runs — same env var, same names. Recognized values:
+
+| Value | Effect |
+|---|---|
+| `shell_exec` | Gate `execution_kind=shell` task creates and `agent_loop` `shell_exec` tool calls. |
+| `git_exec` | Gate `execution_kind=git` task creates and `agent_loop` `git_exec` tool calls. |
+| `file_write` | Gate `execution_kind=file` task creates and `agent_loop` `file_write` tool calls. |
+| `network_egress` | Gate task creates that opt into `sandbox_network=true`. |
+
+Empty value disables every gate (use only in trusted environments). For per-MCP-server gating in `agent_loop` runs, see `approval_policy` on `mcp_servers` entries in [`mcp.md#approval-policy`](mcp.md#approval-policy).
+
 ## Event and stream endpoints
 
 ### Per-run events
@@ -165,7 +197,6 @@ sequenceDiagram
 ## Runtime backend and queue configuration
 
 - `GATEWAY_TASKS_BACKEND=memory|sqlite|postgres`
-- `GATEWAY_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write,network_egress`
 - `GATEWAY_TASK_QUEUE_BACKEND=memory|sqlite|postgres`
 - `GATEWAY_TASK_QUEUE_WORKERS=<int>`
 - `GATEWAY_TASK_QUEUE_BUFFER=<int>`
@@ -296,7 +327,7 @@ GET /v1/provider-presets
 
 The list is built from `config.BuiltInProviders()` — see [`docs/providers.md`](providers.md) for the full catalog and how to add custom providers.
 
-### Rate-limit headers on chat / messages
+## Rate-limit headers on chat / messages
 
 Every response from `POST /v1/chat/completions` and `POST /v1/messages` carries three rate-limit headers, regardless of whether rate limiting is enabled (the headers are zero-value when off):
 

@@ -15,6 +15,22 @@ The Observe tab in the operator UI surfaces all of this without needing an exter
 
 For the full request lifecycle that produces these traces, see [`architecture.md`](architecture.md).
 
+## Contents
+
+- [Three streams, not one](#three-streams-not-one)
+- [What You Can Inspect Today](#what-you-can-inspect-today)
+- [OTLP Configuration](#otlp-configuration)
+- [Inbound Trace Context Propagation](#inbound-trace-context-propagation)
+- [Core Vocabulary](#core-vocabulary)
+- [Traces](#traces)
+- [Metrics](#metrics)
+- [Error And Limit Signals](#error-and-limit-signals)
+- [Local Debugging Workflow](#local-debugging-workflow)
+- [Known-Good OTLP Recipes](#known-good-otlp-recipes)
+- [Troubleshooting Runbooks](#troubleshooting-runbooks)
+- [Release Validation Checklist](#release-validation-checklist)
+- [OTel support: status and gaps](#otel-support-status-and-gaps)
+
 ## Three streams, not one
 
 Hecate produces three independent observability surfaces. They overlap in vocabulary but serve different consumers; mixing them up is the most common cause of "I'm seeing the wrong shape" confusion.
@@ -258,16 +274,18 @@ Retention manager runs emit events under the `retention.run` span:
 | `retention.history.persisted` | Run record written to history store |
 | `retention.history.failed` | History write failed |
 
-The retention worker handles the following subsystems (each with a `GATEWAY_RETENTION_<NAME>_MAX_AGE` / `_MAX_COUNT` knob — see `.env.example`):
+The retention worker handles the following subsystems. The **subsystem name** is what the runtime exposes (in retention history rows, in `POST /admin/retention/run`'s `subsystems` array, and in `retention.subsystem.*` events); the **env-var prefix** is the config knob — they don't always match verbatim.
 
-| Subsystem | What it prunes |
-|---|---|
-| `trace_snapshots` | Per-request profiler trace snapshots |
-| `budget_events` | Governor budget ledger entries |
-| `audit_events` | Control-plane audit log |
-| `exact_cache` | Exact-match response cache |
-| `semantic_cache` | Semantic-similarity response cache |
-| `turn_events` | `agent.turn.completed` rows in the run-events table — high-cardinality bulk telemetry from agent_loop runs. Other event types (`run.started`, `run.finished`, `approval.*`) are never touched |
+| Subsystem (runtime) | Env-var prefix | What it prunes |
+|---|---|---|
+| `trace_snapshots` | `GATEWAY_RETENTION_TRACES_` | Per-request profiler trace snapshots |
+| `budget_events` | `GATEWAY_RETENTION_BUDGET_EVENTS_` | Governor budget ledger entries |
+| `audit_events` | `GATEWAY_RETENTION_AUDIT_EVENTS_` | Control-plane audit log |
+| `exact_cache` | `GATEWAY_RETENTION_EXACT_CACHE_` | Exact-match response cache |
+| `semantic_cache` | `GATEWAY_RETENTION_SEMANTIC_CACHE_` | Semantic-similarity response cache |
+| `turn_events` | `GATEWAY_RETENTION_TURN_EVENTS_` | `agent.turn.completed` rows in the run-events table — high-cardinality bulk telemetry from agent_loop runs. Other event types (`run.started`, `run.finished`, `approval.*`) are never touched |
+
+Each prefix has a `_MAX_AGE` and `_MAX_COUNT` suffix (e.g. `GATEWAY_RETENTION_TRACES_MAX_AGE=24h`). See `.env.example` for the defaults.
 
 ## Metrics
 

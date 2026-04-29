@@ -2,6 +2,14 @@
 
 Hecate splits cleanly into two concurrent surfaces: a **gateway** for OpenAI- and Anthropic-shaped client traffic, and a **task runtime** for queued agent work. Both are served from the same binary on the same port, but the request paths are independent — you can use either in isolation, or both side-by-side.
 
+## Contents
+
+- [Gateway request flow](#gateway-request-flow)
+- [Task runtime flow](#task-runtime-flow)
+- [Agent loop turn cycle](#agent-loop-turn-cycle)
+- [Storage tiers](#storage-tiers)
+- [Why two flows in one binary](#why-two-flows-in-one-binary)
+
 ## Gateway request flow
 
 Every chat / messages call goes through the same pipeline. Each gate can short-circuit the request — auth/policy/budget failures never spend upstream tokens, and a cache hit returns without calling the provider at all. Errors produce a fixed status code per gate so client SDKs can handle them deterministically.
@@ -69,13 +77,17 @@ flowchart TD
 
     Executor["Executor<br/>(shell / git / file / agent_loop)"]
     Executor --> AgentLoop{"agent_loop?"}
-    AgentLoop -->|"yes"| LoopRef["See: Agent loop turn cycle<br/>(mid-loop approval gate,<br/>per-turn cost events)"]
+    AgentLoop -->|"yes"| LoopRef["See: Agent loop turn cycle<br/>(mid-loop approval gate,<br/>per-turn cost events,<br/>built-in tools + MCP servers)"]
     AgentLoop -->|"no"| Sandboxd["sandboxd<br/>(out-of-process exec)"]
+    LoopRef --> Sandboxd
+    LoopRef --> McpServers["External MCP servers<br/>(stdio / HTTP, per-server<br/>approval policy)"]
 
     Sandboxd --> State["Task state<br/>(runs, steps, artifacts)"]
     LoopRef --> State
+    McpServers --> State
     Sandboxd --> RunEvents["Run events<br/>(monotonic sequence)"]
     LoopRef --> RunEvents
+    McpServers --> RunEvents
 
     State --> Snapshot["Run snapshot<br/>(includes Approvals)"]
     RunEvents --> Snapshot
@@ -107,23 +119,31 @@ sequenceDiagram
     participant LLM
     participant Tools
     participant Sandbox
+    participant MCP as External MCP server
     participant Store
     Worker->>Agent: Execute
     Agent->>Store: load conversation if resume
     Note over Agent: prepend workspace env message<br/>plus four-layer system prompt
+    Note over Agent,MCP: bring up cached MCP clients,<br/>merge their tools into the catalog
     loop turn cycle
         Agent->>LLM: Chat with messages, tools, and ProviderHint
         LLM-->>Agent: assistant message
         Agent->>Store: emit agent.turn.completed event
         Agent->>Store: persist conversation snapshot
         alt assistant emitted tool_calls
-            opt any tool gated by policy
+            opt any tool gated by policy<br/>(built-in or per-MCP-server)
                 Agent->>Store: persist agent_loop_tool_call approval
                 Agent-->>Worker: pause as awaiting_approval
             end
             Agent->>Tools: dispatch each tool_call
-            Tools->>Sandbox: shell_exec or file_write or http_request
-            Sandbox-->>Tools: result
+            alt built-in tool (mcp__ prefix absent)
+                Tools->>Sandbox: shell_exec / file_write / http_request / ...
+                Sandbox-->>Tools: result
+            else mcp__server__tool
+                Tools->>MCP: call upstream tool
+                MCP-->>Tools: result (or is_error=true)
+                Tools->>Store: emit mcp.tool.dispatched / failed / blocked
+            end
             Tools-->>Agent: tool result text
             Agent->>Store: persist updated conversation
         else assistant emitted final answer
@@ -135,7 +155,7 @@ sequenceDiagram
 
 Three runtime invariants worth pinning (full mechanics in [`agent-runtime.md`](agent-runtime.md)):
 
-- **Workspace environment system message.** The loop prepends a machine-generated system message naming the workspace path, so the model uses the cloned cwd instead of the source path it sees in the user prompt. Without this, tool calls land outside the sandbox and fail with `escapes allowed root`.
+- **Workspace environment system message.** The loop prepends a machine-generated system message naming the workspace path so the model uses the cloned cwd. See [`agent-runtime.md#workspace-environment-system-message`](agent-runtime.md#workspace-environment-system-message) for the wire shape and rationale.
 - **Provider hint.** `ChatRequest.Scope.ProviderHint` is set from `run.Provider` (mirrored from `task.RequestedProvider`), so the operator's pinned provider actually routes — no fallback to the default for generic model ids.
 - **Cost ceiling is task-cumulative.** The per-task `BudgetMicrosUSD` is checked against `priorCost + costSpent` after each turn, where `priorCost` includes every prior run in the resume chain. A chain of resumes can't escape the ceiling.
 

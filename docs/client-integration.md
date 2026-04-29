@@ -4,6 +4,19 @@ This guide explains how to point external coding clients at Hecate as the model 
 
 For the request lifecycle Hecate runs each call through (auth → policy → cache → router → provider), see [`architecture.md`](architecture.md#gateway-request-flow). For task-runtime (`/v1/tasks/...`) endpoints, see [`runtime-api.md`](runtime-api.md).
 
+## Contents
+
+- [The easy path — Admin → Integrations](#the-easy-path--admin--integrations)
+- [Base URL and endpoints](#base-url-and-endpoints)
+- [Authentication options](#authentication-options)
+- [Two operating modes](#two-operating-modes)
+- [Codex setup](#codex-setup)
+- [Claude Code setup](#claude-code-setup)
+- [Smoke tests](#smoke-tests)
+- [Multi-modal content (vision)](#multi-modal-content-vision)
+- [OpenAI request fields and cross-provider behavior](#openai-request-fields-and-cross-provider-behavior)
+- [Common failures](#common-failures)
+
 ## The easy path — Admin → Integrations
 
 The fastest way to wire a coding client up is the **Integrations** sub-tab in the operator UI's Admin view. The base URL is auto-filled from your browser location (so it works as-is for local dev, internal hostnames, and public deploys behind TLS terminators), each snippet has its own copy button, and the panel cross-links the Keys tab where you mint a scoped API key.

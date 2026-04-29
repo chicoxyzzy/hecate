@@ -4,6 +4,19 @@ Hecate's `agent_loop` execution kind runs an LLM-driven loop: the model picks to
 
 For the high-level execution flow that wraps it (queue, lease, sandbox, events), see [`architecture.md`](architecture.md#task-runtime-flow). For the API endpoints that drive it, see [`runtime-api.md`](runtime-api.md).
 
+## Contents
+
+- [Loop mechanics](#loop-mechanics)
+- [Built-in tools](#built-in-tools)
+- [External MCP tools](#external-mcp-tools)
+- [Workspace modes](#workspace-modes)
+- [Four-layer system prompt](#four-layer-system-prompt)
+- [Approval gating](#approval-gating)
+- [Cost tracking](#cost-tracking)
+- [Retry and resume](#retry-and-resume)
+- [Configuration knobs](#configuration-knobs)
+- [Common failure modes](#common-failure-modes)
+
 ## Loop mechanics
 
 A run with `execution_kind=agent_loop` walks turns:
@@ -21,16 +34,17 @@ sequenceDiagram
     participant Runner
     participant Agent
     participant LLM
-    participant Tools
+    participant Tools as Tools (built-in + mcp__server__tool)
     participant Store
     Runner->>Agent: Execute
     Agent->>Store: load saved conversation if resume
+    Note over Agent,Tools: tool catalog = built-ins + every<br/>mcp_servers entry's tool list
     loop turn cycle
         Agent->>LLM: Chat with messages and tool schemas
         LLM-->>Agent: assistant message
         Agent->>Store: persist conversation snapshot
         alt assistant emitted tool_calls
-            opt any tool gated by policy
+            opt any tool gated by policy<br/>(built-in approval or per-server MCP policy)
                 Agent->>Store: persist approval as pending
                 Agent-->>Runner: pause as awaiting_approval
             end
@@ -74,6 +88,12 @@ Tool argument schemas are JSON-Schema-shaped and surfaced to the LLM in the stan
 - When `GATEWAY_TASK_SHELL_ALLOWED_HOSTS` is set, only those exact hostnames are reachable. Empty = all public hosts allowed.
 
 Enforcement is **best-effort static parsing** of the command string. Tools that respect the allowlist (`curl`, `wget`, `git fetch`, `npm install`, `pip install`, etc.) get covered; clever obfuscation (base64-encoded URLs, `nc`/`telnet` raw sockets, custom-binary egress) bypasses it. For hard isolation, run the gateway in a network namespace or behind a filtering egress proxy. The default `sandbox_network=false` (no network at all) remains the strongest guarantee.
+
+## External MCP tools
+
+In addition to the six built-ins, an `agent_loop` task can declare external MCP servers on the `mcp_servers` task field. Their tools join the LLM's catalog at run start under `mcp__<server>__<tool>` aliases — for example a `read_file` tool on a server aliased `fs` becomes `mcp__fs__read_file`. Approval gating is per-server (`auto` / `require_approval` / `block`), distinct from the built-in approval policy axis.
+
+See [`mcp.md#hecate-as-mcp-client`](mcp.md#hecate-as-mcp-client) for the full schema, transports (stdio + Streamable HTTP), secret-aware `env` / `headers`, lifecycle / caching contract, and dry-run probe.
 
 ## Workspace modes
 
@@ -155,13 +175,14 @@ Env vars that affect agent_loop runs:
 |---|---|---|
 | `GATEWAY_TASK_AGENT_LOOP_MAX_TURNS` | `8` | Hard ceiling on LLM round-trips per run |
 | `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` | `""` | Global (broadest) layer of the four-layer system prompt |
-| `GATEWAY_TASK_APPROVAL_POLICIES` | `shell_exec` | Comma-separated approval gates (`shell_exec`, `git_exec`, `file_write`, `network_egress`) |
 | `GATEWAY_TASK_HTTP_TIMEOUT` | `30s` | Timeout for the `http_request` tool |
 | `GATEWAY_TASK_HTTP_MAX_RESPONSE_BYTES` | `262144` (256 KiB) | Response size cap for `http_request` |
 | `GATEWAY_TASK_HTTP_ALLOW_PRIVATE_IPS` | `false` | When `false`, blocks loopback / RFC1918 / link-local destinations |
 | `GATEWAY_TASK_HTTP_ALLOWED_HOSTS` | `""` | Comma-separated exact-host allowlist; empty = all public hosts |
 | `GATEWAY_TASK_SHELL_ALLOW_PRIVATE_IPS` | `false` | Same private-IP block, applied to URLs in shell_exec / git_exec commands when the task has `sandbox_network=true` |
 | `GATEWAY_TASK_SHELL_ALLOWED_HOSTS` | `""` | Same exact-host allowlist, applied to shell_exec / git_exec command URLs |
+
+For `GATEWAY_TASK_APPROVAL_POLICIES` (which gates `shell_exec` / `git_exec` / `file_write` / `network_egress` mid-loop tool calls and the matching pre-execution task gates) see [`runtime-api.md#approval-policy-configuration`](runtime-api.md#approval-policy-configuration). For per-task `mcp_servers` knobs (max-servers cap, client-cache sizing, ping intervals) see [`runtime-api.md#runtime-backend-and-queue-configuration`](runtime-api.md#runtime-backend-and-queue-configuration) and [`mcp.md#resource-limits`](mcp.md#resource-limits).
 
 Per-task fields on `POST /v1/tasks` that affect agent_loop:
 
@@ -172,6 +193,7 @@ Per-task fields on `POST /v1/tasks` that affect agent_loop:
 - `workspace_mode` — `""` / `"persistent"` / `"ephemeral"` (all clone) or `"in_place"` (use source directly)
 - `requested_provider` / `requested_model` — pin the LLM provider and model
 - `budget_micros_usd` — per-task cost ceiling in micro-USD; `0` disables
+- `mcp_servers` — array of external MCP server configs whose tools join the catalog under `mcp__<name>__<tool>` aliases. Schema in [`mcp.md#hecate-as-mcp-client`](mcp.md#hecate-as-mcp-client).
 
 ## Common failure modes
 

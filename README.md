@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/chicoxyzzy/hecate)](LICENSE)
 [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-f5a800?logo=opentelemetry&logoColor=white)](https://opentelemetry.io/)
 
-Hecate is an open-source AI gateway and agent-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and first-class OpenTelemetry.
+Hecate is an open-source AI gateway and agent-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and OpenTelemetry.
 
 One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffic) and **agent-style execution loops** (queued tasks with approvals, sandboxed shell/file/git, resumable runs), while keeping operators in control of cost, safety, and traceability.
 
@@ -15,18 +15,20 @@ One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffi
 ## Table Of Contents
 
 - [Quick Start](#quick-start)
+- [Connect Your Client](#connect-your-client)
 - [Architecture](#architecture)
 - [Operator UI](#operator-ui)
 - [Auth, Policy, And Spend](#auth-policy-and-spend)
 - [Observability](#observability)
-- [Using Hecate With Codex And Claude Code](#using-hecate-with-codex-and-claude-code)
 - [Config Highlights](#config-highlights)
   - [Auth and data](#auth-and-data)
   - [Storage backends](#storage-backends)
   - [Agent task runtime](#agent-task-runtime)
+  - [MCP integration](#mcp-integration)
+  - [Rate limiting](#rate-limiting)
   - [Telemetry](#telemetry)
 - [Docs](#docs)
-- [Roadmap](#roadmap)
+- [Status](#status)
 - [License](#license)
 
 ## Quick Start
@@ -55,17 +57,31 @@ The browser remembers the token in `localStorage`; subsequent visits go straight
 
 Operating the docker stack — Postgres/Ollama profiles, image pinning, recovering a lost admin token, resetting state — is in [`docs/deployment.md`](docs/deployment.md). Setting up a local source build with hot-reload is in [`docs/development.md`](docs/development.md).
 
+## Connect Your Client
+
+Hecate speaks both shapes natively, so existing CLIs work without code changes:
+
+| Client | Endpoint to set | Auth header |
+|---|---|---|
+| **Codex** (OpenAI Chat Completions) | `OPENAI_BASE_URL=http://127.0.0.1:8080/v1` | `OPENAI_API_KEY=<bearer or tenant key>` |
+| **Claude Code** (Anthropic Messages) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080` | `ANTHROPIC_API_KEY=<bearer or tenant key>` |
+| **Any OpenAI/Anthropic SDK** | their `base_url` knob → `…/v1` | the SDK's API-key knob |
+
+The Operator UI's **Admin → Integrations** tab gives you copy-paste env-var snippets pre-filled with your gateway URL. For full details — `GET /v1/models` discovery, vision content, gateway-only vs. runtime modes, common 4xx codes — see [`docs/client-integration.md`](docs/client-integration.md).
+
 ## Architecture
 
-Hecate splits into two concurrent surfaces in one binary: a gateway for OpenAI- and Anthropic-shaped client traffic, and a task runtime for queued agent work. Both share auth, budgets, and observability — but the request paths are independent, so you can use either in isolation.
+Hecate is two concurrent surfaces in one Go binary: a **gateway** for OpenAI- and Anthropic-shaped client traffic, and a **task runtime** for queued agent work. Both share auth, budgets, observability, and an MCP integration layer — but their request paths are independent, so you can use either in isolation.
 
 ```mermaid
 flowchart LR
-    Client["Client"]
+    Client["Clients<br/>(Codex, Claude Code, SDKs)"]
     Client -->|"chat / messages"| Gateway["Gateway pipeline"]
     Client -->|"task control"| Runtime["Task runtime"]
     Gateway --> Providers["Cloud + local providers"]
     Runtime --> Sandbox["sandboxd execution boundary"]
+    Runtime --> MCP["External MCP servers<br/>(filesystem, github, ...)"]
+    MCPClients["MCP clients<br/>(Claude Desktop, Cursor, Zed)"] -->|"hecate mcp-server"| Runtime
     Gateway --> Telemetry["OTel traces, metrics, logs"]
     Runtime --> Telemetry
 ```
@@ -149,33 +165,19 @@ The app shell lives in `ui/src/app`, shared console primitives live in `ui/src/f
 
 ## Auth, Policy, And Spend
 
-Auth supports admin bearer (auto-generated on first run; override with `GATEWAY_AUTH_TOKEN`) and persisted control-plane API keys with allowed-providers/allowed-models scoping.
-
-The control plane manages tenants, keys, providers (with encrypted secrets at rest), policy rules, the pricebook, and audit history.
-
-The governor enforces budgets (with warning thresholds, top-ups, resets, and history), denies requests as `402` on budget exhaustion, and rate-limits per-key with `X-RateLimit-*` headers.
+- **Auth** — admin bearer (auto-generated on first run; override with `GATEWAY_AUTH_TOKEN`) plus persisted per-tenant API keys with allowed-providers / allowed-models scoping.
+- **Control plane** — tenants, keys, providers (encrypted secrets at rest), policy rules, the pricebook, and a full audit history.
+- **Governor** — per-tenant budgets with warning thresholds, top-ups, resets, and history; `402` on exhaustion; per-key token-bucket rate limiting with `X-RateLimit-*` headers and `429` on overflow.
 
 ## Observability
 
-- request IDs, trace IDs, and span IDs in response headers
-- first-class OpenTelemetry traces, metrics, and logs
-- structured logs
-- local trace inspection over HTTP
-- OTLP HTTP export for traces, metrics, and logs
-- optional request/response trace body capture (`GATEWAY_TRACE_BODIES=true`)
-- runtime telemetry health and SLO snapshots via `/admin/runtime/stats`
+- Request, trace, and span IDs in every response header
+- OpenTelemetry traces, metrics, and logs over OTLP/HTTP — plus structured stdout logs
+- Local trace inspector served at `/` (no external collector required for dev)
+- Optional request / response body capture in spans (`GATEWAY_TRACE_BODIES=true`)
+- Runtime SLO snapshots at `/admin/runtime/stats`
 
-For full telemetry details, see [`docs/telemetry.md`](docs/telemetry.md).
-
-## Using Hecate With Codex And Claude Code
-
-Hecate supports both OpenAI-compatible clients and Anthropic Messages clients, so you can point Codex and Claude Code at one gateway:
-
-- OpenAI-compatible path: `POST /v1/chat/completions`
-- Anthropic path: `POST /v1/messages`
-- Discovery: `GET /v1/models`
-
-For copy-paste setup and auth/header examples, see [`docs/client-integration.md`](docs/client-integration.md).
+Full export surface and collector recipes: [`docs/telemetry.md`](docs/telemetry.md).
 
 ## Config Highlights
 
@@ -220,6 +222,8 @@ The docker image picks SQLite for every durable subsystem so `docker compose up`
 
 ### Agent task runtime
 
+Tasks of `execution_kind=agent_loop` run an LLM-driven tool-using loop with built-in `shell_exec` / `git_exec` / `file_write` / `read_file` / `list_dir` / `http_request` tools, mid-loop approval gating, per-task cost ceilings, and retry-from-turn-N for exploring alternate paths. Every run gets its own workspace — a clone of the source by default, or the source directly via `workspace_mode=in_place`. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the full contract.
+
 | Variable | Default | What it does |
 |---|---|---|
 | `GATEWAY_TASK_QUEUE_WORKERS` | `1` | Concurrency: how many runs the queue dispatches in parallel. |
@@ -229,12 +233,17 @@ The docker image picks SQLite for every durable subsystem so `docker compose up`
 | `GATEWAY_TASK_MAX_CONCURRENT_PER_TENANT` | `0` | Per-tenant concurrency cap. `0` = unlimited. |
 | `GATEWAY_TASK_AGENT_LOOP_MAX_TURNS` | `8` | Hard ceiling on LLM round-trips per `agent_loop` run. |
 | `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` | `""` | Global (broadest) layer of the four-layer agent system prompt. |
+
+### MCP integration
+
+Hecate participates in MCP on both sides: it can expose its task / session / observability surfaces to MCP-aware clients (Claude Desktop, Cursor, Zed) via the `hecate mcp-server` subcommand, *and* `agent_loop` tasks can configure external MCP servers (filesystem, github, …) whose tools become available to the LLM. See [`docs/mcp.md`](docs/mcp.md) for the full contract — both directions, transports (stdio + Streamable HTTP), secret-aware config, approval policies (`auto` / `require_approval` / `block`), and the shared client cache.
+
+| Variable | Default | What it does |
+|---|---|---|
 | `GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK` | `16` | Max `mcp_servers` entries an `agent_loop` task may declare. Over-cap creates fail with a 400. `0` disables. |
 | `GATEWAY_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES` | `256` | Soft cap on cached MCP upstream clients. LRU-idle eviction at the cap; over-cap inserts allowed when every entry is in use. `0` disables. |
 | `GATEWAY_TASK_MCP_CLIENT_CACHE_PING_INTERVAL` | `60s` | How often the cache pings idle MCP clients to detect wedged subprocesses (alive but not responsive). `0` disables; reactive eviction on transport-closed errors still applies. |
 | `GATEWAY_TASK_MCP_CLIENT_CACHE_PING_TIMEOUT` | `5s` | Per-ping deadline. Failure or timeout evicts the entry. |
-
-Tasks of `execution_kind=agent_loop` run an LLM-driven tool-using loop with built-in `shell_exec` / `git_exec` / `file_write` / `read_file` / `list_dir` / `http_request` tools, mid-loop approval gating, per-task cost ceilings, and retry-from-turn-N for exploring alternate paths. Every run gets its own workspace — a clone of the source by default, or the source directly via `workspace_mode=in_place`. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the full contract.
 
 ### Rate limiting
 
@@ -263,20 +272,26 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 - [Telemetry, OTLP, And Collector Recipes](docs/telemetry.md) — OTel spans + metrics, response headers, OTLP wiring, what's done vs. not
 - [Development](docs/development.md) — local build, UI hot reload, full make-target reference, screenshot tooling
 
-## Roadmap
+## Status
 
-Roadmap is organized into near-term runtime priorities and platform hardening.
+Hecate is pre-1.0 but production-shaped — single-binary deploys, durable state, OTel everywhere. The table below sketches what's stable enough to build on vs. what's still moving.
 
-Near term:
+| Area | State | Notes |
+|---|---|---|
+| OpenAI / Anthropic gateway | **Stable** | Chat Completions, Messages, streaming, vision, `/v1/models` discovery |
+| Provider catalog | **Stable** | Built-in presets, encrypted credentials, health + circuit breaking |
+| Auth, tenants, keys | **Stable** | Admin bearer + per-tenant API keys with allowed-providers/models scoping |
+| Budgets + rate limits | **Stable** | Per-tenant credit, warning thresholds, `429` with `X-RateLimit-*` |
+| Agent task runtime | **Stable** | `agent_loop` tools, mid-loop approvals, cost ceilings, retry-from-turn-N |
+| MCP integration | **Stable** | Both directions: `hecate mcp-server` and external servers on `agent_loop` |
+| Telemetry | **Stable** | OTLP traces / metrics / logs, response headers, runtime SLO snapshots |
+| Storage tiers | **Stable** | Memory / SQLite / Postgres, picked per subsystem |
+| Operator UI | **Evolving** | Core flows shipped; bulk ops + richer artifact / diff views still landing |
+| Checkpoint controls | **Evolving** | Resume + retry-from-turn shipped; partial-replay + selective continuation in design |
+| Approval policy classes | **Evolving** | Per-tool gating shipped; broader policy-driven classes with safer defaults next |
+| Route diagnostics | **Evolving** | Per-request route reports shipped; richer failure explanations in flight |
 
-1. checkpoint controls for partial replay and selective continuation
-2. broader policy-driven approval classes with safer defaults
-3. deeper task UI workflows for bulk operations and richer artifact/diff views
-
-Platform:
-
-1. clearer route diagnostics and failure explanations
-2. deployment reference stacks for local and production environments
+Out-of-band but on the radar: deployment reference stacks (k8s, Nomad, fly.io) beyond the bundled `docker compose`.
 
 ## License
 
