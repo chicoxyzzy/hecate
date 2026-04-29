@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -857,5 +858,114 @@ func TestCache_HealthCheck_DisabledByZeroPingInterval(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if got := cache.Stats().Entries; got != 1 {
 		t.Errorf("Stats.Entries = %d, want 1 (loop disabled)", got)
+	}
+}
+
+// TestCache_HTTPClient_DefaultsConstructedOnce: with no explicit
+// HTTPClient passed in, the cache lazy-constructs a single
+// *http.Client and reuses it for every HTTP MCP transport it
+// spawns. Pins the seam — a regression that constructed a fresh
+// client per spawn would silently lose the configurability win
+// (and force operators to inject custom transports per cached
+// entry, which there's no API for).
+func TestCache_HTTPClient_DefaultsConstructedOnce(t *testing.T) {
+	t.Parallel()
+	urlA, _ := makeCacheTestServer(t, "a", []mcp.Tool{
+		{Name: "ping", InputSchema: json.RawMessage(`{}`)},
+	})
+	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{
+		{Name: "ping", InputSchema: json.RawMessage(`{}`)},
+	})
+
+	cache := newCacheTestCache(t, time.Minute, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Acquire two distinct upstreams so we exercise multiple spawns.
+	_, _, releaseA, err := cache.Acquire(ctx, ServerConfig{Name: "a", URL: urlA})
+	if err != nil {
+		t.Fatalf("Acquire A: %v", err)
+	}
+	defer releaseA()
+	_, _, releaseB, err := cache.Acquire(ctx, ServerConfig{Name: "b", URL: urlB})
+	if err != nil {
+		t.Fatalf("Acquire B: %v", err)
+	}
+	defer releaseB()
+
+	// The cache's httpClient must be non-nil (default-constructed).
+	if cache.httpClient == nil {
+		t.Fatal("cache.httpClient is nil; default construction failed")
+	}
+	// Both spawned HTTP transports must reference the cache's
+	// shared client. Reach into entries via the bind map (cache
+	// doesn't expose entries directly, so we walk what's there).
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if len(cache.entries) != 2 {
+		t.Fatalf("cache.entries = %d, want 2", len(cache.entries))
+	}
+	for _, entry := range cache.entries {
+		// HTTPTransport stores its httpCli in an unexported field;
+		// reach in via type assertion. Same package — fine.
+		ht, ok := entry.client.transport.(*HTTPTransport)
+		if !ok {
+			t.Errorf("entry transport = %T, want *HTTPTransport", entry.client.transport)
+			continue
+		}
+		if ht.httpCli != cache.httpClient {
+			t.Errorf("transport httpCli = %p, cache.httpClient = %p; want pointer equality",
+				ht.httpCli, cache.httpClient)
+		}
+	}
+}
+
+// TestCache_HTTPClient_CustomInjected: passing a custom
+// *http.Client via SharedClientCacheOptions.HTTPClient threads it
+// through to every HTTP transport. Mirrors the deploy path where
+// an operator wants a corporate-proxy transport, mTLS, or a
+// non-default timeout.
+func TestCache_HTTPClient_CustomInjected(t *testing.T) {
+	t.Parallel()
+	url, _ := makeCacheTestServer(t, "custom", []mcp.Tool{
+		{Name: "ping", InputSchema: json.RawMessage(`{}`)},
+	})
+
+	// Distinguishable client: longer-than-default timeout. The test
+	// asserts pointer equality, but the timeout is a sanity check
+	// that we used the operator's client and not a default.
+	custom := &http.Client{Timeout: 90 * time.Second}
+	cache := NewSharedClientCacheWithOptions(SharedClientCacheOptions{
+		TTL:          time.Minute,
+		PingInterval: -1, // disable health check; not under test
+		Info:         mcp.ClientInfo{Name: "test", Version: "0"},
+		HTTPClient:   custom,
+	})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, _, release, err := cache.Acquire(ctx, ServerConfig{Name: "custom", URL: url})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer release()
+
+	if cache.httpClient != custom {
+		t.Errorf("cache.httpClient = %p, want operator-provided %p", cache.httpClient, custom)
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, entry := range cache.entries {
+		ht, ok := entry.client.transport.(*HTTPTransport)
+		if !ok {
+			t.Errorf("entry transport = %T, want *HTTPTransport", entry.client.transport)
+			continue
+		}
+		if ht.httpCli != custom {
+			t.Errorf("transport httpCli = %p, want injected %p", ht.httpCli, custom)
+		}
 	}
 }

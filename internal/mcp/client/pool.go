@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
@@ -107,7 +108,10 @@ type namespacedToolBinding struct {
 // <version>" identity helps operators when they read upstream logs.
 func NewPool(ctx context.Context, info mcp.ClientInfo, configs []ServerConfig) (*Pool, error) {
 	return buildPool(ctx, configs, func(ctx context.Context, cfg ServerConfig) (*Client, []mcp.Tool, func(), error) {
-		client, tools, err := spawnClient(ctx, info, cfg)
+		// nil http.Client → NewHTTPTransport falls back to its
+		// per-call default. Uncached pools spawn and tear down
+		// per-run, so there's nothing to share.
+		client, tools, err := spawnClient(ctx, info, cfg, nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -234,7 +238,14 @@ const (
 //
 // Respects ctx: cancellation between attempts aborts the retry
 // loop with the ctx error rather than waiting out the backoff.
-func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*Client, []mcp.Tool, error) {
+//
+// httpClient is the *http.Client every HTTP-transport attempt uses;
+// nil falls back to NewHTTPTransport's per-call default. Stdio
+// transports ignore it. Threading through here lets the
+// SharedClientCache reuse a single client across every HTTP MCP
+// server it spawns — the seam for proxy / mTLS / custom-timeout
+// deploys.
+func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig, httpClient *http.Client) (*Client, []mcp.Tool, error) {
 	var lastErr error
 	for attempt := 1; attempt <= spawnClientMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -246,7 +257,7 @@ func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*C
 			}
 			return nil, nil, err
 		}
-		client, tools, err := spawnClientOnce(ctx, info, cfg)
+		client, tools, err := spawnClientOnce(ctx, info, cfg, httpClient)
 		if err == nil {
 			return client, tools, nil
 		}
@@ -268,8 +279,8 @@ func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*C
 // initialize, run tools/list. Failures close the transport before
 // returning so the retry path doesn't leak file descriptors or
 // goroutines on a partially-initialized client.
-func spawnClientOnce(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*Client, []mcp.Tool, error) {
-	transport, err := buildTransport(ctx, cfg)
+func spawnClientOnce(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig, httpClient *http.Client) (*Client, []mcp.Tool, error) {
+	transport, err := buildTransport(ctx, cfg, httpClient)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -314,13 +325,16 @@ func validateTransportConfig(cfg ServerConfig) error {
 
 // buildTransport materializes a Transport from a (validated) config.
 // Stdio configs become a *StdioTransport over an exec.CommandContext;
-// URL configs become a *HTTPTransport with a default 5-minute client.
-// Validation is the caller's responsibility — call validateTransportConfig
-// first.
-func buildTransport(ctx context.Context, cfg ServerConfig) (Transport, error) {
+// URL configs become a *HTTPTransport using httpClient (or a fresh
+// default-construction if nil — preserves the prior per-transport
+// behavior). Validation is the caller's responsibility — call
+// validateTransportConfig first.
+//
+// httpClient is ignored for stdio transports.
+func buildTransport(ctx context.Context, cfg ServerConfig, httpClient *http.Client) (Transport, error) {
 	rawURL := strings.TrimSpace(cfg.URL)
 	if rawURL != "" {
-		t, err := NewHTTPTransport(rawURL, cfg.Headers, nil)
+		t, err := NewHTTPTransport(rawURL, cfg.Headers, httpClient)
 		if err != nil {
 			return nil, fmt.Errorf("http: %w", err)
 		}

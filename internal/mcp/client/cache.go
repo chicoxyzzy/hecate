@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -102,6 +103,19 @@ type SharedClientCache struct {
 	pingInterval time.Duration
 	pingTimeout  time.Duration
 
+	// httpClient is reused across every HTTP MCP transport this cache
+	// spawns. Stdio servers ignore it. The seam exists for two
+	// reasons: (1) deploys that need a custom transport (corporate
+	// proxy, mTLS, alternate DialContext) can inject one via
+	// SharedClientCacheOptions.HTTPClient, and (2) keeping a single
+	// client object makes the timeout / connection-limit policy a
+	// single point to configure rather than scattered per
+	// transport. (Connection pooling itself is already shared via
+	// http.DefaultTransport when each transport defaults its own
+	// client, so this isn't about pool reuse — it's about
+	// configurability.)
+	httpClient *http.Client
+
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	reaperWg  sync.WaitGroup
@@ -193,12 +207,21 @@ type SharedClientCacheOptions struct {
 	PingInterval time.Duration
 	PingTimeout  time.Duration
 	Info         mcp.ClientInfo
+	// HTTPClient is shared across every HTTP MCP transport the cache
+	// spawns. nil falls back to a default `&http.Client{Timeout:
+	// 5*time.Minute}`. Inject a custom client when the deploy needs
+	// a corporate proxy, mTLS, an alternate DialContext, or a
+	// different per-request timeout. Stdio MCP servers ignore this
+	// field.
+	HTTPClient *http.Client
 }
 
 // NewSharedClientCacheWithOptions builds a cache from the full
 // option set. Use this when you need fine control over the
 // health-check cadence (e.g. a deploy that wants pings every 30s
-// instead of the default 60s, or wants to disable them entirely).
+// instead of the default 60s, or wants to disable them entirely),
+// or when you need to inject a custom *http.Client (proxy, mTLS,
+// alternate timeouts).
 func NewSharedClientCacheWithOptions(opts SharedClientCacheOptions) *SharedClientCache {
 	maxEntries := opts.MaxEntries
 	if maxEntries == 0 {
@@ -220,6 +243,7 @@ func NewSharedClientCacheWithOptions(opts SharedClientCacheOptions) *SharedClien
 		pingInterval:   pingInterval,
 		pingTimeout:    opts.PingTimeout,
 		info:           opts.Info,
+		httpClient:     opts.HTTPClient,
 	})
 }
 
@@ -234,6 +258,7 @@ type cacheBuildConfig struct {
 	pingInterval   time.Duration
 	pingTimeout    time.Duration
 	info           mcp.ClientInfo
+	httpClient     *http.Client // nil → cache lazy-constructs the default
 }
 
 // newSharedClientCacheFull is the internal constructor that takes
@@ -257,6 +282,13 @@ func newSharedClientCacheFull(b cacheBuildConfig) *SharedClientCache {
 	if b.pingTimeout <= 0 {
 		b.pingTimeout = defaultPingTimeout
 	}
+	if b.httpClient == nil {
+		// Match NewHTTPTransport's prior default so behavior on the
+		// "no overrides" path is unchanged. Operators that want a
+		// different timeout / proxy / mTLS inject via
+		// SharedClientCacheOptions.HTTPClient.
+		b.httpClient = &http.Client{Timeout: 5 * time.Minute}
+	}
 	c := &SharedClientCache{
 		entries:      make(map[string]*cacheEntry),
 		ttl:          b.ttl,
@@ -265,6 +297,7 @@ func newSharedClientCacheFull(b cacheBuildConfig) *SharedClientCache {
 		maxEntries:   b.maxEntries,
 		pingInterval: b.pingInterval, // 0 = disabled
 		pingTimeout:  b.pingTimeout,
+		httpClient:   b.httpClient,
 		closeCh:      make(chan struct{}),
 	}
 	c.reaperWg.Add(1)
@@ -334,8 +367,11 @@ func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Cli
 	c.notifyMiss(server)
 
 	// Spawn outside the lock so concurrent Acquires for OTHER keys
-	// aren't blocked behind this one's process exec.
-	client, tools, err := spawnClient(ctx, c.info, cfg)
+	// aren't blocked behind this one's process exec. Pass the
+	// cache's shared *http.Client so every HTTP MCP transport this
+	// cache spawns reuses the same client (single point to configure
+	// timeout / proxy / mTLS via SharedClientCacheOptions.HTTPClient).
+	client, tools, err := spawnClient(ctx, c.info, cfg, c.httpClient)
 	if err != nil {
 		return nil, nil, nil, err
 	}

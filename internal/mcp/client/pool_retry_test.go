@@ -78,7 +78,7 @@ func TestSpawnClient_RetryOnTransientFailure(t *testing.T) {
 	client, tools, err := spawnClient(ctx, mcp.ClientInfo{Name: "test", Version: "0"}, ServerConfig{
 		Name: "flaky",
 		URL:  url,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("spawnClient: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestSpawnClient_FailsAfterMaxAttempts(t *testing.T) {
 	_, _, err := spawnClient(ctx, mcp.ClientInfo{Name: "test", Version: "0"}, ServerConfig{
 		Name: "broken",
 		URL:  url,
-	})
+	}, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected error after max attempts, got nil")
@@ -144,7 +144,7 @@ func TestSpawnClient_NoRetryOnFirstSuccess(t *testing.T) {
 	client, _, err := spawnClient(ctx, mcp.ClientInfo{Name: "test", Version: "0"}, ServerConfig{
 		Name: "healthy",
 		URL:  url,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("spawnClient: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestSpawnClient_ContextCancelAbortsRetry(t *testing.T) {
 	_, _, err := spawnClient(ctx, mcp.ClientInfo{Name: "test", Version: "0"}, ServerConfig{
 		Name: "broken",
 		URL:  url,
-	})
+	}, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected error from ctx cancellation, got nil")
