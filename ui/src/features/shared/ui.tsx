@@ -720,15 +720,39 @@ export function ModelPicker({
     }
     return [...usable, ...disabled];
   })();
-  const label = value || (models[0]?.id ?? "model");
+  // Disable the picker when there are no models to show. This handles the
+  // "selected provider has no discovered models" case (e.g. Ollama or
+  // LM Studio with the runtime not running) — opening a dropdown only to
+  // see an empty list is worse than a clearly-disabled affordance. The
+  // outer caller already passes a provider-scoped `models` array, so this
+  // check covers both "no providers configured" and "scoped provider has
+  // no models" without extra plumbing.
+  const isEmpty = models.length === 0;
+  const label = isEmpty ? "no models available" : (value || models[0]?.id || "model");
   const buttonWidth = triggerWidth === undefined ? undefined : triggerWidth;
+  const disabledTitle = isEmpty
+    ? "No discovered models for this provider. Configure credentials or start the local runtime."
+    : label;
 
   return (
     <div className="dropdown-wrap" ref={ref}>
-      <button ref={triggerRef} className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11, gap: 5, color: "var(--t1)", width: buttonWidth }}>
+      <button
+        ref={triggerRef}
+        className="btn btn-ghost btn-sm"
+        onClick={() => { if (!isEmpty) setOpen(o => !o); }}
+        disabled={isEmpty}
+        title={disabledTitle}
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          gap: 5,
+          color: isEmpty ? "var(--t3)" : "var(--t1)",
+          width: buttonWidth,
+          cursor: isEmpty ? "not-allowed" : undefined,
+          opacity: isEmpty ? 0.6 : undefined,
+        }}>
         <Icon d={Icons.model} size={13} />
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }} title={label}>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
           {label}
         </span>
         <Icon d={Icons.chevD} size={11} />

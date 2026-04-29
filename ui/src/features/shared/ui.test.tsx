@@ -263,11 +263,25 @@ describe("ModelPicker", () => {
     expect(document.querySelector(".dropdown-menu")).toBeNull();
   });
 
-  it("renders 'No models match' when the input list is empty", async () => {
+  it("disables the trigger when the model list is empty", async () => {
+    // Selecting a provider whose runtime isn't running (Ollama / LM Studio
+    // not started, llamacpp credentials missing) yields a 0-model list
+    // for that scope. Opening a dropdown to see "no models" is worse UX
+    // than a clearly-disabled trigger — operators either start the
+    // runtime, switch back to Auto, or pick a different provider, all
+    // of which are clearer next steps than scanning an empty list.
     const user = userEvent.setup();
     render(<ModelPicker value="" onChange={() => {}} models={[]} />);
-    await user.click(screen.getByRole("button"));
-    expect(screen.getByText(/No models match/i)).toBeTruthy();
+    const trigger = screen.getByRole("button");
+    expect(trigger).toBeDisabled();
+    expect(trigger.getAttribute("title")).toMatch(/no discovered models/i);
+    expect(trigger.textContent).toMatch(/no models available/i);
+
+    // Clicking a disabled button does nothing. The dropdown menu stays
+    // unmounted and the test confirms the empty-state messaging lives
+    // on the trigger, not behind a click.
+    await user.click(trigger);
+    expect(document.querySelector(".dropdown-menu")).toBeNull();
   });
 
   it("highlights the selected row with the 'selected' class", async () => {
