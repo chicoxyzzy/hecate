@@ -1375,6 +1375,17 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		// than overwriting it with zero.
 		run.TotalCostMicrosUSD = execution.CostMicrosUSD
 	}
+	emitTerminalEvent := true
+	if currentRun, found, err := r.store.GetRun(ctx, task.ID, run.ID); err == nil && found {
+		// CancelRun persists the terminal cancelled state and emits the
+		// authoritative run.cancelled event while the worker may still be
+		// unwinding. Keep persisting the latest run/task snapshots here, but
+		// don't emit a duplicate terminal event if the same status is already
+		// stored.
+		if types.IsTerminalTaskRunStatus(currentRun.Status) && currentRun.Status == run.Status {
+			emitTerminalEvent = false
+		}
+	}
 	if _, err := r.store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
@@ -1393,10 +1404,12 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
 		return nil, err
 	}
-	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run."+run.Status, requestID, trace.TraceID, map[string]any{
-		"error":  run.LastError,
-		"status": run.Status,
-	})
+	if emitTerminalEvent {
+		_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run."+run.Status, requestID, trace.TraceID, map[string]any{
+			"error":  run.LastError,
+			"status": run.Status,
+		})
+	}
 
 	return &StartTaskResult{
 		Task:      task,
