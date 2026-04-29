@@ -446,6 +446,51 @@ type RuntimeStatsResponseItem struct {
 	StoreBackend            string `json:"store_backend,omitempty"`
 }
 
+// MCPProbeRequest is the wire shape for POST /v1/mcp/probe — a
+// dry-run that brings an MCP server up exactly the way an
+// agent_loop run would (same secret resolution, same uncached
+// spawn path), calls tools/list, and tears it down. Lets operators
+// discover what tools a config vends without creating a task and
+// reading the conversation. Body shape mirrors a single
+// MCPServerConfigItem entry from the task-create payload (minus
+// approval_policy, which is a runtime gating decision that doesn't
+// affect what the server vends).
+type MCPProbeRequest struct {
+	Name    string            `json:"name,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// MCPProbeResponse carries the upstream's tools/list result. Each
+// tool keeps its un-namespaced name (the operator probably wants to
+// see what the server itself calls them — namespacing happens at
+// task-spawn time based on the operator-chosen alias).
+type MCPProbeResponse struct {
+	Object string               `json:"object"`
+	Data   MCPProbeResponseItem `json:"data"`
+}
+
+type MCPProbeResponseItem struct {
+	// Server identity reported by the upstream during initialize.
+	// Useful for confirming the operator pointed at the right thing
+	// before they wire it into a task.
+	ServerName    string                   `json:"server_name,omitempty"`
+	ServerVersion string                   `json:"server_version,omitempty"`
+	Tools         []MCPProbeToolDescriptor `json:"tools"`
+}
+
+type MCPProbeToolDescriptor struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// InputSchema is the upstream-declared JSON Schema for the tool's
+	// arguments, returned verbatim so operators can paste it into
+	// docs / build a test fixture without re-fetching.
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
 // MCPCacheStatsResponse is the wire shape for GET /admin/mcp/cache.
 // Surfaces the SharedClientCache snapshot — entries / in-use / idle —
 // so operators can answer "is the cache doing useful work?" without

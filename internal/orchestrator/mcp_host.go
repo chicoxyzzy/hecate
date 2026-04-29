@@ -249,6 +249,67 @@ func NewAgentMCPClientCache(ttl time.Duration, maxEntries int, metrics *telemetr
 	return cache
 }
 
+// MCPProbeResult is the orchestrator-side return shape for
+// ProbeMCPServer. ServerName / ServerVersion echo whatever the
+// upstream reported on its initialize handshake — useful for
+// confirming the operator pointed at the right server before they
+// commit a config to a task. Tools is the upstream's tools/list
+// catalog with un-namespaced names (the operator-chosen alias does
+// the namespacing at task-spawn time).
+type MCPProbeResult struct {
+	ServerName    string
+	ServerVersion string
+	Tools         []mcpclient.NamespacedTool
+}
+
+// ProbeMCPServer brings up a single MCP server with cfg, calls
+// tools/list, and tears it down. Returns the upstream's tool catalog
+// without ever caching the client — this is a one-shot dry-run, the
+// operator is testing a config before committing it to a task.
+//
+// The same secret-resolution path the agent loop uses runs first, so
+// $VAR_NAME and enc:<base64> values resolve identically to a real
+// task. cipher may be nil (mirrors the runtime contract: enc:-prefixed
+// values without a cipher fail fast with a clear error rather than
+// forwarding ciphertext).
+//
+// Bounded by ctx; the caller's deadline is the only timeout. A typical
+// admin endpoint passes a 10s context so a stuck upstream surfaces as
+// a clean error rather than wedging the request.
+func ProbeMCPServer(ctx context.Context, cfg types.MCPServerConfig, cipher secrets.Cipher) (*MCPProbeResult, error) {
+	resolved, err := resolveEnvConfigs([]types.MCPServerConfig{cfg}, cipher)
+	if err != nil {
+		return nil, err
+	}
+	clientCfgs := toClientServerConfigs(resolved)
+	pool, err := mcpclient.NewPool(ctx, agentClientInfo(), clientCfgs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = pool.Close() }()
+
+	// Pool.Tools() is already populated by NewPool's bring-up
+	// (initialize + tools/list) so no extra round-trip is needed.
+	// We strip the namespacing for the response — the probe surface
+	// is for understanding the upstream, not the gateway's runtime
+	// alias.
+	tools := pool.Tools()
+	out := &MCPProbeResult{Tools: make([]mcpclient.NamespacedTool, 0, len(tools))}
+	prefix := mcpclient.NamespacedToolName(strings.TrimSpace(cfg.Name), "")
+	for _, t := range tools {
+		stripped := t
+		// Strip the "mcp__<name>__" prefix to surface the upstream
+		// tool name. Pool always builds names this way; if a future
+		// change skips namespacing, this falls through cleanly via
+		// HasPrefix.
+		if strings.HasPrefix(t.Name, prefix) {
+			stripped.Name = strings.TrimPrefix(t.Name, prefix)
+		}
+		out.Tools = append(out.Tools, stripped)
+	}
+	return out, nil
+}
+
 // toClientServerConfigs converts the orchestrator-side config slice
 // into the client package's shape. Duplicated representation by
 // design: the client package owns its own types so it stays free of

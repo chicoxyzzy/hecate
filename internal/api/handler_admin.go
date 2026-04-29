@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,7 +12,10 @@ import (
 
 	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/governor"
+	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
+	"github.com/hecate/agent-runtime/internal/orchestrator"
 	"github.com/hecate/agent-runtime/internal/retention"
+	"github.com/hecate/agent-runtime/internal/secrets"
 	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -94,6 +99,120 @@ func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
 			StoreBackend:            stats.StoreBackend,
 		},
 	})
+}
+
+// HandleMCPProbe is the dry-run discovery endpoint for MCP server
+// configs. POST /v1/mcp/probe accepts a single MCPServerConfig-shaped
+// body, brings the server up exactly the way an agent_loop run would
+// (same secret resolution, same uncached spawn path), calls
+// tools/list, and tears it down. Returns the upstream's tool catalog
+// so operators can confirm a config before committing it to a task.
+//
+// Auth matches POST /v1/tasks (requireAny): if a principal can create
+// a task with mcp_servers configured, it can probe with the same
+// config. Both paths exec the same arbitrary command; probe just
+// returns earlier.
+//
+// Bounded by a 10s deadline derived from the request context — a
+// stuck upstream surfaces as a clean error rather than wedging the
+// caller. Callers can pass a shorter deadline by setting their own
+// timeout on the HTTP client; we don't extend.
+func (h *Handler) HandleMCPProbe(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+
+	var req MCPProbeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	cfg, err := normalizeMCPProbeRequest(req, h.secretCipher)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	result, err := orchestrator.ProbeMCPServer(probeCtx, cfg, h.secretCipher)
+	if err != nil {
+		// Probe failures are operator-actionable (wrong command,
+		// missing dep, bad URL) — surface as 400 with the diagnostic
+		// rather than 500. The orchestrator helper already wraps
+		// stderr from stdio servers and HTTP status from URL
+		// servers, so the message is concrete.
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, MCPProbeResponse{
+		Object: "mcp_probe",
+		Data: MCPProbeResponseItem{
+			// ServerName / ServerVersion not surfaced from Pool.Tools
+			// today (the namespacing is alias-based); leaving them
+			// empty until the client package exposes the upstream
+			// initialize result. Tools alone is the headline value
+			// operators want.
+			Tools: renderMCPProbeTools(result.Tools),
+		},
+	})
+}
+
+// normalizeMCPProbeRequest validates and converts the wire shape into
+// the internal types.MCPServerConfig. Mirrors normalizeMCPServerConfigs's
+// rules for one row: non-empty name (default "probe" if missing —
+// the operator typically doesn't care about the alias for a dry-run),
+// command XOR url, secrets resolved via the shared storeSecretMap helper.
+func normalizeMCPProbeRequest(req MCPProbeRequest, cipher secrets.Cipher) (types.MCPServerConfig, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "probe"
+	}
+	command := strings.TrimSpace(req.Command)
+	rawURL := strings.TrimSpace(req.URL)
+	if command != "" && rawURL != "" {
+		return types.MCPServerConfig{}, fmt.Errorf("command and url are mutually exclusive")
+	}
+	if command == "" && rawURL == "" {
+		return types.MCPServerConfig{}, fmt.Errorf("either command or url is required")
+	}
+	args := append([]string(nil), req.Args...)
+	env, err := storeSecretMap(req.Env, cipher, "env")
+	if err != nil {
+		return types.MCPServerConfig{}, err
+	}
+	headers, err := storeSecretMap(req.Headers, cipher, "headers")
+	if err != nil {
+		return types.MCPServerConfig{}, err
+	}
+	return types.MCPServerConfig{
+		Name:    name,
+		Command: command,
+		Args:    args,
+		Env:     env,
+		URL:     rawURL,
+		Headers: headers,
+	}, nil
+}
+
+// renderMCPProbeTools converts the orchestrator's namespaced-tool list
+// into the wire descriptor. Schema is forwarded verbatim because
+// operators want to see exactly what the upstream declared (for docs,
+// for fixture-building, for sanity checks).
+func renderMCPProbeTools(tools []mcpclient.NamespacedTool) []MCPProbeToolDescriptor {
+	out := make([]MCPProbeToolDescriptor, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, MCPProbeToolDescriptor{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.Schema,
+		})
+	}
+	return out
 }
 
 // HandleMCPCacheStats returns a snapshot of the shared MCP client

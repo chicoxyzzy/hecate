@@ -196,3 +196,26 @@ For `agent_loop`-specific knobs (max turns, system-prompt layers, HTTP policy fo
 ```
 
 `configured: false` means no cache is wired (the deploy explicitly disabled it via `Handler.SetMCPClientCache(nil)`); the counter fields are present but zero so admin UIs can render a "no cache" cell instead of error-handling. `in_use` is the **sum** of refcounts across all entries (an entry held by two concurrent runs counts as 2), not the number of entries with at least one acquirer; `idle` is the count of entries with refcount=0. See [`mcp.md`](mcp.md#lifecycle-and-caching) for the underlying contract.
+
+`POST /v1/mcp/probe` is the dry-run discovery surface for an MCP server config. It accepts a single MCP server entry (same shape as one item in the task-create `mcp_servers` array — `name` defaults to `probe` when omitted), brings the server up the way an `agent_loop` run would (same secret resolution, same uncached spawn path), calls `tools/list`, and tears it down. Returns the upstream's tool catalog so operators can confirm the config before committing it to a task.
+
+```json
+POST /v1/mcp/probe
+{
+  "command": "bunx",
+  "args": ["--bun", "@modelcontextprotocol/server-filesystem", "/workspace"]
+}
+
+→ 200
+{
+  "object": "mcp_probe",
+  "data": {
+    "tools": [
+      { "name": "read_text_file", "description": "...", "input_schema": {...} },
+      { "name": "list_directory", "input_schema": {...} }
+    ]
+  }
+}
+```
+
+Tool names come back un-namespaced — the operator wants to see what the upstream itself calls them, not the gateway's runtime alias. Auth matches `POST /v1/tasks` (`requireAny`): if a principal can create a task with `mcp_servers` configured, it can probe with the same config (both paths exec the same arbitrary command). Bounded by a 10-second deadline; a stuck upstream surfaces as a 400 with the diagnostic rather than wedging the request.
