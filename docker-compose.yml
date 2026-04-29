@@ -5,6 +5,26 @@
 #   docker compose --profile postgres up    # adds Postgres for state
 #   docker compose --profile ollama up      # adds Ollama on :11434
 #
+# ── Local inference from Docker ──────────────────────────────────────────────
+# Hecate discovers models by calling /v1/models on each local provider.
+# From inside a container, 127.0.0.1 is the container's own loopback, so the
+# provider base URLs below use host.docker.internal instead, which resolves to
+# the Docker host (your Mac / Linux machine).
+#
+# IMPORTANT: local inference servers bind to 127.0.0.1 by default, which
+# rejects connections that arrive from the Docker bridge interface. You must
+# tell them to accept all interfaces before Hecate can reach them:
+#
+#   Ollama (host install):
+#     OLLAMA_HOST=0.0.0.0 ollama serve
+#
+#   LM Studio: Settings → Local Server → Server bind host → 0.0.0.0
+#
+#   llama.cpp / LocalAI: pass --host 0.0.0.0 to the server binary
+#
+# Alternatively, run Ollama inside Docker so no bind change is needed:
+#   docker compose --profile ollama up
+#
 # When the hecate image isn't on a registry yet, this builds locally from
 # the Dockerfile in the same directory. Once published, the `image:` tag
 # below also doubles as the pull target so `docker compose pull` works.
@@ -17,20 +37,10 @@ services:
     image: ghcr.io/chicoxyzzy/hecate:latest
     ports:
       - "8765:8765"
-    # host.docker.internal resolves to the Docker host on macOS and Windows
-    # (Docker Desktop) and on Linux with Docker Desktop ≥ 20.10. The
-    # extra_hosts entry below sets it explicitly on Linux where it is not
-    # injected automatically.
-    #
-    # Using host.docker.internal instead of 127.0.0.1 is essential for local
-    # inference discovery: from inside a container, 127.0.0.1 is the
-    # container's own loopback — not the host — so every /v1/models call
-    # would fail with "connection refused" and the UI would show 0 models.
-    #
-    # When the ollama profile is active the ollama container publishes port
-    # 11434 on the host, so host.docker.internal:11434 reaches it via the
-    # published port just as well as it would reach a host-native Ollama
-    # install. No separate URL is needed for the two cases.
+    # extra_hosts injects host.docker.internal on Linux (macOS/Windows Docker
+    # Desktop provide it automatically). See the header comment for why all
+    # local-inference URLs use host.docker.internal and the 0.0.0.0 bind
+    # requirement for host-native inference servers.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
