@@ -529,3 +529,89 @@ func TestClient_ContextCancelUnblocksCall(t *testing.T) {
 		t.Errorf("CallTool err = %v, want context.DeadlineExceeded", err)
 	}
 }
+
+// TestClient_PingSuccess exercises the happy path: the server
+// answers a ping with an empty result and the client returns nil.
+// The cache's health-check loop relies on this round-trip to
+// detect wedged subprocesses.
+func TestClient_PingSuccess(t *testing.T) {
+	t.Parallel()
+	transport := newMemTransport()
+	server := newFakeServer(t, transport)
+	server.handle("initialize", func(_ mcp.Request) (any, *mcp.RPCError) {
+		return mcp.InitializeResult{
+			ProtocolVersion: declaredClientProtocolVersion,
+			Capabilities:    mcp.ServerCapabilities{Tools: &mcp.ToolsCapability{}},
+			ServerInfo:      mcp.ServerInfo{Name: "fake", Version: "0"},
+		}, nil
+	})
+	pinged := 0
+	server.handle("ping", func(_ mcp.Request) (any, *mcp.RPCError) {
+		pinged++
+		return struct{}{}, nil // MCP spec: empty object on success
+	})
+	server.start()
+	t.Cleanup(server.stop)
+
+	c := New(transport, mcp.ClientInfo{Name: "hecate-test", Version: "0"})
+	t.Cleanup(func() { _ = c.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := c.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := c.Ping(ctx); err != nil {
+		t.Errorf("Ping: %v", err)
+	}
+	if pinged != 1 {
+		t.Errorf("server saw %d pings, want 1", pinged)
+	}
+}
+
+// TestClient_PingTimeoutReturnsErr: a server whose ping handler
+// hangs must surface as context.DeadlineExceeded from Ping. This is
+// the wedge signal the cache's health-check loop relies on to
+// evict — without it, a stuck subprocess would just hold its slot
+// until TTL.
+//
+// We register a never-returning handler (rather than leaving ping
+// unhandled) because the fakeServer's default for unknown methods
+// is method-not-found, which would surface as an RPC error rather
+// than a deadline.
+func TestClient_PingTimeoutReturnsErr(t *testing.T) {
+	t.Parallel()
+	transport := newMemTransport()
+	server := newFakeServer(t, transport)
+	server.handle("initialize", func(_ mcp.Request) (any, *mcp.RPCError) {
+		return mcp.InitializeResult{
+			ProtocolVersion: declaredClientProtocolVersion,
+			Capabilities:    mcp.ServerCapabilities{Tools: &mcp.ToolsCapability{}},
+			ServerInfo:      mcp.ServerInfo{Name: "fake", Version: "0"},
+		}, nil
+	})
+	stuck := make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	server.handle("ping", func(_ mcp.Request) (any, *mcp.RPCError) {
+		<-stuck
+		return struct{}{}, nil
+	})
+	server.start()
+	t.Cleanup(server.stop)
+
+	c := New(transport, mcp.ClientInfo{Name: "hecate-test", Version: "0"})
+	t.Cleanup(func() { _ = c.Close() })
+
+	initCtx, cancelInit := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelInit()
+	if _, err := c.Initialize(initCtx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelPing()
+	err := c.Ping(pingCtx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Ping err = %v, want context.DeadlineExceeded", err)
+	}
+}

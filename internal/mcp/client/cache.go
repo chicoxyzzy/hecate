@@ -91,16 +91,28 @@ type SharedClientCache struct {
 	// one that records metrics; tests typically leave it nil).
 	observer *CacheObserver
 
+	// pingInterval / pingTimeout govern the proactive health-check
+	// loop. The reactive eviction in Pool.Call only fires AFTER a
+	// tool call has already failed; the ping loop catches subprocesses
+	// that are alive but wedged (event-loop deadlock, tight CPU loop)
+	// before the next real call hits the wall. pingInterval == 0
+	// disables the loop entirely (useful for tests that don't want
+	// a ticker at all). pingTimeout bounds each individual ping;
+	// failure or deadline-exceeded evicts the entry.
+	pingInterval time.Duration
+	pingTimeout  time.Duration
+
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	reaperWg  sync.WaitGroup
 }
 
 type cacheEntry struct {
-	client   *Client
-	tools    []mcp.Tool
-	inUse    int
-	lastUsed time.Time
+	client     *Client
+	tools      []mcp.Tool
+	inUse      int
+	lastUsed   time.Time
+	lastPinged time.Time
 }
 
 const (
@@ -112,22 +124,39 @@ const (
 	// enough to bound a runaway tenant or a config-permutation churn
 	// from accumulating an unbounded set of cached subprocesses.
 	defaultCacheMaxEntries = 256
+	// defaultPingInterval is how often the health-check loop pings
+	// idle entries. 60s balances "fast enough to detect a wedge
+	// before the operator's next task" against "not so much wire
+	// chatter that it shows up in upstream logs as flooding."
+	defaultPingInterval = 60 * time.Second
+	// defaultPingTimeout bounds each individual ping. 5s is plenty
+	// for a healthy MCP server (ping is a one-shot empty-result
+	// round-trip) and tight enough that a wedged subprocess
+	// surfaces quickly.
+	defaultPingTimeout = 5 * time.Second
 )
 
 // NewSharedClientCache builds a cache with the given idle TTL and
-// a sensible default max-entries cap (256). Every Client the cache
-// spawns reports info as its MCP ClientInfo on the initialize
-// handshake, so upstream server logs identify a single stable client
-// identity (e.g. "hecate-agent-loop / <version>") regardless of which
-// run triggered the spawn.
+// the cache's default knobs for everything else (max-entries cap of
+// 256, reaper at 30s, health-check ping every 60s with a 5s timeout
+// per ping). Every Client the cache spawns reports info as its MCP
+// ClientInfo on the initialize handshake, so upstream server logs
+// identify a single stable client identity (e.g. "hecate-agent-loop
+// / <version>") regardless of which run triggered the spawn.
 //
-// ttl <= 0 falls back to defaultCacheTTL (5 minutes). The reaper runs
-// every 30s and evicts entries idle past ttl.
+// ttl <= 0 falls back to defaultCacheTTL (5 minutes).
 //
-// For deployments that need a different cap, see
-// NewSharedClientCacheWithLimits.
+// For deployments that need to override the cap or health-check
+// cadence, see NewSharedClientCacheWithLimits.
 func NewSharedClientCache(ttl time.Duration, info mcp.ClientInfo) *SharedClientCache {
-	return newSharedClientCacheFull(ttl, defaultReaperInterval, defaultCacheMaxEntries, info)
+	return newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            ttl,
+		reaperInterval: defaultReaperInterval,
+		maxEntries:     defaultCacheMaxEntries,
+		pingInterval:   defaultPingInterval,
+		pingTimeout:    defaultPingTimeout,
+		info:           info,
+	})
 }
 
 // NewSharedClientCacheWithLimits is the explicit-cap counterpart for
@@ -135,45 +164,128 @@ func NewSharedClientCache(ttl time.Duration, info mcp.ClientInfo) *SharedClientC
 // expecting many distinct MCP servers per tenant). maxEntries <= 0
 // disables the cap entirely — only TTL eviction applies.
 //
-// All other knobs (ttl, reaper interval) match NewSharedClientCache.
+// All other knobs (ttl, reaper, ping) match NewSharedClientCache's
+// defaults. For full control, see NewSharedClientCacheWithOptions.
 func NewSharedClientCacheWithLimits(ttl time.Duration, maxEntries int, info mcp.ClientInfo) *SharedClientCache {
-	return newSharedClientCacheFull(ttl, defaultReaperInterval, maxEntries, info)
+	return newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            ttl,
+		reaperInterval: defaultReaperInterval,
+		maxEntries:     maxEntries,
+		pingInterval:   defaultPingInterval,
+		pingTimeout:    defaultPingTimeout,
+		info:           info,
+	})
+}
+
+// SharedClientCacheOptions is the public knob bundle for callers that
+// need to tune more than just ttl + maxEntries — e.g. configuring the
+// proactive health-check loop. Zero values fall back to defaults
+// (defaultCacheTTL, defaultCacheMaxEntries, defaultPingInterval,
+// defaultPingTimeout). PingInterval == 0 explicitly disables the
+// health-check loop while keeping reactive eviction in Pool.Call.
+//
+// reaperInterval is intentionally NOT exposed here — it's a tuning
+// knob with no operator-visible signal beyond test harnesses, and
+// the in-package newSharedClientCacheFull is sufficient for those.
+type SharedClientCacheOptions struct {
+	TTL          time.Duration
+	MaxEntries   int
+	PingInterval time.Duration
+	PingTimeout  time.Duration
+	Info         mcp.ClientInfo
+}
+
+// NewSharedClientCacheWithOptions builds a cache from the full
+// option set. Use this when you need fine control over the
+// health-check cadence (e.g. a deploy that wants pings every 30s
+// instead of the default 60s, or wants to disable them entirely).
+func NewSharedClientCacheWithOptions(opts SharedClientCacheOptions) *SharedClientCache {
+	maxEntries := opts.MaxEntries
+	if maxEntries == 0 {
+		maxEntries = defaultCacheMaxEntries
+	}
+	pingInterval := opts.PingInterval
+	if pingInterval == 0 {
+		// Use the default for the unset case. Callers that want the
+		// loop disabled pass a negative value.
+		pingInterval = defaultPingInterval
+	}
+	if pingInterval < 0 {
+		pingInterval = 0 // disable
+	}
+	return newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            opts.TTL,
+		reaperInterval: defaultReaperInterval,
+		maxEntries:     maxEntries,
+		pingInterval:   pingInterval,
+		pingTimeout:    opts.PingTimeout,
+		info:           opts.Info,
+	})
+}
+
+// cacheBuildConfig captures every knob the internal constructor
+// supports. Using a struct rather than positional params keeps the
+// argument list manageable as the cache grows new options
+// (max-entries, ping-interval, ping-timeout, ...).
+type cacheBuildConfig struct {
+	ttl            time.Duration
+	reaperInterval time.Duration
+	maxEntries     int
+	pingInterval   time.Duration
+	pingTimeout    time.Duration
+	info           mcp.ClientInfo
 }
 
 // newSharedClientCacheFull is the internal constructor that takes
-// every knob. Tests use it to drive tight TTL / reaper / cap windows
-// without racing the reaper goroutine — every field must be set
-// BEFORE the goroutine starts (mutating after construction would race
-// with the goroutine's own reads).
+// every knob. Tests use it to drive tight TTL / reaper / ping
+// windows without racing the reaper goroutine — every field must be
+// set BEFORE the goroutine starts (mutating after construction would
+// race with the goroutine's own reads).
 //
-// Sentinel handling: ttl <= 0 → defaultCacheTTL; reaperInterval <= 0
-// → defaultReaperInterval; maxEntries <= 0 → cap disabled.
-func newSharedClientCacheFull(ttl, reaperInterval time.Duration, maxEntries int, info mcp.ClientInfo) *SharedClientCache {
-	if ttl <= 0 {
-		ttl = defaultCacheTTL
+// Sentinel handling on each field: ttl <= 0 → defaultCacheTTL;
+// reaperInterval <= 0 → defaultReaperInterval; maxEntries <= 0 → cap
+// disabled; pingInterval <= 0 → health-check loop disabled (the
+// reactive eviction in Pool.Call still applies); pingTimeout <= 0 →
+// defaultPingTimeout (only meaningful when pingInterval > 0).
+func newSharedClientCacheFull(b cacheBuildConfig) *SharedClientCache {
+	if b.ttl <= 0 {
+		b.ttl = defaultCacheTTL
 	}
-	if reaperInterval <= 0 {
-		reaperInterval = defaultReaperInterval
+	if b.reaperInterval <= 0 {
+		b.reaperInterval = defaultReaperInterval
+	}
+	if b.pingTimeout <= 0 {
+		b.pingTimeout = defaultPingTimeout
 	}
 	c := &SharedClientCache{
-		entries:    make(map[string]*cacheEntry),
-		ttl:        ttl,
-		info:       info,
-		reaper:     reaperInterval,
-		maxEntries: maxEntries,
-		closeCh:    make(chan struct{}),
+		entries:      make(map[string]*cacheEntry),
+		ttl:          b.ttl,
+		info:         b.info,
+		reaper:       b.reaperInterval,
+		maxEntries:   b.maxEntries,
+		pingInterval: b.pingInterval, // 0 = disabled
+		pingTimeout:  b.pingTimeout,
+		closeCh:      make(chan struct{}),
 	}
 	c.reaperWg.Add(1)
 	go c.reaperLoop()
+	if b.pingInterval > 0 {
+		c.reaperWg.Add(1)
+		go c.healthCheckLoop()
+	}
 	return c
 }
 
-// newSharedClientCacheWithReaper is the legacy three-arg constructor
+// newSharedClientCacheWithReaper is the legacy four-arg constructor
 // kept for tests written against the prior signature. Treats the cap
-// as disabled (0) — explicit cap tests use newSharedClientCacheFull
-// directly.
+// as disabled (0) and disables the health-check loop — explicit cap /
+// health-check tests use newSharedClientCacheFull directly.
 func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.ClientInfo) *SharedClientCache {
-	return newSharedClientCacheFull(ttl, reaperInterval, 0, info)
+	return newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            ttl,
+		reaperInterval: reaperInterval,
+		info:           info,
+	})
 }
 
 // Acquire returns a Client + tools snapshot for cfg, spawning one on
@@ -350,8 +462,18 @@ func (c *SharedClientCache) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
 	})
-	c.reaperWg.Wait()
 
+	// Snapshot + close clients FIRST, before waiting for the reaper
+	// loops to exit. The health-check loop may be blocked inside
+	// Client.Ping waiting for an upstream that's hanging (the exact
+	// failure mode the loop is supposed to detect). Closing the
+	// transport interrupts the ping, the loop returns from
+	// pingIdleEntries, sees closeCh on its next iteration, and
+	// exits — letting reaperWg.Wait below complete.
+	//
+	// Order swapped from the previous version (Wait → snapshot →
+	// close clients), which deadlocked when a ping was in flight at
+	// Close time.
 	c.mu.Lock()
 	clients := make([]*Client, 0, len(c.entries))
 	for _, e := range c.entries {
@@ -366,6 +488,9 @@ func (c *SharedClientCache) Close() error {
 			errs = append(errs, err)
 		}
 	}
+
+	c.reaperWg.Wait()
+
 	if len(errs) == 0 {
 		return nil
 	}
@@ -458,6 +583,106 @@ func (c *SharedClientCache) evictIdle() {
 		// "how often is the cache reaping things?" without server
 		// granularity.
 		c.notifyEvicted("")
+	}
+}
+
+// healthCheckLoop is the proactive liveness probe. Every pingInterval
+// tick it pings every IDLE entry whose last successful ping is older
+// than pingInterval; entries that fail or time out are evicted. Idle
+// entries are the only safe targets — pinging an in-use entry would
+// race the active tool call's response on the same channel; the
+// active caller will see any failure itself and trip the reactive
+// eviction in Pool.Call.
+//
+// Runs on its own ticker (separate from the TTL reaper) so the two
+// cadences can be tuned independently. Stops when c.closeCh fires.
+func (c *SharedClientCache) healthCheckLoop() {
+	defer c.reaperWg.Done()
+	ticker := time.NewTicker(c.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.closeCh:
+			return
+		case <-ticker.C:
+			c.pingIdleEntries()
+		}
+	}
+}
+
+// pingIdleEntries snapshots the idle entries due for a ping, drops
+// the lock, pings each one with pingTimeout, then re-takes the lock
+// briefly to either update lastPinged (success) or evict (failure).
+//
+// Concurrency notes:
+//   - The ping itself happens OUTSIDE the lock so a slow upstream
+//     can't block other Acquire calls.
+//   - Between the snapshot and the eviction step an entry may have
+//     gone in-use (a fresh Acquire). We re-check inUse under the
+//     lock before evicting; if the entry is now in-use, skip
+//     eviction — the active caller will see any failure itself.
+//   - On Close, c.closeCh closing aborts the loop's outer select but
+//     pings already in flight finish; ServerConfig.Close on the
+//     transport will fail those that haven't returned, evicting
+//     stale entries either way.
+func (c *SharedClientCache) pingIdleEntries() {
+	type target struct {
+		key    string
+		client *Client
+	}
+	cutoff := time.Now().Add(-c.pingInterval)
+
+	c.mu.Lock()
+	targets := make([]target, 0, len(c.entries))
+	for key, e := range c.entries {
+		if e.inUse > 0 {
+			continue
+		}
+		// Fresh entries (lastPinged == zero) get pinged on the first
+		// tick after they go idle. Subsequent pings space out by
+		// pingInterval.
+		if !e.lastPinged.IsZero() && e.lastPinged.After(cutoff) {
+			continue
+		}
+		targets = append(targets, target{key: key, client: e.client})
+	}
+	c.mu.Unlock()
+
+	if len(targets) == 0 {
+		return
+	}
+
+	for _, t := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), c.pingTimeout)
+		err := t.client.Ping(ctx)
+		cancel()
+
+		c.mu.Lock()
+		entry, stillCached := c.entries[t.key]
+		switch {
+		case !stillCached:
+			// Entry was already evicted (TTL, manual Evict, race
+			// against Close). Nothing to do.
+			c.mu.Unlock()
+		case entry.inUse > 0:
+			// Someone Acquired this entry while we were pinging.
+			// Don't evict mid-call; the caller sees its own errors.
+			// Update lastPinged on success so we don't re-probe
+			// immediately on the next tick.
+			if err == nil {
+				entry.lastPinged = time.Now()
+			}
+			c.mu.Unlock()
+		case err != nil:
+			// Wedged. Evict.
+			delete(c.entries, t.key)
+			c.mu.Unlock()
+			_ = t.client.Close()
+			c.notifyEvicted("")
+		default:
+			entry.lastPinged = time.Now()
+			c.mu.Unlock()
+		}
 	}
 }
 

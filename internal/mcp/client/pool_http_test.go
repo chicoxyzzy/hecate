@@ -87,6 +87,11 @@ func registerStandardHandlers(
 	srv.handle("tools/list", func(req mcp.Request) (any, *mcp.RPCError) {
 		return mcp.ListToolsResult{Tools: tools}, nil
 	})
+	srv.handle("ping", func(req mcp.Request) (any, *mcp.RPCError) {
+		// Real MCP servers always answer ping with an empty result.
+		// Tests that simulate a wedged server override this handler.
+		return struct{}{}, nil
+	})
 	srv.handle("tools/call", func(req mcp.Request) (any, *mcp.RPCError) {
 		var params mcp.CallToolParams
 		if err := json.Unmarshal(req.Params, &params); err != nil {

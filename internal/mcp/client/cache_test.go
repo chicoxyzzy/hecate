@@ -390,7 +390,7 @@ func TestCache_MaxEntries_EvictsLRUIdleOnOverflow(t *testing.T) {
 	// Cap of 3, no auto-eviction by TTL during the test (long ttl
 	// + long reaper interval keeps the reaper from confusing the
 	// LRU signal).
-	cache := newSharedClientCacheFull(time.Minute, time.Minute, 3, mcp.ClientInfo{Name: "test", Version: "0"})
+	cache := newSharedClientCacheFull(cacheBuildConfig{ttl: time.Minute, reaperInterval: time.Minute, maxEntries: 3, info: mcp.ClientInfo{Name: "test", Version: "0"}})
 	t.Cleanup(func() { _ = cache.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -454,7 +454,7 @@ func TestCache_MaxEntries_AllowsOverCapWhenAllInUse(t *testing.T) {
 	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
 	urlC, _ := makeCacheTestServer(t, "c", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
 
-	cache := newSharedClientCacheFull(time.Minute, time.Minute, 2, mcp.ClientInfo{Name: "test", Version: "0"})
+	cache := newSharedClientCacheFull(cacheBuildConfig{ttl: time.Minute, reaperInterval: time.Minute, maxEntries: 2, info: mcp.ClientInfo{Name: "test", Version: "0"}})
 	t.Cleanup(func() { _ = cache.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -498,7 +498,7 @@ func TestCache_MaxEntries_DisabledByZero(t *testing.T) {
 	urlB, _ := makeCacheTestServer(t, "b", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
 	urlC, _ := makeCacheTestServer(t, "c", []mcp.Tool{{Name: "t", InputSchema: json.RawMessage(`{}`)}})
 
-	cache := newSharedClientCacheFull(time.Minute, time.Minute, 0, mcp.ClientInfo{Name: "test", Version: "0"})
+	cache := newSharedClientCacheFull(cacheBuildConfig{ttl: time.Minute, reaperInterval: time.Minute, maxEntries: 0, info: mcp.ClientInfo{Name: "test", Version: "0"}})
 	t.Cleanup(func() { _ = cache.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -656,5 +656,206 @@ func TestCache_Observer_NilSafe(t *testing.T) {
 
 	if hits != 1 {
 		t.Errorf("hits = %d, want 1", hits)
+	}
+}
+
+// makeCacheTestServerWithPing wires a fixture whose ping handler is
+// controllable: the supplied callback runs synchronously inside the
+// handler, so tests can make ping fail (return an RPC error) or hang
+// (block until t.Cleanup). Other methods behave normally.
+//
+// pingHandler == nil falls back to the default "answer empty result"
+// behavior — no test-specific fixture wrapping needed for the
+// happy-path cases.
+func makeCacheTestServerWithPing(t *testing.T, name string, pingHandler func() (any, *mcp.RPCError)) string {
+	t.Helper()
+	hs, srv := newTestMCPHTTPServer(t)
+	registerStandardHandlers(srv, name, []mcp.Tool{
+		{Name: "noop", InputSchema: json.RawMessage(`{}`)},
+	}, map[string]func(json.RawMessage) mcp.CallToolResult{})
+	if pingHandler != nil {
+		srv.handle("ping", func(_ mcp.Request) (any, *mcp.RPCError) {
+			return pingHandler()
+		})
+	}
+	return hs.URL
+}
+
+// TestCache_HealthCheck_EvictsUnresponsiveIdleEntry pins the
+// headline behavior: an idle cached entry whose ping fails is
+// evicted before the next Acquire would have handed back a dead
+// client. We use a server that returns an RPC error on ping (the
+// failure mode the cache treats as "wedge"), wait long enough for
+// the health-check loop to fire once, and assert the entry is gone.
+func TestCache_HealthCheck_EvictsUnresponsiveIdleEntry(t *testing.T) {
+	t.Parallel()
+	url := makeCacheTestServerWithPing(t, "stuck", func() (any, *mcp.RPCError) {
+		return nil, mcp.NewError(mcp.ErrCodeInternalError, "wedged")
+	})
+
+	// Tight pingInterval so the loop fires quickly; pingTimeout is
+	// the inner per-call bound. Tests don't get to use defaultReaperInterval
+	// so we use the full constructor.
+	cache := newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            time.Minute,
+		reaperInterval: time.Minute,
+		pingInterval:   30 * time.Millisecond,
+		pingTimeout:    1 * time.Second,
+		info:           mcp.ClientInfo{Name: "hecate-cache-test", Version: "0"},
+	})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := ServerConfig{Name: "stuck", URL: url}
+	_, _, release, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	release()
+
+	// Health check fires every ~30ms; the failing ping should
+	// trigger eviction. Poll Stats so the test is fast on a warm
+	// machine and forgiving on a cold one.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cache.Stats().Entries == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("entry not evicted by health check; Stats = %+v", cache.Stats())
+}
+
+// TestCache_HealthCheck_HangingPingEvictsAfterTimeout: ping that
+// hangs forever must surface as a deadline-exceeded inside
+// pingTimeout, evicting the entry. Distinguished from the
+// RPC-error path above — both should evict but the timeout one
+// is the more pernicious "alive on the wire but not responsive"
+// failure mode that motivated the feature.
+func TestCache_HealthCheck_HangingPingEvictsAfterTimeout(t *testing.T) {
+	t.Parallel()
+	hang := make(chan struct{})
+	url := makeCacheTestServerWithPing(t, "hang", func() (any, *mcp.RPCError) {
+		<-hang
+		return struct{}{}, nil
+	})
+	// Cleanup ordering matters: t.Cleanup is LIFO. Register
+	// close(hang) AFTER makeCacheTestServerWithPing so it runs
+	// BEFORE the httptest server's Close (registered inside the
+	// helper) — otherwise hs.Close blocks forever waiting for the
+	// still-blocking <-hang server-side handler.
+	t.Cleanup(func() { close(hang) })
+
+	cache := newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            time.Minute,
+		reaperInterval: time.Minute,
+		pingInterval:   30 * time.Millisecond,
+		pingTimeout:    100 * time.Millisecond,
+		info:           mcp.ClientInfo{Name: "hecate-cache-test", Version: "0"},
+	})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, _, release, err := cache.Acquire(ctx, ServerConfig{Name: "hang", URL: url})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	release()
+
+	// pingInterval=30ms → first probe fires at ~30ms.
+	// pingTimeout=100ms → that probe completes at ~130ms with a
+	// deadline-exceeded → eviction. Cap at 2s to avoid wedging the
+	// test on a slow machine.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cache.Stats().Entries == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("entry not evicted after ping timeout; Stats = %+v", cache.Stats())
+}
+
+// TestCache_HealthCheck_SkipsInUseEntries: an in-use entry must
+// NOT be pinged or evicted by the health-check loop — pinging
+// would race the active tool call's response, and evicting an
+// in-use entry would yank the client out from under a legitimate
+// caller. We hold an Acquire across multiple ping-loop ticks and
+// assert the entry survives even when the upstream's ping handler
+// would fail it if probed.
+func TestCache_HealthCheck_SkipsInUseEntries(t *testing.T) {
+	t.Parallel()
+	url := makeCacheTestServerWithPing(t, "inuse", func() (any, *mcp.RPCError) {
+		// Would-fail handler — but we expect no probe at all while
+		// the entry is in-use.
+		return nil, mcp.NewError(mcp.ErrCodeInternalError, "wedged")
+	})
+
+	cache := newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            time.Minute,
+		reaperInterval: time.Minute,
+		pingInterval:   30 * time.Millisecond,
+		pingTimeout:    1 * time.Second,
+		info:           mcp.ClientInfo{Name: "hecate-cache-test", Version: "0"},
+	})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := ServerConfig{Name: "inuse", URL: url}
+	_, _, release, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer release() // hold across the entire test
+
+	// Wait several ping-loop intervals. With the handler set to
+	// fail, an in-use-blind ping loop would have evicted the
+	// entry; the in-use guard keeps it alive.
+	time.Sleep(150 * time.Millisecond)
+	if got := cache.Stats(); got.Entries != 1 || got.InUse != 1 {
+		t.Errorf("Stats = %+v after in-use hold, want Entries=1 InUse=1", got)
+	}
+}
+
+// TestCache_HealthCheck_DisabledByZeroPingInterval: pingInterval=0
+// means "no health-check loop." Verifying by registering a
+// would-fail ping handler and asserting the entry survives across
+// what would otherwise be many ping-loop ticks.
+func TestCache_HealthCheck_DisabledByZeroPingInterval(t *testing.T) {
+	t.Parallel()
+	url := makeCacheTestServerWithPing(t, "disabled", func() (any, *mcp.RPCError) {
+		return nil, mcp.NewError(mcp.ErrCodeInternalError, "would-fail")
+	})
+
+	cache := newSharedClientCacheFull(cacheBuildConfig{
+		ttl:            time.Minute,
+		reaperInterval: time.Minute,
+		pingInterval:   0, // disabled
+		pingTimeout:    1 * time.Second,
+		info:           mcp.ClientInfo{Name: "hecate-cache-test", Version: "0"},
+	})
+	t.Cleanup(func() { _ = cache.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := ServerConfig{Name: "disabled", URL: url}
+	_, _, release, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	release()
+
+	// 200ms is much longer than any sane pingInterval — a running
+	// loop would have fired several times by now.
+	time.Sleep(200 * time.Millisecond)
+	if got := cache.Stats().Entries; got != 1 {
+		t.Errorf("Stats.Entries = %d, want 1 (loop disabled)", got)
 	}
 }

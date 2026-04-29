@@ -192,6 +192,18 @@ func agentClientInfo() mcp.ClientInfo {
 	return mcp.ClientInfo{Name: "hecate-agent-loop", Version: version.Version}
 }
 
+// AgentMCPClientCacheOptions bundles the knobs main.go threads into
+// the cache. Avoids a 6-param positional constructor as the cache
+// grows new options. Zero values fall back to the cache's internal
+// defaults (see mcpclient.NewSharedClientCache for each field).
+type AgentMCPClientCacheOptions struct {
+	TTL          time.Duration
+	MaxEntries   int
+	PingInterval time.Duration
+	PingTimeout  time.Duration
+	Metrics      *telemetry.OrchestratorMetrics
+}
+
 // NewAgentMCPClientCache builds a SharedClientCache configured with
 // the same client identity that uncached agent-loop runs use. main.go
 // constructs one of these at startup, hands it to the api.Handler, and
@@ -200,31 +212,19 @@ func agentClientInfo() mcp.ClientInfo {
 // unexported and ensures the cache and the per-run path can never
 // drift on identity strings.
 //
-// ttl is the idle TTL for cached entries; 0 falls back to the cache's
-// internal default (5 minutes).
-//
-// maxEntries caps how many distinct upstream clients the cache holds
-// at once. When at-or-over the cap on a fresh insert, the cache evicts
-// the least-recently-used IDLE entry first; if every entry is in-use,
-// the over-cap insert is allowed (TTL eviction catches up later). 0
-// falls back to the cache's internal default (256). Negative disables
-// the cap (unbounded growth — used by tests that don't care).
-//
-// metrics, when non-nil, gets wired in as a CacheObserver so cache
-// hit/miss/evict events show up on the cache-events counter. nil =
-// no metrics (cache still functions; callers just lose observability).
-func NewAgentMCPClientCache(ttl time.Duration, maxEntries int, metrics *telemetry.OrchestratorMetrics) *mcpclient.SharedClientCache {
-	var cache *mcpclient.SharedClientCache
-	if maxEntries == 0 {
-		// Distinguish "operator left the field zero-valued" from
-		// "operator deliberately disabled the cap" by treating zero
-		// as "use the cache's default" and negative as "disabled."
-		// The orchestrator.Config field documentation calls this out.
-		cache = mcpclient.NewSharedClientCache(ttl, agentClientInfo())
-	} else {
-		cache = mcpclient.NewSharedClientCacheWithLimits(ttl, maxEntries, agentClientInfo())
-	}
-	if metrics != nil {
+// See AgentMCPClientCacheOptions for the knobs and their fallback
+// behavior. metrics, when non-nil, gets wired in as a CacheObserver
+// so cache hit/miss/evict events show up on the cache-events counter.
+func NewAgentMCPClientCache(opts AgentMCPClientCacheOptions) *mcpclient.SharedClientCache {
+	cache := mcpclient.NewSharedClientCacheWithOptions(mcpclient.SharedClientCacheOptions{
+		TTL:          opts.TTL,
+		MaxEntries:   opts.MaxEntries,
+		PingInterval: opts.PingInterval,
+		PingTimeout:  opts.PingTimeout,
+		Info:         agentClientInfo(),
+	})
+	if opts.Metrics != nil {
+		metrics := opts.Metrics
 		// Capture metrics in closures so the cache stays free of any
 		// telemetry-package dependency. The closures themselves are
 		// nil-safe (the metrics SDK no-ops on nil instruments).

@@ -175,6 +175,26 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return res, nil
 }
 
+// Ping sends an MCP `ping` request and waits for the response. The
+// MCP spec defines ping as a bidirectional liveness probe — servers
+// answer with an empty result, clients can answer the same. This
+// method is the client→server direction, used by the cache's
+// health-check loop to detect subprocesses that are still
+// connected but wedged (event loop deadlock, tight CPU loop, etc.)
+// before a real tool call hits the wall.
+//
+// Bounded by ctx — callers pass a tight deadline (a few seconds)
+// because the whole point is to fail fast on a non-responsive
+// peer. Reactive eviction in Pool.Call already covers the
+// transport-closed case; ping covers the more pernicious "alive
+// but not answering" failure mode.
+func (c *Client) Ping(ctx context.Context) error {
+	if _, err := c.call(ctx, "ping", nil); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+	return nil
+}
+
 // Close shuts the client down: marks the connection closed,
 // terminates the transport, and waits for the read loop to exit.
 // Idempotent. After Close, all method calls return ErrClientClosed.

@@ -231,6 +231,8 @@ The docker image picks SQLite for every durable subsystem so `docker compose up`
 | `GATEWAY_TASK_AGENT_SYSTEM_PROMPT` | `""` | Global (broadest) layer of the four-layer agent system prompt. |
 | `GATEWAY_TASK_MAX_MCP_SERVERS_PER_TASK` | `16` | Max `mcp_servers` entries an `agent_loop` task may declare. Over-cap creates fail with a 400. `0` disables. |
 | `GATEWAY_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES` | `256` | Soft cap on cached MCP upstream clients. LRU-idle eviction at the cap; over-cap inserts allowed when every entry is in use. `0` disables. |
+| `GATEWAY_TASK_MCP_CLIENT_CACHE_PING_INTERVAL` | `60s` | How often the cache pings idle MCP clients to detect wedged subprocesses (alive but not responsive). `0` disables; reactive eviction on transport-closed errors still applies. |
+| `GATEWAY_TASK_MCP_CLIENT_CACHE_PING_TIMEOUT` | `5s` | Per-ping deadline. Failure or timeout evicts the entry. |
 
 Tasks of `execution_kind=agent_loop` run an LLM-driven tool-using loop with built-in `shell_exec` / `git_exec` / `file_write` / `read_file` / `list_dir` / `http_request` tools, mid-loop approval gating, per-task cost ceilings, and retry-from-turn-N for exploring alternate paths. Every run gets its own workspace — a clone of the source by default, or the source directly via `workspace_mode=in_place`. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the full contract.
 

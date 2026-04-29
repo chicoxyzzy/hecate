@@ -266,7 +266,16 @@ func main() {
 	// and tears it down on Shutdown after the runner has drained, so
 	// in-flight runs always see a live client. Zero TTL falls back to
 	// the cache's internal default (5 minutes idle eviction).
-	handler.SetMCPClientCache(orchestrator.NewAgentMCPClientCache(0, cfg.Server.TaskMCPClientCacheMaxEntries, handler.OrchestratorMetrics()))
+	handler.SetMCPClientCache(orchestrator.NewAgentMCPClientCache(orchestrator.AgentMCPClientCacheOptions{
+		// TTL=0 lets the cache use its internal default (5 min).
+		// We don't expose a TTL knob today; if operators ask, add
+		// GATEWAY_TASK_MCP_CLIENT_CACHE_TTL alongside the existing
+		// max-entries / ping-interval / ping-timeout knobs.
+		MaxEntries:   cfg.Server.TaskMCPClientCacheMaxEntries,
+		PingInterval: cfg.Server.TaskMCPClientCachePingInterval,
+		PingTimeout:  cfg.Server.TaskMCPClientCachePingTimeout,
+		Metrics:      handler.OrchestratorMetrics(),
+	}))
 
 	server := &http.Server{
 		Addr:              cfg.Server.Address,
