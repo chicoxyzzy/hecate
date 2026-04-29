@@ -7,6 +7,7 @@ const WORKSPACE_STORAGE_KEY = "hecate.workspace";
 
 export default function App() {
   const { state, actions } = useRuntimeConsole();
+  const validWorkspaces: WorkspaceID[] = ["chats", "overview", "runs", "providers", "admin"];
   // The operator's *preferred* workspace, hydrated from localStorage. We
   // never overwrite this with a fallback — only the explicit selection
   // path persists. Resolving the actually-active workspace happens at
@@ -16,7 +17,7 @@ export default function App() {
   // would clobber the saved value on every reload.
   const [preferredWorkspace, setPreferredWorkspace] = useState<WorkspaceID>(() => {
     const saved = localStorage.getItem(WORKSPACE_STORAGE_KEY);
-    return saved ?? "chats";
+    return validWorkspaces.includes(saved as WorkspaceID) ? (saved as WorkspaceID) : "chats";
   });
 
   const workspaces = useMemo(() => getAvailableWorkspaces(state.session.isAdmin), [state.session.isAdmin]);

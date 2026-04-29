@@ -64,7 +64,6 @@ import type {
   RetentionRunData,
 } from "../types/runtime";
 
-const defaultPrompt = "Say hello in one short sentence.";
 type SessionKind = "anonymous" | "tenant" | "admin" | "invalid";
 type SessionState = {
   kind: SessionKind;
@@ -101,7 +100,7 @@ export function useRuntimeConsole() {
 
   const [model, setModel] = useState("");
   const [tenant, setTenant] = useState("");
-  const [message, setMessage] = useState(defaultPrompt);
+  const [message, setMessage] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);

@@ -141,6 +141,14 @@ describe("useRuntimeConsole", () => {
     });
   });
 
+  it("starts chats with an empty composer", async () => {
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+
+    expect(result.current.state.message).toBe("");
+  });
+
   it("syncs the tenant field from the authenticated tenant session", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);
