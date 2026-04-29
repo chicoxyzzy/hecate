@@ -60,6 +60,22 @@ export function TaskList({ tasks, selectedTaskID, loading, busyAction, onSelect,
                   {t.execution_kind}
                 </span>
               )}
+              {/* MCP-config chip — surfaced when the task configures
+                  one or more external MCP servers, so operators can
+                  see at-a-glance which agent_loop tasks bring up
+                  external tool sources. The tooltip lists server
+                  names; the parsed name/server distinction in the
+                  run-detail timeline picks up from there. */}
+              {t.mcp_servers && t.mcp_servers.length > 0 && (
+                <span
+                  className="badge badge-muted"
+                  aria-label={`${t.mcp_servers.length} MCP server${t.mcp_servers.length === 1 ? "" : "s"} configured`}
+                  title={`MCP servers: ${t.mcp_servers.map(s => s.name).join(", ")}`}
+                  style={{ fontSize: 9, fontFamily: "var(--font-mono)", padding: "1px 5px", flexShrink: 0 }}
+                >
+                  MCP × {t.mcp_servers.length}
+                </span>
+              )}
               <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)", marginLeft: "auto" }}>
                 {t.step_count ?? 0} steps
               </span>

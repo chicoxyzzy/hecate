@@ -590,6 +590,22 @@ export type TaskRecord = {
   root_trace_id?: string;
   latest_trace_id?: string;
   latest_request_id?: string;
+  // MCPServers echoes the configured external MCP servers (if
+  // any). Used by the task list to show an "MCP × N" chip and the
+  // task detail to render the per-server configuration. Mirrors
+  // the wire shape — see api.MCPServerConfigItem on the gateway
+  // side. Secret values (env, headers) come back redacted unless
+  // they're $VAR_NAME references; approval_policy and url/command
+  // are surfaced verbatim.
+  mcp_servers?: Array<{
+    name: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+    approval_policy?: string;
+  }>;
 };
 
 export type TasksResponse = {

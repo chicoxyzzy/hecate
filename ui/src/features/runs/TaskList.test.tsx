@@ -147,4 +147,56 @@ describe("TaskList", () => {
     render();
     expect(screen.getByText("agent")).toBeTruthy();
   });
+
+  it("renders an 'MCP × N' chip when the task configures MCP servers", () => {
+    // Two configured servers → "MCP × 2" with an aria-label that
+    // names the count, so screen readers announce the chip
+    // consistently across rows.
+    const { render } = setup({
+      tasks: [
+        makeTask({
+          execution_kind: "agent_loop",
+          shell_command: undefined,
+          mcp_servers: [
+            { name: "github", url: "https://api.example.com/mcp" },
+            { name: "filesystem", command: "bunx" },
+          ],
+        }),
+      ],
+    });
+    render();
+    expect(screen.getByText("MCP × 2")).toBeTruthy();
+    expect(screen.getByLabelText(/2 MCP servers configured/i)).toBeTruthy();
+  });
+
+  it("hides the MCP chip when mcp_servers is empty or missing", () => {
+    // Both shell tasks (no mcp_servers field) and agent_loop tasks
+    // with an empty array must render WITHOUT the chip — otherwise
+    // operators can't tell at a glance which agent_loop runs use
+    // external tool sources.
+    const { render } = setup({
+      tasks: [
+        makeTask({ id: "task-no-mcp", execution_kind: "agent_loop", shell_command: undefined }),
+      ],
+    });
+    render();
+    expect(screen.queryByText(/^MCP × /)).toBeNull();
+    expect(screen.queryByLabelText(/MCP server.*configured/i)).toBeNull();
+  });
+
+  it("renders 'MCP × 1' (singular) and a singular aria-label for one server", () => {
+    // Pluralization edge-case — "1 MCP servers" reads wrong.
+    const { render } = setup({
+      tasks: [
+        makeTask({
+          execution_kind: "agent_loop",
+          shell_command: undefined,
+          mcp_servers: [{ name: "fs", command: "bunx" }],
+        }),
+      ],
+    });
+    render();
+    expect(screen.getByText("MCP × 1")).toBeTruthy();
+    expect(screen.getByLabelText(/^1 MCP server configured$/i)).toBeTruthy();
+  });
 });
