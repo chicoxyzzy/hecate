@@ -514,3 +514,128 @@ func TestSQLiteStore_DeleteTaskCascades(t *testing.T) {
 		t.Fatalf("steps still present after delete: %d", len(steps))
 	}
 }
+
+// TestSQLiteStore_TaskMCPServersRoundTrip pins that a Task with a
+// fully-populated MCPServers slice survives a round-trip through
+// the sqlite backend's JSON-blob storage path. The pkg/types/task
+// JSON-round-trip test pins the marshaling contract on the type
+// itself; this test pins the actual storage layer (write JSON,
+// read JSON, deep-equal). Postgres uses the identical
+// json.Marshal/json.Unmarshal pair on its blob column, so this
+// test covers that backend's contract by construction — same code
+// path, no per-backend variance.
+//
+// Catches: a regression where someone changes a Task field tag,
+// adds an unmarshal hook that mishandles a default value, or
+// makes a column type incompatible with the existing JSON shape
+// would silently corrupt every persisted MCP config; this test
+// fails first.
+func TestSQLiteStore_TaskMCPServersRoundTrip(t *testing.T) {
+	t.Parallel()
+	store := newSQLiteTestStore(t)
+	ctx := context.Background()
+
+	task := types.Task{
+		ID:            "task-mcp",
+		Title:         "MCP store round-trip",
+		Tenant:        "team-a",
+		Status:        "queued",
+		ExecutionKind: "agent_loop",
+		MCPServers: []types.MCPServerConfig{
+			{
+				Name:    "fs",
+				Command: "bunx",
+				Args:    []string{"--bun", "@modelcontextprotocol/server-filesystem", "/workspace"},
+				Env: map[string]string{
+					"DEBUG_TOKEN": "$DEBUG_TOKEN",
+					"AUTH":        "enc:abc123base64=",
+					"NODE_ENV":    "production",
+				},
+				ApprovalPolicy: types.MCPApprovalAuto,
+			},
+			{
+				Name: "github",
+				URL:  "https://api.example.com/mcp",
+				Headers: map[string]string{
+					"Authorization": "Bearer $GITHUB_TOKEN",
+					"X-Trace":       "on",
+				},
+				ApprovalPolicy: types.MCPApprovalRequireApproval,
+			},
+			{
+				Name:           "blocked",
+				Command:        "npx",
+				Args:           []string{"@vendor/dangerous"},
+				ApprovalPolicy: types.MCPApprovalBlock,
+			},
+		},
+	}
+
+	if _, err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	got, ok, err := store.GetTask(ctx, task.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetTask: ok=%v err=%v", ok, err)
+	}
+
+	// Field-by-field check on the MCP slice rather than reflect.DeepEqual
+	// on the whole Task: the store stamps CreatedAt / UpdatedAt /
+	// other timestamps, so a whole-Task DeepEqual would fail on
+	// fields the test doesn't care about.
+	if len(got.MCPServers) != len(task.MCPServers) {
+		t.Fatalf("MCPServers count: got %d, want %d", len(got.MCPServers), len(task.MCPServers))
+	}
+	for i, want := range task.MCPServers {
+		gotEntry := got.MCPServers[i]
+		if gotEntry.Name != want.Name {
+			t.Errorf("[%d] Name = %q, want %q", i, gotEntry.Name, want.Name)
+		}
+		if gotEntry.Command != want.Command {
+			t.Errorf("[%d] Command = %q, want %q", i, gotEntry.Command, want.Command)
+		}
+		if gotEntry.URL != want.URL {
+			t.Errorf("[%d] URL = %q, want %q", i, gotEntry.URL, want.URL)
+		}
+		if gotEntry.ApprovalPolicy != want.ApprovalPolicy {
+			t.Errorf("[%d] ApprovalPolicy = %q, want %q", i, gotEntry.ApprovalPolicy, want.ApprovalPolicy)
+		}
+		if !equalStringSlice(gotEntry.Args, want.Args) {
+			t.Errorf("[%d] Args = %+v, want %+v", i, gotEntry.Args, want.Args)
+		}
+		if !equalStringMap(gotEntry.Env, want.Env) {
+			t.Errorf("[%d] Env = %+v, want %+v", i, gotEntry.Env, want.Env)
+		}
+		if !equalStringMap(gotEntry.Headers, want.Headers) {
+			t.Errorf("[%d] Headers = %+v, want %+v", i, gotEntry.Headers, want.Headers)
+		}
+	}
+}
+
+// equalStringSlice / equalStringMap are tiny helpers because
+// reflect.DeepEqual treats nil and empty slice/map as different —
+// for round-trip tests we want to consider them equivalent (empty
+// JSON arrays and missing keys end up as nil after unmarshal).
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
