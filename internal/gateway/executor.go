@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hecate/agent-runtime/internal/governor"
+	"github.com/hecate/agent-runtime/internal/policy"
 	"github.com/hecate/agent-runtime/internal/profiler"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/router"
@@ -291,7 +293,15 @@ func firstNonEmpty(values ...string) string {
 }
 
 func classifyRouteDenied(err error) string {
-	message := strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
+	var budgetErr *governor.BudgetExceededError
+	if errors.As(err, &budgetErr) {
+		return "budget_denied"
+	}
+	var policyErr *policy.Error
+	if errors.As(err, &policyErr) {
+		return "policy_denied"
+	}
+	message := lowerError(err)
 	switch {
 	case strings.Contains(message, "balance") || strings.Contains(message, "budget") || strings.Contains(message, "cost"):
 		return "budget_denied"
@@ -300,6 +310,10 @@ func classifyRouteDenied(err error) string {
 	default:
 		return string(RoutePreflightRouteDenied)
 	}
+}
+
+func lowerError(err error) string {
+	return strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
 }
 
 func (e *ResilientExecutor) retryDelay(attempt int) time.Duration {

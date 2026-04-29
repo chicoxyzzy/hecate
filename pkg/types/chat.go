@@ -358,6 +358,9 @@ type RouteCandidateReport struct {
 	Outcome            string
 	SkipReason         string
 	HealthStatus       string
+	PolicyRuleID       string
+	PolicyAction       string
+	PolicyReason       string
 	EstimatedMicrosUSD int64
 	Attempt            int
 	RetryCount         int

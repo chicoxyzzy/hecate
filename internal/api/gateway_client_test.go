@@ -1776,6 +1776,141 @@ func TestGatewayTraceEndpointShowsSkippedRouteCandidate(t *testing.T) {
 	}
 }
 
+func TestGatewayTraceEndpointShowsPolicyDeniedRouteCandidate(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{},
+	}
+	srv := newGatewayServer(t, provider, config.Config{
+		Router: config.RouterConfig{DefaultModel: "gpt-4o-mini"},
+		Governor: config.GovernorConfig{
+			PolicyRules: []config.PolicyRuleConfig{{
+				ID:            "deny-cloud",
+				Action:        "deny",
+				Reason:        "cloud denied from trace test",
+				ProviderKinds: []string{"cloud"},
+			}},
+		},
+	})
+	defer srv.Close()
+
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
+	chatResp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	requestID := chatResp.Header.Get("X-Request-Id")
+	raw := readBody(t, chatResp)
+	if chatResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("chat status = %d, want 403, body=%s", chatResp.StatusCode, raw)
+	}
+	if requestID == "" {
+		t.Fatal("X-Request-Id = empty, cannot query trace")
+	}
+
+	traceResp, err := http.Get(srv.URL + "/v1/traces?request_id=" + requestID)
+	if err != nil {
+		t.Fatalf("GET /v1/traces error = %v", err)
+	}
+	traceRaw := readBody(t, traceResp)
+	if traceResp.StatusCode != http.StatusOK {
+		t.Fatalf("trace status = %d, body=%s", traceResp.StatusCode, traceRaw)
+	}
+
+	var trace TraceResponse
+	if err := json.Unmarshal(traceRaw, &trace); err != nil {
+		t.Fatalf("Unmarshal() error = %v, body=%s", err, traceRaw)
+	}
+	foundDenied := false
+	for _, candidate := range trace.Data.Route.Candidates {
+		if candidate.Provider == "openai" && candidate.Outcome == "denied" && candidate.SkipReason == "policy_denied" {
+			foundDenied = true
+			if candidate.PolicyRuleID != "deny-cloud" {
+				t.Fatalf("candidate.policy_rule_id = %q, want deny-cloud", candidate.PolicyRuleID)
+			}
+			if candidate.PolicyAction != "deny" {
+				t.Fatalf("candidate.policy_action = %q, want deny", candidate.PolicyAction)
+			}
+			if candidate.PolicyReason != "cloud denied from trace test" {
+				t.Fatalf("candidate.policy_reason = %q, want policy reason", candidate.PolicyReason)
+			}
+		}
+	}
+	if !foundDenied {
+		t.Fatalf("missing denied openai policy_denied candidate: %+v", trace.Data.Route.Candidates)
+	}
+}
+
+func TestGatewayTraceEndpointShowsBudgetDeniedRouteCandidate(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{},
+	}
+	srv := newGatewayServer(t, provider, config.Config{
+		Router: config.RouterConfig{DefaultModel: "gpt-4o-mini"},
+		Governor: config.GovernorConfig{
+			MaxPromptTokens:      100_000,
+			MaxTotalBudgetMicros: 1,
+			BudgetBackend:        "memory",
+			BudgetKey:            "global",
+			BudgetScope:          "global",
+		},
+	})
+	defer srv.Close()
+
+	body := `{"model":"gpt-4o-mini","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	chatResp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	requestID := chatResp.Header.Get("X-Request-Id")
+	raw := readBody(t, chatResp)
+	if chatResp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("chat status = %d, want 402, body=%s", chatResp.StatusCode, raw)
+	}
+	if requestID == "" {
+		t.Fatal("X-Request-Id = empty, cannot query trace")
+	}
+
+	traceResp, err := http.Get(srv.URL + "/v1/traces?request_id=" + requestID)
+	if err != nil {
+		t.Fatalf("GET /v1/traces error = %v", err)
+	}
+	traceRaw := readBody(t, traceResp)
+	if traceResp.StatusCode != http.StatusOK {
+		t.Fatalf("trace status = %d, body=%s", traceResp.StatusCode, traceRaw)
+	}
+
+	var trace TraceResponse
+	if err := json.Unmarshal(traceRaw, &trace); err != nil {
+		t.Fatalf("Unmarshal() error = %v, body=%s", err, traceRaw)
+	}
+	foundDenied := false
+	for _, candidate := range trace.Data.Route.Candidates {
+		if candidate.Provider == "openai" && candidate.Outcome == "denied" && candidate.SkipReason == "budget_denied" {
+			foundDenied = true
+			if candidate.EstimatedMicrosUSD <= 0 {
+				t.Fatalf("candidate.estimated_micros_usd = %d, want >0", candidate.EstimatedMicrosUSD)
+			}
+		}
+	}
+	if !foundDenied {
+		t.Fatalf("missing denied openai budget_denied candidate: %+v", trace.Data.Route.Candidates)
+	}
+}
+
 // TestClaudeCodeClientTraceEndpointShowsAnthropicRequest verifies that a
 // /v1/messages request is also traceable via the GET /v1/traces endpoint.
 func TestClaudeCodeClientTraceEndpointShowsAnthropicRequest(t *testing.T) {

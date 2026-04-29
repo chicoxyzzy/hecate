@@ -40,6 +40,9 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 						telemetry.AttrHecateProviderIndex:          0,
 						telemetry.AttrHecateRouteSkipReason:        "budget_denied",
 						telemetry.AttrErrorMessage:                 "budget denied",
+						telemetry.AttrHecatePolicyRuleID:           "deny-expensive-local",
+						telemetry.AttrHecatePolicyAction:           "deny",
+						telemetry.AttrHecatePolicyReason:           "local spillover blocked",
 						telemetry.AttrHecateCostEstimatedMicrosUSD: int64(1200),
 					},
 				},
@@ -124,6 +127,12 @@ func TestBuildRouteDecisionReport(t *testing.T) {
 	}
 	if report.Candidates[0].SkipReason != "budget_denied" {
 		t.Fatalf("candidate[0].SkipReason = %q, want budget_denied", report.Candidates[0].SkipReason)
+	}
+	if report.Candidates[0].PolicyRuleID != "deny-expensive-local" {
+		t.Fatalf("candidate[0].PolicyRuleID = %q, want deny-expensive-local", report.Candidates[0].PolicyRuleID)
+	}
+	if report.Candidates[0].PolicyReason != "local spillover blocked" {
+		t.Fatalf("candidate[0].PolicyReason = %q, want local spillover blocked", report.Candidates[0].PolicyReason)
 	}
 	if report.Candidates[1].Outcome != "completed" {
 		t.Fatalf("candidate[1].Outcome = %q, want completed", report.Candidates[1].Outcome)

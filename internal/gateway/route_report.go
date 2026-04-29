@@ -94,6 +94,9 @@ func routeCandidateFromEvent(event types.TraceEvent) types.RouteCandidateReport 
 		Outcome:            routeOutcomeFromEvent(event.Name, event.Attributes),
 		SkipReason:         firstNonEmptyString(stringAttr(event.Attributes, telemetry.AttrHecateRouteSkipReason), stringAttr(event.Attributes, telemetry.AttrErrorMessage)),
 		HealthStatus:       stringAttr(event.Attributes, telemetry.AttrHecateProviderHealthStatus),
+		PolicyRuleID:       stringAttr(event.Attributes, telemetry.AttrHecatePolicyRuleID),
+		PolicyAction:       stringAttr(event.Attributes, telemetry.AttrHecatePolicyAction),
+		PolicyReason:       stringAttr(event.Attributes, telemetry.AttrHecatePolicyReason),
 		EstimatedMicrosUSD: int64Attr(event.Attributes, telemetry.AttrHecateCostEstimatedMicrosUSD),
 		Attempt:            int(int64Attr(event.Attributes, telemetry.AttrHecateRetryAttempt)),
 		RetryCount:         retryCountFromEvent(event),
@@ -178,6 +181,15 @@ func mergeRouteCandidate(target *types.RouteCandidateReport, incoming types.Rout
 	}
 	if incoming.HealthStatus != "" {
 		target.HealthStatus = incoming.HealthStatus
+	}
+	if incoming.PolicyRuleID != "" {
+		target.PolicyRuleID = incoming.PolicyRuleID
+	}
+	if incoming.PolicyAction != "" {
+		target.PolicyAction = incoming.PolicyAction
+	}
+	if incoming.PolicyReason != "" {
+		target.PolicyReason = incoming.PolicyReason
 	}
 	if incoming.EstimatedMicrosUSD > 0 {
 		target.EstimatedMicrosUSD = incoming.EstimatedMicrosUSD

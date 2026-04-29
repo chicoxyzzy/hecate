@@ -365,6 +365,7 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 					EstimatedCost:  types.CostBreakdown{Currency: "USD"},
 				}
 			case RoutePreflightRouteDenied:
+				recordRouteDeniedCandidate(trace, decision, preflightErr, 0)
 				recordTraceError(trace, "governor.route_denied", "governor", errorKindRouteDenied, preflightErr, map[string]any{
 					telemetry.AttrGenAIProviderName:            decision.Provider,
 					telemetry.AttrHecateProviderKind:           preflightErr.ProviderKind,

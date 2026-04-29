@@ -29,3 +29,21 @@ func recordRouteDiagnostics(ctx context.Context, trace *profiler.Trace, routeRou
 		})
 	}
 }
+
+func recordRouteDeniedCandidate(trace *profiler.Trace, candidate types.RouteDecision, preflightErr *RoutePreflightError, index int) {
+	if trace == nil || preflightErr == nil {
+		return
+	}
+	providerKind := firstNonEmpty(preflightErr.ProviderKind, candidate.ProviderKind)
+	reason := classifyRouteDenied(preflightErr.Err)
+	recordTraceError(trace, "router.candidate.denied", "routing", reason, preflightErr, map[string]any{
+		telemetry.AttrGenAIProviderName:            candidate.Provider,
+		telemetry.AttrGenAIRequestModel:            candidate.Model,
+		telemetry.AttrHecateProviderKind:           providerKind,
+		telemetry.AttrHecateRouteReason:            candidate.Reason,
+		telemetry.AttrHecateProviderIndex:          index,
+		telemetry.AttrHecateRouteOutcome:           "denied",
+		telemetry.AttrHecateRouteSkipReason:        reason,
+		telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
+	})
+}

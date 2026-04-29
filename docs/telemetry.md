@@ -250,13 +250,16 @@ winner:
 | `router.selected` | The router picked the initial provider/model | `gen_ai.provider.name`, `gen_ai.request.model`, `hecate.provider.kind`, `hecate.route.reason` |
 | `router.candidate.skipped` | A provider/model was not selected before execution | `hecate.route.skip_reason`, `hecate.provider.health_status`, `hecate.provider.index` |
 | `router.candidate.considered` | The executor is about to preflight/call a runtime candidate | `hecate.route.outcome=considered`, `hecate.provider.index` |
-| `router.candidate.denied` | Policy, budget, or route preflight denied a candidate | `hecate.route.skip_reason`, `hecate.cost.estimated_micros_usd` |
+| `router.candidate.denied` | Policy, budget, or route preflight denied a candidate | `hecate.route.skip_reason`, `hecate.cost.estimated_micros_usd`, `hecate.policy.rule_id`, `hecate.policy.reason` |
 | `router.candidate.selected` | A candidate survived preflight and will be called | `hecate.route.outcome=selected`, `hecate.cost.estimated_micros_usd` |
 
 Common skip reasons include `unsupported_model`, `circuit_open`,
 `provider_not_requested`, `no_default_model`, `no_model`,
-`preflight_price_missing`, and `route_denied`. Runtime failover events use the
-same provider/model vocabulary under `gateway.provider`.
+`preflight_price_missing`, `budget_denied`, `policy_denied`, and
+`route_denied`. Policy-backed denials also carry the matched rule id/action/
+reason when the governor rejected the candidate via a persisted or configured
+policy rule. Runtime failover events use the same provider/model vocabulary
+under `gateway.provider`.
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
 

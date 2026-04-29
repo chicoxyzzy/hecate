@@ -193,6 +193,9 @@ export type TraceResponse = {
         outcome?: string;
         skip_reason?: string;
         health_status?: string;
+        policy_rule_id?: string;
+        policy_action?: string;
+        policy_reason?: string;
         estimated_micros_usd?: number;
         estimated_usd?: string;
         attempt?: number;

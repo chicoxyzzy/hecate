@@ -343,6 +343,9 @@ type TraceRouteCandidateRecord struct {
 	Outcome            string `json:"outcome,omitempty"`
 	SkipReason         string `json:"skip_reason,omitempty"`
 	HealthStatus       string `json:"health_status,omitempty"`
+	PolicyRuleID       string `json:"policy_rule_id,omitempty"`
+	PolicyAction       string `json:"policy_action,omitempty"`
+	PolicyReason       string `json:"policy_reason,omitempty"`
 	EstimatedMicrosUSD int64  `json:"estimated_micros_usd,omitempty"`
 	EstimatedUSD       string `json:"estimated_usd,omitempty"`
 	Attempt            int    `json:"attempt,omitempty"`
