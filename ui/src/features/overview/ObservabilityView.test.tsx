@@ -210,4 +210,121 @@ describe("ObservabilityView", () => {
     expect(container.textContent).toMatch(/Route summary/);
     expect(container.textContent).toMatch(/Event flow/);
   });
+
+  it("renders policy metadata on a policy_denied route candidate", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/admin/traces")) {
+        return new Response(JSON.stringify({
+          object: "trace_list",
+          data: [{
+            request_id: "req-policy",
+            started_at: "2026-04-29T10:00:00Z",
+            span_count: 1,
+            duration_ms: 5,
+            route: {
+              final_provider: "openai",
+              final_model: "gpt-4o-mini",
+              candidates: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o",
+                  outcome: "skipped",
+                  skip_reason: "policy_denied",
+                  policy_rule_id: "cost-cap",
+                  policy_action: "deny",
+                  policy_reason: "request exceeds cost cap",
+                },
+                { provider: "openai", model: "gpt-4o-mini", outcome: "selected" },
+              ],
+            },
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const state = createRuntimeConsoleFixture({ session: adminSession });
+    let container = null as unknown as HTMLElement;
+    await act(async () => {
+      const result = render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+      container = result.container;
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/cost-cap/);
+    });
+    expect(container.textContent).toMatch(/deny/);
+    expect(container.textContent).toMatch(/request exceeds cost cap/);
+    expect(container.textContent).toMatch(/Policy denied/);
+  });
+
+  it("renders governor.model_rewrite event as rewrite arrow with policy context", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/admin/traces")) {
+        return new Response(JSON.stringify({
+          object: "trace_list",
+          data: [{
+            request_id: "req-rewrite",
+            started_at: "2026-04-29T10:00:00Z",
+            span_count: 1,
+            duration_ms: 8,
+            route: { final_provider: "openai", final_model: "gpt-4o-mini", candidates: [] },
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.startsWith("/v1/traces")) {
+        return new Response(JSON.stringify({
+          object: "trace",
+          data: {
+            request_id: "req-rewrite",
+            started_at: "2026-04-29T10:00:00Z",
+            spans: [{
+              trace_id: "trace-rw",
+              span_id: "span-rw",
+              name: "gateway.governor",
+              start_time: "2026-04-29T10:00:00Z",
+              end_time: "2026-04-29T10:00:00.005Z",
+              events: [{
+                name: "governor.model_rewrite",
+                timestamp: "2026-04-29T10:00:00.002Z",
+                attributes: {
+                  "gen_ai.request.model.original": "gpt-4o",
+                  "gen_ai.request.model.rewritten": "gpt-4o-mini",
+                  "hecate.policy.rule_id": "downgrade-default",
+                  "hecate.policy.action": "rewrite_model",
+                  "hecate.policy.reason": "default downgrade",
+                },
+              }],
+            }],
+            route: { candidates: [] },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const state = createRuntimeConsoleFixture({ session: adminSession });
+    let container = null as unknown as HTMLElement;
+    await act(async () => {
+      const result = render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+      container = result.container;
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/governor\.model_rewrite/);
+    });
+    // Model rewrite arrow
+    expect(container.textContent).toMatch(/gpt-4o/);
+    expect(container.textContent).toMatch(/gpt-4o-mini/);
+    // Policy context
+    expect(container.textContent).toMatch(/downgrade-default/);
+    expect(container.textContent).toMatch(/rewrite_model/);
+    expect(container.textContent).toMatch(/default downgrade/);
+  });
 });

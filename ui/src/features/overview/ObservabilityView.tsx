@@ -434,7 +434,32 @@ export function ObservabilityView({ state }: Props) {
                         />
                         <div>
                           <div style={{ fontSize: 12, color: "var(--t0)", marginBottom: 4 }}>{event.name}</div>
-                          {event.attributes && Object.keys(event.attributes).length > 0 && (
+                          {event.name === "governor.model_rewrite" ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              {event.attributes?.["gen_ai.request.model.original"] != null && event.attributes?.["gen_ai.request.model.rewritten"] != null && (
+                                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t1)" }}>
+                                  {String(event.attributes["gen_ai.request.model.original"])} → {String(event.attributes["gen_ai.request.model.rewritten"])}
+                                </span>
+                              )}
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                {event.attributes?.["hecate.policy.rule_id"] != null && (
+                                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                                    rule <span style={{ color: "var(--t1)" }}>{String(event.attributes["hecate.policy.rule_id"])}</span>
+                                  </span>
+                                )}
+                                {event.attributes?.["hecate.policy.action"] != null && (
+                                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                                    action <span style={{ color: "var(--t1)" }}>{String(event.attributes["hecate.policy.action"])}</span>
+                                  </span>
+                                )}
+                                {event.attributes?.["hecate.policy.reason"] != null && (
+                                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t2)", fontStyle: "italic" }}>
+                                    {String(event.attributes["hecate.policy.reason"])}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ) : event.attributes && Object.keys(event.attributes).length > 0 && (
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                               {Object.entries(event.attributes).slice(0, 4).map(([key, value]) => (
                                 <span key={key} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
@@ -485,6 +510,25 @@ export function ObservabilityView({ state }: Props) {
                       {c.detail && (
                         <div style={{ marginTop: 6, fontSize: 11, color: "var(--t2)", lineHeight: 1.45 }}>
                           {c.detail}
+                        </div>
+                      )}
+                      {(c.policy_rule_id || c.policy_action || c.policy_reason) && (
+                        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                          {c.policy_rule_id && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                              rule <span style={{ color: "var(--t1)" }}>{c.policy_rule_id}</span>
+                            </span>
+                          )}
+                          {c.policy_action && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                              action <span style={{ color: "var(--t1)" }}>{c.policy_action}</span>
+                            </span>
+                          )}
+                          {c.policy_reason && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t2)", fontStyle: "italic" }}>
+                              {c.policy_reason}
+                            </span>
+                          )}
                         </div>
                       )}
                       {(c.failover_from || c.failover_to || c.attempt || c.retry_count) && (
