@@ -47,13 +47,15 @@ jobs:
           # --include-fragments: catches broken anchor refs like docs/foo.md#section.
           # --exclude-path .gomodcache: third-party module CLAUDE.md's are not ours to fix.
           # --exclude-path ui/node_modules: same idea for npm package docs.
-          # --base .: relative links resolve from the repo root.
+          # No --base: lychee resolves relative links from each file's own path
+          # by default, which is what we want. (Earlier --base . failed because
+          # lychee requires --base to be a URL or an absolute path; for local
+          # file scans the flag is unnecessary.)
           args: >-
             --no-progress
             --include-fragments
             --exclude-path .gomodcache
             --exclude-path ui/node_modules
-            --base .
             './**/*.md'
             './**/*.mdc'
           fail: true
