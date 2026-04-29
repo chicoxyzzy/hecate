@@ -1,0 +1,25 @@
+# Lychee link-check exclusions for the Links workflow.
+# Each pattern is a regex matched against the URL.
+
+# Local development hosts referenced in operator-facing setup docs.
+# These won't resolve from CI runners and shouldn't.
+^http://127\.0\.0\.1
+^http://localhost
+^http://0\.0\.0\.0
+^http://tempo:
+
+# Provider API base URLs. Most return 401/403 without auth, which lychee
+# treats as "broken." They are not broken — they are the documented
+# bases for upstream providers. Curl with credentials confirms reachability.
+^https://api\.openai\.com
+^https://api\.anthropic\.com
+^https://api\.deepseek\.com
+^https://api\.groq\.com
+^https://api\.mistral\.ai
+^https://api\.together\.xyz
+^https://api\.x\.ai
+^https://generativelanguage\.googleapis\.com
+
+# Documentation example placeholders, not real endpoints.
+^https://api\.example\.com
+^https://example\.com

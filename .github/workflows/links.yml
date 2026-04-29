@@ -1,0 +1,61 @@
+name: Links
+
+# Catches broken relative links in agent-guidance files (AGENTS.md, CLAUDE.md,
+# ai/**, .cursor/rules/**, nested AGENTS.md / SKILL.md) and the long-form
+# product docs in docs/. The Test workflow path-ignores **/*.md, so without
+# this dedicated workflow markdown drift would land unchecked. Also runs
+# weekly on a schedule to surface external link rot.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**/*.md'
+      - '**/*.mdc'
+      - '.lycheeignore'
+      - '.github/workflows/links.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - '**/*.md'
+      - '**/*.mdc'
+      - '.lycheeignore'
+      - '.github/workflows/links.yml'
+  # Weekly to surface external link rot without anyone touching the docs.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lychee:
+    name: Check markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # --no-progress: cleaner CI logs.
+          # --include-fragments: catches broken anchor refs like docs/foo.md#section.
+          # --exclude-path .gomodcache: third-party module CLAUDE.md's are not ours to fix.
+          # --exclude-path ui/node_modules: same idea for npm package docs.
+          # --base .: relative links resolve from the repo root.
+          args: >-
+            --no-progress
+            --include-fragments
+            --exclude-path .gomodcache
+            --exclude-path ui/node_modules
+            --base .
+            './**/*.md'
+            './**/*.mdc'
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
