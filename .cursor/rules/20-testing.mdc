@@ -1,6 +1,6 @@
 ---
 description: Testing and verification rules
-globs: *.go, *.ts, *.tsx
+globs: **/*.go, **/*.ts, **/*.tsx, **/*_test.go
 alwaysApply: false
 ---
 
@@ -12,7 +12,7 @@ alwaysApply: false
 |---|---|---|
 | Build | `go build ./...` | Always |
 | Focused | `go test -race -count=1 ./<package>/...` (or `/test-affected`) | During iteration |
-| Race suite (**floor**) | `GOCACHE=/Users/chicoxyzzy/dev/hecate/.gocache go test -race -timeout 10m ./...` (or `/race`) | Runtime/backend changes |
+| Race suite (**floor**) | `go test -race -timeout 10m ./...` (or `/race`) | Runtime/backend changes |
 | E2E | `go test -tags e2e ./e2e/...` | api → orchestrator → providers/sandbox/mcp chain |
 
 Race suite is the floor for any change touching `internal/gateway`, `internal/router`, `internal/providers`, `internal/orchestrator`, `internal/sandbox`, or retention/state wiring. Not a nice-to-have.

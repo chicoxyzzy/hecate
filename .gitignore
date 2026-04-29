@@ -1,15 +1,19 @@
 .env
 # .claude/ holds Claude Code config + session state. Keep most of it
 # user-local (per-machine session history, local overrides), but
-# track the shared workflow definitions under commands/ so the team
-# gets the same /race, /typecheck, /commit-msg shortcuts.
+# track shared team artifacts: slash commands under commands/, the
+# baseline permission allowlist in settings.json, and the skill
+# discovery symlinks under skills/ that point Claude at canonical
+# SKILL.md files in ai/skills/.
 #
 # Pattern note: ignore immediate children of .claude/ via `*` rather
-# than the directory itself, so the negation can re-include
-# commands/. `.claude/` would have ignored the whole tree and made
-# `!.claude/commands/` unreachable per gitignore semantics.
+# than the directory itself, so the negations can re-include
+# specific subpaths. `.claude/` would have ignored the whole tree
+# and made `!.claude/commands/` unreachable per gitignore semantics.
 .claude/*
 !.claude/commands/
+!.claude/skills/
+!.claude/settings.json
 # Default GATEWAY_DATA_DIR for local dev. Holds the auto-generated
 # bootstrap file (AES-GCM control-plane key + admin bearer token, mode
 # 0600). Never commit it.
