@@ -1,4 +1,0 @@
-389ae62b59f9e51be4486a27d844e4e4e015748ef797d26ae3ce791e58fff357  hecate_0.0.0-SNAPSHOT-b32226e_darwin_amd64.tar.gz
-0e4dee03832e433451a893c29e96a837097faaf2fb5b75ce1adea2948d4a39a9  hecate_0.0.0-SNAPSHOT-b32226e_darwin_arm64.tar.gz
-4fae0fd27534c5617b151f78b7c72170758105792877d63a8777133884ca6aa4  hecate_0.0.0-SNAPSHOT-b32226e_linux_amd64.tar.gz
-2d38d9a00acf38fda7afc85dec68b15037feb7709824ef13f32dec3f2491aec1  hecate_0.0.0-SNAPSHOT-b32226e_linux_arm64.tar.gz

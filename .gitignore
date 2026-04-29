@@ -34,3 +34,6 @@ ui/test-results/
 ui/playwright-report/
 ui/coverage/
 coverage.out
+# Goreleaser output. Snapshot and release runs both write into ./dist
+# at repo root. Anything in here is a build artifact — never tracked.
+dist/
