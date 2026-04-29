@@ -1,6 +1,6 @@
-# Client Integration (Codex And Claude Code)
+# Client Integration (Codex, Claude Code, And Cursor)
 
-This guide explains how to point external coding clients at Hecate as the model gateway. Hecate accepts both OpenAI-compatible and Anthropic-shaped traffic on the same port, so one gateway URL works for both Codex-style and Claude-Code-style clients.
+This guide explains how to point external coding clients at Hecate as the model gateway. Hecate accepts both OpenAI-compatible and Anthropic-shaped traffic on the same port, so one gateway URL works for Codex-style, Claude-Code-style, and Cursor clients.
 
 For the request lifecycle Hecate runs each call through (auth → policy → cache → router → provider), see [`architecture.md`](architecture.md#gateway-request-flow). For task-runtime (`/v1/tasks/...`) endpoints, see [`runtime-api.md`](runtime-api.md).
 
@@ -14,6 +14,7 @@ This page is about **custom clients**, not custom providers. A custom client is 
 - [Two operating modes](#two-operating-modes)
 - [Codex setup](#codex-setup)
 - [Claude Code setup](#claude-code-setup)
+- [Cursor setup](#cursor-setup)
 - [Smoke tests](#smoke-tests)
 - [Multi-modal content (vision)](#multi-modal-content-vision)
 - [OpenAI request fields and cross-provider behavior](#openai-request-fields-and-cross-provider-behavior)
@@ -136,6 +137,21 @@ export ANTHROPIC_API_KEY="hecate-client-token"
 ```
 
 Hecate accepts this key via `x-api-key`. If your client supports explicit auth headers, `Authorization: Bearer ...` also works.
+
+## Cursor setup
+
+Cursor reads its model configuration from the in-app Settings UI, not from environment variables. To route Cursor's chat / Composer / Tab models through Hecate:
+
+1. Open **Cursor → Settings → Cursor Settings → Models → API Keys**.
+2. Toggle **Override OpenAI Base URL** on and set:
+   - **Base URL**: `http://127.0.0.1:8080/v1` (or your Hecate gateway URL)
+   - **OpenAI API Key**: a tenant key from the Hecate UI's Keys tab (or the admin bearer for first-run testing)
+3. Click **Verify** — Cursor will probe `/v1/models`. A green check means Hecate accepted the credential and returned the model catalog.
+4. Pick a Hecate-routable model (e.g. `gpt-4o-mini`, `claude-sonnet-4`, or any model your tenant key is scoped to) in the model picker. Cursor's Composer and Tab features will now route through Hecate.
+
+Cursor does not currently expose an Anthropic-base-URL override. To use Anthropic models via Hecate from Cursor, rely on Hecate's cross-provider translation: the OpenAI-compatible endpoint accepts `model: claude-...` and Hecate translates the request into an Anthropic Messages call upstream. From Cursor's point of view it's still the OpenAI base URL.
+
+> Note: this is unrelated to the `.cursor/rules/` feature in this repo, which controls Cursor's coding-rule injection — not its model routing. The two are independent.
 
 ## Smoke tests
 

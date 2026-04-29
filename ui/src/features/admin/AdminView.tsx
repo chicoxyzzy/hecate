@@ -1347,6 +1347,16 @@ export OPENAI_API_KEY="<paste an API key from the Keys tab>"`;
   const anthropicSnippet = `export ANTHROPIC_BASE_URL="${origin}"
 export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
 
+  // Cursor reads its model config from the in-app Settings UI, not from
+  // environment variables. The "snippet" here is a labeled value pair the
+  // operator pastes into Cursor → Settings → Models → API Keys.
+  const cursorSnippet = `Cursor → Settings → Cursor Settings → Models → API Keys
+
+Override OpenAI Base URL:  ${openaiBase}
+OpenAI API Key:            <paste an API key from the Keys tab>
+
+Click "Verify" — a green check means Cursor reached /v1/models through this gateway.`;
+
   const curlSnippet = `curl -sS "${openaiBase}/chat/completions" \\
   -H "Authorization: Bearer <api-key>" \\
   -H "Content-Type: application/json" \\
@@ -1360,9 +1370,9 @@ export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
         </div>
         <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
           Copy the env vars below into your shell (or your client's settings) to route Codex,
-          Claude Code, or any OpenAI- / Anthropic-compatible client through this gateway.
-          The base URL is auto-filled from your browser location, so the snippets work for
-          local dev, internal hostnames, and public deploys alike.
+          Claude Code, Cursor, or any OpenAI- / Anthropic-compatible client through this
+          gateway. The base URL is auto-filled from your browser location, so the snippets
+          work for local dev, internal hostnames, and public deploys alike.
         </div>
       </div>
 
@@ -1379,6 +1389,13 @@ export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
             Claude Code / Anthropic Messages
           </div>
           <CodeBlock code={anthropicSnippet} lang="bash" />
+        </div>
+
+        <div>
+          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
+            Cursor (Settings UI, not env vars)
+          </div>
+          <CodeBlock code={cursorSnippet} lang="text" />
         </div>
 
         <div>

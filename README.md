@@ -71,15 +71,11 @@ Provider API keys can be added in the UI after first boot. If you prefer environ
 
 Hecate is designed to work with existing tools, not a custom SDK.
 
-| Client | Configure |
-|---|---|
-| Codex, OpenAI SDKs, OpenAI-compatible tools | `OPENAI_BASE_URL=http://127.0.0.1:8080/v1` and `OPENAI_API_KEY=<hecate key>` |
-| Claude Code, Anthropic SDKs | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080` and `ANTHROPIC_API_KEY=<hecate key>` |
-| curl / internal tools | Use the OpenAI-compatible `/v1/chat/completions` or Anthropic-compatible `/v1/messages` APIs |
+The operator UI includes **Admin → Integrations** with copy-paste snippets for common clients.
 
-The operator UI also includes **Admin → Integrations** with copy-paste snippets for common clients.
+![Integrations tab — copy-paste client configuration snippets](docs/screenshots/admin-integrations.png)
 
-Custom clients are supported today: Codex, Claude Code, OpenAI/Anthropic SDKs, curl scripts, and internal tools can point at Hecate. Custom providers are different: provider management currently centers on the shipped preset catalog, not arbitrary provider creation. See [docs/client-integration.md](docs/client-integration.md) and [docs/providers.md](docs/providers.md).
+See [docs/client-integration.md](docs/client-integration.md) for other ways to setup your client.
 
 ## Add Providers
 
@@ -144,8 +140,11 @@ The embedded UI is a runtime console for operators.
 - **Admin** — tenants, API keys, balances, pricebook, policy rules, retention, and client snippets.
 
 <details>
-<summary>UI screenshots</summary>
+<summary>Various UI screenshots</summary>
 
+![Observability view — request ledger and route-report drilldown](docs/screenshots/observe.png)
+
+![Tasks workspace — task list with run state and approval queue](docs/screenshots/tasks.png)
 
 ![Pricebook tab — model catalog with priced / unpriced / deprecated filters](docs/screenshots/admin-pricebook.png)
 
@@ -154,12 +153,6 @@ The embedded UI is a runtime console for operators.
 ![Tenants tab — tenant lifecycle and access controls](docs/screenshots/admin-tenants.png)
 
 ![API keys tab — scoped keys for clients and agents](docs/screenshots/admin-keys.png)
-
-![Integrations tab — copy-paste client configuration snippets](docs/screenshots/admin-integrations.png)
-
-![Observability view — request ledger and route-report drilldown](docs/screenshots/observe.png)
-
-![Tasks workspace — task list with run state and approval queue](docs/screenshots/tasks.png)
 
 </details>
 

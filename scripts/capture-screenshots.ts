@@ -261,12 +261,17 @@ async function main() {
 
   console.log("→ admin / pricebook");
   await openWorkspace(page, "admin");
-  await page.getByRole("button", { name: /pricebook/i }).click();
+  // Tab buttons render the display label from TAB_LABELS in
+  // ui/src/features/admin/AdminView.tsx — pricebook → "Pricing",
+  // budget → "Balances", integrations → "Clients". The internal tab
+  // ids (pricebook / budget / integrations) are storage keys, not
+  // rendered text; clicking has to anchor on the visible label.
+  await page.getByRole("button", { name: /pricing/i }).click();
   await page.waitForTimeout(800);
   await snap(page, "admin-pricebook");
 
   console.log("→ admin / budget");
-  await page.getByRole("button", { name: /budget/i }).click();
+  await page.getByRole("button", { name: /balances/i }).click();
   await page.waitForTimeout(500);
   await snap(page, "admin-budget");
 
@@ -291,7 +296,7 @@ async function main() {
   await snap(page, "admin-keys");
 
   console.log("→ admin / integrations");
-  await page.getByRole("button", { name: /integrations/i }).click();
+  await page.getByRole("button", { name: /clients/i }).click();
   await page.waitForTimeout(400);
   await snap(page, "admin-integrations");
 
