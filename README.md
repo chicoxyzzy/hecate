@@ -62,11 +62,11 @@ The first-run UI guides provider setup and token entry:
 
 ![First-run onboarding wizard](docs/screenshots/onboard-wizard.png)
 
-If you've cloned the repo and want optional services (Postgres profile, Ollama profile, dev rebuild from source):
+If you've cloned the repo and want optional services (Postgres profile, dev rebuild from source):
 
 ```bash
-docker compose up                # uses ghcr.io image; first run pulls
-docker compose --profile full up # adds Postgres + Ollama
+docker compose up                    # uses ghcr.io image; first run pulls
+docker compose --profile postgres up # adds Postgres for durable state
 ```
 
 For local development from source:

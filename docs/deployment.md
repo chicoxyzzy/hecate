@@ -51,11 +51,9 @@ Each tarball includes the binary plus `LICENSE` and `README.md`. Verify integrit
 
 ```bash
 docker compose --profile postgres up    # adds Postgres on :5432 for durable state
-docker compose --profile ollama up      # adds Ollama on :11434 for local models
-docker compose --profile full up        # both of the above
 ```
 
-Profiles are additive — `--profile postgres --profile ollama` works too. Profiles are off by default so a bare `docker compose up` stays "just the gateway" with no extra containers.
+Profiles are off by default so a bare `docker compose up` stays "just the gateway" with no extra containers.
 
 To use the Postgres profile across subsystems, point each backend at it via env vars in `.env`:
 
@@ -90,7 +88,7 @@ The bootstrap file (and the SQLite database, see below) persist across container
 
 ## Resetting state
 
-To wipe the stack back to first-run — removes the `hecate-data` (admin token + SQLite db), `postgres-data`, and `ollama-models` volumes and regenerates the admin token on the next `docker compose up`:
+To wipe the stack back to first-run — removes the `hecate-data` (admin token + SQLite db) and `postgres-data` volumes and regenerates the admin token on the next `docker compose up`:
 
 ```bash
 make reset-docker

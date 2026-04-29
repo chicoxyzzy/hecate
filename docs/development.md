@@ -60,7 +60,7 @@ The Vite dev server proxies every `/v1/*`, `/admin/*`, and `/healthz` request to
 
 ```bash
 make reset-dev        # local dev: stops :8765, removes .data/
-make reset-docker     # docker stack: `docker compose --profile full down -v`
+make reset-docker     # docker stack: `docker compose --profile postgres down -v`
 ```
 
 The next page load detects the rejected stale token in `localStorage` and re-prompts for the regenerated one — no manual cleanup required.

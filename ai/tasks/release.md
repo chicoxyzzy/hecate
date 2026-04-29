@@ -12,22 +12,32 @@ Default to producing a written plan first ([`../skills/architect/SKILL.md`](../s
 
 ## Pre-flight
 
-Run these in order. Each can be done without remote impact.
+Before running the release script, verify:
 
-1. **Clean worktree.** `git status` shows nothing modified, nothing staged. Goreleaser refuses to release from a dirty worktree.
-2. **`dist/` is gitignored at repo root.** The goreleaser snapshot writes binaries and tarballs into `./dist`; if anything in there is tracked, the next release-CI run breaks with "git is in a dirty state" because `--clean` deletes the tracked files. The `ui/dist/` entry in `.gitignore` does **not** cover repo-root `dist/`.
-3. **`goreleaser` installed.** `which goreleaser` returns a path. Install via `go install github.com/goreleaser/goreleaser/v2@latest` if missing.
-4. **Snapshot dry-run.** `goreleaser release --snapshot --clean`. Builds 4 binaries + 2 Docker images locally without publishing. Inspect `dist/CHANGELOG.md` (or the workflow log on a real run) — the first tag in a repo includes every commit since git history began, which is rarely what you want for the release page. If the changelog is unusable, tune `.goreleaser.yaml`'s `changelog.filters` or pass `--release-notes <file>` on the real run.
-5. **Verify-alpha gate.** `make verify-alpha` exit 0 — full ladder including `docs-env-check`, race suite, docker-smoke, and UI e2e. See [`../core/verification.md`](../core/verification.md). The gate is mandatory; calling it out as skipped in the release notes is acceptable only when the skip's risk is named.
+1. **`make verify-alpha` exits 0** — full gate: `docs-env-check`, race suite, docker-smoke, UI unit + e2e. See [`../core/verification.md`](../core/verification.md). Mandatory; calling out a skip in release notes is acceptable only when the risk is named.
+2. **`goreleaser` is installed.** `which goreleaser`. Install via `go install github.com/goreleaser/goreleaser/v2@latest` if missing.
 
-## Tag and push
+## Cut the release
+
+Use the release script. It checks clean worktree, tag uniqueness, goreleaser on PATH, fires a snapshot dry-run, then prompts before tagging:
 
 ```bash
-git tag -a vX.Y.Z -m "<release notes baked into the annotation>"
-git push origin vX.Y.Z
+scripts/release.sh vX.Y.Z
 ```
 
-Use annotated (`-a`) tags. The annotation message is what `git show vX.Y.Z` and the GitHub release page surface; treat it as the canonical release notes. Pre-release suffixes (`-alpha.N`, `-beta.N`, `-rc.N`) are recognized by goreleaser's `prerelease: auto` config and the GitHub Releases entry is auto-marked as a pre-release.
+For pre-release tags:
+
+```bash
+scripts/release.sh v0.1.0-alpha.6
+```
+
+To skip the snapshot dry-run (e.g. already ran it manually):
+
+```bash
+scripts/release.sh v0.2.0 --skip-snapshot
+```
+
+The annotated tag message becomes the canonical release notes — it's what `git show vX.Y.Z` and the GitHub Releases page surface. Write it before tagging; the script prompts for confirmation but doesn't prompt for the message (pass it as the annotation when the script creates the tag, or edit via `git tag -a -f` before pushing if needed).
 
 ## Watch CI
 
@@ -46,6 +56,8 @@ Acceptance:
 - **`.env_file` in compose overrides Dockerfile `ENV`.** If your local `.env` has `GATEWAY_DATA_DIR=.data` (relative), it'll override the Dockerfile's absolute `/data` and break `docker compose cp /data/...`. The current `.env.example` comments these out specifically; old developer-machine `.env` copies may still have the override and will fail `make test-docker-smoke` locally even though CI passes.
 - **First-tag changelog is all-history.** Goreleaser builds the auto-changelog from git log between previous and current tags; if there's no previous tag, it includes every commit since the initial commit. Inspect the snapshot output before tagging.
 - **Don't run snapshot from a clean checkout, then `git add -A`.** The snapshot writes ~50 MB of binaries into `./dist`; a sweeping `git add` will pick them up if `dist/` isn't gitignored.
+- **`ui/dist/.gitkeep` must be tracked.** The `//go:embed all:ui/dist` directive in `embed.go` fails at compile time if `ui/dist` is completely absent from the tree. `.gitignore` keeps `ui/dist/*` but un-ignores `.gitkeep` via negation — the negation only works if `/dist/` (not `dist/`) is the rule anchoring the goreleaser output directory. If `go build` fails with `pattern all:ui/dist: no matching files found`, check that `ui/dist/.gitkeep` is tracked (`git ls-files ui/dist/`) and that `.gitignore` anchors the root dist rule with a leading `/`.
+- **`Dockerfile.release` is what goreleaser uses, not `Dockerfile`.** Changes to `Dockerfile` only affect `docker compose up --build` (local dev). The GHCR release image is built from `Dockerfile.release`. Any new `ENV` var or runtime default must go in both.
 
 ## Recovery
 

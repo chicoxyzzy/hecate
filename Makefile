@@ -170,11 +170,11 @@ screenshots:
 	  exit $$status
 
 # reset-docker wipes the docker compose stack: stops + removes containers
-# and removes the hecate-data, postgres-data, and ollama-models named
-# volumes so the next 'docker compose up' re-bootstraps from scratch.
-# --profile full activates the optional services so their volumes are
-# also caught by 'down -v'.
+# and removes the hecate-data and postgres-data named volumes so the next
+# 'docker compose up' re-bootstraps from scratch.
+# --profile postgres activates the optional Postgres service so its volume
+# is also caught by 'down -v'.
 reset-docker:
-	docker compose --profile full down -v --remove-orphans
+	docker compose --profile postgres down -v --remove-orphans
 	@echo "Docker stack reset. Next 'docker compose up' regenerates the admin token."
 	@echo "On next page load, the UI auto-detects the rejected stale token and re-prompts."
