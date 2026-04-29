@@ -653,8 +653,11 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 			Kind:            string(entry.Kind),
 			BaseURL:         entry.BaseURL,
 			CredentialState: entry.CredentialState,
+			CredentialReady: providerCredentialReady(entry.CredentialState),
 			Healthy:         entry.Healthy,
 			Status:          entry.Status,
+			RoutingReady:    providerRoutingReady(entry),
+			RoutingBlocked:  providerRoutingBlockedReason(entry),
 			DefaultModel:    entry.DefaultModel,
 			Models:          append([]string(nil), entry.Models...),
 			DiscoverySource: entry.DiscoverySource,
@@ -675,6 +678,38 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 	}
 
 	return &ProviderStatusResult{Providers: statuses}, nil
+}
+
+func providerCredentialReady(state string) bool {
+	switch state {
+	case "", "unknown", "configured", "not_required":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerRoutingReady(entry catalog.Entry) bool {
+	return providerRoutingBlockedReason(entry) == ""
+}
+
+func providerRoutingBlockedReason(entry catalog.Entry) string {
+	if entry.Status == "disabled" {
+		return "provider_disabled"
+	}
+	if !providerCredentialReady(entry.CredentialState) {
+		return "credential_missing"
+	}
+	if entry.Status == "open" {
+		return "circuit_open"
+	}
+	if !entry.Healthy && entry.Status != "half_open" {
+		return "provider_unhealthy"
+	}
+	if entry.DefaultModel == "" && len(entry.Models) == 0 {
+		return "no_models"
+	}
+	return ""
 }
 
 func (s *Service) BudgetStatus(ctx context.Context, key string) (*BudgetStatusResult, error) {

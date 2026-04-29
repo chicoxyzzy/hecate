@@ -390,8 +390,11 @@ type ProviderStatusResponseItem struct {
 	Kind            string   `json:"kind"`
 	BaseURL         string   `json:"base_url,omitempty"`
 	CredentialState string   `json:"credential_state,omitempty"`
+	CredentialReady bool     `json:"credential_ready"`
 	Healthy         bool     `json:"healthy"`
 	Status          string   `json:"status"`
+	RoutingReady    bool     `json:"routing_ready"`
+	RoutingBlocked  string   `json:"routing_blocked_reason,omitempty"`
 	DefaultModel    string   `json:"default_model,omitempty"`
 	Models          []string `json:"models,omitempty"`
 	ModelCount      int      `json:"model_count"`

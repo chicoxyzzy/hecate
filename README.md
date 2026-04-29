@@ -283,7 +283,7 @@ Hecate is pre-1.0 and ready for early technical users: single-binary deploys, du
 | Area | State | Notes |
 |---|---|---|
 | OpenAI / Anthropic gateway | **Usable** | Chat Completions, Messages, streaming, vision, `/v1/models` discovery |
-| Provider catalog | **Usable** | Built-in presets, encrypted credentials, health + circuit breaking |
+| Provider catalog | **Usable** | Built-in presets, encrypted credentials, health, circuit breaking, routing readiness |
 | Auth, tenants, keys | **Usable** | Admin bearer + per-tenant API keys with allowed-providers/models scoping |
 | Budgets + rate limits | **Usable** | Per-tenant credit, warning thresholds, `429` with `X-RateLimit-*` |
 | Agent task runtime | **Alpha** | `agent_loop` tools, mid-loop approvals, cost ceilings, retry-from-turn-N |

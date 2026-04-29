@@ -82,6 +82,18 @@ The Providers tab shows the current state on each card:
 
 Health state is in-process and resets on restart by design — durable health tracking would re-include known-broken upstreams that recovered while the gateway was down.
 
+`GET /admin/providers` is the operator diagnostics surface for provider
+readiness. In addition to raw health and discovery fields, each provider
+returns:
+
+- `credential_ready` — whether credentials are configured or not required
+- `routing_ready` — whether the router can currently send traffic to it
+- `routing_blocked_reason` — stable reason when routing is blocked, such as `credential_missing`, `provider_disabled`, `circuit_open`, `provider_unhealthy`, or `no_models`
+- `model_count`, `discovery_source`, `last_checked_at`, and `last_error` for model-discovery freshness and failure context
+
+Route reports in the trace inspector reuse the same readiness vocabulary when
+they explain why a provider/model candidate was skipped.
+
 ## Custom provider status
 
 Custom provider lifecycle is not productized yet: there is no create/delete endpoint and the Providers tab is built around the built-in preset catalog. The next step is a real control-plane custom-provider flow with validation, encrypted credentials, model discovery, and UI management.

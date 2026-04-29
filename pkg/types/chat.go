@@ -229,8 +229,11 @@ type ProviderStatus struct {
 	Kind            string
 	BaseURL         string
 	CredentialState string
+	CredentialReady bool
 	Healthy         bool
 	Status          string
+	RoutingReady    bool
+	RoutingBlocked  string
 	DefaultModel    string
 	Models          []string
 	DiscoverySource string

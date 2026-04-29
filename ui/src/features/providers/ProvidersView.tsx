@@ -113,6 +113,8 @@ export function ProvidersView({ state, actions }: Props) {
     const modelCount = rt?.model_count ?? rt?.models?.length ?? 0;
     const statusLabel = rt?.status || (enabled ? "unknown" : "disabled");
     const lastError = rt?.last_error || rt?.error;
+    const routingReady = rt?.routing_ready ?? (enabled && healthy);
+    const routingBlocked = rt?.routing_blocked_reason;
     const conflicts = conflictMap.get(id) ?? [];
     const conflictTitle = conflicts.length > 0
       ? `Shares endpoint with ${conflicts.join(", ")} — only one can serve requests at a time.`
@@ -149,6 +151,11 @@ export function ProvidersView({ state, actions }: Props) {
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: healthy ? "var(--green)" : enabled ? "var(--red)" : "var(--t3)" }}>
             {statusLabel}
           </span>
+          {enabled && !routingReady && routingBlocked && (
+            <span title={routingBlocked} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--amber)" }}>
+              blocked
+            </span>
+          )}
           {baseURL && (
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{baseURL}</span>
           )}
@@ -230,6 +237,7 @@ export function ProvidersView({ state, actions }: Props) {
               ["Kind",          selectedConfig.kind],
               ["Health",        selectedStatus?.status || "unknown"],
               ["Credentials",   selectedStatus?.credential_state || (selectedConfig.credential_configured ? "configured" : selectedConfig.kind === "local" ? "not_required" : "missing")],
+              ["Route",         selectedStatus?.routing_ready === false ? selectedStatus.routing_blocked_reason || "blocked" : "ready"],
               ["Default model", selectedConfig.default_model || "—"],
             ] as [string, string | number][]).map(([label, val]) => (
               <div key={label}>

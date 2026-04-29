@@ -104,8 +104,11 @@ export type ProviderRecord = {
   kind: string;
   base_url?: string;
   credential_state?: "configured" | "missing" | "not_required" | "unknown";
+  credential_ready?: boolean;
   healthy: boolean;
   status: string;
+  routing_ready?: boolean;
+  routing_blocked_reason?: string;
   default_model?: string;
   models?: string[];
   model_count?: number;

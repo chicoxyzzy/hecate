@@ -805,8 +805,19 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 			DiscoverySource: "config_fallback",
 		},
 	}
+	missingCredentialProvider := &fakeProvider{
+		name:       "anthropic",
+		credential: providers.CredentialStateMissing,
+		capabilities: providers.Capabilities{
+			Name:            "anthropic",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "claude-sonnet-4-5",
+			Models:          []string{"claude-sonnet-4-5"},
+			DiscoverySource: "config_unconfigured",
+		},
+	}
 
-	registry := providers.NewRegistry(healthyProvider, degradedProvider)
+	registry := providers.NewRegistry(healthyProvider, degradedProvider, missingCredentialProvider)
 	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	budgetStore := governor.NewMemoryBudgetStore()
 	service := gateway.NewService(gateway.Dependencies{
@@ -830,12 +841,13 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	if response.Object != "provider_status" {
 		t.Fatalf("object = %q, want provider_status", response.Object)
 	}
-	if len(response.Data) != 2 {
-		t.Fatalf("provider count = %d, want 2", len(response.Data))
+	if len(response.Data) != 3 {
+		t.Fatalf("provider count = %d, want 3", len(response.Data))
 	}
 
 	foundHealthy := false
 	foundDegraded := false
+	foundCredentialBlocked := false
 	for _, item := range response.Data {
 		if item.Name == "openai" && item.Healthy && item.RefreshedAt != "" {
 			if item.BaseURL == "" {
@@ -850,13 +862,37 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 			if item.LastCheckedAt == "" {
 				t.Fatal("openai last_checked_at is empty")
 			}
+			if !item.CredentialReady {
+				t.Fatal("openai credential_ready = false, want true")
+			}
+			if !item.RoutingReady {
+				t.Fatalf("openai routing_ready = false, reason = %q", item.RoutingBlocked)
+			}
 			foundHealthy = true
 		}
 		if item.Name == "ollama" && !item.Healthy && item.Status == "degraded" && item.Error != "" && item.LastError != "" {
 			if item.CredentialState != "not_required" {
 				t.Fatalf("ollama credential_state = %q, want not_required", item.CredentialState)
 			}
+			if item.RoutingReady {
+				t.Fatal("ollama routing_ready = true, want false for degraded capability failure")
+			}
+			if item.RoutingBlocked != "provider_unhealthy" {
+				t.Fatalf("ollama routing_blocked_reason = %q, want provider_unhealthy", item.RoutingBlocked)
+			}
 			foundDegraded = true
+		}
+		if item.Name == "anthropic" {
+			if item.CredentialReady {
+				t.Fatal("anthropic credential_ready = true, want false")
+			}
+			if item.RoutingReady {
+				t.Fatal("anthropic routing_ready = true, want false for missing credentials")
+			}
+			if item.RoutingBlocked != "credential_missing" {
+				t.Fatalf("anthropic routing_blocked_reason = %q, want credential_missing", item.RoutingBlocked)
+			}
+			foundCredentialBlocked = true
 		}
 	}
 	if !foundHealthy {
@@ -864,6 +900,9 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	}
 	if !foundDegraded {
 		t.Fatalf("missing degraded provider entry: %#v", response.Data)
+	}
+	if !foundCredentialBlocked {
+		t.Fatalf("missing credential-blocked provider entry: %#v", response.Data)
 	}
 }
 
@@ -3804,6 +3843,7 @@ type fakeProvider struct {
 	capabilities providers.Capabilities
 	capsErr      error
 	baseURL      string
+	credential   providers.CredentialState
 }
 
 func (p *fakeProvider) Name() string {
@@ -3838,6 +3878,9 @@ func (p *fakeProvider) BaseURL() string {
 }
 
 func (p *fakeProvider) CredentialState() providers.CredentialState {
+	if p.credential != "" {
+		return p.credential
+	}
 	if p.Kind() == providers.KindLocal {
 		return providers.CredentialStateNotRequired
 	}
