@@ -310,6 +310,9 @@ func TestOpenAIProviderCapabilitiesFallbackToConfig(t *testing.T) {
 	if caps.DiscoverySource != "config_fallback" {
 		t.Fatalf("discovery source = %q, want config_fallback", caps.DiscoverySource)
 	}
+	if caps.LastError == "" {
+		t.Fatal("last error is empty, want discovery failure diagnostic")
+	}
 
 	_, err = provider.Capabilities(context.Background())
 	if err != nil {

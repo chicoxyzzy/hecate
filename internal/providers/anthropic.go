@@ -167,6 +167,20 @@ func (p *AnthropicProvider) Enabled() bool {
 	return p.config.Enabled
 }
 
+func (p *AnthropicProvider) BaseURL() string {
+	return p.config.BaseURL
+}
+
+func (p *AnthropicProvider) CredentialState() CredentialState {
+	if p.Kind() == KindLocal || p.config.StubMode {
+		return CredentialStateNotRequired
+	}
+	if strings.TrimSpace(p.config.APIKey) == "" {
+		return CredentialStateMissing
+	}
+	return CredentialStateConfigured
+}
+
 func (p *AnthropicProvider) Kind() Kind {
 	if p.config.Kind == string(KindLocal) {
 		return KindLocal

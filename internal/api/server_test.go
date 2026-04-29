@@ -837,9 +837,24 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	foundDegraded := false
 	for _, item := range response.Data {
 		if item.Name == "openai" && item.Healthy && item.RefreshedAt != "" {
+			if item.BaseURL == "" {
+				t.Fatal("openai base_url is empty")
+			}
+			if item.CredentialState != "configured" {
+				t.Fatalf("openai credential_state = %q, want configured", item.CredentialState)
+			}
+			if item.ModelCount != 1 {
+				t.Fatalf("openai model_count = %d, want 1", item.ModelCount)
+			}
+			if item.LastCheckedAt == "" {
+				t.Fatal("openai last_checked_at is empty")
+			}
 			foundHealthy = true
 		}
-		if item.Name == "ollama" && !item.Healthy && item.Status == "degraded" && item.Error != "" {
+		if item.Name == "ollama" && !item.Healthy && item.Status == "degraded" && item.Error != "" && item.LastError != "" {
+			if item.CredentialState != "not_required" {
+				t.Fatalf("ollama credential_state = %q, want not_required", item.CredentialState)
+			}
 			foundDegraded = true
 		}
 	}
@@ -3739,6 +3754,7 @@ type fakeProvider struct {
 	lastRequest  types.ChatRequest
 	capabilities providers.Capabilities
 	capsErr      error
+	baseURL      string
 }
 
 func (p *fakeProvider) Name() string {
@@ -3763,6 +3779,20 @@ func (p *fakeProvider) DefaultModel() string {
 		return p.capabilities.DefaultModel
 	}
 	return "gpt-4o-mini"
+}
+
+func (p *fakeProvider) BaseURL() string {
+	if p.baseURL != "" {
+		return p.baseURL
+	}
+	return "https://example.invalid"
+}
+
+func (p *fakeProvider) CredentialState() providers.CredentialState {
+	if p.Kind() == providers.KindLocal {
+		return providers.CredentialStateNotRequired
+	}
+	return providers.CredentialStateConfigured
 }
 
 func (p *fakeProvider) Capabilities(_ context.Context) (providers.Capabilities, error) {

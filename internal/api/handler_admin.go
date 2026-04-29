@@ -42,15 +42,22 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 		item := ProviderStatusResponseItem{
 			Name:            provider.Name,
 			Kind:            provider.Kind,
+			BaseURL:         provider.BaseURL,
+			CredentialState: provider.CredentialState,
 			Healthy:         provider.Healthy,
 			Status:          provider.Status,
 			DefaultModel:    provider.DefaultModel,
 			Models:          provider.Models,
+			ModelCount:      len(provider.Models),
 			DiscoverySource: provider.DiscoverySource,
+			LastError:       provider.LastError,
 			Error:           provider.Error,
 		}
 		if !provider.RefreshedAt.IsZero() {
 			item.RefreshedAt = provider.RefreshedAt.UTC().Format(time.RFC3339)
+		}
+		if !provider.LastCheckedAt.IsZero() {
+			item.LastCheckedAt = provider.LastCheckedAt.UTC().Format(time.RFC3339)
 		}
 		data = append(data, item)
 	}

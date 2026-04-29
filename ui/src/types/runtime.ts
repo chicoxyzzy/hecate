@@ -102,12 +102,17 @@ export type ChatSessionResponse = {
 export type ProviderRecord = {
   name: string;
   kind: string;
+  base_url?: string;
+  credential_state?: "configured" | "missing" | "not_required" | "unknown";
   healthy: boolean;
   status: string;
   default_model?: string;
   models?: string[];
+  model_count?: number;
   discovery_source?: string;
   refreshed_at?: string;
+  last_checked_at?: string;
+  last_error?: string;
   error?: string;
 };
 

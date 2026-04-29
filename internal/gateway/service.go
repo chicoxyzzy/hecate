@@ -650,16 +650,24 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 		status := types.ProviderStatus{
 			Name:            entry.Name,
 			Kind:            string(entry.Kind),
+			BaseURL:         entry.BaseURL,
+			CredentialState: entry.CredentialState,
 			Healthy:         entry.Healthy,
 			Status:          entry.Status,
 			DefaultModel:    entry.DefaultModel,
 			Models:          append([]string(nil), entry.Models...),
 			DiscoverySource: entry.DiscoverySource,
+			LastError:       entry.LastError,
 			Error:           entry.Error,
 		}
 		if entry.RefreshedAt != "" {
 			if ts, err := time.Parse(time.RFC3339, entry.RefreshedAt); err == nil {
 				status.RefreshedAt = ts
+			}
+		}
+		if entry.LastCheckedAt != "" {
+			if ts, err := time.Parse(time.RFC3339, entry.LastCheckedAt); err == nil {
+				status.LastCheckedAt = ts
 			}
 		}
 		statuses = append(statuses, status)

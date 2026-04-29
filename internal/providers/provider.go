@@ -40,6 +40,21 @@ type Validator interface {
 	Validate() error
 }
 
+type CredentialState string
+
+const (
+	CredentialStateConfigured  CredentialState = "configured"
+	CredentialStateMissing     CredentialState = "missing"
+	CredentialStateNotRequired CredentialState = "not_required"
+	CredentialStateUnknown     CredentialState = "unknown"
+)
+
+// CredentialReporter lets operator-facing surfaces explain whether a provider
+// is blocked on credentials without exposing the secret material itself.
+type CredentialReporter interface {
+	CredentialState() CredentialState
+}
+
 type Capabilities struct {
 	Name            string
 	Kind            Kind
@@ -48,6 +63,7 @@ type Capabilities struct {
 	Discoverable    bool
 	DiscoverySource string
 	RefreshedAt     time.Time
+	LastError       string
 }
 
 // Enabler is an optional interface a Provider may implement to signal that it

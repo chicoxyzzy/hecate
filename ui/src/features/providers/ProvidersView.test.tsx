@@ -64,9 +64,11 @@ describe("ProvidersView conflict resolution", () => {
         makeStatus("ollama", {
           healthy: false,
           status: "unhealthy",
-          error: "connect: connection refused",
+          last_error: "connect: connection refused",
+          model_count: 1,
+          credential_state: "not_required",
           discovery_source: "live",
-          refreshed_at: "2026-04-29T10:00:00Z",
+          last_checked_at: "2026-04-29T10:00:00Z",
         }),
       ],
     });
@@ -77,6 +79,7 @@ describe("ProvidersView conflict resolution", () => {
     const user = userEvent.setup();
     await user.click(screen.getByText("Ollama"));
     expect(screen.getByText("Diagnostics")).toBeTruthy();
+    expect(screen.getByText("not_required")).toBeTruthy();
     expect(screen.getByText(/discovery:/)).toBeTruthy();
     expect(screen.getByText(/checked:/)).toBeTruthy();
   });

@@ -388,12 +388,17 @@ type TraceEventRecord struct {
 type ProviderStatusResponseItem struct {
 	Name            string   `json:"name"`
 	Kind            string   `json:"kind"`
+	BaseURL         string   `json:"base_url,omitempty"`
+	CredentialState string   `json:"credential_state,omitempty"`
 	Healthy         bool     `json:"healthy"`
 	Status          string   `json:"status"`
 	DefaultModel    string   `json:"default_model,omitempty"`
 	Models          []string `json:"models,omitempty"`
+	ModelCount      int      `json:"model_count"`
 	DiscoverySource string   `json:"discovery_source,omitempty"`
 	RefreshedAt     string   `json:"refreshed_at,omitempty"`
+	LastCheckedAt   string   `json:"last_checked_at,omitempty"`
+	LastError       string   `json:"last_error,omitempty"`
 	Error           string   `json:"error,omitempty"`
 }
 

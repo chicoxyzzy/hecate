@@ -246,6 +246,16 @@ func (p *OpenAICompatibleProvider) BaseURL() string {
 	return p.config.BaseURL
 }
 
+func (p *OpenAICompatibleProvider) CredentialState() CredentialState {
+	if p.Kind() == KindLocal || p.config.StubMode {
+		return CredentialStateNotRequired
+	}
+	if strings.TrimSpace(p.config.APIKey) == "" {
+		return CredentialStateMissing
+	}
+	return CredentialStateConfigured
+}
+
 func (p *OpenAICompatibleProvider) Kind() Kind {
 	if p.config.Kind == string(KindLocal) {
 		return KindLocal

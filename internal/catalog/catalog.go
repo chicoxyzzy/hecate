@@ -10,10 +10,14 @@ type Entry struct {
 	Provider        providers.Provider
 	Name            string
 	Kind            providers.Kind
+	BaseURL         string
+	CredentialState string
 	DefaultModel    string
 	Models          []string
 	DiscoverySource string
 	RefreshedAt     string
+	LastCheckedAt   string
+	LastError       string
 	Healthy         bool
 	Status          string
 	Error           string

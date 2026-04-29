@@ -46,11 +46,16 @@ func (c *RegistryCatalog) Get(ctx context.Context, name string) (Entry, bool) {
 }
 
 func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider providers.Provider) Entry {
+	baseURL := providerBaseURL(provider)
+	credentialState := providerCredentialState(provider)
+
 	if e, ok := provider.(providers.Enabler); ok && !e.Enabled() {
 		return Entry{
 			Provider:        provider,
 			Name:            provider.Name(),
 			Kind:            provider.Kind(),
+			BaseURL:         baseURL,
+			CredentialState: credentialState,
 			DiscoverySource: "control_plane",
 			Healthy:         false,
 			Status:          "disabled",
@@ -58,16 +63,19 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 	}
 
 	if c.selfListenAddr != "" {
-		if bup, ok := provider.(baseURLer); ok {
-			if isSelfReferentialURL(c.selfListenAddr, bup.BaseURL()) {
+		if baseURL != "" {
+			if isSelfReferentialURL(c.selfListenAddr, baseURL) {
 				return Entry{
 					Provider:        provider,
 					Name:            provider.Name(),
 					Kind:            provider.Kind(),
+					BaseURL:         baseURL,
+					CredentialState: credentialState,
 					DiscoverySource: "self_referential",
 					Healthy:         false,
 					Status:          "degraded",
-					Error:           fmt.Sprintf("provider base URL %q points to the gateway's own address — run the local provider on a different port", bup.BaseURL()),
+					LastError:       fmt.Sprintf("provider base URL %q points to the gateway's own address — run the local provider on a different port", baseURL),
+					Error:           fmt.Sprintf("provider base URL %q points to the gateway's own address — run the local provider on a different port", baseURL),
 				}
 			}
 		}
@@ -94,33 +102,74 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 		Provider:        provider,
 		Name:            provider.Name(),
 		Kind:            provider.Kind(),
+		BaseURL:         baseURL,
+		CredentialState: credentialState,
 		DefaultModel:    defaultModel,
 		Models:          models,
 		DiscoverySource: discoverySource,
 		Healthy:         err == nil,
 		Status:          "healthy",
+		LastError:       caps.LastError,
 	}
 	if !caps.RefreshedAt.IsZero() {
-		entry.RefreshedAt = caps.RefreshedAt.UTC().Format(time.RFC3339)
+		refreshedAt := caps.RefreshedAt.UTC().Format(time.RFC3339)
+		entry.RefreshedAt = refreshedAt
+		entry.LastCheckedAt = refreshedAt
 	}
 	if err != nil {
 		entry.Healthy = false
 		entry.Status = "degraded"
+		entry.LastError = err.Error()
 		entry.Error = err.Error()
+	} else if entry.LastError != "" {
+		entry.Healthy = false
+		entry.Status = "degraded"
+		entry.Error = entry.LastError
 	}
 
 	if c.healthTracker != nil {
 		state := c.healthTracker.State(provider.Name())
+		if checkedAt := latestHealthTimestamp(state); !checkedAt.IsZero() {
+			entry.LastCheckedAt = checkedAt.UTC().Format(time.RFC3339)
+		}
 		if !state.Available {
 			entry.Healthy = false
 			entry.Status = string(state.Status)
-			entry.Error = providers.FormatHealthStateError(provider.Name(), state)
+			entry.LastError = providers.FormatHealthStateError(provider.Name(), state)
+			entry.Error = entry.LastError
 		} else if state.Status != "" {
 			entry.Status = string(state.Status)
 		}
 	}
 
 	return entry
+}
+
+func providerBaseURL(provider providers.Provider) string {
+	if b, ok := provider.(baseURLer); ok {
+		return b.BaseURL()
+	}
+	return ""
+}
+
+func providerCredentialState(provider providers.Provider) string {
+	if reporter, ok := provider.(providers.CredentialReporter); ok {
+		return string(reporter.CredentialState())
+	}
+	return string(providers.CredentialStateUnknown)
+}
+
+func latestHealthTimestamp(state providers.HealthState) time.Time {
+	switch {
+	case state.LastSuccessAt.IsZero():
+		return state.LastFailureAt
+	case state.LastFailureAt.IsZero():
+		return state.LastSuccessAt
+	case state.LastFailureAt.After(state.LastSuccessAt):
+		return state.LastFailureAt
+	default:
+		return state.LastSuccessAt
+	}
 }
 
 // isSelfReferentialURL returns true when providerBaseURL points to the same

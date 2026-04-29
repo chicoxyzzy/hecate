@@ -46,6 +46,10 @@ func resolveCapabilities(
 			slog.Any("error", err),
 		)
 		cached := staticCaps("config_fallback")
+		cached.LastError = err.Error()
+		if cached.RefreshedAt.IsZero() {
+			cached.RefreshedAt = time.Now().UTC()
+		}
 		mu.Lock()
 		*cachedCaps = cached
 		*capsExpiry = time.Now().Add(retryAfter)

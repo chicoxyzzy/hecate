@@ -227,12 +227,16 @@ type ModelInfo struct {
 type ProviderStatus struct {
 	Name            string
 	Kind            string
+	BaseURL         string
+	CredentialState string
 	Healthy         bool
 	Status          string
 	DefaultModel    string
 	Models          []string
 	DiscoverySource string
 	RefreshedAt     time.Time
+	LastCheckedAt   time.Time
+	LastError       string
 	Error           string
 }
 
