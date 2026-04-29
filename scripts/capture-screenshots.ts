@@ -128,7 +128,7 @@ async function optimize() {
     return;
   }
   console.log(`→ optimizing PNGs (${tool.name}, ${tool.lossy ? "lossy palette" : "lossless"})`);
-  // Each PNG is independent — run the optimizer in parallel. With 10
+  // Each PNG is independent — run the optimizer in parallel. With docs
   // captures this drops a serial 2-3s pngquant pass to ~0.5s.
   const { spawn } = await import("node:child_process");
   await Promise.all(captured.map(path => new Promise<void>(resolve => {
@@ -251,6 +251,13 @@ async function main() {
   await openWorkspace(page, "providers");
   await page.waitForSelector("text=Cloud providers", { timeout: 5_000 });
   await snap(page, "providers");
+
+  console.log("→ provider setup");
+  await page.getByText("OpenAI").first().click();
+  await page.waitForSelector("text=API Key", { timeout: 5_000 });
+  await page.locator("input[type='password']").fill("sk-live-••••••••••••••••••••");
+  await page.waitForTimeout(300);
+  await snap(page, "provider-setup");
 
   console.log("→ admin / pricebook");
   await openWorkspace(page, "admin");

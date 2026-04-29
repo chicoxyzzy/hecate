@@ -17,6 +17,7 @@ It sits between AI clients and model providers. Existing OpenAI-compatible and A
 - [Why Hecate](#why-hecate)
 - [Quick Start](#quick-start)
 - [Connect a Client](#connect-a-client)
+- [Add Providers](#add-providers)
 - [Architecture](#architecture)
 - [Operator UI](#operator-ui)
 - [What Works Today](#what-works-today)
@@ -80,6 +81,35 @@ The operator UI also includes **Admin → Integrations** with copy-paste snippet
 
 Custom clients are supported today: Codex, Claude Code, OpenAI/Anthropic SDKs, curl scripts, and internal tools can point at Hecate. Custom providers are different: provider management currently centers on the shipped preset catalog, not arbitrary provider creation. See [docs/client-integration.md](docs/client-integration.md) and [docs/providers.md](docs/providers.md).
 
+## Add Providers
+
+Hecate ships with a built-in catalog of cloud and local provider presets. Enabling one means giving Hecate either an API key (cloud) or a reachable runtime URL (local).
+
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/provider-setup.png)
+
+There are other ways to do it:
+
+| Method | When |
+|---|---|
+| **Environment variables** | First-run bootstrap or fleet automation. Set `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, `PROVIDER_<NAME>_DEFAULT_MODEL` in `.env`. |
+| **Control-plane API** | Programmatic management. `PUT /admin/control-plane/providers/{id}/api-key` and `PATCH /admin/control-plane/providers/{id}` mirror every UI action. |
+
+**Cloud presets** (need an API key): `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `deepseek`, `together_ai`, `xai`.
+
+**Local presets** (need the runtime listening on its default port): `ollama` (`:11434`), `lmstudio` (`:1234`), `localai` (`:8080`), `llamacpp` (`:8080`).
+
+Example `.env` snippet for first-run bootstrap:
+
+```bash
+PROVIDER_ANTHROPIC_API_KEY=sk-ant-...
+PROVIDER_OPENAI_API_KEY=sk-...
+PROVIDER_OPENAI_DEFAULT_MODEL=gpt-4o-mini
+# Local Ollama on the host machine — no key needed
+PROVIDER_OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+```
+
+Provider health, circuit-breaking, base-URL overrides, and the full preset catalog are documented in [docs/providers.md](docs/providers.md).
+
 ## Architecture
 
 Hecate is one Go binary with two main surfaces:
@@ -116,7 +146,6 @@ The embedded UI is a runtime console for operators.
 <details>
 <summary>UI screenshots</summary>
 
-![Providers tab — every preset card with health, model count, and configured-credentials state](docs/screenshots/providers.png)
 
 ![Pricebook tab — model catalog with priced / unpriced / deprecated filters](docs/screenshots/admin-pricebook.png)
 
