@@ -30,6 +30,25 @@ type ResilientExecutor struct {
 	sleep         func(context.Context, time.Duration) error
 }
 
+type failoverHistoryEntry struct {
+	Provider           string
+	Model              string
+	Event              string
+	Reason             string
+	RouteReason        string
+	RequestID          string
+	TraceID            string
+	PeerProvider       string
+	PeerModel          string
+	PeerRouteReason    string
+	HealthStatus       string
+	PeerHealthStatus   string
+	Error              string
+	ErrorClass         string
+	AttemptCount       int
+	EstimatedMicrosUSD int64
+}
+
 func NewResilientExecutor(
 	router router.Router,
 	preflight RoutePreflight,
@@ -83,6 +102,16 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrHecateRouteSkipReason:      string(RoutePreflightProviderNotFound),
 				telemetry.AttrHecateProviderHealthStatus: healthStatus(e.healthTracker, candidate.Provider),
 			})
+			e.appendFailoverTransitionHistory(ctx, candidates, index, failoverHistoryEntry{
+				Provider:           candidate.Provider,
+				Model:              candidate.Model,
+				Event:              "failover_triggered",
+				Reason:             string(RoutePreflightProviderNotFound),
+				RouteReason:        candidate.Reason,
+				HealthStatus:       healthStatus(e.healthTracker, candidate.Provider),
+				Error:              lastErr.Error(),
+				EstimatedMicrosUSD: 0,
+			})
 			continue
 		}
 
@@ -126,6 +155,17 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 					telemetry.AttrHecateFailoverReason:         reason,
 					telemetry.AttrHecateCostEstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
 				})
+				e.appendFailoverTransitionHistory(ctx, candidates, index, failoverHistoryEntry{
+					Provider:           candidate.Provider,
+					Model:              candidate.Model,
+					Event:              "failover_triggered",
+					Reason:             reason,
+					RouteReason:        candidate.Reason,
+					HealthStatus:       healthStatus(e.healthTracker, candidate.Provider),
+					Error:              preflightErr.Error(),
+					ErrorClass:         providers.HealthErrorClass(preflightErr.Err),
+					EstimatedMicrosUSD: preflightErr.EstimatedCostMicros,
+				})
 				continue
 			}
 			if index == 0 {
@@ -135,19 +175,32 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 		}
 
 		if index > 0 {
+			previous := candidates[index-1]
 			recordTrace(trace, "provider.failover.selected", "provider", map[string]any{
 				telemetry.AttrGenAIProviderName:            candidate.Provider,
 				telemetry.AttrGenAIRequestModel:            candidate.Model,
 				telemetry.AttrHecateProviderKind:           preflight.ProviderKind,
-				telemetry.AttrHecateFailoverFromProvider:   initial.Provider,
-				telemetry.AttrHecateFailoverFromModel:      initial.Model,
+				telemetry.AttrHecateFailoverFromProvider:   previous.Provider,
+				telemetry.AttrHecateFailoverFromModel:      previous.Model,
 				telemetry.AttrHecateFailoverToProvider:     candidate.Provider,
 				telemetry.AttrHecateFailoverToModel:        candidate.Model,
 				telemetry.AttrHecateFailoverReason:         candidate.Reason,
 				telemetry.AttrHecateProviderIndex:          index,
 				telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
 			})
-			e.appendFailoverHistory(ctx, candidate, initial.Provider, initial.Model, "failover_selected", candidate.Reason)
+			e.appendFailoverHistory(ctx, failoverHistoryEntry{
+				Provider:           candidate.Provider,
+				Model:              candidate.Model,
+				Event:              "failover_selected",
+				Reason:             "candidate_selected",
+				RouteReason:        candidate.Reason,
+				PeerProvider:       previous.Provider,
+				PeerModel:          previous.Model,
+				PeerRouteReason:    previous.Reason,
+				HealthStatus:       healthStatus(e.healthTracker, candidate.Provider),
+				PeerHealthStatus:   healthStatus(e.healthTracker, previous.Provider),
+				EstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
+			})
 		}
 
 		recordTrace(trace, "router.candidate.selected", "routing", map[string]any{
@@ -278,7 +331,21 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrHecateFailoverReason:       "provider_retry_exhausted",
 				telemetry.AttrHecateProviderIndex:        index,
 			})
-			e.appendFailoverHistory(ctx, candidate, nextCandidate.Provider, nextCandidate.Model, "failover_triggered", "provider_retry_exhausted")
+			e.appendFailoverHistory(ctx, failoverHistoryEntry{
+				Provider:         candidate.Provider,
+				Model:            candidate.Model,
+				Event:            "failover_triggered",
+				Reason:           "provider_retry_exhausted",
+				RouteReason:      candidate.Reason,
+				PeerProvider:     nextCandidate.Provider,
+				PeerModel:        nextCandidate.Model,
+				PeerRouteReason:  nextCandidate.Reason,
+				HealthStatus:     healthStatus(e.healthTracker, candidate.Provider),
+				PeerHealthStatus: healthStatus(e.healthTracker, nextCandidate.Provider),
+				Error:            lastErr.Error(),
+				ErrorClass:       providers.HealthErrorClass(lastErr),
+				AttemptCount:     e.options.MaxAttempts,
+			})
 			continue
 		}
 		break
@@ -330,22 +397,42 @@ func lowerError(err error) string {
 	return strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
 }
 
-func (e *ResilientExecutor) appendFailoverHistory(ctx context.Context, candidate types.RouteDecision, peerProvider, peerModel, event, reason string) {
-	if e == nil || e.history == nil || candidate.Provider == "" || event == "" {
+func (e *ResilientExecutor) appendFailoverTransitionHistory(ctx context.Context, candidates []types.RouteDecision, index int, entry failoverHistoryEntry) {
+	if index >= len(candidates)-1 {
+		return
+	}
+	nextCandidate := candidates[index+1]
+	entry.PeerProvider = nextCandidate.Provider
+	entry.PeerModel = nextCandidate.Model
+	entry.PeerRouteReason = nextCandidate.Reason
+	entry.PeerHealthStatus = healthStatus(e.healthTracker, nextCandidate.Provider)
+	e.appendFailoverHistory(ctx, entry)
+}
+
+func (e *ResilientExecutor) appendFailoverHistory(ctx context.Context, entry failoverHistoryEntry) {
+	if e == nil || e.history == nil || entry.Provider == "" || entry.Event == "" {
 		return
 	}
 	traceIDs := telemetry.TraceIDsFromContext(ctx)
 	_ = e.history.Append(context.Background(), providers.HealthHistoryRecord{
-		Provider:     candidate.Provider,
-		Model:        candidate.Model,
-		Event:        event,
-		Status:       "failover",
-		Reason:       reason,
-		RequestID:    telemetry.RequestIDFromContext(ctx),
-		TraceID:      traceIDs.TraceID,
-		PeerProvider: peerProvider,
-		PeerModel:    peerModel,
-		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+		Provider:           entry.Provider,
+		Model:              entry.Model,
+		Event:              entry.Event,
+		Status:             "failover",
+		Error:              entry.Error,
+		ErrorClass:         entry.ErrorClass,
+		Reason:             entry.Reason,
+		RouteReason:        entry.RouteReason,
+		RequestID:          telemetry.RequestIDFromContext(ctx),
+		TraceID:            traceIDs.TraceID,
+		PeerProvider:       entry.PeerProvider,
+		PeerModel:          entry.PeerModel,
+		PeerRouteReason:    entry.PeerRouteReason,
+		HealthStatus:       entry.HealthStatus,
+		PeerHealthStatus:   entry.PeerHealthStatus,
+		AttemptCount:       entry.AttemptCount,
+		EstimatedMicrosUSD: entry.EstimatedMicrosUSD,
+		Timestamp:          time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 

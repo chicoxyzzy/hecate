@@ -432,10 +432,14 @@ type ProviderHealthHistoryResponseItem struct {
 	Error               string `json:"error,omitempty"`
 	ErrorClass          string `json:"error_class,omitempty"`
 	Reason              string `json:"reason,omitempty"`
+	RouteReason         string `json:"route_reason,omitempty"`
 	RequestID           string `json:"request_id,omitempty"`
 	TraceID             string `json:"trace_id,omitempty"`
 	PeerProvider        string `json:"peer_provider,omitempty"`
 	PeerModel           string `json:"peer_model,omitempty"`
+	PeerRouteReason     string `json:"peer_route_reason,omitempty"`
+	HealthStatus        string `json:"health_status,omitempty"`
+	PeerHealthStatus    string `json:"peer_health_status,omitempty"`
 	LatencyMS           int64  `json:"latency_ms,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 	TotalSuccesses      int64  `json:"total_successes,omitempty"`
@@ -443,6 +447,8 @@ type ProviderHealthHistoryResponseItem struct {
 	Timeouts            int64  `json:"timeouts,omitempty"`
 	ServerErrors        int64  `json:"server_errors,omitempty"`
 	RateLimits          int64  `json:"rate_limits,omitempty"`
+	AttemptCount        int    `json:"attempt_count,omitempty"`
+	EstimatedMicrosUSD  int64  `json:"estimated_micros_usd,omitempty"`
 	OpenUntil           string `json:"open_until,omitempty"`
 	Timestamp           string `json:"timestamp,omitempty"`
 }

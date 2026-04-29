@@ -17,10 +17,14 @@ type HealthHistoryRecord struct {
 	Error               string
 	ErrorClass          string
 	Reason              string
+	RouteReason         string
 	RequestID           string
 	TraceID             string
 	PeerProvider        string
 	PeerModel           string
+	PeerRouteReason     string
+	HealthStatus        string
+	PeerHealthStatus    string
 	LatencyMS           int64
 	ConsecutiveFailures int
 	TotalSuccesses      int64
@@ -28,6 +32,8 @@ type HealthHistoryRecord struct {
 	Timeouts            int64
 	ServerErrors        int64
 	RateLimits          int64
+	AttemptCount        int
+	EstimatedMicrosUSD  int64
 	OpenUntil           string
 	Timestamp           string
 }
@@ -136,6 +142,7 @@ func buildHealthHistoryRecord(provider, event string, state HealthState, now tim
 		Available:           state.Available,
 		Error:               state.LastError,
 		ErrorClass:          state.LastErrorClass,
+		HealthStatus:        string(state.Status),
 		LatencyMS:           state.LastLatency.Milliseconds(),
 		ConsecutiveFailures: state.ConsecutiveFailures,
 		TotalSuccesses:      state.TotalSuccesses,

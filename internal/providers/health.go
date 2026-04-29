@@ -171,6 +171,10 @@ func HealthStateReason(state HealthState) string {
 	return state.LastErrorClass
 }
 
+func HealthErrorClass(err error) string {
+	return classifyHealthError(err)
+}
+
 func (t *MemoryHealthTracker) RecordFailure(provider string, err error) {
 	t.Observe(provider, HealthObservation{Error: err})
 }

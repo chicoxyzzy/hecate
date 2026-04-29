@@ -262,10 +262,14 @@ type ProviderHealthHistoryEntry struct {
 	Error               string
 	ErrorClass          string
 	Reason              string
+	RouteReason         string
 	RequestID           string
 	TraceID             string
 	PeerProvider        string
 	PeerModel           string
+	PeerRouteReason     string
+	HealthStatus        string
+	PeerHealthStatus    string
 	LatencyMS           int64
 	ConsecutiveFailures int
 	TotalSuccesses      int64
@@ -273,6 +277,8 @@ type ProviderHealthHistoryEntry struct {
 	Timeouts            int64
 	ServerErrors        int64
 	RateLimits          int64
+	AttemptCount        int
+	EstimatedMicrosUSD  int64
 	OpenUntil           time.Time
 	Timestamp           time.Time
 }

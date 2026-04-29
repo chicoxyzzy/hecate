@@ -1122,6 +1122,24 @@ func TestProviderHealthHistoryIncludesFailoverEvents(t *testing.T) {
 			if item.Reason != "provider_retry_exhausted" {
 				t.Fatalf("failover_triggered reason = %q, want provider_retry_exhausted", item.Reason)
 			}
+			if item.RouteReason != "provider_default_model" {
+				t.Fatalf("failover_triggered route_reason = %q, want provider_default_model", item.RouteReason)
+			}
+			if item.PeerRouteReason != "provider_default_model_failover" {
+				t.Fatalf("failover_triggered peer_route_reason = %q, want provider_default_model_failover", item.PeerRouteReason)
+			}
+			if item.ErrorClass != "server_error" {
+				t.Fatalf("failover_triggered error_class = %q, want server_error", item.ErrorClass)
+			}
+			if item.HealthStatus == "" {
+				t.Fatal("failover_triggered health_status is empty")
+			}
+			if item.PeerHealthStatus == "" {
+				t.Fatal("failover_triggered peer_health_status is empty")
+			}
+			if item.AttemptCount != 1 {
+				t.Fatalf("failover_triggered attempt_count = %d, want 1", item.AttemptCount)
+			}
 			if item.RequestID == "" {
 				t.Fatal("failover_triggered request_id is empty")
 			}
@@ -1135,6 +1153,18 @@ func TestProviderHealthHistoryIncludesFailoverEvents(t *testing.T) {
 			}
 			if item.PeerProvider != "anthropic" {
 				t.Fatalf("failover_selected peer_provider = %q, want anthropic", item.PeerProvider)
+			}
+			if item.Reason != "candidate_selected" {
+				t.Fatalf("failover_selected reason = %q, want candidate_selected", item.Reason)
+			}
+			if item.RouteReason != "provider_default_model_failover" {
+				t.Fatalf("failover_selected route_reason = %q, want provider_default_model_failover", item.RouteReason)
+			}
+			if item.PeerRouteReason != "provider_default_model" {
+				t.Fatalf("failover_selected peer_route_reason = %q, want provider_default_model", item.PeerRouteReason)
+			}
+			if item.EstimatedMicrosUSD < 0 {
+				t.Fatalf("failover_selected estimated_micros_usd = %d, want non-negative", item.EstimatedMicrosUSD)
 			}
 			if item.RequestID == "" {
 				t.Fatal("failover_selected request_id is empty")
@@ -1150,6 +1180,106 @@ func TestProviderHealthHistoryIncludesFailoverEvents(t *testing.T) {
 	}
 	if !sawFailoverSelected {
 		t.Fatal("provider history missing failover_selected event")
+	}
+}
+
+func TestProviderHealthHistoryIncludesPreflightFailoverEvents(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	primary := &fakeProvider{
+		defaultModel: "claude-unpriced",
+		name:         "anthropic",
+		capabilities: providers.Capabilities{
+			Name:            "anthropic",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "claude-unpriced",
+			Models:          []string{"claude-unpriced"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+	}
+	fallback := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:            "openai",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "gpt-4o-mini",
+			Models:          []string{"gpt-4o-mini"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-preflight-fallback",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_100, 0).UTC(),
+			Choices: []types.ChatChoice{{
+				Index:        0,
+				Message:      types.Message{Role: "assistant", Content: "fallback ok"},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{primary, fallback}, config.Config{
+		Router: config.RouterConfig{
+			DefaultModel: "claude-unpriced",
+		},
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			RetryBackoff:    time.Millisecond,
+			FailoverEnabled: true,
+			HistoryLimit:    20,
+		},
+		Pricebook: config.PricebookConfig{
+			UnknownModelPolicy: "error",
+			Entries: []config.ModelPriceConfig{
+				{
+					Provider:                        "openai",
+					Model:                           "gpt-4o-mini",
+					InputMicrosUSDPerMillionTokens:  150_000,
+					OutputMicrosUSDPerMillionTokens: 600_000,
+				},
+			},
+		},
+	})
+	client := newAPITestClient(t, handler)
+
+	chat := decodeRecorder[OpenAIChatCompletionResponse](t, client.mustRequest(http.MethodPost, "/v1/chat/completions", `{
+		"messages": [
+			{"role":"user","content":"hello"}
+		]
+	}`))
+	if chat.Model != "gpt-4o-mini" {
+		t.Fatalf("response model = %q, want gpt-4o-mini fallback", chat.Model)
+	}
+
+	response := mustRequestJSON[ProviderHealthHistoryResponse](client, http.MethodGet, "/admin/providers/history?limit=20", "")
+	found := false
+	for _, item := range response.Data {
+		if item.Event != "failover_triggered" || item.Provider != "anthropic" {
+			continue
+		}
+		if item.Reason != "preflight_price_missing" {
+			continue
+		}
+		found = true
+		if item.RouteReason != "provider_default_model" {
+			t.Fatalf("route_reason = %q, want provider_default_model", item.RouteReason)
+		}
+		if item.PeerProvider != "openai" {
+			t.Fatalf("peer_provider = %q, want openai", item.PeerProvider)
+		}
+		if item.PeerRouteReason != "provider_default_model_failover" {
+			t.Fatalf("peer_route_reason = %q, want provider_default_model_failover", item.PeerRouteReason)
+		}
+		if item.EstimatedMicrosUSD != 0 {
+			t.Fatalf("estimated_micros_usd = %d, want 0 for price-missing preflight", item.EstimatedMicrosUSD)
+		}
+	}
+	if !found {
+		t.Fatalf("missing preflight_price_missing failover history row: %+v", response.Data)
 	}
 }
 

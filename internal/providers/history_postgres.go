@@ -44,10 +44,14 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 			error_message,
 			error_class,
 			reason,
+			route_reason,
 			request_id,
 			trace_id,
 			peer_provider,
 			peer_model,
+			peer_route_reason,
+			health_status,
+			peer_health_status,
 			latency_ms,
 			consecutive_failures,
 			total_successes,
@@ -55,9 +59,11 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 			timeouts,
 			server_errors,
 			rate_limits,
+			attempt_count,
+			estimated_micros_usd,
 			open_until,
 			timestamp_utc
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 	`, s.table),
 		record.Provider,
 		record.Model,
@@ -67,10 +73,14 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 		record.Error,
 		record.ErrorClass,
 		record.Reason,
+		record.RouteReason,
 		record.RequestID,
 		record.TraceID,
 		record.PeerProvider,
 		record.PeerModel,
+		record.PeerRouteReason,
+		record.HealthStatus,
+		record.PeerHealthStatus,
 		record.LatencyMS,
 		record.ConsecutiveFailures,
 		record.TotalSuccesses,
@@ -78,6 +88,8 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 		record.Timeouts,
 		record.ServerErrors,
 		record.RateLimits,
+		record.AttemptCount,
+		record.EstimatedMicrosUSD,
 		record.OpenUntil,
 		record.Timestamp,
 	)
@@ -92,9 +104,11 @@ func (s *PostgresHealthHistoryStore) List(ctx context.Context, filter HealthHist
 	args := make([]any, 0, 2)
 	query := fmt.Sprintf(`
 		SELECT provider, model, event, status, available, error_message, error_class,
-		       reason, request_id, trace_id, peer_provider, peer_model,
+		       reason, route_reason, request_id, trace_id, peer_provider, peer_model,
+		       peer_route_reason, health_status, peer_health_status,
 		       latency_ms, consecutive_failures, total_successes, total_failures,
-		       timeouts, server_errors, rate_limits, open_until, timestamp_utc
+		       timeouts, server_errors, rate_limits, attempt_count, estimated_micros_usd,
+		       open_until, timestamp_utc
 		FROM %s
 	`, s.table)
 	if strings.TrimSpace(filter.Provider) != "" {
@@ -124,10 +138,14 @@ func (s *PostgresHealthHistoryStore) List(ctx context.Context, filter HealthHist
 			&record.Error,
 			&record.ErrorClass,
 			&record.Reason,
+			&record.RouteReason,
 			&record.RequestID,
 			&record.TraceID,
 			&record.PeerProvider,
 			&record.PeerModel,
+			&record.PeerRouteReason,
+			&record.HealthStatus,
+			&record.PeerHealthStatus,
 			&record.LatencyMS,
 			&record.ConsecutiveFailures,
 			&record.TotalSuccesses,
@@ -135,6 +153,8 @@ func (s *PostgresHealthHistoryStore) List(ctx context.Context, filter HealthHist
 			&record.Timeouts,
 			&record.ServerErrors,
 			&record.RateLimits,
+			&record.AttemptCount,
+			&record.EstimatedMicrosUSD,
 			&record.OpenUntil,
 			&record.Timestamp,
 		); err != nil {
@@ -160,10 +180,14 @@ func (s *PostgresHealthHistoryStore) migrate(ctx context.Context) error {
 			error_message TEXT NOT NULL DEFAULT '',
 			error_class TEXT NOT NULL DEFAULT '',
 			reason TEXT NOT NULL DEFAULT '',
+			route_reason TEXT NOT NULL DEFAULT '',
 			request_id TEXT NOT NULL DEFAULT '',
 			trace_id TEXT NOT NULL DEFAULT '',
 			peer_provider TEXT NOT NULL DEFAULT '',
 			peer_model TEXT NOT NULL DEFAULT '',
+			peer_route_reason TEXT NOT NULL DEFAULT '',
+			health_status TEXT NOT NULL DEFAULT '',
+			peer_health_status TEXT NOT NULL DEFAULT '',
 			latency_ms BIGINT NOT NULL DEFAULT 0,
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			total_successes BIGINT NOT NULL DEFAULT 0,
@@ -171,12 +195,26 @@ func (s *PostgresHealthHistoryStore) migrate(ctx context.Context) error {
 			timeouts BIGINT NOT NULL DEFAULT 0,
 			server_errors BIGINT NOT NULL DEFAULT 0,
 			rate_limits BIGINT NOT NULL DEFAULT 0,
+			attempt_count INTEGER NOT NULL DEFAULT 0,
+			estimated_micros_usd BIGINT NOT NULL DEFAULT 0,
 			open_until TEXT NOT NULL DEFAULT '',
 			timestamp_utc TEXT NOT NULL
 		)
 	`, s.table))
 	if err != nil {
 		return fmt.Errorf("migrate postgres provider health history store: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		ALTER TABLE %s
+		ADD COLUMN IF NOT EXISTS route_reason TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS peer_route_reason TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS health_status TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS peer_health_status TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+		ADD COLUMN IF NOT EXISTS estimated_micros_usd BIGINT NOT NULL DEFAULT 0
+	`, s.table))
+	if err != nil {
+		return fmt.Errorf("migrate postgres provider health history columns: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE INDEX IF NOT EXISTS %s_provider_timestamp_idx

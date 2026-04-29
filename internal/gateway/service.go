@@ -740,10 +740,14 @@ func (s *Service) ProviderHealthHistory(ctx context.Context, provider string, li
 			Error:               record.Error,
 			ErrorClass:          record.ErrorClass,
 			Reason:              record.Reason,
+			RouteReason:         record.RouteReason,
 			RequestID:           record.RequestID,
 			TraceID:             record.TraceID,
 			PeerProvider:        record.PeerProvider,
 			PeerModel:           record.PeerModel,
+			PeerRouteReason:     record.PeerRouteReason,
+			HealthStatus:        record.HealthStatus,
+			PeerHealthStatus:    record.PeerHealthStatus,
 			LatencyMS:           record.LatencyMS,
 			ConsecutiveFailures: record.ConsecutiveFailures,
 			TotalSuccesses:      record.TotalSuccesses,
@@ -751,6 +755,8 @@ func (s *Service) ProviderHealthHistory(ctx context.Context, provider string, li
 			Timeouts:            record.Timeouts,
 			ServerErrors:        record.ServerErrors,
 			RateLimits:          record.RateLimits,
+			AttemptCount:        record.AttemptCount,
+			EstimatedMicrosUSD:  record.EstimatedMicrosUSD,
 		}
 		if record.OpenUntil != "" {
 			if ts, err := time.Parse(time.RFC3339Nano, record.OpenUntil); err == nil {

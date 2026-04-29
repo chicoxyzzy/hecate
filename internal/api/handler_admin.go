@@ -119,10 +119,14 @@ func (h *Handler) HandleProviderHealthHistory(w http.ResponseWriter, r *http.Req
 			Error:               entry.Error,
 			ErrorClass:          entry.ErrorClass,
 			Reason:              entry.Reason,
+			RouteReason:         entry.RouteReason,
 			RequestID:           entry.RequestID,
 			TraceID:             entry.TraceID,
 			PeerProvider:        entry.PeerProvider,
 			PeerModel:           entry.PeerModel,
+			PeerRouteReason:     entry.PeerRouteReason,
+			HealthStatus:        entry.HealthStatus,
+			PeerHealthStatus:    entry.PeerHealthStatus,
 			LatencyMS:           entry.LatencyMS,
 			ConsecutiveFailures: entry.ConsecutiveFailures,
 			TotalSuccesses:      entry.TotalSuccesses,
@@ -130,6 +134,8 @@ func (h *Handler) HandleProviderHealthHistory(w http.ResponseWriter, r *http.Req
 			Timeouts:            entry.Timeouts,
 			ServerErrors:        entry.ServerErrors,
 			RateLimits:          entry.RateLimits,
+			AttemptCount:        entry.AttemptCount,
+			EstimatedMicrosUSD:  entry.EstimatedMicrosUSD,
 		}
 		if !entry.OpenUntil.IsZero() {
 			item.OpenUntil = entry.OpenUntil.UTC().Format(time.RFC3339Nano)

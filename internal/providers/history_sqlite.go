@@ -44,10 +44,14 @@ func (s *SQLiteHealthHistoryStore) Append(ctx context.Context, record HealthHist
 			error_message,
 			error_class,
 			reason,
+			route_reason,
 			request_id,
 			trace_id,
 			peer_provider,
 			peer_model,
+			peer_route_reason,
+			health_status,
+			peer_health_status,
 			latency_ms,
 			consecutive_failures,
 			total_successes,
@@ -55,9 +59,11 @@ func (s *SQLiteHealthHistoryStore) Append(ctx context.Context, record HealthHist
 			timeouts,
 			server_errors,
 			rate_limits,
+			attempt_count,
+			estimated_micros_usd,
 			open_until,
 			timestamp_utc
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, s.table),
 		record.Provider,
 		record.Model,
@@ -67,10 +73,14 @@ func (s *SQLiteHealthHistoryStore) Append(ctx context.Context, record HealthHist
 		record.Error,
 		record.ErrorClass,
 		record.Reason,
+		record.RouteReason,
 		record.RequestID,
 		record.TraceID,
 		record.PeerProvider,
 		record.PeerModel,
+		record.PeerRouteReason,
+		record.HealthStatus,
+		record.PeerHealthStatus,
 		record.LatencyMS,
 		record.ConsecutiveFailures,
 		record.TotalSuccesses,
@@ -78,6 +88,8 @@ func (s *SQLiteHealthHistoryStore) Append(ctx context.Context, record HealthHist
 		record.Timeouts,
 		record.ServerErrors,
 		record.RateLimits,
+		record.AttemptCount,
+		record.EstimatedMicrosUSD,
 		record.OpenUntil,
 		record.Timestamp,
 	)
@@ -92,9 +104,11 @@ func (s *SQLiteHealthHistoryStore) List(ctx context.Context, filter HealthHistor
 	args := make([]any, 0, 2)
 	query := fmt.Sprintf(`
 		SELECT provider, model, event, status, available, error_message, error_class,
-		       reason, request_id, trace_id, peer_provider, peer_model,
+		       reason, route_reason, request_id, trace_id, peer_provider, peer_model,
+		       peer_route_reason, health_status, peer_health_status,
 		       latency_ms, consecutive_failures, total_successes, total_failures,
-		       timeouts, server_errors, rate_limits, open_until, timestamp_utc
+		       timeouts, server_errors, rate_limits, attempt_count, estimated_micros_usd,
+		       open_until, timestamp_utc
 		FROM %s
 	`, s.table)
 	if strings.TrimSpace(filter.Provider) != "" {
@@ -123,10 +137,14 @@ func (s *SQLiteHealthHistoryStore) List(ctx context.Context, filter HealthHistor
 			&record.Error,
 			&record.ErrorClass,
 			&record.Reason,
+			&record.RouteReason,
 			&record.RequestID,
 			&record.TraceID,
 			&record.PeerProvider,
 			&record.PeerModel,
+			&record.PeerRouteReason,
+			&record.HealthStatus,
+			&record.PeerHealthStatus,
 			&record.LatencyMS,
 			&record.ConsecutiveFailures,
 			&record.TotalSuccesses,
@@ -134,6 +152,8 @@ func (s *SQLiteHealthHistoryStore) List(ctx context.Context, filter HealthHistor
 			&record.Timeouts,
 			&record.ServerErrors,
 			&record.RateLimits,
+			&record.AttemptCount,
+			&record.EstimatedMicrosUSD,
 			&record.OpenUntil,
 			&record.Timestamp,
 		); err != nil {
@@ -160,10 +180,14 @@ func (s *SQLiteHealthHistoryStore) migrate(ctx context.Context) error {
 			error_message TEXT NOT NULL DEFAULT '',
 			error_class TEXT NOT NULL DEFAULT '',
 			reason TEXT NOT NULL DEFAULT '',
+			route_reason TEXT NOT NULL DEFAULT '',
 			request_id TEXT NOT NULL DEFAULT '',
 			trace_id TEXT NOT NULL DEFAULT '',
 			peer_provider TEXT NOT NULL DEFAULT '',
 			peer_model TEXT NOT NULL DEFAULT '',
+			peer_route_reason TEXT NOT NULL DEFAULT '',
+			health_status TEXT NOT NULL DEFAULT '',
+			peer_health_status TEXT NOT NULL DEFAULT '',
 			latency_ms INTEGER NOT NULL DEFAULT 0,
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			total_successes INTEGER NOT NULL DEFAULT 0,
@@ -171,12 +195,36 @@ func (s *SQLiteHealthHistoryStore) migrate(ctx context.Context) error {
 			timeouts INTEGER NOT NULL DEFAULT 0,
 			server_errors INTEGER NOT NULL DEFAULT 0,
 			rate_limits INTEGER NOT NULL DEFAULT 0,
+			attempt_count INTEGER NOT NULL DEFAULT 0,
+			estimated_micros_usd INTEGER NOT NULL DEFAULT 0,
 			open_until TEXT NOT NULL DEFAULT '',
 			timestamp_utc TEXT NOT NULL
 		)
 	`, s.table))
 	if err != nil {
 		return fmt.Errorf("migrate sqlite provider health history store: %w", err)
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"route_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"peer_route_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"health_status", "TEXT NOT NULL DEFAULT ''"},
+		{"peer_health_status", "TEXT NOT NULL DEFAULT ''"},
+		{"attempt_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"estimated_micros_usd", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		exists, err := s.columnExists(ctx, column.name)
+		if err != nil {
+			return fmt.Errorf("inspect sqlite provider health history columns: %w", err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, s.table, column.name, column.definition)); err != nil {
+			return fmt.Errorf("migrate sqlite provider health history %s: %w", column.name, err)
+		}
 	}
 	indexName := strings.Trim(s.table, `"`) + "_provider_timestamp_idx"
 	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
@@ -187,6 +235,31 @@ func (s *SQLiteHealthHistoryStore) migrate(ctx context.Context) error {
 		return fmt.Errorf("migrate sqlite provider health history index: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteHealthHistoryStore) columnExists(ctx context.Context, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, s.table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultVal sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *SQLiteHealthHistoryStore) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {

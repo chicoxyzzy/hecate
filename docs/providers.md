@@ -89,6 +89,16 @@ The current snapshot lives at `GET /admin/providers`. A short persisted event hi
 
 Each row includes the resulting health status, error class, last observed latency, current failure counters, and correlation fields like `request_id` and `trace_id` so operators can answer whether a provider is transiently failing, rate-limited, just getting slow over time, or repeatedly losing traffic during failover.
 
+Failover rows now also capture:
+
+- `reason` — the failover cause or phase, such as `provider_retry_exhausted`, `preflight_price_missing`, `budget_denied`, `policy_denied`, or `candidate_selected`
+- `route_reason` — why that provider/model candidate was in play
+- `peer_provider` / `peer_model` — the adjacent provider on the failover edge
+- `peer_route_reason` — why the next or previous candidate was in play
+- `health_status` / `peer_health_status` — the runtime health snapshot around the failover
+- `attempt_count` — retry attempts exhausted before failover when applicable
+- `estimated_micros_usd` — estimated preflight cost when the runtime had one
+
 The history store is configurable with:
 
 - `GATEWAY_PROVIDER_HISTORY_BACKEND` — `memory`, `sqlite`, or `postgres`
