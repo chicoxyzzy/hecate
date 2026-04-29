@@ -27,13 +27,14 @@ type RuleRouter struct {
 }
 
 type routeCandidate struct {
-	Provider providers.Provider
-	Name     string
-	Kind     providers.Kind
-	Model    string
-	Reason   string
-	Status   string
-	Healthy  bool
+	Provider     providers.Provider
+	Name         string
+	Kind         providers.Kind
+	Model        string
+	Reason       string
+	Status       string
+	HealthReason string
+	Healthy      bool
 }
 
 func NewRuleRouter(defaultModel string, catalog catalog.Catalog) *RuleRouter {
@@ -158,7 +159,7 @@ func (r *RuleRouter) RouteDiagnostics(ctx context.Context, req types.ChatRequest
 			Model:        model,
 			Reason:       routeReasonForHealth(reason, entry.Status),
 			Outcome:      "skipped",
-			SkipReason:   skipReason,
+			SkipReason:   routeSkipReasonForHealth(skipReason, entry.HealthReason),
 			HealthStatus: firstNonEmpty(entry.Status, string(providers.HealthStatusHealthy)),
 		})
 	}
@@ -340,13 +341,14 @@ func orderedEntriesByName(entries []catalog.Entry) []catalog.Entry {
 
 func newRouteCandidate(entry catalog.Entry, model, reason string) routeCandidate {
 	return routeCandidate{
-		Provider: entry.Provider,
-		Name:     entry.Name,
-		Kind:     entry.Kind,
-		Model:    model,
-		Reason:   routeReasonForHealth(reason, entry.Status),
-		Status:   entry.Status,
-		Healthy:  entry.Healthy,
+		Provider:     entry.Provider,
+		Name:         entry.Name,
+		Kind:         entry.Kind,
+		Model:        model,
+		Reason:       routeReasonForHealth(reason, entry.Status),
+		Status:       entry.Status,
+		HealthReason: entry.HealthReason,
+		Healthy:      entry.Healthy,
 	}
 }
 
@@ -369,14 +371,24 @@ func routeHealthSkipReason(entry catalog.Entry) string {
 	status := strings.TrimSpace(entry.Status)
 	switch status {
 	case string(providers.HealthStatusOpen):
-		return "circuit_open"
+		return routeSkipReasonForHealth("circuit_open", entry.HealthReason)
 	case string(providers.HealthStatusDegraded):
-		return "provider_degraded"
+		return routeSkipReasonForHealth("provider_degraded", entry.HealthReason)
 	case "":
 		return "provider_unhealthy"
 	default:
-		return "provider_" + status
+		return routeSkipReasonForHealth("provider_"+status, entry.HealthReason)
 	}
+}
+
+func routeSkipReasonForHealth(skipReason, healthReason string) string {
+	if healthReason == "rate_limit" {
+		switch skipReason {
+		case "circuit_open", "provider_degraded", "provider_half_open", "provider_open", "provider_unhealthy":
+			return "provider_rate_limited"
+		}
+	}
+	return skipReason
 }
 
 func routeReasonForHealth(baseReason, status string) string {

@@ -134,10 +134,12 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 		if !state.Available {
 			entry.Healthy = false
 			entry.Status = string(state.Status)
+			entry.HealthReason = providers.HealthStateReason(state)
 			entry.LastError = providers.FormatHealthStateError(provider.Name(), state)
 			entry.Error = entry.LastError
 		} else if state.Status != "" {
 			entry.Status = string(state.Status)
+			entry.HealthReason = providers.HealthStateReason(state)
 		}
 	}
 

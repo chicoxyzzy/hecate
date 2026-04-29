@@ -576,4 +576,15 @@ func TestRuleRouterSkipsRateLimitedProviderImmediately(t *testing.T) {
 	if got.Provider != "anthropic" {
 		t.Fatalf("Route() provider = %q, want anthropic after openai 429 cooldown", got.Provider)
 	}
+
+	diagnostics := router.RouteDiagnostics(context.Background(), types.ChatRequest{}, got)
+	if len(diagnostics) != 1 {
+		t.Fatalf("RouteDiagnostics() count = %d, want 1: %+v", len(diagnostics), diagnostics)
+	}
+	if diagnostics[0].Provider != "openai" {
+		t.Fatalf("diagnostic provider = %q, want openai", diagnostics[0].Provider)
+	}
+	if diagnostics[0].SkipReason != "provider_rate_limited" {
+		t.Fatalf("diagnostic skip reason = %q, want provider_rate_limited", diagnostics[0].SkipReason)
+	}
 }

@@ -701,9 +701,15 @@ func providerRoutingBlockedReason(entry catalog.Entry) string {
 		return "credential_missing"
 	}
 	if entry.Status == "open" {
+		if entry.HealthReason == "rate_limit" {
+			return "provider_rate_limited"
+		}
 		return "circuit_open"
 	}
 	if !entry.Healthy && entry.Status != "half_open" {
+		if entry.HealthReason == "rate_limit" {
+			return "provider_rate_limited"
+		}
 		return "provider_unhealthy"
 	}
 	if entry.DefaultModel == "" && len(entry.Models) == 0 {

@@ -906,6 +906,56 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 	}
 }
 
+func TestProviderStatusReturnsRateLimitedRoutingBlockReason(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	rateLimitedProvider := &fakeProvider{
+		name: "openai",
+		capabilities: providers.Capabilities{
+			Name:            "openai",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "gpt-4o-mini",
+			Models:          []string{"gpt-4o-mini"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+	}
+	registry := providers.NewRegistry(rateLimitedProvider)
+	health := providers.NewMemoryHealthTracker(3, time.Minute)
+	health.RecordFailure("openai", &providers.UpstreamError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit"})
+	providerCatalog := catalog.NewRegistryCatalog(registry, health)
+	budgetStore := governor.NewMemoryBudgetStore()
+	service := gateway.NewService(gateway.Dependencies{
+		Logger:    logger,
+		Cache:     cache.NewMemoryStore(time.Minute),
+		Router:    router.NewRuleRouter("gpt-4o-mini", providerCatalog),
+		Catalog:   providerCatalog,
+		Governor:  governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, budgetStore, budgetStore),
+		Providers: registry,
+		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
+			OpenAICompatible: []config.OpenAICompatibleProviderConfig{{Name: "openai", Kind: "cloud"}},
+		}, defaultPricebookForTests()),
+		Tracer: profiler.NewInMemoryTracer(nil),
+	})
+	handler := NewServer(logger, NewHandler(config.Config{}, logger, service, nil, nil, nil))
+	client := newAPITestClient(t, handler)
+	response := mustRequestJSON[ProviderStatusResponse](client, http.MethodGet, "/admin/providers", "")
+	if len(response.Data) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(response.Data))
+	}
+	item := response.Data[0]
+	if item.Status != "open" {
+		t.Fatalf("status = %q, want open", item.Status)
+	}
+	if item.RoutingReady {
+		t.Fatal("routing_ready = true, want false for rate-limited provider")
+	}
+	if item.RoutingBlocked != "provider_rate_limited" {
+		t.Fatalf("routing_blocked_reason = %q, want provider_rate_limited", item.RoutingBlocked)
+	}
+}
+
 func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	t.Parallel()
 

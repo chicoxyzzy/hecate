@@ -18,6 +18,7 @@ type Entry struct {
 	RefreshedAt     string
 	LastCheckedAt   string
 	LastError       string
+	HealthReason    string
 	Healthy         bool
 	Status          string
 	Error           string

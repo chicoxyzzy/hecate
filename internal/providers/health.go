@@ -45,6 +45,7 @@ type HealthState struct {
 	LastFailureAt       time.Time
 	OpenUntil           time.Time
 	LastError           string
+	LastErrorClass      string
 }
 
 type MemoryHealthTracker struct {
@@ -91,6 +92,7 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 		state.ConsecutiveFailures = 0
 		state.OpenUntil = time.Time{}
 		state.LastError = ""
+		state.LastErrorClass = ""
 		state.LastSuccessAt = now
 		state.TotalSuccesses++
 		t.providers[provider] = state
@@ -104,6 +106,7 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 	state.LastFailureAt = now
 	state.LastError = observation.Error.Error()
 	errorClass := classifyHealthError(observation.Error)
+	state.LastErrorClass = errorClass
 	switch errorClass {
 	case "timeout":
 		state.Timeouts++
@@ -129,6 +132,10 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 		state.OpenUntil = now.Add(t.cooldown)
 	}
 	t.providers[provider] = state
+}
+
+func HealthStateReason(state HealthState) string {
+	return state.LastErrorClass
 }
 
 func (t *MemoryHealthTracker) RecordFailure(provider string, err error) {
