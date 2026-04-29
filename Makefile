@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 GOCACHE_DIR := $(CURDIR)/.gocache
 
-.PHONY: test test-race coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke reset-dev reset-docker screenshots
+.PHONY: test test-race vet coverage ui-coverage build run serve dev ui-install ui-dev ui-build ui-test ui-test-e2e test-docker-smoke docs-env-check verify-alpha reset-dev reset-docker screenshots
 
 # build produces a single self-contained hecate binary with the UI bundle
 # embedded. The UI is built first so //go:embed picks up the real assets;
@@ -19,6 +19,10 @@ test:
 test-race:
 	mkdir -p "$(GOCACHE_DIR)"
 	GOCACHE="$(GOCACHE_DIR)" go test -race ./...
+
+vet:
+	mkdir -p "$(GOCACHE_DIR)"
+	GOCACHE="$(GOCACHE_DIR)" go vet ./...
 
 coverage:
 	mkdir -p "$(GOCACHE_DIR)"
@@ -90,6 +94,17 @@ ui-test-e2e:
 test-docker-smoke:
 	mkdir -p "$(GOCACHE_DIR)"
 	GOCACHE="$(GOCACHE_DIR)" go test -tags 'e2e docker' -count=1 -timeout 5m ./e2e/...
+
+# docs-env-check catches alpha-risk documentation drift: removed env bootstrap
+# surfaces sneaking back into docs, and release docs going missing.
+docs-env-check:
+	@test -f docs/release.md
+	@test -f docs/known-limitations.md
+	@! rg -n 'GATEWAY_POLICY_RULES_JSON|GATEWAY_PRICEBOOK_JSON|GATEWAY_PROVIDERS|PROVIDER_[A-Z0-9_]+_(PROTOCOL|API_VERSION|TIMEOUT)' README.md docs .env.example internal/config e2e .github
+
+# verify-alpha is the public-alpha release gate. It intentionally runs only
+# non-destructive checks, but it is not cheap: Docker and UI e2e can take a bit.
+verify-alpha: docs-env-check test vet test-race test-docker-smoke ui-test ui-test-e2e build
 
 # reset-dev wipes local dev state back to first-run: stops the hecate on
 # :8080 and deletes the data directory (which holds the bootstrap file

@@ -270,6 +270,8 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 - [Runtime API Notes](docs/runtime-api.md) — task / run / step / approval endpoints, queue + lease model, resume + retry-from-turn semantics
 - [Event catalog](docs/events.md) — every event Hecate emits, payload shapes, when each fires
 - [Telemetry, OTLP, And Collector Recipes](docs/telemetry.md) — OTel spans + metrics, response headers, OTLP wiring, what's done vs. not
+- [Release](docs/release.md) — alpha release gate, versioning, release-note expectations
+- [Known limitations](docs/known-limitations.md) — current alpha boundaries and non-goals
 - [Development](docs/development.md) — local build, UI hot reload, full make-target reference, screenshot tooling
 
 ## Status

@@ -1,0 +1,67 @@
+# Known Limitations
+
+Hecate is public-alpha software. This page is the plain-language list of what
+operators should not assume yet.
+
+## API And Schema Stability
+
+- Public APIs are designed to be stable, but pre-1.0 changes are still possible.
+- Persisted SQLite/Postgres schemas are young. Back up data before upgrading.
+- There is not yet a dedicated migration CLI or rollback workflow.
+
+## Provider Lifecycle
+
+- Built-in provider presets are the supported path today.
+- Credentials, enable/disable state, base URLs, defaults, and pricebook entries
+  are managed through the persisted control plane.
+- Full custom provider create/delete is not a first-class alpha workflow.
+- Provider model discovery depends on each upstream's OpenAI-compatible or
+  Anthropic-compatible catalog behavior; local runtimes can differ.
+
+## Pricing And Budgets
+
+- Pricebook rows can be imported or edited, but billing-critical deployments
+  should verify pricing against provider invoices.
+- Unknown cloud-model prices fail closed by default so operators do not
+  silently run unpriced traffic.
+- Local models can be zero-cost or manually priced, but host/GPU cost is not
+  automatically measured.
+
+## Semantic Cache
+
+- Semantic cache is disabled by default.
+- Semantic cache supports `memory` and `postgres`; SQLite vector search is not
+  supported by the pure-Go SQLite driver used by Hecate.
+- The local simple embedder is useful for development and alpha experiments,
+  not a semantic-quality benchmark.
+- Cache hits are optimization hints, not correctness guarantees. Operators
+  should keep exact/semantic cache behavior visible in traces for important
+  workloads.
+
+## Task Runtime And Sandbox
+
+- `agent_loop` and MCP integration are alpha. They are useful for controlled
+  workflows, but the behavior surface is still expanding.
+- `sandboxd` provides an out-of-process execution boundary and policy checks;
+  it is not yet hardened container/VM/OS isolation.
+- Approval policies exist, but broader policy classes and safer defaults are
+  still evolving.
+- Browser automation, WASM plugins, and broad tool marketplaces are out of
+  scope for the current alpha.
+
+## Deployment
+
+- Single-node Docker or bare-binary deployments are the primary tested paths.
+- SQLite is the pragmatic single-node durable default in Docker.
+- Postgres is supported for shared durable state, but multi-node production
+  operations still need more soak testing and operational docs.
+- Kubernetes, Helm, Nomad, and hosted deployment matrices are not first-class
+  release targets yet.
+
+## Observability
+
+- Hecate is OpenTelemetry-first for traces, metrics, and logs.
+- The local UI trace inspector is an operator workbench, not a replacement for
+  a long-term telemetry backend.
+- OTLP exporter failures should be treated like deployment misconfiguration;
+  Hecate keeps structured stdout logs as the local fallback.

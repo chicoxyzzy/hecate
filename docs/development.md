@@ -65,15 +65,19 @@ The next page load detects the rejected stale token in `localStorage` and re-pro
 
 ```bash
 make test              # go test ./...
+make vet               # go vet ./...
 make test-race         # go test -race ./...
 make coverage          # go test -coverprofile + writes coverage.html
 make ui-test           # UI unit tests (vitest)
 make ui-test-e2e       # UI end-to-end tests (Playwright)
 make ui-coverage       # UI coverage report (vitest --coverage)
 make test-docker-smoke # boots the production image and probes /healthz, /v1/models, bootstrap volume
+make verify-alpha      # public-alpha gate: docs/env check, Go, Docker, UI, build
 ```
 
 The race detector is the strongest correctness check (and the slowest); CI runs it on every push. `test-docker-smoke` requires Docker but doesn't need any other infrastructure — it spins up its own compose project to avoid colliding with a developer's running stack.
+
+Before cutting a public alpha tag, run `make verify-alpha` and follow the checklist in [Release](release.md).
 
 ### Skipping CI for inert changes
 
