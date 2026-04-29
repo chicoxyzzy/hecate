@@ -634,3 +634,128 @@ func TestOrchestratorMetricsNilSafe(t *testing.T) {
 	om.RecordQueueWait(ctx, QueueWaitRecord{QueueBackend: "memory", WaitMS: 1})
 	om.RecordLeaseExtendFailed(ctx)
 }
+
+// TestOrchestratorMetricsRecordMCPToolCallEmitsCounterAndHistogram pins
+// that the new MCP-tool-call instrument records both the counter
+// increment and a duration sample with the expected attribute set.
+// Operators chart this to spot slow upstream servers and to count
+// dispatches per server / tool / outcome.
+func TestOrchestratorMetricsRecordMCPToolCallEmitsCounterAndHistogram(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	om, err := NewOrchestratorMetricsWithMeterProvider(provider)
+	if err != nil {
+		t.Fatalf("NewOrchestratorMetricsWithMeterProvider: %v", err)
+	}
+
+	om.RecordMCPToolCall(context.Background(), MCPToolCallRecord{
+		Server:     "github",
+		Tool:       "create_pr",
+		Result:     MCPCallResultDispatched,
+		DurationMS: 250,
+	})
+
+	collected := collectMetrics(t, reader)
+
+	calls := findMetric[metricdata.Sum[int64]](t, collected, MetricOrchestratorMCPToolCallsTotal)
+	if len(calls.DataPoints) != 1 {
+		t.Fatalf("call data points = %d, want 1", len(calls.DataPoints))
+	}
+	if calls.DataPoints[0].Value != 1 {
+		t.Fatalf("call count = %d, want 1", calls.DataPoints[0].Value)
+	}
+	for k, want := range map[string]string{
+		AttrHecateMCPServer:     "github",
+		AttrHecateMCPTool:       "create_pr",
+		AttrHecateMCPCallResult: MCPCallResultDispatched,
+	} {
+		if got := attrValue(calls.DataPoints[0].Attributes, k); got != want {
+			t.Errorf("attr %s = %q, want %q", k, got, want)
+		}
+	}
+
+	dur := findMetric[metricdata.Histogram[int64]](t, collected, MetricOrchestratorMCPToolCallDuration)
+	if len(dur.DataPoints) != 1 {
+		t.Fatalf("duration data points = %d, want 1", len(dur.DataPoints))
+	}
+	if dur.DataPoints[0].Sum != 250 {
+		t.Errorf("duration sum = %d, want 250", dur.DataPoints[0].Sum)
+	}
+}
+
+// TestOrchestratorMetricsRecordMCPCacheEvent pins the cache-events
+// counter: hit/miss/evicted each land on a distinct attribute set.
+// Operators read the hit:miss ratio to tell whether the cache is
+// doing useful work; eviction count answers "is the TTL too short?".
+func TestOrchestratorMetricsRecordMCPCacheEvent(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	om, err := NewOrchestratorMetricsWithMeterProvider(provider)
+	if err != nil {
+		t.Fatalf("NewOrchestratorMetricsWithMeterProvider: %v", err)
+	}
+
+	om.RecordMCPCacheEvent(context.Background(), MCPCacheEventRecord{Server: "github", Event: MCPCacheEventHit})
+	om.RecordMCPCacheEvent(context.Background(), MCPCacheEventRecord{Server: "github", Event: MCPCacheEventMiss})
+	om.RecordMCPCacheEvent(context.Background(), MCPCacheEventRecord{Server: "", Event: MCPCacheEventEvicted})
+
+	collected := collectMetrics(t, reader)
+	events := findMetric[metricdata.Sum[int64]](t, collected, MetricOrchestratorMCPCacheEventsTotal)
+	if len(events.DataPoints) != 3 {
+		t.Fatalf("cache event data points = %d, want 3 (hit/miss/evicted)", len(events.DataPoints))
+	}
+	// Verify each event kind is present exactly once.
+	seen := map[string]int{}
+	for _, dp := range events.DataPoints {
+		ev := attrValue(dp.Attributes, AttrHecateMCPCacheEvent)
+		seen[ev] += int(dp.Value)
+	}
+	for _, want := range []string{MCPCacheEventHit, MCPCacheEventMiss, MCPCacheEventEvicted} {
+		if seen[want] != 1 {
+			t.Errorf("event %q count = %d, want 1", want, seen[want])
+		}
+	}
+}
+
+// TestOrchestratorMetricsRecordMCPToolCallSkipsHistogramOnZeroDuration:
+// a 0-duration record (which can happen on extremely-fast block paths
+// when the wall clock hasn't ticked) increments the counter but does
+// NOT add a 0 to the histogram — that would skew the latency
+// distribution toward zero in dashboards.
+func TestOrchestratorMetricsRecordMCPToolCallSkipsHistogramOnZeroDuration(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	om, err := NewOrchestratorMetricsWithMeterProvider(provider)
+	if err != nil {
+		t.Fatalf("NewOrchestratorMetricsWithMeterProvider: %v", err)
+	}
+
+	om.RecordMCPToolCall(context.Background(), MCPToolCallRecord{
+		Server: "fs", Tool: "read", Result: MCPCallResultBlocked, DurationMS: 0,
+	})
+	collected := collectMetrics(t, reader)
+
+	calls := findMetric[metricdata.Sum[int64]](t, collected, MetricOrchestratorMCPToolCallsTotal)
+	if calls.DataPoints[0].Value != 1 {
+		t.Errorf("counter not incremented: %d", calls.DataPoints[0].Value)
+	}
+	// The histogram metric may or may not be registered depending on
+	// SDK behavior on 0 samples; what we DO require is that if it's
+	// present, it carries 0 data points (no sample recorded).
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != MetricOrchestratorMCPToolCallDuration {
+				continue
+			}
+			if h, ok := m.Data.(metricdata.Histogram[int64]); ok && len(h.DataPoints) > 0 {
+				t.Errorf("histogram has %d data point(s), want 0 on 0-ms record", len(h.DataPoints))
+			}
+		}
+	}
+}

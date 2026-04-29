@@ -27,6 +27,13 @@ type ExecutionSpec struct {
 	NewID            func(prefix string) string
 	UpsertStep       func(step types.TaskStep) error
 	UpsertArtifact   func(artifact types.TaskArtifact) error
+	// EmitRunEvent appends an event to the run's event stream. Used
+	// by executors that want to emit telemetry beyond steps and
+	// artifacts — currently the agent loop's MCP dispatcher, which
+	// records mcp.tool.dispatched / .failed / .blocked alongside its
+	// steps so operators have a per-call audit signal independent of
+	// the step kinds. Optional; nil disables emission.
+	EmitRunEvent func(eventType string, data map[string]any)
 	// SystemPrompt is the composed agent_loop system prompt — global
 	// default + tenant prompt + workspace CLAUDE.md/AGENTS.md +
 	// per-task prompt, concatenated broadest-first. The runner

@@ -297,8 +297,11 @@ The retention worker handles the following subsystems (each with a `GATEWAY_RETE
 | `hecate.orchestrator.approvals` | Counter | `{approval}` | Approval gates resolved, grouped by kind and decision |
 | `hecate.orchestrator.approval.wait_duration` | Histogram | `ms` | Time a run spent waiting for an approval gate |
 | `hecate.orchestrator.queue.lease_extend_failures` | Counter | `{failure}` | Queue lease extension failures |
+| `hecate.orchestrator.mcp.tool_calls` | Counter | `{call}` | MCP tool dispatches grouped by `hecate.mcp.server`, `hecate.mcp.tool`, and `hecate.mcp.call.result` (`dispatched` / `tool_error` / `failed` / `blocked`) |
+| `hecate.orchestrator.mcp.tool_call.duration` | Histogram | `ms` | MCP tool dispatch wall-clock duration; same attribute set as the counter |
+| `hecate.orchestrator.mcp.cache_events` | Counter | `{event}` | Shared-client cache events grouped by `hecate.mcp.cache.event` (`hit` / `miss` / `evicted`) and (when known) `hecate.mcp.server` |
 
-Metric attributes reuse the same vocabulary as traces — provider, model, cache, failover, result, step kind, approval decision, queue backend, and run status fields.
+Metric attributes reuse the same vocabulary as traces — provider, model, cache, failover, result, step kind, approval decision, queue backend, run status, plus the MCP-specific `hecate.mcp.*` attributes for the three MCP-client metrics above.
 
 ## Error And Limit Signals
 

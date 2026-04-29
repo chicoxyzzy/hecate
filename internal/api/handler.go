@@ -46,6 +46,21 @@ type Handler struct {
 	// own subprocesses. Owned by the handler — Shutdown closes it
 	// after the runner has drained.
 	mcpClientCache *mcpclient.SharedClientCache
+	// orchestratorMetrics is shared between the runner and the MCP
+	// client cache observer. Built once in NewHandler so a second
+	// NewOrchestratorMetrics() can't register duplicate instruments;
+	// exposed via OrchestratorMetrics() so main.go can plumb the
+	// same instance into the cache.
+	orchestratorMetrics *telemetry.OrchestratorMetrics
+}
+
+// OrchestratorMetrics returns the metrics instance the runner is using.
+// main.go reads this to wire the same instance into the MCP client
+// cache observer so cache hit/miss/evict events show up alongside
+// run/step/approval metrics on a single instrument set. nil when the
+// handler hasn't been wired yet (test fixtures that bypass NewHandler).
+func (h *Handler) OrchestratorMetrics() *telemetry.OrchestratorMetrics {
+	return h.orchestratorMetrics
 }
 
 type ProviderRuntime interface {
@@ -108,7 +123,14 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	if taskQueue != nil {
 		runner.SetQueue(taskQueue)
 	}
-	runner.SetMetrics(telemetry.NewOrchestratorMetrics())
+	// Metrics: built once and exposed via Handler.OrchestratorMetrics()
+	// so main.go can plumb the same instance into the MCP client cache
+	// observer. A second NewOrchestratorMetrics() would register
+	// duplicate instruments against the meter provider — same names,
+	// different *Counter pointers — which is a real (if rarely-fatal)
+	// metrics-SDK footgun on some providers.
+	orchestratorMetrics := telemetry.NewOrchestratorMetrics()
+	runner.SetMetrics(orchestratorMetrics)
 	// Wire the four-layer agent_loop system-prompt composer. Layers
 	// are concatenated broadest-first:
 	//   1. global default — operator's GATEWAY_TASK_AGENT_SYSTEM_PROMPT
@@ -144,15 +166,16 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	}
 
 	return &Handler{
-		config:          cfg,
-		logger:          logger,
-		service:         service,
-		authenticator:   auth.NewAuthenticator(cfg.Server, cpStore),
-		controlPlane:    cpStore,
-		providerRuntime: providerRuntime,
-		taskStore:       taskStore,
-		taskRunner:      runner,
-		rateLimiter:     rl,
+		config:              cfg,
+		logger:              logger,
+		service:             service,
+		authenticator:       auth.NewAuthenticator(cfg.Server, cpStore),
+		controlPlane:        cpStore,
+		providerRuntime:     providerRuntime,
+		taskStore:           taskStore,
+		taskRunner:          runner,
+		rateLimiter:         rl,
+		orchestratorMetrics: orchestratorMetrics,
 	}
 }
 

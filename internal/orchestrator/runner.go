@@ -275,6 +275,10 @@ func (r *Runner) SetAgentLLMClient(llm AgentLLMClient) {
 		factory = DefaultMCPHostFactory
 	}
 	agent.SetMCPHostFactory(factory)
+	// Same story for metrics — the rebuild lost the prior wiring.
+	if r.metrics != nil {
+		agent.SetMetrics(r.metrics)
+	}
 	r.agent = agent
 }
 
@@ -315,11 +319,19 @@ func agentLoopGatedTools(policies map[string]struct{}) []string {
 
 // SetMetrics wires in an OrchestratorMetrics instance. Safe to call after
 // NewRunner; a nil argument is silently ignored.
+//
+// Forwards the same instance to the agent_loop executor so MCP tool
+// calls and cache observers share the same instruments as
+// run/step/approval metrics — operators see one coherent set, not
+// two parallel registrations.
 func (r *Runner) SetMetrics(m *telemetry.OrchestratorMetrics) {
 	if m == nil {
 		return
 	}
 	r.metrics = m
+	if agent, ok := r.agent.(*AgentLoopExecutor); ok {
+		agent.SetMetrics(m)
+	}
 }
 
 func (r *Runner) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
@@ -1200,16 +1212,19 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 		systemPrompt = r.resolveSysPrompt(ctx, task.Tenant, task.SystemPrompt, run.WorkspacePath)
 	}
 	execution, err := executor.Execute(ctx, ExecutionSpec{
-		Task:                        taskForRun(task, run),
-		Run:                         run,
-		RequestID:                   requestID,
-		TraceID:                     trace.TraceID,
-		RootSpanID:                  trace.RootSpanID(),
-		StartedAt:                   time.Now().UTC(),
-		ResumeCheckpoint:            resumeCheckpoint,
-		NewID:                       defaultResourceID,
-		UpsertStep:                  func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
-		UpsertArtifact:              func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
+		Task:             taskForRun(task, run),
+		Run:              run,
+		RequestID:        requestID,
+		TraceID:          trace.TraceID,
+		RootSpanID:       trace.RootSpanID(),
+		StartedAt:        time.Now().UTC(),
+		ResumeCheckpoint: resumeCheckpoint,
+		NewID:            defaultResourceID,
+		UpsertStep:       func(step types.TaskStep) error { return r.upsertStep(ctx, step) },
+		UpsertArtifact:   func(artifact types.TaskArtifact) error { return r.upsertArtifact(ctx, artifact) },
+		EmitRunEvent: func(eventType string, data map[string]any) {
+			_, _ = r.emitRunEvent(ctx, task.ID, run.ID, eventType, requestID, trace.TraceID, data)
+		},
 		SystemPrompt:                systemPrompt,
 		ShellNetworkAllowedHosts:    r.config.ShellNetwork.AllowedHosts,
 		ShellNetworkAllowPrivateIPs: r.config.ShellNetwork.AllowPrivateIPs,

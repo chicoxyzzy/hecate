@@ -96,6 +96,18 @@ const (
 	AttrHecateApprovalDecision = "hecate.approval.decision"
 	AttrHecateApprovalWaitMS   = "hecate.approval.wait_ms"
 
+	// MCP — external tool call dispatch and cache observability.
+	// `result` takes one of the MCPCallResult* constants in
+	// contract.go (dispatched / tool_error / failed / blocked); the
+	// cache `event` attribute takes MCPCacheEvent* (hit / miss /
+	// evicted). `server` is the operator-chosen alias from the task's
+	// mcp_servers config; `tool` is the un-namespaced upstream tool
+	// name so charts can group across aliases.
+	AttrHecateMCPServer     = "hecate.mcp.server"
+	AttrHecateMCPTool       = "hecate.mcp.tool"
+	AttrHecateMCPCallResult = "hecate.mcp.call.result"
+	AttrHecateMCPCacheEvent = "hecate.mcp.cache.event"
+
 	// Queue lifecycle
 	AttrHecateQueueBackend = "hecate.queue.backend"
 	AttrHecateQueueClaimID = "hecate.queue.claim_id"

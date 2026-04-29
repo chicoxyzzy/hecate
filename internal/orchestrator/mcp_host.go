@@ -11,6 +11,7 @@ import (
 	"github.com/hecate/agent-runtime/internal/mcp"
 	mcpclient "github.com/hecate/agent-runtime/internal/mcp/client"
 	"github.com/hecate/agent-runtime/internal/secrets"
+	"github.com/hecate/agent-runtime/internal/telemetry"
 	"github.com/hecate/agent-runtime/internal/version"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
@@ -208,15 +209,44 @@ func agentClientInfo() mcp.ClientInfo {
 // the over-cap insert is allowed (TTL eviction catches up later). 0
 // falls back to the cache's internal default (256). Negative disables
 // the cap (unbounded growth — used by tests that don't care).
-func NewAgentMCPClientCache(ttl time.Duration, maxEntries int) *mcpclient.SharedClientCache {
+//
+// metrics, when non-nil, gets wired in as a CacheObserver so cache
+// hit/miss/evict events show up on the cache-events counter. nil =
+// no metrics (cache still functions; callers just lose observability).
+func NewAgentMCPClientCache(ttl time.Duration, maxEntries int, metrics *telemetry.OrchestratorMetrics) *mcpclient.SharedClientCache {
+	var cache *mcpclient.SharedClientCache
 	if maxEntries == 0 {
 		// Distinguish "operator left the field zero-valued" from
 		// "operator deliberately disabled the cap" by treating zero
 		// as "use the cache's default" and negative as "disabled."
 		// The orchestrator.Config field documentation calls this out.
-		return mcpclient.NewSharedClientCache(ttl, agentClientInfo())
+		cache = mcpclient.NewSharedClientCache(ttl, agentClientInfo())
+	} else {
+		cache = mcpclient.NewSharedClientCacheWithLimits(ttl, maxEntries, agentClientInfo())
 	}
-	return mcpclient.NewSharedClientCacheWithLimits(ttl, maxEntries, agentClientInfo())
+	if metrics != nil {
+		// Capture metrics in closures so the cache stays free of any
+		// telemetry-package dependency. The closures themselves are
+		// nil-safe (the metrics SDK no-ops on nil instruments).
+		cache.SetObserver(&mcpclient.CacheObserver{
+			OnHit: func(server string) {
+				metrics.RecordMCPCacheEvent(context.Background(), telemetry.MCPCacheEventRecord{
+					Server: server, Event: telemetry.MCPCacheEventHit,
+				})
+			},
+			OnMiss: func(server string) {
+				metrics.RecordMCPCacheEvent(context.Background(), telemetry.MCPCacheEventRecord{
+					Server: server, Event: telemetry.MCPCacheEventMiss,
+				})
+			},
+			OnEvicted: func(server string) {
+				metrics.RecordMCPCacheEvent(context.Background(), telemetry.MCPCacheEventRecord{
+					Server: server, Event: telemetry.MCPCacheEventEvicted,
+				})
+			},
+		})
+	}
+	return cache
 }
 
 // toClientServerConfigs converts the orchestrator-side config slice

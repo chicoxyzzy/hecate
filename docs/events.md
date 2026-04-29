@@ -33,6 +33,9 @@ These are **persisted events** (rows in the `task_state_run_events` table). They
 | `approval.approved` | Approvals | Operator approved a gate |
 | `approval.rejected` | Approvals | Operator rejected a gate (terminates the run) |
 | `agent.turn.completed` | Agent loop | One LLM round-trip in an `agent_loop` run finished |
+| `mcp.tool.dispatched` | MCP | Agent loop dispatched a tool call to an external MCP server (`is_error=false` OR upstream `is_error=true`) |
+| `mcp.tool.failed` | MCP | Protocol-level failure (transport closed, RPC error, unknown tool) before a result was returned |
+| `mcp.tool.blocked` | MCP | The configured `approval_policy=block` short-circuited the call before it reached the upstream |
 | `task.updated` | Housekeeping | Task metadata changed (e.g. cancellation flushed) |
 | `snapshot` | Housekeeping | Per-run SSE handler periodically writes a state snapshot |
 | `external.event` | Caller-driven | Default type for events posted via `POST /v1/tasks/{id}/runs/{run_id}/events` |
@@ -251,6 +254,32 @@ Emitted once per LLM round-trip in an `agent_loop` run. The richest cost-trackin
 The per-turn figure is also stamped on the matching model step's `OutputSummary.cost_micros_usd` so the run-replay UI surfaces it without subscribing here. See [agent-runtime.md](agent-runtime.md#cost-tracking) for the full cost model.
 
 These rows are the only event type pruned by the retention worker (`turn_events` subsystem) — they accumulate fast on long agent runs. Other event types are kept indefinitely. See `GATEWAY_RETENTION_TURN_EVENTS_*` in `.env.example`.
+
+## MCP
+
+Three events form the audit trail for external MCP tool calls in `agent_loop` runs. Together they cover every dispatch outcome the loop's MCP dispatcher produces — successful calls (including upstream-side tool errors), protocol failures, and policy-blocked calls. See [mcp.md](mcp.md#hecate-as-mcp-client) for the underlying configuration and policy model.
+
+All three carry the same shared payload shape:
+
+| Extra key | Type | Notes |
+|---|---|---|
+| `server` | `string` | Operator-chosen alias from the task's `mcp_servers` config (the `<server>` segment of `mcp__<server>__<tool>`) |
+| `tool` | `string` | Un-namespaced upstream tool name |
+| `result` | `string` | One of `dispatched`, `tool_error`, `failed`, `blocked` — finer-grained than the event-type split |
+| `duration_ms` | `int64` | Wall-clock from dispatch start to result-in-hand |
+| `error` | `string` | Present on `mcp.tool.failed` and (when applicable) `mcp.tool.dispatched` with `result=tool_error` |
+
+### `mcp.tool.dispatched`
+
+Emitted on every dispatch that reached the upstream MCP server, regardless of whether the upstream returned `is_error=false` (clean success) or `is_error=true` (tool-level failure with diagnostic text). The `result` payload key disambiguates the two: `dispatched` for clean, `tool_error` for upstream-marked failures. Operators chart `tool_error / (dispatched + tool_error)` to spot servers that are answering but unhappy.
+
+### `mcp.tool.failed`
+
+Protocol-level failure before a result was in hand: transport closed, RPC error, unknown-tool routing miss. The agent loop forwards the diagnostic as a tool-error message to the LLM (the run does not fail), but the event is the audit signal a dashboard would alert on.
+
+### `mcp.tool.blocked`
+
+The task's `approval_policy=block` short-circuited the call. The upstream was never contacted; the LLM saw a tool error suggesting it pick a different path. Distinct from `mcp.tool.failed` so operators can alert on `failed` without their pages firing on the (legitimate) block path. Distinct from `approval.requested` because block doesn't pause the run — it's a hard refusal, not a gate.
 
 ## Housekeeping
 

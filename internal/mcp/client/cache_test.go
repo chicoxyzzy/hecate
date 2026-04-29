@@ -557,3 +557,104 @@ func TestCache_DoubleReleaseIsIdempotent(t *testing.T) {
 		t.Errorf("Stats.InUse = %d, want 1 (double-release should be idempotent)", got)
 	}
 }
+
+// TestCache_Observer_HitMissEvictedFire pins that the CacheObserver
+// hooks fire on the right paths: a fresh Acquire records Miss, a
+// subsequent Acquire of the same cfg records Hit, and Evict() fires
+// Evicted with the operator-supplied alias.
+func TestCache_Observer_HitMissEvictedFire(t *testing.T) {
+	t.Parallel()
+	url, _ := makeCacheTestServer(t, "fs", []mcp.Tool{
+		{Name: "ping", InputSchema: json.RawMessage(`{}`)},
+	})
+
+	var (
+		mu      sync.Mutex
+		hits    []string
+		misses  []string
+		evicted []string
+	)
+	obs := &CacheObserver{
+		OnHit:     func(s string) { mu.Lock(); hits = append(hits, s); mu.Unlock() },
+		OnMiss:    func(s string) { mu.Lock(); misses = append(misses, s); mu.Unlock() },
+		OnEvicted: func(s string) { mu.Lock(); evicted = append(evicted, s); mu.Unlock() },
+	}
+
+	cache := newCacheTestCache(t, time.Minute, time.Minute)
+	cache.SetObserver(obs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := ServerConfig{Name: "fs", URL: url}
+
+	// First acquire = miss.
+	_, _, r1, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire 1: %v", err)
+	}
+	r1()
+
+	// Second acquire = hit.
+	_, _, r2, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire 2: %v", err)
+	}
+	r2()
+
+	// Evict surfaces the alias on the observer.
+	cache.Evict(cfg)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(misses) != 1 || misses[0] != "fs" {
+		t.Errorf("misses = %v, want [\"fs\"]", misses)
+	}
+	if len(hits) != 1 || hits[0] != "fs" {
+		t.Errorf("hits = %v, want [\"fs\"]", hits)
+	}
+	if len(evicted) != 1 || evicted[0] != "fs" {
+		t.Errorf("evicted = %v, want [\"fs\"]", evicted)
+	}
+}
+
+// TestCache_Observer_NilSafe pins that a partially-set CacheObserver
+// (some callbacks nil) doesn't panic when a missing event fires. This
+// matches the documented contract — observers can implement only the
+// events they care about.
+func TestCache_Observer_NilSafe(t *testing.T) {
+	t.Parallel()
+	url, _ := makeCacheTestServer(t, "fs", []mcp.Tool{
+		{Name: "ping", InputSchema: json.RawMessage(`{}`)},
+	})
+
+	// Only Hit is wired; Miss and Evicted left nil.
+	var hits int
+	cache := newCacheTestCache(t, time.Minute, time.Minute)
+	cache.SetObserver(&CacheObserver{
+		OnHit: func(string) { hits++ },
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := ServerConfig{Name: "fs", URL: url}
+
+	// Miss path: must not panic on nil OnMiss.
+	_, _, r1, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire (miss): %v", err)
+	}
+	r1()
+	// Hit path: should fire and increment.
+	_, _, r2, err := cache.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Acquire (hit): %v", err)
+	}
+	r2()
+	// Evict path: must not panic on nil OnEvicted.
+	cache.Evict(cfg)
+
+	if hits != 1 {
+		t.Errorf("hits = %d, want 1", hits)
+	}
+}

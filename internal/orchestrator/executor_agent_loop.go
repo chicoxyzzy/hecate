@@ -74,6 +74,12 @@ type AgentLoopExecutor struct {
 	// MCPServers config. nil = no MCP support; tasks that configure
 	// MCPServers will fail with a clear error.
 	mcpFactory AgentMCPHostFactory
+	// metrics is the optional metrics seam for MCP tool calls. When
+	// set, dispatchMCPToolCall records every dispatch outcome on the
+	// hecate.orchestrator.mcp.tool_calls counter / duration
+	// histogram. nil = no metrics (the loop still runs; just no
+	// numbers).
+	metrics *telemetry.OrchestratorMetrics
 }
 
 // NewAgentLoopExecutor constructs the loop. A nil LLM client is
@@ -132,6 +138,16 @@ func NewAgentLoopExecutor(llm AgentLLMClient, shell Executor, file Executor, git
 		httpPolicy: httpPolicy,
 		httpClient: httpClient,
 	}
+}
+
+// SetMetrics wires an OrchestratorMetrics instance for MCP-tool-call
+// telemetry. Safe to call after construction; nil clears any
+// previously-set metrics. Production wires this once at runner setup
+// (the runner already holds the metrics via SetMetrics; it forwards
+// the same instance here so the agent loop and the runner share
+// instruments).
+func (e *AgentLoopExecutor) SetMetrics(m *telemetry.OrchestratorMetrics) {
+	e.metrics = m
 }
 
 // SetMCPHostFactory wires the factory used to bring up per-task MCP
@@ -660,6 +676,14 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 		args = json.RawMessage(`{}`)
 	}
 
+	// Decompose the namespaced name once — used for both metric
+	// attributes (server / tool) and event payloads. Built-in tools
+	// don't reach this function, so a parse failure here would be a
+	// programming error in the dispatcher; we still tolerate it
+	// gracefully by leaving the attributes blank rather than crashing
+	// the run.
+	server, toolLeaf, _ := mcpclient.SplitNamespacedToolName(call.Function.Name)
+
 	// Block policy: never call upstream. Emit a failed step and feed
 	// a tool-error message back to the LLM so the model can pick a
 	// different path on the next turn. Operators use this to disable
@@ -667,6 +691,7 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 	// editing the upstream server's tool catalog.
 	if mcpServerPolicy(call.Function.Name, spec.Task) == types.MCPApprovalBlock {
 		finishedAt := time.Now().UTC()
+		durationMS := finishedAt.Sub(startedAt).Milliseconds()
 		text := fmt.Sprintf("mcp tool %q is blocked by the configured approval policy on this task; pick a different tool", call.Function.Name)
 		step := types.TaskStep{
 			ID:         spec.NewID("step"),
@@ -691,15 +716,18 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 			"blocked":   true,
 			"text_size": len(text),
 		}
+		e.recordMCPCallTelemetry(ctx, spec, server, toolLeaf, telemetry.MCPCallResultBlocked, durationMS, "")
 		return text, &step, nil, nil
 	}
 
 	text, isError, err := host.Call(ctx, call.Function.Name, args)
 	finishedAt := time.Now().UTC()
+	durationMS := finishedAt.Sub(startedAt).Milliseconds()
 
 	status := "completed"
 	resultKind := resultFromStatus(status)
 	stepError := ""
+	callResult := telemetry.MCPCallResultDispatched
 	if err != nil {
 		// Protocol-level failure (transport closed, RPC error, unknown
 		// tool). Surface as a tool error to the LLM with the diagnostic
@@ -709,12 +737,14 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 		resultKind = resultFromStatus(status)
 		stepError = err.Error()
 		text = fmt.Sprintf("mcp tool %q failed: %v", call.Function.Name, err)
+		callResult = telemetry.MCPCallResultFailed
 	} else if isError {
 		// Tool-level error. The text already carries the upstream
 		// reason; mark the step failed so the run timeline shows it
 		// in red and the next-turn message ToolError is set.
 		status = "failed"
 		resultKind = resultFromStatus(status)
+		callResult = telemetry.MCPCallResultToolError
 	}
 
 	step := types.TaskStep{
@@ -739,7 +769,64 @@ func (e *AgentLoopExecutor) dispatchMCPToolCall(ctx context.Context, spec Execut
 		"is_error":  isError || err != nil,
 		"text_size": len(text),
 	}
+	e.recordMCPCallTelemetry(ctx, spec, server, toolLeaf, callResult, durationMS, stepError)
 	return text, &step, nil, nil
+}
+
+// recordMCPCallTelemetry emits the per-dispatch metrics and run event
+// for one MCP tool call. Pulled out so the four exit paths in
+// dispatchMCPToolCall (blocked / dispatched / tool_error / failed)
+// share a single telemetry surface — operators get a coherent
+// counter/histogram/event triple regardless of which branch fired.
+//
+// All sources are nil-safe: e.metrics may be unset (tests, early
+// boot) and spec.EmitRunEvent may be nil (executors invoked outside
+// the runner's wiring). Either side missing degrades gracefully to
+// "no signal" rather than crashing the dispatch.
+func (e *AgentLoopExecutor) recordMCPCallTelemetry(
+	ctx context.Context,
+	spec ExecutionSpec,
+	server, tool, result string,
+	durationMS int64,
+	errMsg string,
+) {
+	if e.metrics != nil {
+		e.metrics.RecordMCPToolCall(ctx, telemetry.MCPToolCallRecord{
+			Server:     server,
+			Tool:       tool,
+			Result:     result,
+			DurationMS: durationMS,
+		})
+	}
+	if spec.EmitRunEvent == nil {
+		return
+	}
+	// Map the four call-result values to event names. blocked +
+	// failed get distinct events because operators tend to alert on
+	// failed but treat blocked as an audit signal; conflating them
+	// would mask one or trigger pages on the other.
+	var eventType string
+	switch result {
+	case telemetry.MCPCallResultBlocked:
+		eventType = telemetry.EventOrchestratorMCPToolBlocked
+	case telemetry.MCPCallResultFailed:
+		eventType = telemetry.EventOrchestratorMCPToolFailed
+	default:
+		// Both Dispatched and ToolError land on .dispatched — the
+		// payload's `result` distinguishes the two so consumers can
+		// filter without us having to spawn a third event type.
+		eventType = telemetry.EventOrchestratorMCPToolDispatched
+	}
+	data := map[string]any{
+		"server":      server,
+		"tool":        tool,
+		"result":      result,
+		"duration_ms": durationMS,
+	}
+	if errMsg != "" {
+		data["error"] = errMsg
+	}
+	spec.EmitRunEvent(eventType, data)
 }
 
 // mcpToolInputForLog captures the call inputs for the step's Input

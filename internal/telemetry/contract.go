@@ -96,6 +96,40 @@ const (
 	EventOrchestratorApprovalRequested = "orchestrator.approval.requested"
 	EventOrchestratorApprovalResolved  = "orchestrator.approval.resolved"
 	EventOrchestratorApprovalFailed    = "orchestrator.approval.failed"
+
+	// MCP-tool-call events — emitted by dispatchMCPToolCall on every
+	// dispatch outcome. Together with the per-step orchestrator
+	// records they form the audit trail for external MCP usage:
+	// which task / run hit which server / tool, when, with what
+	// outcome. Block decisions emit too — the LLM never reached the
+	// upstream, but the operator's policy fired and that's a
+	// security-relevant signal.
+	EventOrchestratorMCPToolDispatched = "orchestrator.mcp.tool.dispatched"
+	EventOrchestratorMCPToolFailed     = "orchestrator.mcp.tool.failed"
+	EventOrchestratorMCPToolBlocked    = "orchestrator.mcp.tool.blocked"
+)
+
+// MCP-tool-call result values for telemetry attributes / event
+// payloads. Distinct from RunStatus / step Result because we need
+// finer granularity: a call that returned `is_error=true` from the
+// upstream is functionally a tool-level failure but a
+// protocol-level success, and operators want to chart those
+// separately.
+const (
+	MCPCallResultDispatched = "dispatched" // upstream returned cleanly, is_error=false
+	MCPCallResultToolError  = "tool_error" // upstream returned is_error=true
+	MCPCallResultFailed     = "failed"     // protocol/transport error before a result
+	MCPCallResultBlocked    = "blocked"    // approval policy short-circuited the call
+)
+
+// MCP-cache events for the cache-events counter. Hit/miss are recorded
+// at Acquire time; evicted is recorded both for reactive eviction
+// (Pool.Call transport-closed error) and TTL/LRU eviction (cache reaper
+// or over-cap insert).
+const (
+	MCPCacheEventHit     = "hit"
+	MCPCacheEventMiss    = "miss"
+	MCPCacheEventEvicted = "evicted"
 )
 
 // Retention
@@ -162,6 +196,17 @@ const (
 	MetricOrchestratorApprovalsTotal       = "hecate.orchestrator.approvals"
 	MetricOrchestratorApprovalWaitDuration = "hecate.orchestrator.approval.wait_duration"
 	MetricOrchestratorLeaseExtendFailures  = "hecate.orchestrator.queue.lease_extend_failures"
+
+	// MCP-client metrics — track the volume and latency of tool calls
+	// dispatched to external MCP servers, plus the cache's
+	// hit/miss/evict counts. Operators use these to answer "is the
+	// github MCP server slow today?" and "is the cache doing useful
+	// work?". The result attribute on calls splits failures from
+	// blocked-by-policy from successful tool errors so the same
+	// histogram is meaningful across all four outcomes.
+	MetricOrchestratorMCPToolCallsTotal   = "hecate.orchestrator.mcp.tool_calls"
+	MetricOrchestratorMCPToolCallDuration = "hecate.orchestrator.mcp.tool_call.duration"
+	MetricOrchestratorMCPCacheEventsTotal = "hecate.orchestrator.mcp.cache_events"
 )
 
 // ---------------------------------------------------------------------------

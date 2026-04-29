@@ -211,6 +211,9 @@ type OrchestratorMetrics struct {
 	approvalsTotal       otmetric.Int64Counter
 	approvalWaitDuration otmetric.Int64Histogram
 	leaseExtendFailures  otmetric.Int64Counter
+	mcpToolCallsTotal    otmetric.Int64Counter
+	mcpToolCallDuration  otmetric.Int64Histogram
+	mcpCacheEventsTotal  otmetric.Int64Counter
 }
 
 // NewOrchestratorMetrics registers all orchestrator instruments against
@@ -303,6 +306,33 @@ func NewOrchestratorMetricsWithMeterProvider(provider otmetric.MeterProvider) (*
 		return nil, err
 	}
 
+	mcpToolCallsTotal, err := meter.Int64Counter(
+		MetricOrchestratorMCPToolCallsTotal,
+		otmetric.WithDescription("Total MCP tool dispatches grouped by server, tool, and result (dispatched | tool_error | failed | blocked)."),
+		otmetric.WithUnit("{call}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	mcpToolCallDuration, err := meter.Int64Histogram(
+		MetricOrchestratorMCPToolCallDuration,
+		otmetric.WithDescription("MCP tool dispatch wall-clock duration."),
+		otmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	mcpCacheEventsTotal, err := meter.Int64Counter(
+		MetricOrchestratorMCPCacheEventsTotal,
+		otmetric.WithDescription("MCP shared-client cache events grouped by event (hit | miss | evicted) and server."),
+		otmetric.WithUnit("{event}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &OrchestratorMetrics{
 		runsTotal:            runsTotal,
 		runDuration:          runDuration,
@@ -312,6 +342,9 @@ func NewOrchestratorMetricsWithMeterProvider(provider otmetric.MeterProvider) (*
 		approvalsTotal:       approvalsTotal,
 		approvalWaitDuration: approvalWaitDuration,
 		leaseExtendFailures:  leaseExtendFailures,
+		mcpToolCallsTotal:    mcpToolCallsTotal,
+		mcpToolCallDuration:  mcpToolCallDuration,
+		mcpCacheEventsTotal:  mcpCacheEventsTotal,
 	}, nil
 }
 
@@ -395,6 +428,71 @@ func (m *OrchestratorMetrics) RecordLeaseExtendFailed(ctx context.Context) {
 		return
 	}
 	m.leaseExtendFailures.Add(ctx, 1)
+}
+
+// MCPToolCallRecord carries the labels and measurements for one MCP
+// tool dispatch attempt. Result takes one of MCPCallResult* (see
+// contract.go); duration is wall-clock from the moment the agent loop
+// decided to dispatch (or block) until the result was in hand.
+type MCPToolCallRecord struct {
+	Server     string
+	Tool       string
+	Result     string // dispatched | tool_error | failed | blocked
+	DurationMS int64
+}
+
+// RecordMCPToolCall records one MCP tool dispatch outcome. Counter
+// increments by attribute set; histogram records duration when > 0
+// (Blocked outcomes typically record sub-millisecond durations, which
+// would skew the histogram floor — we still record them so operators
+// can see "block path is fast" rather than guessing).
+func (m *OrchestratorMetrics) RecordMCPToolCall(ctx context.Context, rec MCPToolCallRecord) {
+	if m == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 3)
+	if rec.Server != "" {
+		attrs = append(attrs, attribute.String(AttrHecateMCPServer, rec.Server))
+	}
+	if rec.Tool != "" {
+		attrs = append(attrs, attribute.String(AttrHecateMCPTool, rec.Tool))
+	}
+	if rec.Result != "" {
+		attrs = append(attrs, attribute.String(AttrHecateMCPCallResult, rec.Result))
+	}
+	opt := otmetric.WithAttributes(attrs...)
+	m.mcpToolCallsTotal.Add(ctx, 1, opt)
+	if rec.DurationMS > 0 {
+		m.mcpToolCallDuration.Record(ctx, rec.DurationMS, opt)
+	}
+}
+
+// MCPCacheEventRecord carries the labels for a single
+// SharedClientCache event. Server is the operator-chosen alias from
+// the per-task config (not part of the cache key, but useful as a
+// telemetry attribute so operators can see which upstream is being
+// hit/missed); blank when the event is server-agnostic.
+type MCPCacheEventRecord struct {
+	Server string
+	Event  string // hit | miss | evicted
+}
+
+// RecordMCPCacheEvent records one cache hit/miss/eviction. Cheap
+// enough to call from inside the cache's lock — only an Add against
+// a counter. Counters with no Server attribute are still useful for
+// answering "is the cache doing useful work?" via the hit:miss ratio.
+func (m *OrchestratorMetrics) RecordMCPCacheEvent(ctx context.Context, rec MCPCacheEventRecord) {
+	if m == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 2)
+	if rec.Server != "" {
+		attrs = append(attrs, attribute.String(AttrHecateMCPServer, rec.Server))
+	}
+	if rec.Event != "" {
+		attrs = append(attrs, attribute.String(AttrHecateMCPCacheEvent, rec.Event))
+	}
+	m.mcpCacheEventsTotal.Add(ctx, 1, otmetric.WithAttributes(attrs...))
 }
 
 // ---------------------------------------------------------------------------

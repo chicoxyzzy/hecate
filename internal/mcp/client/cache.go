@@ -48,6 +48,27 @@ import (
 // per-task alias used to namespace tools (mcp__<name>__<tool>), not
 // part of upstream identity. Two tasks aliasing the same upstream as
 // "fs" and "filesystem" share one subprocess.
+// CacheObserver is the optional telemetry seam for SharedClientCache.
+// All three callbacks are nil-safe (the cache wraps every invocation
+// in a nil check), so observers can implement only the events they
+// care about by leaving fields nil.
+//
+// Server is the operator-chosen alias from the per-task config (NOT
+// part of the cache key — see configKey). It's blank on Evicted
+// callbacks fired from paths where the alias isn't known
+// (TTL/LRU eviction inside the reaper, where the cache only carries
+// the upstream key, not the operator's alias).
+//
+// Implementations must be cheap and non-blocking — these fire from
+// the cache's hot path under c.mu in some cases. A typical
+// implementation just bumps an atomic counter or calls into an
+// already-fast metrics SDK.
+type CacheObserver struct {
+	OnHit     func(server string)
+	OnMiss    func(server string)
+	OnEvicted func(server string)
+}
+
 type SharedClientCache struct {
 	mu      sync.Mutex
 	entries map[string]*cacheEntry
@@ -64,6 +85,11 @@ type SharedClientCache struct {
 	// and TTL eviction will catch up once anything goes idle. 0
 	// disables the cap (used by tests that don't care).
 	maxEntries int
+
+	// observer carries optional callbacks for hit/miss/evict events.
+	// nil = no observer wired (the orchestrator-level helper installs
+	// one that records metrics; tests typically leave it nil).
+	observer *CacheObserver
 
 	closeCh   chan struct{}
 	closeOnce sync.Once
@@ -164,8 +190,19 @@ func newSharedClientCacheWithReaper(ttl, reaperInterval time.Duration, info mcp.
 //
 // On error (init fails, network down) no entry is created and no
 // release func is returned.
+// SetObserver attaches the given CacheObserver. nil clears any
+// previously-set observer. Safe to call before Acquire-type
+// operations begin; not safe to call concurrently with them.
+// Production code wires this once at construction (via
+// NewSharedClientCacheWithLimits → orchestrator helper) and never
+// touches it again.
+func (c *SharedClientCache) SetObserver(o *CacheObserver) {
+	c.observer = o
+}
+
 func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Client, []mcp.Tool, func(), error) {
 	key := configKey(cfg)
+	server := cfg.Name
 
 	// Fast path: cache hit.
 	c.mu.Lock()
@@ -174,12 +211,18 @@ func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Cli
 		e.lastUsed = time.Now()
 		client, tools := e.client, e.tools
 		c.mu.Unlock()
+		c.notifyHit(server)
 		return client, tools, c.releaseFor(key), nil
 	}
 	c.mu.Unlock()
 
-	// Miss: spawn outside the lock so concurrent Acquires for OTHER
-	// keys aren't blocked behind this one's process exec.
+	// Miss: notify before spawning so observers see the miss even if
+	// the spawn fails (an init-failure miss is still operationally
+	// interesting — operators should see "we tried and couldn't").
+	c.notifyMiss(server)
+
+	// Spawn outside the lock so concurrent Acquires for OTHER keys
+	// aren't blocked behind this one's process exec.
 	client, tools, err := spawnClient(ctx, c.info, cfg)
 	if err != nil {
 		return nil, nil, nil, err
@@ -224,8 +267,30 @@ func (c *SharedClientCache) Acquire(ctx context.Context, cfg ServerConfig) (*Cli
 	c.mu.Unlock()
 	if evicted != nil {
 		_ = evicted.Close()
+		// Eviction here happens server-agnostically — the cache key
+		// excludes Name on purpose, so we don't have a single
+		// authoritative alias to attribute. Fire with empty server.
+		c.notifyEvicted("")
 	}
 	return client, tools, c.releaseFor(key), nil
+}
+
+func (c *SharedClientCache) notifyHit(server string) {
+	if c.observer != nil && c.observer.OnHit != nil {
+		c.observer.OnHit(server)
+	}
+}
+
+func (c *SharedClientCache) notifyMiss(server string) {
+	if c.observer != nil && c.observer.OnMiss != nil {
+		c.observer.OnMiss(server)
+	}
+}
+
+func (c *SharedClientCache) notifyEvicted(server string) {
+	if c.observer != nil && c.observer.OnEvicted != nil {
+		c.observer.OnEvicted(server)
+	}
 }
 
 // pickLRUIdleLocked returns the key of the least-recently-used entry
@@ -266,6 +331,10 @@ func (c *SharedClientCache) Evict(cfg ServerConfig) {
 	c.mu.Unlock()
 	if ok {
 		_ = e.client.Close()
+		// Caller has the original cfg, so we know the alias here —
+		// fire the observer with the operator's name for richer
+		// metrics granularity than the alias-less reaper path.
+		c.notifyEvicted(cfg.Name)
 	}
 }
 
@@ -383,6 +452,12 @@ func (c *SharedClientCache) evictIdle() {
 	c.mu.Unlock()
 	for _, cl := range toClose {
 		_ = cl.Close()
+		// TTL eviction is alias-agnostic — the cache key omits Name
+		// on purpose, so we don't have a stable alias to attribute
+		// here. Counters keyed only by event=evicted still answer
+		// "how often is the cache reaping things?" without server
+		// granularity.
+		c.notifyEvicted("")
 	}
 }
 
