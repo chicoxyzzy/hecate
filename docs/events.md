@@ -49,9 +49,9 @@ These are **persisted events** (rows in the `task_state_run_events` table). They
 | `approval.approved` | Approvals | Operator approved a gate |
 | `approval.rejected` | Approvals | Operator rejected a gate (terminates the run) |
 | `agent.turn.completed` | Agent loop | One LLM round-trip in an `agent_loop` run finished |
-| `mcp.tool.dispatched` | MCP | Agent loop dispatched a tool call to an external MCP server (`is_error=false` OR upstream `is_error=true`) |
-| `mcp.tool.failed` | MCP | Protocol-level failure (transport closed, RPC error, unknown tool) before a result was returned |
-| `mcp.tool.blocked` | MCP | The configured `approval_policy=block` short-circuited the call before it reached the upstream |
+| `orchestrator.mcp.tool.dispatched` | MCP | Agent loop dispatched a tool call to an external MCP server (`is_error=false` OR upstream `is_error=true`) |
+| `orchestrator.mcp.tool.failed` | MCP | Protocol-level failure (transport closed, RPC error, unknown tool) before a result was returned |
+| `orchestrator.mcp.tool.blocked` | MCP | The configured `approval_policy=block` short-circuited the call before it reached the upstream |
 | `task.updated` | Housekeeping | Task metadata changed (e.g. cancellation flushed) |
 | `snapshot` | Housekeeping | Per-run SSE handler periodically writes a state snapshot |
 | `external.event` | Caller-driven | Default type for events posted via `POST /v1/tasks/{id}/runs/{run_id}/events` |
@@ -238,7 +238,7 @@ Both shapes share these fields. The mid-loop variant uses `approval_kind` instea
 | Extra key | Type | Notes |
 |---|---|---|
 | `approval_id` | `string` | The new approval record id |
-| `kind` / `approval_kind` | `string` | Approval type (e.g. `agent_loop_tool_call`, `task_pre_execution`) |
+| `kind` / `approval_kind` | `string` | Approval type. One of `shell_command`, `git_exec`, `file_write`, `network_egress` (pre-execution gates), or `agent_loop_tool_call` (mid-loop gate). See [`runtime-api.md#approval-kinds`](runtime-api.md#approval-kinds). |
 | `status` | `string` | `pending` at creation |
 
 ### `approval.approved` / `approval.rejected`
@@ -283,19 +283,19 @@ All three carry the same shared payload shape:
 | `tool` | `string` | Un-namespaced upstream tool name |
 | `result` | `string` | One of `dispatched`, `tool_error`, `failed`, `blocked` — finer-grained than the event-type split |
 | `duration_ms` | `int64` | Wall-clock from dispatch start to result-in-hand |
-| `error` | `string` | Present on `mcp.tool.failed` and (when applicable) `mcp.tool.dispatched` with `result=tool_error` |
+| `error` | `string` | Present on `orchestrator.mcp.tool.failed` and (when applicable) `orchestrator.mcp.tool.dispatched` with `result=tool_error` |
 
-### `mcp.tool.dispatched`
+### `orchestrator.mcp.tool.dispatched`
 
 Emitted on every dispatch that reached the upstream MCP server, regardless of whether the upstream returned `is_error=false` (clean success) or `is_error=true` (tool-level failure with diagnostic text). The `result` payload key disambiguates the two: `dispatched` for clean, `tool_error` for upstream-marked failures. Operators chart `tool_error / (dispatched + tool_error)` to spot servers that are answering but unhappy.
 
-### `mcp.tool.failed`
+### `orchestrator.mcp.tool.failed`
 
 Protocol-level failure before a result was in hand: transport closed, RPC error, unknown-tool routing miss. The agent loop forwards the diagnostic as a tool-error message to the LLM (the run does not fail), but the event is the audit signal a dashboard would alert on.
 
-### `mcp.tool.blocked`
+### `orchestrator.mcp.tool.blocked`
 
-The task's `approval_policy=block` short-circuited the call. The upstream was never contacted; the LLM saw a tool error suggesting it pick a different path. Distinct from `mcp.tool.failed` so operators can alert on `failed` without their pages firing on the (legitimate) block path. Distinct from `approval.requested` because block doesn't pause the run — it's a hard refusal, not a gate.
+The task's `approval_policy=block` short-circuited the call. The upstream was never contacted; the LLM saw a tool error suggesting it pick a different path. Distinct from `orchestrator.mcp.tool.failed` so operators can alert on `failed` without their pages firing on the (legitimate) block path. Distinct from `approval.requested` because block doesn't pause the run — it's a hard refusal, not a gate.
 
 ## Housekeeping
 
