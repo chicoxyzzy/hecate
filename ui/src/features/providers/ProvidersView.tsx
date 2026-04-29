@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { buildConflictMap, providerDotColor, resolvedBaseURL } from "../../lib/provider-utils";
-import { Dot, Icon, Icons, Toggle } from "../shared/ui";
+import { describeCredentialState, describeRoutingBlockedReason } from "../../lib/runtime-utils";
+import { Badge, Dot, Icon, Icons, Toggle } from "../shared/ui";
 
 type Props = {
   state: RuntimeConsoleViewModel["state"];
@@ -100,6 +101,24 @@ export function ProvidersView({ state, actions }: Props) {
 
   const cloudEnabledCount = allCloudIDs.filter(id => resolveEnabled(id)).length;
   const localEnabledCount = allLocalIDs.filter(id => resolveEnabled(id)).length;
+  const readyCount = state.providers.filter(p => p.routing_ready).length;
+  const blockedCount = state.providers.filter(p => p.routing_ready === false).length;
+  const unhealthyCount = state.providers.filter(p => !p.healthy).length;
+
+  function statusTone(status?: string): "healthy" | "degraded" | "down" | "disabled" {
+    switch (status) {
+      case "healthy":
+        return "healthy";
+      case "degraded":
+      case "half_open":
+        return "degraded";
+      case "open":
+      case "unhealthy":
+        return "down";
+      default:
+        return "disabled";
+    }
+  }
 
   function renderCard(id: string) {
     const cp = configuredByID.get(id);
@@ -115,6 +134,7 @@ export function ProvidersView({ state, actions }: Props) {
     const lastError = rt?.last_error || rt?.error;
     const routingReady = rt?.routing_ready ?? (enabled && healthy);
     const routingBlocked = rt?.routing_blocked_reason;
+    const credentialState = rt?.credential_state || (cp?.credential_configured ? "configured" : cp?.kind === "local" ? "not_required" : "missing");
     const conflicts = conflictMap.get(id) ?? [];
     const conflictTitle = conflicts.length > 0
       ? `Shares endpoint with ${conflicts.join(", ")} — only one can serve requests at a time.`
@@ -144,22 +164,33 @@ export function ProvidersView({ state, actions }: Props) {
         {description && (
           <div style={{ fontSize: 11, color: "var(--t3)", marginBottom: 8, lineHeight: 1.4 }}>{description}</div>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 11, color: "var(--t2)" }}>
-            <span style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", fontWeight: 500 }}>{modelCount}</span> models
-          </span>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: healthy ? "var(--green)" : enabled ? "var(--red)" : "var(--t3)" }}>
-            {statusLabel}
-          </span>
-          {enabled && !routingReady && routingBlocked && (
-            <span title={routingBlocked} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--amber)" }}>
-              blocked
-            </span>
-          )}
-          {baseURL && (
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{baseURL}</span>
-          )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          <Badge status={statusTone(statusLabel)} label={statusLabel} />
+          <Badge status={routingReady ? "ok" : "warn"} label={routingReady ? "route ready" : "route blocked"} />
+          <Badge status={credentialState === "missing" ? "warn" : "ok"} label={describeCredentialState(credentialState)} />
         </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "4px 10px" }}>
+          <div style={{ fontSize: 11, color: "var(--t2)" }}>
+            Models <span style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", fontWeight: 500 }}>{modelCount}</span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--t2)", textAlign: "right" }}>
+            {rt?.last_checked_at ? (
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--t3)" }} title={formatProviderTime(rt.last_checked_at)}>
+                checked {new Date(rt.last_checked_at).toLocaleTimeString()}
+              </span>
+            ) : (
+              <span style={{ color: "var(--t3)" }}>not checked yet</span>
+            )}
+          </div>
+        </div>
+        {!routingReady && routingBlocked && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "var(--amber)", lineHeight: 1.45 }}>
+            {describeRoutingBlockedReason(routingBlocked)}
+          </div>
+        )}
+        {baseURL && (
+          <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{baseURL}</div>
+        )}
         {lastError && (
           <div style={{ marginTop: 8, paddingTop: 7, borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--red)", lineHeight: 1.4 }}>
             {lastError}
@@ -173,6 +204,11 @@ export function ProvidersView({ state, actions }: Props) {
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
       {/* Provider list */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+          <Badge status="ok" label={`${readyCount} route ready`} />
+          <Badge status={blockedCount > 0 ? "warn" : "ok"} label={`${blockedCount} blocked`} />
+          <Badge status={unhealthyCount > 0 ? "error" : "ok"} label={`${unhealthyCount} unhealthy`} />
+        </div>
 
         {/* Cloud */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
@@ -236,8 +272,8 @@ export function ProvidersView({ state, actions }: Props) {
               ["Protocol",      selectedConfig.protocol || "—"],
               ["Kind",          selectedConfig.kind],
               ["Health",        selectedStatus?.status || "unknown"],
-              ["Credentials",   selectedStatus?.credential_state || (selectedConfig.credential_configured ? "configured" : selectedConfig.kind === "local" ? "not_required" : "missing")],
-              ["Route",         selectedStatus?.routing_ready === false ? selectedStatus.routing_blocked_reason || "blocked" : "ready"],
+              ["Credentials",   describeCredentialState(selectedStatus?.credential_state || (selectedConfig.credential_configured ? "configured" : selectedConfig.kind === "local" ? "not_required" : "missing"))],
+              ["Route",         selectedStatus?.routing_ready === false ? describeRoutingBlockedReason(selectedStatus.routing_blocked_reason) : "Ready"],
               ["Default model", selectedConfig.default_model || "—"],
             ] as [string, string | number][]).map(([label, val]) => (
               <div key={label}>

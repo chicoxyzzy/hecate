@@ -166,7 +166,22 @@ describe("ObservabilityView", () => {
           object: "trace",
           data: {
             request_id: "req-1",
-            spans: [],
+            started_at: "2026-04-29T10:00:00Z",
+            spans: [{
+              trace_id: "trace-1",
+              span_id: "span-1",
+              name: "gateway.router",
+              start_time: "2026-04-29T10:00:00Z",
+              end_time: "2026-04-29T10:00:00.010Z",
+              events: [{
+                name: "router.candidate.skipped",
+                timestamp: "2026-04-29T10:00:00.005Z",
+                attributes: {
+                  "gen_ai.provider.name": "ollama",
+                  "hecate.route.skip_reason": "preflight_price_missing",
+                },
+              }],
+            }],
             route: {
               candidates: [
                 { provider: "ollama", model: "llama3.1:8b", outcome: "skipped", skip_reason: "preflight_price_missing", reason: "requested_model" },
@@ -192,5 +207,7 @@ describe("ObservabilityView", () => {
       expect(container.textContent).toMatch(/Missing price/);
     });
     expect(container.textContent).toMatch(/Requested model/);
+    expect(container.textContent).toMatch(/Route summary/);
+    expect(container.textContent).toMatch(/Event flow/);
   });
 });

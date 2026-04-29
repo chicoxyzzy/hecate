@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
+import type { TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunEventRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
 import { Badge, Dot, Icon, Icons } from "../shared/ui";
 
 type StreamState = "idle" | "connecting" | "live" | "closed" | "error";
@@ -183,11 +183,37 @@ function formatDuration(start?: string, end?: string): string {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
+function describeRunEvent(eventType: string): { label: string; tone: "queued" | "running" | "awaiting" | "done" | "failed" } {
+  const labels: Record<string, { label: string; tone: "queued" | "running" | "awaiting" | "done" | "failed" }> = {
+    "run.created": { label: "Run created", tone: "queued" },
+    "run.queued": { label: "Queued", tone: "queued" },
+    "run.claimed": { label: "Claimed by worker", tone: "running" },
+    "run.running": { label: "Execution started", tone: "running" },
+    "run.awaiting_approval": { label: "Waiting for approval", tone: "awaiting" },
+    "run.approved": { label: "Approval granted", tone: "running" },
+    "run.rejected": { label: "Approval rejected", tone: "failed" },
+    "run.cancelled": { label: "Cancelled", tone: "failed" },
+    "run.failed": { label: "Failed", tone: "failed" },
+    "run.completed": { label: "Completed", tone: "done" },
+    "run.resumed": { label: "Resumed", tone: "running" },
+    "run.retry_from_turn": { label: "Retry from turn", tone: "running" },
+    "run.worker_shutdown": { label: "Worker shutdown", tone: "failed" },
+  };
+  return labels[eventType] ?? { label: eventType.replaceAll("_", " "), tone: "queued" };
+}
+
+function describeApprovalKind(kind: string): string {
+  if (kind === "shell") return "Shell command";
+  if (kind === "git") return "Git command";
+  return kind.replaceAll("_", " ");
+}
+
 type Props = {
   task: TaskRecord;
   run: TaskRunRecord | null;
   runs: TaskRunRecord[];
   selectedRunID: string;
+  events: TaskRunEventRecord[];
   steps: TaskStepRecord[];
   artifacts: TaskArtifactRecord[];
   approvals: TaskApprovalRecord[];
@@ -220,7 +246,7 @@ type Props = {
 };
 
 export function TaskDetail({
-  task, run, runs, selectedRunID, steps, artifacts, approvals,
+  task, run, runs, selectedRunID, events, steps, artifacts, approvals,
   streamTurnCosts, streamState, busyAction, notice,
   onSelectRun, onResolveApproval, onCancelRun, onRetryRun, onResumeRun, onRetryFromTurn,
   onResumeRaisingCeiling,
@@ -328,6 +354,65 @@ export function TaskDetail({
       )}
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        {run && (
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg1)" }}>
+            <div className="kicker" style={{ marginBottom: 8 }}>Run overview</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              <Badge status={taskBadgeStatus(run.status)} />
+              {run.provider && <Badge status="ok" label={run.provider} />}
+              {run.provider_kind && <Badge status={run.provider_kind === "local" ? "healthy" : "disabled"} label={run.provider_kind} />}
+              {run.otel_status_message && run.status === "failed" && <Badge status="error" label={run.otel_status_message} />}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px 14px" }}>
+              {[
+                ["Model", run.model || "—"],
+                ["Duration", formatDuration(run.started_at, run.finished_at) || "—"],
+                ["Request ID", run.request_id || "—"],
+                ["Trace ID", run.trace_id || "—"],
+                ["Last error", run.last_error || "—"],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <div className="kicker" style={{ marginBottom: 3 }}>{label}</div>
+                  <div style={{ fontSize: 12, color: value === "—" ? "var(--t3)" : label === "Last error" && value !== "—" ? "var(--red)" : "var(--t1)", fontFamily: "var(--font-mono)", wordBreak: "break-word" }}>
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {events.length > 0 && (
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+            <div className="kicker" style={{ marginBottom: 8 }}>Run timeline</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {events.slice().sort((left, right) => left.sequence - right.sequence).map((event) => {
+                const meta = describeRunEvent(event.event_type);
+                return (
+                  <div key={event.id || `${event.sequence}-${event.event_type}`} style={{ display: "grid", gridTemplateColumns: "64px 110px 1fr", gap: 10, alignItems: "start" }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                      #{event.sequence}
+                    </div>
+                    <Badge status={meta.tone} label={meta.label} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)" }}>
+                        {event.created_at ? new Date(event.created_at).toLocaleTimeString() : "streamed"}
+                      </div>
+                      {(event.request_id || event.trace_id) && (
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", marginTop: 2, wordBreak: "break-all" }}>
+                          {event.request_id ? `req ${event.request_id}` : ""}
+                          {event.request_id && event.trace_id ? " · " : ""}
+                          {event.trace_id ? `trace ${event.trace_id}` : ""}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Cost-ceiling banner: shown only when this run failed
             specifically because of the per-task budget. Lets the
             operator raise the ceiling and resume in one click rather
@@ -346,7 +431,7 @@ export function TaskDetail({
             <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--amber-border)", display: "flex", alignItems: "center", gap: 8 }}>
               <Icon d={Icons.warning} size={15} />
               <span style={{ fontWeight: 500, color: "var(--amber)", fontSize: 13 }}>Approval required</span>
-              <span style={{ fontSize: 11, color: "var(--amber-lo)", fontFamily: "var(--font-mono)", marginLeft: "auto" }}>{approval.kind}</span>
+              <span style={{ fontSize: 11, color: "var(--amber-lo)", fontFamily: "var(--font-mono)", marginLeft: "auto" }}>{describeApprovalKind(approval.kind)}</span>
             </div>
             <div style={{ padding: "12px 14px" }}>
               {approval.reason && (
@@ -354,6 +439,18 @@ export function TaskDetail({
                   <Icon d={Icons.info} size={13} /> {approval.reason}
                 </div>
               )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+                {approval.requested_by && (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t2)" }}>
+                    requested by <span style={{ color: "var(--t1)" }}>{approval.requested_by}</span>
+                  </span>
+                )}
+                {approval.created_at && (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t2)" }}>
+                    at <span style={{ color: "var(--t1)" }}>{new Date(approval.created_at).toLocaleString()}</span>
+                  </span>
+                )}
+              </div>
               {(task.shell_command || task.git_command) && (
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t1)", background: "var(--bg0)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "6px 10px", marginBottom: 10 }}>
                   {task.execution_kind === "git" ? `git ${task.git_command}` : task.shell_command}
@@ -581,9 +678,11 @@ function StepDetail({ step }: { step: TaskStepRecord }) {
         )}
         {step.tool_name && !mcp && <span>tool: <span style={{ color: "var(--t1)" }}>{step.tool_name}</span></span>}
         {step.phase && <span>phase: <span style={{ color: "var(--t1)" }}>{step.phase}</span></span>}
+        {step.error_kind && <span>error kind: <span style={{ color: "var(--t1)" }}>{step.error_kind}</span></span>}
         {step.exit_code !== undefined && <span>exit: <span style={{ color: step.exit_code === 0 ? "var(--green)" : "var(--red)" }}>{step.exit_code}</span></span>}
         {duration && <span>took: <span style={{ color: "var(--t1)" }}>{duration}</span></span>}
         {step.started_at && <span>started: <span style={{ color: "var(--t1)" }}>{new Date(step.started_at).toLocaleString()}</span></span>}
+        {step.trace_id && <span>trace: <span style={{ color: "var(--t1)" }}>{step.trace_id}</span></span>}
       </div>
       {/* Hint pointing operators to the conversation viewer where
           the upstream server's full text result is rendered. The

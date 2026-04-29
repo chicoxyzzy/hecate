@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getMCPCacheStats, getRecentTraces, getRuntimeStats, getTrace } from "../../lib/api";
-import { describeRouteReason, describeRouteSkipReason } from "../../lib/runtime-utils";
+import {
+  buildTraceTimeline,
+  describeHealthStatus,
+  describeRouteReason,
+  describeRouteSkipReason,
+  formatTraceAttributeKey,
+  formatTraceAttributeValue,
+  healthStatusTone,
+  routeOutcomeTone,
+} from "../../lib/runtime-utils";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { MCPCacheStatsResponse, RuntimeStatsResponse, TraceListItem, TraceResponse, TraceSpanRecord } from "../../types/runtime";
-import { Dot } from "../shared/ui";
+import { Badge, Dot } from "../shared/ui";
 import { ConnectYourClient } from "./ConnectYourClient";
 
 type Props = {
@@ -159,6 +168,7 @@ export function ObservabilityView({ state }: Props) {
   const { spans: computedSpans, totalMs } = traceDetail?.spans?.length
     ? computeSpans(traceDetail.spans)
     : { spans: [], totalMs: 0 };
+  const traceTimeline = traceDetail?.spans?.length ? buildTraceTimeline(traceDetail.spans, traceDetail.started_at) : [];
 
   // Gateway URL: derive from the page origin (UI is served from the same
   // host:port as the API now thanks to the embed). This keeps the snippets
@@ -320,6 +330,23 @@ export function ObservabilityView({ state }: Props) {
                 <div style={{ padding: "12px 14px", color: "var(--t3)", fontSize: 12, fontFamily: "var(--font-mono)" }}>loading…</div>
               )}
 
+              {(traceDetail?.route || selectedTrace?.route) && (
+                <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+                  <div className="kicker" style={{ marginBottom: 8 }}>Route summary</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                    {selectedTrace?.route?.final_provider && <Badge status="ok" label={selectedTrace.route.final_provider} />}
+                    {selectedTrace?.route?.final_model && <Badge status="healthy" label={selectedTrace.route.final_model} />}
+                    {selectedTrace?.route?.final_reason && <Badge status="queued" label={describeRouteReason(selectedTrace.route.final_reason)} />}
+                    {selectedTrace?.status_code === "error" && <Badge status="error" label={selectedTrace.status_message || "request failed"} />}
+                  </div>
+                  {selectedTrace?.route?.fallback_from && (
+                    <div style={{ fontSize: 11, color: "var(--amber)", lineHeight: 1.45 }}>
+                      Fallback from {selectedTrace.route.fallback_from} before the selected route completed.
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Span waterfall — always available from in-memory tracer */}
               {traceDetail?.spans && traceDetail.spans.length > 0 && (
                 <div style={{ padding: "10px 14px", borderBottom: traceDetail.route?.candidates?.length ? "1px solid var(--border)" : undefined }}>
@@ -388,6 +415,41 @@ export function ObservabilityView({ state }: Props) {
                 </div>
               )}
 
+              {traceTimeline.length > 0 && (
+                <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+                  <div className="kicker" style={{ marginBottom: 8 }}>Event flow</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {traceTimeline.map((event, index) => (
+                      <div key={`${event.timestamp}-${event.name}-${index}`} style={{ display: "grid", gridTemplateColumns: "56px 92px 1fr", gap: 10, alignItems: "start" }}>
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>{event.offsetLabel}</div>
+                        <Badge
+                          status={
+                            event.phase === "provider" ? "healthy" :
+                            event.phase === "cache" ? "queued" :
+                            event.phase === "routing" ? "ok" :
+                            event.phase === "response" ? "done" :
+                            "disabled"
+                          }
+                          label={event.phase}
+                        />
+                        <div>
+                          <div style={{ fontSize: 12, color: "var(--t0)", marginBottom: 4 }}>{event.name}</div>
+                          {event.attributes && Object.keys(event.attributes).length > 0 && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                              {Object.entries(event.attributes).slice(0, 4).map(([key, value]) => (
+                                <span key={key} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                                  {formatTraceAttributeKey(key)} <span style={{ color: "var(--t1)" }}>{formatTraceAttributeValue(value)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Route candidates */}
               {(() => {
                 type Candidate = NonNullable<NonNullable<TraceListItem["route"]>["candidates"]>[number];
@@ -396,25 +458,53 @@ export function ObservabilityView({ state }: Props) {
                 <div style={{ padding: "10px 14px" }}>
                   <div className="kicker" style={{ marginBottom: 6 }}>Route candidates</div>
                   {candidates.map((c, i) => (
-                    <div key={i} style={{ display: "flex", gap: 6, padding: "4px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: c.outcome === "selected" || c.outcome === "completed" ? "var(--teal)" : "var(--t3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {c.provider}/{c.model || "no model"}
-                      </span>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0, color: c.outcome === "completed" ? "var(--green)" : c.outcome === "selected" ? "var(--teal)" : c.outcome === "failed" ? "var(--red)" : "var(--t3)" }}>
-                        {c.outcome || "—"}
-                      </span>
-                      {c.skip_reason && (
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--amber)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 110 }} title={c.skip_reason}>
-                          {describeRouteSkipReason(c.skip_reason)}
+                    <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t0)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {c.provider}/{c.model || "no model"}
                         </span>
+                        <Badge status={
+                          routeOutcomeTone(c.outcome) === "healthy" ? "done" :
+                          routeOutcomeTone(c.outcome) === "danger" ? "error" :
+                          routeOutcomeTone(c.outcome) === "warning" ? "warn" :
+                          "disabled"
+                        } label={c.outcome || "unknown"} />
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {c.reason && <Badge status="queued" label={describeRouteReason(c.reason)} />}
+                        {c.skip_reason && <Badge status="warn" label={describeRouteSkipReason(c.skip_reason)} />}
+                        {c.health_status && <Badge status={
+                          healthStatusTone(c.health_status) === "healthy" ? "healthy" :
+                          healthStatusTone(c.health_status) === "danger" ? "error" :
+                          healthStatusTone(c.health_status) === "warning" ? "warn" :
+                          "disabled"
+                        } label={describeHealthStatus(c.health_status)} />}
+                        {c.latency_ms != null && c.latency_ms > 0 && <Badge status="disabled" label={`${c.latency_ms}ms`} />}
+                        {c.estimated_usd && <Badge status="disabled" label={c.estimated_usd} />}
+                      </div>
+                      {c.detail && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: "var(--t2)", lineHeight: 1.45 }}>
+                          {c.detail}
+                        </div>
                       )}
-                      {c.reason && (
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 110 }} title={c.reason}>
-                          {describeRouteReason(c.reason)}
-                        </span>
-                      )}
-                      {c.latency_ms != null && c.latency_ms > 0 && (
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", flexShrink: 0 }}>{c.latency_ms}ms</span>
+                      {(c.failover_from || c.failover_to || c.attempt || c.retry_count) && (
+                        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                          {c.attempt != null && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                              attempt <span style={{ color: "var(--t1)" }}>{c.attempt}</span>
+                            </span>
+                          )}
+                          {c.retry_count != null && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                              retries <span style={{ color: "var(--t1)" }}>{c.retry_count}</span>
+                            </span>
+                          )}
+                          {c.failover_from && c.failover_to && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                              failover <span style={{ color: "var(--t1)" }}>{c.failover_from}</span> → <span style={{ color: "var(--t1)" }}>{c.failover_to}</span>
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

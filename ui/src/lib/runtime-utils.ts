@@ -165,6 +165,33 @@ export function describeRouteSkipReason(reason?: string): string {
   return labels[reason] ?? titleizeIdentifier(reason);
 }
 
+export function describeRoutingBlockedReason(reason?: string): string {
+  if (!reason) {
+    return "Routing blocked";
+  }
+  const labels: Record<string, string> = {
+    credential_missing: "Missing credentials",
+    provider_disabled: "Provider disabled",
+    circuit_open: "Circuit open",
+    provider_unhealthy: "Provider unhealthy",
+    no_models: "No discovered models",
+  };
+  return labels[reason] ?? titleizeIdentifier(reason);
+}
+
+export function describeCredentialState(state?: string): string {
+  switch (state) {
+    case "configured":
+      return "Configured";
+    case "missing":
+      return "Missing";
+    case "not_required":
+      return "Not required";
+    default:
+      return state ? titleizeIdentifier(state) : "Unknown";
+  }
+}
+
 function titleizeIdentifier(value: string): string {
   return value
     .split("_")

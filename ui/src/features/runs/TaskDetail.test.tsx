@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { TaskDetail } from "./TaskDetail";
-import type { TaskRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
+import type { TaskRecord, TaskRunEventRecord, TaskRunRecord, TaskStepRecord } from "../../types/runtime";
 
 function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -56,6 +56,7 @@ function setup(propOverrides: Partial<React.ComponentProps<typeof TaskDetail>> =
     run,
     runs: [run],
     selectedRunID: run.id,
+    events: [],
     steps: [],
     artifacts: [],
     approvals: [],
@@ -178,6 +179,60 @@ describe("TaskDetail step drill-down", () => {
     // The chevron is only rendered when hasDetail; assert no chevron path
     // shows up by checking the button does not contain an aria-expanded toggle effect.
     expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("TaskDetail runtime debugging", () => {
+  it("renders the run overview with request and trace ids", () => {
+    const run = makeRun({
+      status: "failed",
+      provider: "ollama",
+      provider_kind: "local",
+      request_id: "req-123",
+      trace_id: "trace-456",
+      last_error: "context deadline exceeded",
+      otel_status_message: "provider_unavailable",
+    });
+    const { render } = setup({ run, runs: [run] });
+    render();
+    expect(screen.getByText(/Run overview/i)).toBeTruthy();
+    expect(screen.getByText("req-123")).toBeTruthy();
+    expect(screen.getByText("trace-456")).toBeTruthy();
+    expect(screen.getByText("context deadline exceeded")).toBeTruthy();
+  });
+
+  it("renders the run timeline from persisted events", () => {
+    const events: TaskRunEventRecord[] = [
+      { id: "e1", task_id: "task-1", run_id: "run-1", sequence: 1, event_type: "run.created", created_at: "2026-04-27T17:00:00Z" },
+      { id: "e2", task_id: "task-1", run_id: "run-1", sequence: 2, event_type: "run.queued", created_at: "2026-04-27T17:00:01Z" },
+      { id: "e3", task_id: "task-1", run_id: "run-1", sequence: 3, event_type: "run.completed", created_at: "2026-04-27T17:00:02Z" },
+    ];
+    const { render } = setup({ events });
+    render();
+    expect(screen.getByText(/Run timeline/i)).toBeTruthy();
+    expect(screen.getByText(/Run created/i)).toBeTruthy();
+    expect(screen.getByText(/Queued/i)).toBeTruthy();
+    expect(screen.getByText(/Completed/i)).toBeTruthy();
+  });
+
+  it("renders approval metadata for pending approvals", () => {
+    const { render } = setup({
+      approvals: [{
+        id: "approval-1",
+        task_id: "task-1",
+        run_id: "run-1",
+        kind: "shell",
+        status: "pending",
+        reason: "Needs explicit shell approval",
+        requested_by: "agent_loop",
+        created_at: "2026-04-27T17:00:00Z",
+      } as any],
+      run: makeRun({ status: "awaiting_approval" }),
+    });
+    render();
+    expect(screen.getByText(/Approval required/i)).toBeTruthy();
+    expect(screen.getByText(/Shell command/i)).toBeTruthy();
+    expect(screen.getByText(/requested by/i)).toBeTruthy();
   });
 });
 

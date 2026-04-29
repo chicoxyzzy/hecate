@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   cancelTaskRun, createTask, deleteTask, getModels, getProviderPresets, getProviders,
-  getTaskApprovals, getTaskRunArtifacts,
+  getTaskApprovals, getTaskRunArtifacts, getTaskRunEvents,
   getTaskRuns, getTaskRunSteps, getTasks, resolveTaskApproval,
   retryTaskRun, retryTaskRunFromTurn, resumeTaskRun, resumeTaskRunRaisingCeiling,
   startTask, streamTaskRun,
@@ -12,6 +12,7 @@ import type {
   ProviderPresetRecord,
   ProviderRecord,
   TaskApprovalRecord, TaskArtifactRecord, TaskRecord, TaskRunRecord, TaskStepRecord,
+  TaskRunEventRecord,
 } from "../../types/runtime";
 import { TaskList } from "./TaskList";
 import { TaskDetail } from "./TaskDetail";
@@ -33,6 +34,7 @@ export function TasksView({ authToken, session }: Props) {
   const [approvals, setApprovals] = useState<TaskApprovalRecord[]>([]);
   const [steps, setSteps] = useState<TaskStepRecord[]>([]);
   const [artifacts, setArtifacts] = useState<TaskArtifactRecord[]>([]);
+  const [runEvents, setRunEvents] = useState<TaskRunEventRecord[]>([]);
   // Streamed per-turn costs, keyed by turn number. Populated as
   // `agent.turn.completed` events arrive on the SSE stream. Acts as a
   // fallback for the model-step output_summary path: when the step's
@@ -61,18 +63,21 @@ export function TasksView({ authToken, session }: Props) {
   const resetRunDetail = useCallback(() => {
     setSteps([]);
     setArtifacts([]);
+    setRunEvents([]);
     setStreamTurnCosts(new Map());
     streamCursorRef.current = 0;
   }, []);
 
   const loadRunDetail = useCallback(async (taskID: string, runID: string) => {
     if (!taskID || !runID) { resetRunDetail(); return; }
-    const [stepsRes, artifactsRes] = await Promise.all([
+    const [stepsRes, artifactsRes, eventsRes] = await Promise.all([
       getTaskRunSteps(taskID, runID, authToken),
       getTaskRunArtifacts(taskID, runID, authToken),
+      getTaskRunEvents(taskID, runID, 0, authToken),
     ]);
     setSteps(stepsRes.data ?? []);
     setArtifacts(artifactsRes.data ?? []);
+    setRunEvents((eventsRes.data ?? []).slice().sort((left, right) => left.sequence - right.sequence));
   }, [authToken, resetRunDetail]);
 
   const loadTaskDetail = useCallback(async (taskID: string, preferredRunID = "") => {
@@ -160,6 +165,26 @@ export function TasksView({ authToken, session }: Props) {
         // gateways that don't include it don't blank the banner.
         if (payload.data.approvals !== undefined) {
           setApprovals(payload.data.approvals);
+        }
+        const eventType = payload.data.event_type;
+        if (eventType && payload.data.sequence > 0) {
+          setRunEvents(cur => {
+            if (cur.some(event => event.sequence === payload.data.sequence)) {
+              return cur;
+            }
+            return [
+              ...cur,
+              {
+                id: `stream-${payload.data.sequence}`,
+                task_id: selectedTaskID,
+                run_id: selectedRunID,
+                sequence: payload.data.sequence,
+                event_type: eventType,
+                request_id: payload.data.run.request_id,
+                trace_id: payload.data.run.trace_id,
+              },
+            ];
+          });
         }
         setTasks(cur => cur.map(t => t.id === selectedTaskID ? { ...t, status: payload.data.run.status } : t));
       },
@@ -352,6 +377,7 @@ export function TasksView({ authToken, session }: Props) {
           selectedRunID={selectedRunID}
           steps={steps}
           artifacts={artifacts}
+          events={runEvents}
           approvals={approvals}
           streamTurnCosts={streamTurnCosts}
           streamState={streamState}
