@@ -97,7 +97,20 @@ ENV GATEWAY_ADDRESS=:8765 \
     GATEWAY_TASKS_BACKEND=sqlite \
     GATEWAY_TASK_QUEUE_BACKEND=sqlite \
     GATEWAY_CACHE_BACKEND=sqlite \
-    GATEWAY_BUDGET_BACKEND=sqlite
+    GATEWAY_BUDGET_BACKEND=sqlite \
+    # Local inference: from inside a container 127.0.0.1 is the container's
+    # own loopback, not the host. Override all local provider base URLs to
+    # use host.docker.internal so model discovery reaches a server running on
+    # the Docker host. This applies whether using `docker run` directly or
+    # via docker compose. host.docker.internal is provided automatically by
+    # Docker Desktop on macOS/Windows; on Linux add
+    # --add-host host.docker.internal:host-gateway (docker-compose.yml does
+    # this via extra_hosts). The inference server must also bind to 0.0.0.0,
+    # not 127.0.0.1 — see docker-compose.yml header for per-server details.
+    PROVIDER_OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+    PROVIDER_LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1 \
+    PROVIDER_LLAMACPP_BASE_URL=http://host.docker.internal:8080/v1 \
+    PROVIDER_LOCALAI_BASE_URL=http://host.docker.internal:8080/v1
 VOLUME ["/data"]
 
 EXPOSE 8765
