@@ -2980,6 +2980,63 @@ func TestTaskRunRetryCreatesNewAttempt(t *testing.T) {
 	}
 }
 
+func TestTaskStartReturnsConflictWhileRunActive(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Active start","prompt":"Leave this run awaiting approval.","execution_kind":"shell","shell_command":"printf 'active\n'","working_directory":".","timeout_ms":1000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
+	}
+
+	rec := tasks.mustRequestStatus(http.StatusConflict, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if !strings.Contains(rec.Body.String(), "active run") {
+		t.Fatalf("error body = %s, want mention of active run", rec.Body.String())
+	}
+}
+
+func TestTaskRunRetryReturnsConflictForActiveRun(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Active retry","prompt":"Leave this run awaiting approval.","execution_kind":"shell","shell_command":"printf 'active\n'","working_directory":".","timeout_ms":1000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
+	}
+
+	rec := tasks.mustRequestStatus(http.StatusConflict, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/retry", `{}`)
+	if !strings.Contains(rec.Body.String(), "not retryable") {
+		t.Fatalf("error body = %s, want mention of not retryable", rec.Body.String())
+	}
+}
+
+func TestTaskRunResumeReturnsConflictForActiveRun(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Active resume","prompt":"Leave this run awaiting approval.","execution_kind":"shell","shell_command":"printf 'active\n'","working_directory":".","timeout_ms":1000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
+	}
+
+	rec := tasks.mustRequestStatus(http.StatusConflict, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/resume", `{}`)
+	if !strings.Contains(rec.Body.String(), "not resumable") {
+		t.Fatalf("error body = %s, want mention of not resumable", rec.Body.String())
+	}
+}
+
 func TestTaskRunResumeFromCancelledRun(t *testing.T) {
 	t.Parallel()
 

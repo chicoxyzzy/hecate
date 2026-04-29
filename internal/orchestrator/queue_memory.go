@@ -53,6 +53,7 @@ func (q *MemoryRunQueue) Claim(ctx context.Context, _ string, waitFor time.Durat
 	if waitFor <= 0 {
 		waitFor = 200 * time.Millisecond
 	}
+	q.reclaimExpired(time.Now().UTC())
 	timer := time.NewTimer(waitFor)
 	defer timer.Stop()
 	select {
@@ -71,6 +72,24 @@ func (q *MemoryRunQueue) Claim(ctx context.Context, _ string, waitFor time.Durat
 			Job:        job,
 			LeaseUntil: leaseUntil,
 		}, true, nil
+	}
+}
+
+func (q *MemoryRunQueue) reclaimExpired(now time.Time) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for claimID, claim := range q.inflight {
+		if now.Before(claim.leaseUntil) {
+			continue
+		}
+		select {
+		case q.ch <- claim.job:
+			delete(q.inflight, claimID)
+		default:
+			// The in-memory queue is the dev/test backend. If the pending
+			// channel is full, keep the expired claim in place and retry
+			// reclamation on the next Claim instead of dropping work.
+		}
 	}
 }
 

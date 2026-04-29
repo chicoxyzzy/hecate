@@ -63,6 +63,35 @@ func TestMemoryRunQueue_ExtendLeaseKeepsClaim(t *testing.T) {
 	}
 }
 
+func TestMemoryRunQueue_ExpiredLeaseCanBeReclaimed(t *testing.T) {
+	t.Parallel()
+	q := NewMemoryRunQueue(8, 20*time.Millisecond)
+	if err := q.Enqueue(context.Background(), QueueJob{TaskID: "task", RunID: "reclaim"}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	claim, ok, err := q.Claim(context.Background(), "worker_a", 50*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("first Claim: ok=%v err=%v", ok, err)
+	}
+	if claim.Job.RunID != "reclaim" {
+		t.Fatalf("first claim run id = %q, want reclaim", claim.Job.RunID)
+	}
+
+	time.Sleep(35 * time.Millisecond)
+
+	reclaimed, ok, err := q.Claim(context.Background(), "worker_b", 50*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("reclaim Claim: ok=%v err=%v", ok, err)
+	}
+	if reclaimed.Job.RunID != "reclaim" {
+		t.Fatalf("reclaimed run id = %q, want reclaim", reclaimed.Job.RunID)
+	}
+	if reclaimed.ClaimID == claim.ClaimID {
+		t.Fatalf("reclaimed claim id = %q, want a fresh claim id", reclaimed.ClaimID)
+	}
+}
+
 func TestMemoryRunQueue_ConcurrentEnqueueClaim(t *testing.T) {
 	t.Parallel()
 	q := NewMemoryRunQueue(100, time.Second)

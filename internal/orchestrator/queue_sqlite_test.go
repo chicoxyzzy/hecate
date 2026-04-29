@@ -204,6 +204,36 @@ func TestSQLiteRunQueue_NackRequeues(t *testing.T) {
 	}
 }
 
+func TestSQLiteRunQueue_ExpiredLeaseCanBeReclaimed(t *testing.T) {
+	t.Parallel()
+	q := newSQLiteTestQueue(t, 20*time.Millisecond)
+	ctx := context.Background()
+
+	if err := q.Enqueue(ctx, QueueJob{TaskID: "task", RunID: "reclaim"}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claim, ok, err := q.Claim(ctx, "worker_a", 50*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("first claim: ok=%v err=%v", ok, err)
+	}
+	if claim.Job.RunID != "reclaim" {
+		t.Fatalf("first claim run id = %q, want reclaim", claim.Job.RunID)
+	}
+
+	time.Sleep(35 * time.Millisecond)
+
+	reclaimed, ok, err := q.Claim(ctx, "worker_b", 100*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("reclaim claim: ok=%v err=%v", ok, err)
+	}
+	if reclaimed.Job.RunID != "reclaim" {
+		t.Fatalf("reclaimed run id = %q, want reclaim", reclaimed.Job.RunID)
+	}
+	if reclaimed.ClaimID != claim.ClaimID {
+		t.Fatalf("sqlite reuses row claim id = %q, want %q", reclaimed.ClaimID, claim.ClaimID)
+	}
+}
+
 // TestSQLiteRunQueue_ConcurrentClaim is the load-bearing test for the
 // SQLite lease semantics. Without the BEGIN IMMEDIATE / WAL writer-lock
 // serialization, two goroutines racing to claim the same row would

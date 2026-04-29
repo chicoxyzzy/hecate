@@ -313,6 +313,10 @@ func (h *Handler) HandleStartTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if taskHasActiveRun(task) {
+		WriteError(w, http.StatusConflict, errCodeInvalidRequest, "task already has an active run")
+		return
+	}
 	result, err := h.taskRunner.StartTask(ctx, task, newOpaqueTaskResourceID)
 	if err != nil {
 		telemetry.Error(h.logger, ctx, "gateway.tasks.start.failed",
@@ -332,6 +336,13 @@ func (h *Handler) HandleStartTask(w http.ResponseWriter, r *http.Request) {
 		Object: "task_run",
 		Data:   renderTaskRun(result.Run),
 	})
+}
+
+func taskHasActiveRun(task types.Task) bool {
+	if strings.TrimSpace(task.LatestRunID) == "" {
+		return false
+	}
+	return !types.IsTerminalTaskRunStatus(task.Status)
 }
 
 func (h *Handler) HandleTaskApprovals(w http.ResponseWriter, r *http.Request) {
@@ -1077,8 +1088,12 @@ func (h *Handler) HandleRetryTaskRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, ok = h.loadAuthorizedTaskRun(ctx, w, r, task)
+	run, ok := h.loadAuthorizedTaskRun(ctx, w, r, task)
 	if !ok {
+		return
+	}
+	if !types.IsTerminalTaskRunStatus(run.Status) {
+		WriteError(w, http.StatusConflict, errCodeInvalidRequest, "run is not retryable until it reaches a terminal state")
 		return
 	}
 	result, err := h.taskRunner.StartTask(ctx, task, newOpaqueTaskResourceID)
@@ -1108,7 +1123,7 @@ func (h *Handler) HandleResumeTaskRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run.Status != "failed" && run.Status != "cancelled" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "run is not resumable")
+		WriteError(w, http.StatusConflict, errCodeInvalidRequest, "run is not resumable")
 		return
 	}
 	// Optional ceiling raise — used by the "Raise ceiling and
