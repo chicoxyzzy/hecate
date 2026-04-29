@@ -159,7 +159,7 @@ If a change starts spanning many files, return to those four questions and split
 A backend change is in good shape when:
 
 - the build passes (`go build ./...`)
-- the race suite passes (`go test ./... -race -count=1`)
+- the race suite passes for runtime/backend work (`GOCACHE=/Users/chicoxyzzy/dev/hecate/.gocache go test -race -timeout 10m ./...`)
 - inbound + outbound wire shapes are tested independently
 - new env knobs are documented in `.env.example` and the relevant `docs/<feature>.md`
 - error paths return the right HTTP status with a useful message

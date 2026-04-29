@@ -73,6 +73,8 @@ provider.capsExpiry = time.Now().Add(time.Minute)
 
 **E2E build tags**: `//go:build e2e` (always required), plus optional `ollama` and `docker` sub-tags. Run with `go test -tags e2e ./e2e/...`. Use `PROVIDER_FAKE_KIND=local` to skip the pricebook preflight on synthetic test models.
 
+**Runtime/backend verification**: if a change touches runtime behavior (`internal/gateway`, `internal/router`, `internal/providers`, `internal/orchestrator`, `internal/sandbox`, retention/state wiring, or other request execution paths), finish by running the race suite, not just the focused package tests. Default command: `GOCACHE=/Users/chicoxyzzy/dev/hecate/.gocache go test -race -timeout 10m ./...`.
+
 ## Recipes
 
 ### Add a passthrough field end-to-end (OpenAI-only knob)
