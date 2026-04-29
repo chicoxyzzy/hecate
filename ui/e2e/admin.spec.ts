@@ -18,8 +18,11 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector("text=Admin token");
 });
 
-test("renders all 5 admin tabs", async ({ page }) => {
-  for (const tab of ["keys", "tenants", "budget", "usage", "retention"]) {
+test("renders all 8 admin tabs", async ({ page }) => {
+  // Display labels from ui/src/features/admin/AdminView.tsx TAB_LABELS.
+  // Anchor on the rendered text (what operators click), not internal tab
+  // ids — the id list and label list are deliberately distinct.
+  for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention", "Clients"]) {
     await expect(page.getByRole("button", { name: tab })).toBeVisible();
   }
 });
@@ -70,7 +73,7 @@ test("budget tab shows admin-required hint when no budget", async ({ page }) => 
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
   await page.keyboard.press("5");
-  await page.getByRole("button", { name: "budget" }).click();
+  await page.getByRole("button", { name: "Balances" }).click();
   // Either shows the hint (no budget) or shows budget data — both are acceptable.
   const ok = await Promise.race([
     page.locator("text=Admin access required").first().waitFor({ timeout: 1000 }).then(() => true).catch(() => false),
@@ -154,7 +157,7 @@ test("pricebook import all triggers preview + apply round-trip", async ({ page }
     });
   });
 
-  await page.getByRole("button", { name: "pricebook" }).click();
+  await page.getByRole("button", { name: "Pricing" }).click();
   // Preview is fetched on mount of the tab; the "Import all" button
   // becomes enabled once the diff arrives. Without this assertion, a
   // future regression that drops the mount-time preview fetch would go
