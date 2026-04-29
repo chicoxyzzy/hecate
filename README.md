@@ -278,7 +278,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 
 ## Status
 
-Hecate is pre-1.0 and ready for early technical users: single-binary deploys, durable state, and OpenTelemetry-first operations are in place, while some APIs and safety boundaries are still evolving. The table below sketches what's usable today vs. what's still moving.
+Hecate is public-alpha software for early technical users. The gateway, provider catalog, auth, budgets, durable state, and OpenTelemetry are usable today; the task runtime, MCP-heavy workflows, and execution-isolation story are newer and should still be treated as alpha surfaces. Single-node deployments are the primary tested path.
 
 | Area | State | Notes |
 |---|---|---|
@@ -286,17 +286,17 @@ Hecate is pre-1.0 and ready for early technical users: single-binary deploys, du
 | Provider catalog | **Usable** | Built-in presets, encrypted credentials, health, circuit breaking, routing readiness |
 | Auth, tenants, keys | **Usable** | Admin bearer + per-tenant API keys with allowed-providers/models scoping |
 | Budgets + rate limits | **Usable** | Per-tenant credit, warning thresholds, `429` with `X-RateLimit-*` |
-| Agent task runtime | **Alpha** | `agent_loop` tools, mid-loop approvals, cost ceilings, retry-from-turn-N |
-| MCP integration | **Alpha** | Both directions: `hecate mcp-server` and external servers on `agent_loop` |
+| Agent task runtime | **Alpha** | Queued runs, approvals, resumable flows, and `agent_loop` work today, but operator ergonomics and runtime hardening are still moving |
+| MCP integration | **Alpha** | Both directions work, but the integration surface is still growing and needs more production soak |
 | Telemetry | **Usable** | OTLP traces / metrics / logs, response headers, runtime SLO snapshots |
 | Storage tiers | **Usable** | Memory / SQLite / Postgres, picked per subsystem |
-| Operator UI | **Evolving** | Core flows shipped; bulk ops + richer artifact / diff views still landing |
+| Operator UI | **Usable** | Core operator workflows are shipped; some debugging and bulk-management flows are still being refined |
 | Checkpoint controls | **Evolving** | Resume + retry-from-turn shipped; partial-replay + selective continuation in design |
-| Execution isolation | **Evolving** | Out-of-process `sandboxd` boundary and policy checks shipped; stronger OS-level isolation is future work |
+| Execution isolation | **Alpha** | Out-of-process `sandboxd` boundary and policy checks shipped; stronger OS-level isolation is future work |
 | Approval policy classes | **Evolving** | Per-tool gating shipped; broader policy-driven classes with safer defaults next |
 | Route diagnostics | **Usable** | Per-request route reports with selected/skipped candidates, skip reasons, failover, cost, and cache path |
 
-Out-of-band but on the radar: deployment reference stacks (k8s, Nomad, fly.io) beyond the bundled `docker compose`.
+See [Known limitations](docs/known-limitations.md) before treating Hecate as a production-stable control plane.
 
 ## License
 

@@ -8,6 +8,8 @@ operators should not assume yet.
 - Public APIs are designed to be stable, but pre-1.0 changes are still possible.
 - Persisted SQLite/Postgres schemas are young. Back up data before upgrading.
 - There is not yet a dedicated migration CLI or rollback workflow.
+- Single-node operation is the primary tested deployment shape. Shared Postgres
+  state exists, but multi-node operational guidance is still thin.
 
 ## Provider Lifecycle
 
@@ -47,6 +49,8 @@ operators should not assume yet.
   workflows, but the behavior surface is still expanding.
 - `sandboxd` provides an out-of-process execution boundary and policy checks;
   it is not yet hardened container/VM/OS isolation.
+- Network allowlisting for task tools is best-effort static command parsing,
+  not a hard egress firewall.
 - Approval policies exist, but broader policy classes and safer defaults are
   still evolving.
 - Browser automation, WASM plugins, and broad tool marketplaces are out of
@@ -68,3 +72,10 @@ operators should not assume yet.
   a long-term telemetry backend.
 - OTLP exporter failures should be treated like deployment misconfiguration;
   Hecate keeps structured stdout logs as the local fallback.
+
+## Operator UI
+
+- The operator UI is usable for the main alpha workflows: provider setup,
+  request inspection, budgets, tenants, keys, and task-run debugging.
+- Some bulk-management and deeper artifact-inspection flows are still lighter
+  than a mature control-plane product.
