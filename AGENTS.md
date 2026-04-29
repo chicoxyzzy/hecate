@@ -7,10 +7,11 @@ OpenTelemetry traces. Tenant-aware, deny-by-default, runtime-aware,
 storage-tiered (memory / sqlite / postgres). The React operator UI is
 embedded via `//go:embed ui/dist`.
 
-This file is the codebase map and recipe sheet — the entry point an
-agent (Claude Code, Codex, Cursor, or human) reaches for when starting
-work on this repo. Conventions, workflow, and longer-form guidance live
-in [`ai/`](ai/README.md).
+This file is the orientation entry — the codebase map, the runtime
+invariants, and the gotchas that bite often. It is what an agent
+(Claude Code, Codex, Cursor, or human) reaches for when starting work
+on this repo. Conventions, workflow, verification, and longer-form
+guidance live in [`ai/`](ai/README.md).
 
 ## Where guidance lives
 
@@ -56,6 +57,19 @@ api↔providers parallel-struct duplication is intentional. Full rationale:
 memory (default), sqlite (`modernc.org/sqlite`, no CGO), postgres (`pgx`).
 When adding a new persisted thing, mirror all three.
 
+## Runtime invariants
+
+Non-negotiable rules of the system. Read them before writing code that
+touches request handling, persistence, or tool execution.
+
+- **Auth is path-level.** `/v1/chat/completions` accepts tenant API keys; `/admin/*` requires admin bearer; `/v1/tasks/*` accepts both. Don't blur these.
+- **Tenant scoping is automatic.** Once a request has a tenant principal, every store query gets `WHERE tenant = ?` injected. New endpoints respect this — never bypass via the admin path.
+- **Sandbox is out-of-process.** Shell, file, and git execution runs inside `cmd/sandboxd`, invoked over an exec boundary. A buggy tool can't crash the gateway. New tools follow the same pattern.
+- **Approvals are blocking.** Pre-execution and mid-loop approvals halt the run; the run record persists in `awaiting_approval` until resolved. New gates use the `TaskApproval` shape.
+- **Events are appended, not mutated.** Every state transition writes a `run_event` with a monotonic sequence. The SSE stream replays from `after_sequence`. New event types go in `docs/events.md`.
+- **Cost is `int64` micro-USD.** Never `float64` for money — pricebook, budgets, ledger all stay integer (`1_000_000` = `$1`).
+- **OTel is first-class.** Every request gets a trace ID surfaced in the `X-Trace-Id` response header and persisted on the run record. New code paths add spans, not just log lines.
+
 ## Conventions (in brief)
 
 Full standards: [`ai/core/engineering-standards.md`](ai/core/engineering-standards.md).
@@ -65,13 +79,9 @@ Full standards: [`ai/core/engineering-standards.md`](ai/core/engineering-standar
   distinct value (`Seed *int`, `ParallelToolCalls *bool`); value with
   `omitempty` when zero == API default (`PresencePenalty float64`).
 - **`json.RawMessage`** for forward-compat passthrough fields.
-- **Test naming**: `TestPackage_Behavior`. Table-driven where the variant
-  set is obvious.
-- **Cost is `int64` micro-USD.** Never `float64`.
-- **Auth is path-level**: `/v1/...` tenant; `/admin/...` admin; `/v1/tasks/*` accepts both.
+- **Test naming**: `TestPackage_Behavior`. Table-driven where the variant set is obvious.
 - **No emojis**, no plan/phase labels in commit messages or comments.
-- **Conventional Commits**; `chore(agent):` for agent-doc-only changes.
-  Don't auto-commit — propose a message and let the operator merge.
+- **Conventional Commits**; `chore(agent):` for agent-doc-only changes. Don't auto-commit — propose a message and let the operator merge.
 
 ## Verification
 
@@ -84,11 +94,11 @@ Full ladder: [`ai/core/verification.md`](ai/core/verification.md).
 
 ## Recipes
 
-Backend recipes (test helper cheat-sheet, MCP tool, persisted run-event)
-live in [`ai/skills/backend/SKILL.md`](ai/skills/backend/SKILL.md). The
-seven-step "add a wire field" chain — the most-redone task here — is in
-[`ai/skills/providers/SKILL.md`](ai/skills/providers/SKILL.md). UI recipes
-in [`ai/skills/ui/SKILL.md`](ai/skills/ui/SKILL.md).
+| Task | Where |
+|---|---|
+| Add a passthrough wire field (the seven-step chain — most-redone task here) | [`ai/skills/providers/SKILL.md`](ai/skills/providers/SKILL.md) |
+| Add an MCP tool / persisted run-event type / test helper cheat-sheet | [`ai/skills/backend/SKILL.md`](ai/skills/backend/SKILL.md) |
+| UI recipes (SSE-driven state field, paired pickers, snapshot refresh) | [`ai/skills/ui/SKILL.md`](ai/skills/ui/SKILL.md) |
 
 ## Gotchas
 
