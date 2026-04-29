@@ -175,7 +175,7 @@ The app shell lives in `ui/src/app`, shared console primitives live in `ui/src/f
 
 - Request, trace, and span IDs in every response header
 - OpenTelemetry traces, metrics, and logs over OTLP/HTTP — plus structured stdout logs
-- Local trace inspector served at `/` (no external collector required for dev)
+- Local trace inspector served at `/`, including route candidates, skip reasons, failover, cost, and cache path
 - Optional request / response body capture in spans (`GATEWAY_TRACE_BODIES=true`)
 - Runtime SLO snapshots at `/admin/runtime/stats`
 
@@ -294,7 +294,7 @@ Hecate is pre-1.0 and ready for early technical users: single-binary deploys, du
 | Checkpoint controls | **Evolving** | Resume + retry-from-turn shipped; partial-replay + selective continuation in design |
 | Execution isolation | **Evolving** | Out-of-process `sandboxd` boundary and policy checks shipped; stronger OS-level isolation is future work |
 | Approval policy classes | **Evolving** | Per-tool gating shipped; broader policy-driven classes with safer defaults next |
-| Route diagnostics | **Evolving** | Per-request route reports shipped; richer failure explanations in flight |
+| Route diagnostics | **Usable** | Per-request route reports with selected/skipped candidates, skip reasons, failover, cost, and cache path |
 
 Out-of-band but on the radar: deployment reference stacks (k8s, Nomad, fly.io) beyond the bundled `docker compose`.
 

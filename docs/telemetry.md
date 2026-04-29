@@ -172,7 +172,11 @@ Common Hecate-specific attributes include:
 - `hecate.result`
 - `hecate.error.kind`
 - `hecate.provider.kind`
+- `hecate.provider.index`
+- `hecate.provider.health_status`
 - `hecate.route.reason`
+- `hecate.route.outcome`
+- `hecate.route.skip_reason`
 - `hecate.cache.hit`
 - `hecate.cache.type`
 - `hecate.semantic.strategy`
@@ -236,6 +240,23 @@ Gateway traces are centered around a small set of runtime stages. Each stage map
 | `gateway.cost` | Cost calculation |
 | `gateway.response` | Response return |
 | `gateway.runtime` | Catch-all for unclassified events |
+
+Route selection emits OTel-shaped events under `gateway.router` so the local
+trace inspector and OTLP backends can explain the route, not just show the
+winner:
+
+| Event | When | Key attributes |
+|---|---|---|
+| `router.selected` | The router picked the initial provider/model | `gen_ai.provider.name`, `gen_ai.request.model`, `hecate.provider.kind`, `hecate.route.reason` |
+| `router.candidate.skipped` | A provider/model was not selected before execution | `hecate.route.skip_reason`, `hecate.provider.health_status`, `hecate.provider.index` |
+| `router.candidate.considered` | The executor is about to preflight/call a runtime candidate | `hecate.route.outcome=considered`, `hecate.provider.index` |
+| `router.candidate.denied` | Policy, budget, or route preflight denied a candidate | `hecate.route.skip_reason`, `hecate.cost.estimated_micros_usd` |
+| `router.candidate.selected` | A candidate survived preflight and will be called | `hecate.route.outcome=selected`, `hecate.cost.estimated_micros_usd` |
+
+Common skip reasons include `unsupported_model`, `circuit_open`,
+`provider_not_requested`, `no_default_model`, `no_model`,
+`preflight_price_missing`, and `route_denied`. Runtime failover events use the
+same provider/model vocabulary under `gateway.provider`.
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:
 

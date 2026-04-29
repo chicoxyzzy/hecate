@@ -17,6 +17,10 @@ type Router interface {
 	Fallbacks(ctx context.Context, req types.ChatRequest, current types.RouteDecision) []types.RouteDecision
 }
 
+type DiagnosticRouter interface {
+	RouteDiagnostics(ctx context.Context, req types.ChatRequest, selected types.RouteDecision) []types.RouteCandidateReport
+}
+
 type RuleRouter struct {
 	defaultModel string
 	catalog      catalog.Catalog
@@ -131,6 +135,37 @@ func (r *RuleRouter) Fallbacks(ctx context.Context, req types.ChatRequest, curre
 	return out
 }
 
+func (r *RuleRouter) RouteDiagnostics(ctx context.Context, req types.ChatRequest, selected types.RouteDecision) []types.RouteCandidateReport {
+	scope := requestscope.Normalize(req.Scope)
+	entries := orderedEntriesByName(r.catalog.Snapshot(ctx))
+	reports := make([]types.RouteCandidateReport, 0, len(entries))
+	globalModel := req.Model
+	if globalModel == "" {
+		globalModel = r.defaultModel
+	}
+
+	for _, entry := range entries {
+		model, reason, skipReason := r.diagnoseEntry(req, scope.ProviderHint, globalModel, entry)
+		if entry.Name == selected.Provider && model == selected.Model {
+			continue
+		}
+		if skipReason == "" {
+			continue
+		}
+		reports = append(reports, types.RouteCandidateReport{
+			Provider:     entry.Name,
+			ProviderKind: string(entry.Kind),
+			Model:        model,
+			Reason:       routeReasonForHealth(reason, entry.Status),
+			Outcome:      "skipped",
+			SkipReason:   skipReason,
+			HealthStatus: firstNonEmpty(entry.Status, string(providers.HealthStatusHealthy)),
+		})
+	}
+
+	return reports
+}
+
 func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRequest, explicitProvider, model string) (types.RouteDecision, error) {
 	entry, ok := r.catalog.Get(ctx, explicitProvider)
 	if !ok {
@@ -157,6 +192,57 @@ func (r *RuleRouter) routeExplicitProvider(ctx context.Context, req types.ChatRe
 		Model:        routedModel,
 		Reason:       routeReasonForHealth(reason, entry.Status),
 	}, nil
+}
+
+func (r *RuleRouter) diagnoseEntry(req types.ChatRequest, providerHint, globalModel string, entry catalog.Entry) (model, reason, skipReason string) {
+	if providerHint != "" && entry.Name != providerHint {
+		return globalModel, "explicit_provider", "provider_not_requested"
+	}
+	if providerHint != "" && entry.Name == providerHint {
+		if req.Model != "" {
+			if !supportsModel(entry, globalModel) {
+				return globalModel, "pinned_provider_model", "unsupported_model"
+			}
+			if !isRoutableProvider(entry) {
+				return globalModel, "pinned_provider_model", routeHealthSkipReason(entry)
+			}
+			return globalModel, "pinned_provider_model", ""
+		}
+		if entry.DefaultModel == "" {
+			return globalModel, "pinned_provider", "no_default_model"
+		}
+		if !isRoutableProvider(entry) {
+			return entry.DefaultModel, "pinned_provider", routeHealthSkipReason(entry)
+		}
+		return entry.DefaultModel, "pinned_provider", ""
+	}
+
+	if req.Model != "" {
+		if !supportsModel(entry, globalModel) {
+			return globalModel, "requested_model", "unsupported_model"
+		}
+		if !isRoutableProvider(entry) {
+			return globalModel, "requested_model", routeHealthSkipReason(entry)
+		}
+		return globalModel, "requested_model", ""
+	}
+
+	if entry.DefaultModel != "" {
+		if !isRoutableProvider(entry) {
+			return entry.DefaultModel, "provider_default_model", routeHealthSkipReason(entry)
+		}
+		return entry.DefaultModel, "provider_default_model", ""
+	}
+	if globalModel == "" {
+		return "", "global_default_model", "no_model"
+	}
+	if !supportsModel(entry, globalModel) {
+		return globalModel, "global_default_model", "unsupported_model"
+	}
+	if !isRoutableProvider(entry) {
+		return globalModel, "global_default_model", routeHealthSkipReason(entry)
+	}
+	return globalModel, "global_default_model", ""
 }
 
 func (r *RuleRouter) explicitModelCandidates(ctx context.Context, model string) []routeCandidate {
@@ -279,6 +365,20 @@ func isRoutableProvider(entry catalog.Entry) bool {
 	return status == string(providers.HealthStatusHalfOpen)
 }
 
+func routeHealthSkipReason(entry catalog.Entry) string {
+	status := strings.TrimSpace(entry.Status)
+	switch status {
+	case string(providers.HealthStatusOpen):
+		return "circuit_open"
+	case string(providers.HealthStatusDegraded):
+		return "provider_degraded"
+	case "":
+		return "provider_unhealthy"
+	default:
+		return "provider_" + status
+	}
+}
+
 func routeReasonForHealth(baseReason, status string) string {
 	switch status {
 	case string(providers.HealthStatusHalfOpen):
@@ -288,6 +388,15 @@ func routeReasonForHealth(baseReason, status string) string {
 	default:
 		return baseReason
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func candidateRank(status string) int {

@@ -491,3 +491,68 @@ func TestRuleRouterFallbacksPreferHealthyBeforeHalfOpen(t *testing.T) {
 		t.Fatalf("Fallbacks()[1] reason = %q, want half_open recovery failover reason", fallbacks[1].Reason)
 	}
 }
+
+func TestRuleRouterRouteDiagnosticsExplainUnsupportedModels(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4.1-mini"}},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+		&fakeProvider{name: "ollama", kind: providers.KindLocal, defaultModel: "llama3.1:8b", supportedModels: []string{"llama3.1:8b"}},
+	)
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, nil))
+
+	req := types.ChatRequest{Model: "gpt-4.1-mini"}
+	selected, err := router.Route(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+
+	got := router.RouteDiagnostics(context.Background(), req, selected)
+	if len(got) != 2 {
+		t.Fatalf("RouteDiagnostics() count = %d, want 2: %+v", len(got), got)
+	}
+	for _, candidate := range got {
+		if candidate.SkipReason != "unsupported_model" {
+			t.Fatalf("candidate %s skip reason = %q, want unsupported_model", candidate.Provider, candidate.SkipReason)
+		}
+		if candidate.Model != "gpt-4.1-mini" {
+			t.Fatalf("candidate %s model = %q, want requested model", candidate.Provider, candidate.Model)
+		}
+		if candidate.Outcome != "skipped" {
+			t.Fatalf("candidate %s outcome = %q, want skipped", candidate.Provider, candidate.Outcome)
+		}
+	}
+}
+
+func TestRuleRouterRouteDiagnosticsExplainCircuitOpen(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4o-mini"}},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "claude-sonnet", supportedModels: []string{"claude-sonnet"}},
+	)
+	tracker := staticHealthTracker{states: map[string]providers.HealthState{
+		"openai": {Available: false, Status: providers.HealthStatusOpen},
+	}}
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
+
+	selected, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+
+	got := router.RouteDiagnostics(context.Background(), types.ChatRequest{}, selected)
+	if len(got) != 1 {
+		t.Fatalf("RouteDiagnostics() count = %d, want 1: %+v", len(got), got)
+	}
+	if got[0].Provider != "openai" {
+		t.Fatalf("provider = %q, want openai", got[0].Provider)
+	}
+	if got[0].SkipReason != "circuit_open" {
+		t.Fatalf("skip reason = %q, want circuit_open", got[0].SkipReason)
+	}
+	if got[0].HealthStatus != string(providers.HealthStatusOpen) {
+		t.Fatalf("health status = %q, want open", got[0].HealthStatus)
+	}
+}
