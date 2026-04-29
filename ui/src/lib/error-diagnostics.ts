@@ -65,7 +65,7 @@ export function describeGatewayError(code?: string, status?: number): GatewayErr
   if (status && status >= 500) {
     return {
       title: "Gateway or upstream failed",
-      action: "Open Observe for the request trace and inspect provider health.",
+      action: "Open Observability for the request trace and inspect provider health.",
       tone: "danger",
     };
   }

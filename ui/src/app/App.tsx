@@ -15,8 +15,8 @@ export default function App() {
   // isAdmin. Without this, the "admin not in workspaces yet" branch
   // would clobber the saved value on every reload.
   const [preferredWorkspace, setPreferredWorkspace] = useState<WorkspaceID>(() => {
-    const saved = localStorage.getItem(WORKSPACE_STORAGE_KEY) as WorkspaceID | null;
-    return saved ?? "playground";
+    const saved = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    return saved ?? "chats";
   });
 
   const workspaces = useMemo(() => getAvailableWorkspaces(state.session.isAdmin), [state.session.isAdmin]);

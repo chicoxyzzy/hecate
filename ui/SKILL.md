@@ -19,7 +19,7 @@ It should not feel like:
 
 - a generic SaaS dashboard full of cards
 - a landing page with product-marketing copy
-- a toy playground without production context
+- a toy chat surface without production context
 
 Default to utility, orientation, and workflow clarity.
 
@@ -179,7 +179,7 @@ Keep dependencies light. Favor composition and small local abstractions over add
 The actual layout (mirror it when adding features):
 
 - `src/app/`: app shell, top-level orchestration, route/mode switching
-- `src/features/<area>/`: feature-shaped folders, one per operator job — `runs/`, `playground/`, `overview/`, `admin/`, `providers/`
+- `src/features/<area>/`: feature-shaped folders, one per operator job — `runs/`, `chats/`, `overview/`, `admin/`, `providers/`
 - `src/features/shared/`: cross-feature primitives — `ui.tsx` (consolidated `ProviderPicker`, `ModelPicker`, `useFloatingDropdownStyle`), shared layout helpers
 - `src/lib/`: API helpers (`api.ts`, including `streamTaskRun` SSE consumer), formatting (`markdown.ts`), runtime helpers (`provider-utils.ts`, `runtime-utils.ts`)
 - `src/types/runtime.ts`: TypeScript mirrors of the Go API types — keep in lockstep with `pkg/types/` and `internal/api/`

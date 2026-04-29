@@ -25,7 +25,7 @@ test("renders the activity bar with all workspace buttons", async ({ page }) => 
   const nav = page.locator(".hecate-activitybar");
   await expect(nav).toBeVisible();
 
-  for (const label of ["Chat", "Observe", "Tasks", "Providers"]) {
+  for (const label of ["Chats", "Observability", "Tasks", "Providers"]) {
     await expect(nav.locator(`[aria-label^="${label}"]`)).toBeVisible();
   }
 });
@@ -47,7 +47,7 @@ test("status bar shows provider and model counts", async ({ page }) => {
   await expect(bar).toContainText("models");
 });
 
-test("keyboard shortcut 1 activates the Chat workspace", async ({ page }) => {
+test("keyboard shortcut 1 activates the Chats workspace", async ({ page }) => {
   await page.keyboard.press("2"); // navigate away first
   await page.keyboard.press("1");
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
@@ -56,11 +56,11 @@ test("keyboard shortcut 1 activates the Chat workspace", async ({ page }) => {
   );
 });
 
-test("keyboard shortcut 2 activates the Observe workspace", async ({ page }) => {
+test("keyboard shortcut 2 activates the Observability workspace", async ({ page }) => {
   await page.keyboard.press("2");
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
     "aria-label",
-    /Observe/,
+    /Observability/,
   );
 });
 
@@ -73,10 +73,10 @@ test("keyboard shortcut 4 activates the Providers workspace", async ({ page }) =
 });
 
 test("clicking a nav button switches the active workspace", async ({ page }) => {
-  await page.locator(".hecate-activitybar [aria-label^='Observe']").click();
+  await page.locator(".hecate-activitybar [aria-label^='Observability']").click();
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
     "aria-label",
-    /Observe/,
+    /Observability/,
   );
 });
 

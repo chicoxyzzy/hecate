@@ -10,7 +10,7 @@ Hecate is an open-source AI gateway and agent-task runtime that gives teams one 
 
 One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffic) and **agent-style execution loops** (queued tasks with approvals, controlled shell/file/git execution, resumable runs), while keeping operators in control of cost, safety, and traceability.
 
-![Chat playground talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
+![Chats workspace talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
 
 ## Table Of Contents
 
@@ -96,13 +96,13 @@ The operator UI is the same binary, served at `/`. Every dashboard view is also 
 
 Major surfaces:
 
-- **Chat playground** — exercise any configured model, with runtime metadata (provider, model, route reason, cost) inline per turn. Sessions persist in the sidebar; the system-prompt editor floats above the input.
+- **Chats** — exercise any configured model, with runtime metadata (provider, model, route reason, cost) inline per turn. Sessions persist in the sidebar; the system-prompt editor floats above the input.
 - **Providers** — credential lifecycle, enable/disable, health status, base-URL overrides.
 - **Admin → Pricebook** — catalog of every cloud-provider model the gateway knows about (`priced` / `unpriced` / `deprecated`), filterable by provider and status. Per-row Import or bulk "Import all" pulls token prices from [LiteLLM](https://github.com/BerriAI/litellm) (MIT-licensed, attribution in [`NOTICE.md`](NOTICE.md)). Manually-edited rows are protected from blanket imports — operators opt in explicitly via the consent dialog's "Override manual" section.
 - **Admin → Budget** — credit, top-up, reset; warning thresholds; per-tenant scope.
 - **Admin → Tenants & Keys** — control-plane tenant lifecycle and API key management with allowed-providers/models scoping.
 - **Admin → Integrations** — copy-paste env-var snippets for Codex, Claude Code, and curl smoke tests. The base URL is auto-filled from your browser location; pair with a key from the Keys tab.
-- **Observe** — request ledger, trace inspector with route-report drilldown, OTel signal health.
+- **Observability** — request ledger, trace inspector with route-report drilldown, OTel signal health.
 - **Tasks** — task creation, run start/cancel/retry/resume, approvals, live SSE stdout/stderr.
 
 The app shell lives in `ui/src/app`, shared console primitives live in `ui/src/features/shared`, and feature-owned styles live beside feature views.
@@ -152,9 +152,9 @@ The app shell lives in `ui/src/app`, shared console primitives live in `ui/src/f
 </details>
 
 <details>
-<summary>Observe — request ledger and trace inspector</summary>
+<summary>Observability — request ledger and trace inspector</summary>
 
-![Observe tab — request ledger and route-report drilldown](docs/screenshots/observe.png)
+![Observability view — request ledger and route-report drilldown](docs/screenshots/observe.png)
 
 </details>
 

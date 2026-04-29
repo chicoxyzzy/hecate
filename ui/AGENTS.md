@@ -10,9 +10,9 @@ ui/src/
   features/
     runs/         TasksView, TaskDetail, NewTaskSlideOver, TaskList
                   — agent task list + run replay (the headline UI)
-    playground/   ChatView — interactive chat against the gateway
+    chats/        ChatView — interactive chat against the gateway
     overview/     ConnectYourClient, ObservabilityView
-                  — request ledger + Codex/Claude Code setup
+                  — request ledger + trace drilldown + Codex/Claude Code setup
     admin/        AdminView, PricebookTab — tenants, keys, pricebook
     providers/    ProvidersView — provider catalog + health
     shared/       ui.tsx — primitives, ProviderPicker, ModelPicker, useFloatingDropdownStyle

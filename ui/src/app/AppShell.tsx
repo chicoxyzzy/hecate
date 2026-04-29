@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 
 import { AdminView } from "../features/admin/AdminView";
 import { ObservabilityView } from "../features/overview/ObservabilityView";
-import { ChatView } from "../features/playground/ChatView";
+import { ChatView } from "../features/chats/ChatView";
 import { ProvidersView } from "../features/providers/ProvidersView";
 import { TasksView } from "../features/runs/TasksView";
 import { InlineError } from "../features/shared/ui";
 import type { RuntimeConsoleViewModel } from "./useRuntimeConsole";
 
-export type WorkspaceID = "overview" | "runs" | "playground" | "providers" | "admin";
+export type WorkspaceID = "overview" | "runs" | "chats" | "providers" | "admin";
 
 type WorkspaceDefinition = {
   id: WorkspaceID;
@@ -40,8 +40,8 @@ function SvgIcon({ d, size = 18 }: { d: string | string[]; size?: number }) {
 }
 
 const baseWorkspaces: WorkspaceDefinition[] = [
-  { id: "playground", label: "Chat",      shortcut: "1", icon: <SvgIcon d={IC.chat} /> },
-  { id: "overview",   label: "Observe",   shortcut: "2", icon: <SvgIcon d={IC.observe} /> },
+  { id: "chats",      label: "Chats",         shortcut: "1", icon: <SvgIcon d={IC.chat} /> },
+  { id: "overview",   label: "Observability", shortcut: "2", icon: <SvgIcon d={IC.observe} /> },
   { id: "runs",       label: "Tasks",     shortcut: "3", icon: <SvgIcon d={IC.tasks} /> },
   { id: "providers",  label: "Providers", shortcut: "4", icon: <SvgIcon d={IC.providers} /> },
 ];
@@ -50,7 +50,7 @@ const adminWorkspace: WorkspaceDefinition = {
   id: "admin", label: "Admin", shortcut: "5", icon: <SvgIcon d={IC.keys} />,
 };
 
-const BARE_WORKSPACES: WorkspaceID[] = ["playground", "runs"];
+const BARE_WORKSPACES: WorkspaceID[] = ["chats", "runs"];
 
 export function getAvailableWorkspaces(isAdmin: boolean): WorkspaceDefinition[] {
   return isAdmin ? [...baseWorkspaces, adminWorkspace] : baseWorkspaces;
@@ -302,7 +302,7 @@ function AuthenticatedShell({
           {state.error && <div className="page-banner page-banner--error">{state.error}</div>}
           <div className={`console-content${isBare ? " console-content--bare" : ""}`}>
             {activeWorkspace === "overview"   && <ObservabilityView actions={actions} state={state} />}
-            {activeWorkspace === "playground" && <ChatView actions={actions} state={state} />}
+            {activeWorkspace === "chats" && <ChatView actions={actions} state={state} />}
             {activeWorkspace === "runs"       && <TasksView authToken={state.authToken} session={state.session} />}
             {activeWorkspace === "providers"  && <ProvidersView actions={actions} state={state} />}
             {activeWorkspace === "admin" && state.session.isAdmin && <AdminView actions={actions} state={state} />}
