@@ -98,6 +98,20 @@ describe("AdminView retention tab", () => {
     await user.click(await screen.findByRole("button", { name: /Run now/i }));
     expect(runRetention).toHaveBeenCalled();
   });
+
+  it("handles partial retention run payloads without results", async () => {
+    const { state, actions, user } = setup({
+      retentionLastRun: {
+        finished_at: new Date().toISOString(),
+        trigger: "manual",
+      },
+    });
+    render(<AdminView state={state} actions={actions} />);
+    await user.click(screen.getByRole("button", { name: "Retention" }));
+
+    expect(await screen.findByText(/Last run/i)).toBeTruthy();
+    expect(screen.getByText("0 deleted")).toBeTruthy();
+  });
 });
 
 describe("AdminView policy tab", () => {

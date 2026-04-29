@@ -1182,6 +1182,7 @@ function relativeTime(iso: string): string {
 function RetentionTab({ state, actions }: Props) {
   const runs = state.retentionRuns ?? [];
   const lastRun = state.retentionLastRun;
+  const lastRunResults = lastRun?.results ?? [];
 
   // Parse CSV state into a local Set for chip toggles
   const selectedSet = new Set(
@@ -1198,8 +1199,8 @@ function RetentionTab({ state, actions }: Props) {
     actions.setRetentionSubsystems([...next].join(","));
   }
 
-  const totalDeleted = lastRun?.results.filter(r => !r.skipped).reduce((n, r) => n + (r.deleted ?? 0), 0) ?? 0;
-  const maxDeleted = Math.max(1, ...(lastRun?.results.map(r => r.deleted ?? 0) ?? []));
+  const totalDeleted = lastRunResults.filter(r => !r.skipped).reduce((n, r) => n + (r.deleted ?? 0), 0);
+  const maxDeleted = Math.max(1, ...lastRunResults.map(r => r.deleted ?? 0));
 
   return (
     <>
@@ -1265,7 +1266,7 @@ function RetentionTab({ state, actions }: Props) {
             </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {lastRun.results.map(r => (
+            {lastRunResults.map(r => (
               <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: r.skipped ? "var(--t3)" : "var(--t1)", width: 140, flexShrink: 0 }}>
                   {r.name}

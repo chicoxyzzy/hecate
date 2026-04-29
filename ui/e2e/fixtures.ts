@@ -137,6 +137,13 @@ export async function mockGatewayAPIs(page: Page) {
     r.fulfill(ok({ object: "runtime_stats", data: {} })),
   );
 
+  await page.route("/admin/mcp/cache*", r =>
+    r.fulfill(ok({
+      object: "mcp_cache_stats",
+      data: { entries: 0, in_use: 0, idle: 0, max_entries: 0 },
+    })),
+  );
+
   await page.route("/admin/traces*", r =>
     r.fulfill(ok({ object: "list", data: [] })),
   );
