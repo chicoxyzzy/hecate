@@ -236,6 +236,16 @@ The docker image picks SQLite for every durable subsystem so `docker compose up`
 
 Tasks of `execution_kind=agent_loop` run an LLM-driven tool-using loop with built-in `shell_exec` / `git_exec` / `file_write` / `read_file` / `list_dir` / `http_request` tools, mid-loop approval gating, per-task cost ceilings, and retry-from-turn-N for exploring alternate paths. Every run gets its own workspace — a clone of the source by default, or the source directly via `workspace_mode=in_place`. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the full contract.
 
+### Rate limiting
+
+Per-API-key token-bucket throttling on `POST /v1/chat/completions` and `POST /v1/messages`. Off by default; opt in by setting `GATEWAY_RATE_LIMIT_ENABLED=true`. Every response — allowed or denied — carries `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (Unix seconds). Over-limit requests get `429 Too Many Requests` with a `rate_limit_exceeded` error code. Bucketing is keyed on the tenant API key's `key_id`; principals without one (admin bearer tokens, anonymous traffic) share a single `"anonymous"` bucket — set per-tenant API keys if you need separate budgets per caller.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `GATEWAY_RATE_LIMIT_ENABLED` | `false` | Master toggle. Headers are populated only when enabled. |
+| `GATEWAY_RATE_LIMIT_RPM` | `60` | Steady-state refill rate, per API key. Also the value of `X-RateLimit-Limit`. |
+| `GATEWAY_RATE_LIMIT_BURST` | `0` (= RPM) | Maximum tokens that can accumulate (the bucket size). `0` falls back to RPM, giving a burst of one minute's worth of refill. |
+
 ### Telemetry
 
 OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry.md`](docs/telemetry.md) for the full export surface (`GATEWAY_OTEL_*` env vars, samplers, OTLP recipes).

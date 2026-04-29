@@ -221,3 +221,89 @@ POST /v1/mcp/probe
 ```
 
 Tool names come back un-namespaced — the operator wants to see what the upstream itself calls them, not the gateway's runtime alias. Auth matches `POST /v1/tasks` (`requireAny`): if a principal can create a task with `mcp_servers` configured, it can probe with the same config (both paths exec the same arbitrary command). Bounded by a 10-second deadline; a stuck upstream surfaces as a 400 with the diagnostic rather than wedging the request.
+
+## Health and discovery endpoints
+
+Four small surfaces that don't need auth (or only need any-principal auth) and are useful for clients, ops, and the UI.
+
+### `GET /healthz`
+
+Liveness probe. Returns `200` with the gateway's current time and version unconditionally — no auth, no upstream calls. Suitable for load-balancer health checks, Kubernetes `livenessProbe` / `readinessProbe`, and Docker Compose `healthcheck`.
+
+```json
+GET /healthz
+→ 200
+{
+  "status": "ok",
+  "time": "2026-04-29T12:34:56Z",
+  "version": "0.0.0-dev"
+}
+```
+
+The endpoint is intentionally cheap: it doesn't touch the database, providers, or queue. A `200` here means "the process is up and serving HTTP," not "every backend is healthy." For deeper signal use `GET /admin/runtime/stats` (admin-gated; see above).
+
+### `GET /v1/whoami`
+
+Auth introspection. Tells the caller which principal a presented token resolves to — admin, tenant API key, anonymous — without requiring authentication itself. The UI uses this to render the "you are signed in as …" indicator; client integrations use it to confirm a bearer token works before issuing real traffic.
+
+```json
+GET /v1/whoami
+→ 200
+{
+  "object": "session",
+  "data": {
+    "authenticated": true,
+    "invalid_token": false,
+    "role": "admin",
+    "name": "operator",
+    "tenant": "",
+    "source": "bearer",
+    "key_id": "",
+    "allowed_providers": [],
+    "allowed_models": []
+  }
+}
+```
+
+Anonymous (no token / unrecognized token) returns `authenticated: false` with empty `role`. A token that's syntactically present but doesn't match any record returns `authenticated: false, invalid_token: true` — distinguishable so clients can show "your token is wrong" vs. "you're not signed in."
+
+### `GET /v1/provider-presets`
+
+Provider catalog the UI's task-create form uses to render the provider picker. Each entry carries the operator-facing display name, the kind (`cloud` / `local`), the protocol Hecate speaks to it, the `BASE_URL` / `API_KEY` env-var pattern (so the UI can show which `PROVIDER_<NAME>_*` variables to set), the default model, and a short `env_snippet` ready to paste into `.env`.
+
+```json
+GET /v1/provider-presets
+→ 200
+{
+  "object": "provider_presets",
+  "data": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "kind": "cloud",
+      "protocol": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "default_model": "gpt-5.4-mini",
+      "docs_url": "https://platform.openai.com/docs",
+      "description": "OpenAI's Responses + Chat Completions API.",
+      "env_snippet": "OPENAI_API_KEY=your_api_key_here"
+    },
+    ...
+  ]
+}
+```
+
+The list is built from `config.BuiltInProviders()` — see [`docs/providers.md`](providers.md) for the full catalog and how to add custom providers.
+
+### Rate-limit headers on chat / messages
+
+Every response from `POST /v1/chat/completions` and `POST /v1/messages` carries three rate-limit headers, regardless of whether rate limiting is enabled (the headers are zero-value when off):
+
+| Header | Type | Meaning |
+|---|---|---|
+| `X-RateLimit-Limit` | int | Steady-state refill rate per API key (`GATEWAY_RATE_LIMIT_RPM`). |
+| `X-RateLimit-Remaining` | int | Tokens still available in this key's bucket. Decrements per request. |
+| `X-RateLimit-Reset` | Unix seconds | When the bucket will be full again. |
+
+Over-limit requests get `429 Too Many Requests` with the standard error envelope and `code: "rate_limit_exceeded"`. Bucketing is keyed on the tenant API key's `KeyID`; principals without a `KeyID` (admin bearer tokens, anonymous traffic when `auth_token` is empty) all share a single `"anonymous"` bucket. See the [Rate limiting section in the README](../README.md#rate-limiting) for the env-var knobs.
