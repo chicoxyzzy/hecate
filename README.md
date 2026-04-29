@@ -8,7 +8,7 @@
 
 Hecate is an open-source AI gateway and agent-task runtime that gives teams one operational control plane across cloud and local models, with built-in policy, spend controls, and OpenTelemetry.
 
-One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffic) and **agent-style execution loops** (queued tasks with approvals, sandboxed shell/file/git, resumable runs), while keeping operators in control of cost, safety, and traceability.
+One deployment serves both **model access** (OpenAI- and Anthropic-shaped traffic) and **agent-style execution loops** (queued tasks with approvals, controlled shell/file/git execution, resumable runs), while keeping operators in control of cost, safety, and traceability.
 
 ![Chat playground talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
 
@@ -79,7 +79,7 @@ flowchart LR
     Client -->|"chat / messages"| Gateway["Gateway pipeline"]
     Client -->|"task control"| Runtime["Task runtime"]
     Gateway --> Providers["Cloud + local providers"]
-    Runtime --> Sandbox["sandboxd execution boundary"]
+    Runtime --> Sandbox["sandboxd controlled execution"]
     Runtime --> MCP["External MCP servers<br/>(filesystem, github, ...)"]
     MCPClients["MCP clients<br/>(Claude Desktop, Cursor, Zed)"] -->|"hecate mcp-server"| Runtime
     Gateway --> Telemetry["OTel traces, metrics, logs"]
@@ -264,7 +264,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 - [Architecture](docs/architecture.md) — request flow, lease semantics, storage tier matrix
 - [Agent runtime](docs/agent-runtime.md) — `agent_loop` tools, workspace modes, four-layer system prompt, mid-loop approval, cost tracking, retry-from-turn
 - [Deployment](docs/deployment.md) — compose profiles, image pinning, lost-token recovery, resets, backend tier choice
-- [Providers](docs/providers.md) — built-in catalog, configuration, custom providers, health/circuit breaking
+- [Providers](docs/providers.md) — built-in catalog, configuration, health/circuit breaking, custom-provider status
 - [Client Integration (Codex And Claude Code)](docs/client-integration.md) — point existing CLIs at Hecate; choose between gateway-only and runtime modes
 - [MCP integration](docs/mcp.md) — both directions: expose Hecate to Claude Desktop / Cursor / Zed via `hecate mcp-server`, and configure external MCP servers (filesystem, github, …) on `agent_loop` tasks
 - [Runtime API Notes](docs/runtime-api.md) — task / run / step / approval endpoints, queue + lease model, resume + retry-from-turn semantics
@@ -274,20 +274,21 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 
 ## Status
 
-Hecate is pre-1.0 but production-shaped — single-binary deploys, durable state, OTel everywhere. The table below sketches what's stable enough to build on vs. what's still moving.
+Hecate is pre-1.0 and ready for early technical users: single-binary deploys, durable state, and OpenTelemetry-first operations are in place, while some APIs and safety boundaries are still evolving. The table below sketches what's usable today vs. what's still moving.
 
 | Area | State | Notes |
 |---|---|---|
-| OpenAI / Anthropic gateway | **Stable** | Chat Completions, Messages, streaming, vision, `/v1/models` discovery |
-| Provider catalog | **Stable** | Built-in presets, encrypted credentials, health + circuit breaking |
-| Auth, tenants, keys | **Stable** | Admin bearer + per-tenant API keys with allowed-providers/models scoping |
-| Budgets + rate limits | **Stable** | Per-tenant credit, warning thresholds, `429` with `X-RateLimit-*` |
-| Agent task runtime | **Stable** | `agent_loop` tools, mid-loop approvals, cost ceilings, retry-from-turn-N |
-| MCP integration | **Stable** | Both directions: `hecate mcp-server` and external servers on `agent_loop` |
-| Telemetry | **Stable** | OTLP traces / metrics / logs, response headers, runtime SLO snapshots |
-| Storage tiers | **Stable** | Memory / SQLite / Postgres, picked per subsystem |
+| OpenAI / Anthropic gateway | **Usable** | Chat Completions, Messages, streaming, vision, `/v1/models` discovery |
+| Provider catalog | **Usable** | Built-in presets, encrypted credentials, health + circuit breaking |
+| Auth, tenants, keys | **Usable** | Admin bearer + per-tenant API keys with allowed-providers/models scoping |
+| Budgets + rate limits | **Usable** | Per-tenant credit, warning thresholds, `429` with `X-RateLimit-*` |
+| Agent task runtime | **Alpha** | `agent_loop` tools, mid-loop approvals, cost ceilings, retry-from-turn-N |
+| MCP integration | **Alpha** | Both directions: `hecate mcp-server` and external servers on `agent_loop` |
+| Telemetry | **Usable** | OTLP traces / metrics / logs, response headers, runtime SLO snapshots |
+| Storage tiers | **Usable** | Memory / SQLite / Postgres, picked per subsystem |
 | Operator UI | **Evolving** | Core flows shipped; bulk ops + richer artifact / diff views still landing |
 | Checkpoint controls | **Evolving** | Resume + retry-from-turn shipped; partial-replay + selective continuation in design |
+| Execution isolation | **Evolving** | Out-of-process `sandboxd` boundary and policy checks shipped; stronger OS-level isolation is future work |
 | Approval policy classes | **Evolving** | Per-tool gating shipped; broader policy-driven classes with safer defaults next |
 | Route diagnostics | **Evolving** | Per-request route reports shipped; richer failure explanations in flight |
 

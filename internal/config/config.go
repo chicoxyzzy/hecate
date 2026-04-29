@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -416,7 +415,6 @@ func LoadFromEnv() Config {
 			MaxPromptTokens:         getEnvInt("GATEWAY_MAX_PROMPT_TOKENS", 64_000),
 			MaxTotalBudgetMicros:    getEnvInt64("GATEWAY_MAX_BUDGET_MICROS_USD", 5_000_000),
 			ModelRewriteTo:          getEnv("GATEWAY_MODEL_REWRITE_TO", ""),
-			PolicyRules:             loadPolicyRulesFromEnv(),
 			BudgetBackend:           getEnv("GATEWAY_BUDGET_BACKEND", "memory"),
 			BudgetKey:               getEnv("GATEWAY_BUDGET_KEY", "global"),
 			BudgetScope:             getEnv("GATEWAY_BUDGET_SCOPE", "global"),
@@ -499,56 +497,8 @@ func loadRetentionPolicyFromEnv(prefix string, defaultAge time.Duration, default
 
 func loadPricebookFromEnv() PricebookConfig {
 	cfg := defaultPricebookConfig()
-
-	if raw := strings.TrimSpace(getEnv("GATEWAY_PRICEBOOK_JSON", "")); raw != "" {
-		var loaded PricebookConfig
-		if err := json.Unmarshal([]byte(raw), &loaded); err == nil {
-			if strings.TrimSpace(loaded.UnknownModelPolicy) == "" {
-				loaded.UnknownModelPolicy = cfg.UnknownModelPolicy
-			}
-			if len(loaded.Entries) == 0 {
-				loaded.Entries = cfg.Entries
-			}
-			return loaded
-		}
-	}
-
-	if policy := strings.TrimSpace(getEnv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "")); policy != "" {
-		cfg.UnknownModelPolicy = policy
-	}
 	cfg.AutoImportInterval = getEnvDuration("GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL", 0)
 	return cfg
-}
-
-func loadPolicyRulesFromEnv() []PolicyRuleConfig {
-	raw := strings.TrimSpace(getEnv("GATEWAY_POLICY_RULES_JSON", ""))
-	if raw == "" {
-		return nil
-	}
-
-	var rules []PolicyRuleConfig
-	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
-		return nil
-	}
-
-	out := make([]PolicyRuleConfig, 0, len(rules))
-	for _, rule := range rules {
-		rule.ID = strings.TrimSpace(rule.ID)
-		rule.Action = strings.TrimSpace(rule.Action)
-		rule.Reason = strings.TrimSpace(rule.Reason)
-		rule.Roles = normalizeValues(rule.Roles)
-		rule.Tenants = normalizeValues(rule.Tenants)
-		rule.Providers = normalizeValues(rule.Providers)
-		rule.ProviderKinds = normalizeValues(rule.ProviderKinds)
-		rule.Models = normalizeValues(rule.Models)
-		rule.RouteReasons = normalizeValues(rule.RouteReasons)
-		rule.RewriteModelTo = strings.TrimSpace(rule.RewriteModelTo)
-		if rule.Action == "" {
-			continue
-		}
-		out = append(out, rule)
-	}
-	return out
 }
 
 func defaultPricebookConfig() PricebookConfig {
@@ -759,7 +709,7 @@ func providerNameFromEnvKey(key string) (string, bool) {
 		return "", false
 	}
 	nameAndField := strings.TrimPrefix(key, prefix)
-	for _, suffix := range []string{"_API_KEY", "_BASE_URL", "_PROTOCOL"} {
+	for _, suffix := range []string{"_API_KEY", "_BASE_URL", "_DEFAULT_MODEL"} {
 		if strings.HasSuffix(nameAndField, suffix) {
 			name := strings.TrimSuffix(nameAndField, suffix)
 			name = strings.ToLower(name)
@@ -782,13 +732,9 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 	cfg := providerDefaults(name, getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"))
 	prefixes := []string{providerEnvPrefix(name)}
 	for _, prefix := range prefixes {
-		cfg.Name = getEnv(prefix+"NAME", cfg.Name)
 		cfg.Kind = getEnv(prefix+"KIND", cfg.Kind)
-		cfg.Protocol = getEnv(prefix+"PROTOCOL", cfg.Protocol)
 		cfg.BaseURL = getEnv(prefix+"BASE_URL", cfg.BaseURL)
 		cfg.APIKey = getEnv(prefix+"API_KEY", cfg.APIKey)
-		cfg.APIVersion = getEnv(prefix+"API_VERSION", cfg.APIVersion)
-		cfg.Timeout = getEnvDuration(prefix+"TIMEOUT", cfg.Timeout)
 		cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
 		cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
 		cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)

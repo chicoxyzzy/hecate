@@ -201,7 +201,7 @@ func projectRoot(t *testing.T) string {
 // pre-flight so a developer's already-running stack on :8080 produces a
 // clean skip rather than an opaque "address already in use" docker error.
 func portFree(port int) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	addr := fmt.Sprintf(":%d", port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err

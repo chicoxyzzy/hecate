@@ -102,7 +102,7 @@ flowchart TD
     taskApi --> runner["Orchestrator runner"];
     runner --> queue["Leased run queue"];
     queue --> workers["Workers"];
-    workers --> sandboxd["sandboxd execution boundary"];
+    workers --> sandboxd["sandboxd controlled execution"];
     sandboxd --> taskState["Runs, steps, artifacts, events"];
 ```
 

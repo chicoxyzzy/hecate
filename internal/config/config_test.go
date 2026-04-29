@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadFromEnvSemanticAndPostgresSettings(t *testing.T) {
 	t.Setenv("GATEWAY_SEMANTIC_CACHE_ENABLED", "true")
@@ -46,29 +49,17 @@ func TestLoadFromEnvUsesCurrentOpenAIDefaultModel(t *testing.T) {
 }
 
 func TestLoadFromEnvPricebookSettings(t *testing.T) {
-	t.Setenv("GATEWAY_PRICEBOOK_UNKNOWN_MODEL_POLICY", "zero")
-	t.Setenv("GATEWAY_PRICEBOOK_JSON", `{
-		"unknown_model_policy":"error",
-		"entries":[
-			{
-				"provider":"openai",
-				"model":"gpt-4o-mini",
-				"input_micros_usd_per_million_tokens":150000,
-				"output_micros_usd_per_million_tokens":600000,
-				"cached_input_micros_usd_per_million_tokens":75000
-			}
-		]
-	}`)
+	t.Setenv("GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL", "24h")
 
 	cfg := LoadFromEnv()
 	if cfg.Pricebook.UnknownModelPolicy != "error" {
-		t.Fatalf("unknown model policy = %q, want error from json override", cfg.Pricebook.UnknownModelPolicy)
+		t.Fatalf("unknown model policy = %q, want default error", cfg.Pricebook.UnknownModelPolicy)
 	}
-	if len(cfg.Pricebook.Entries) != 1 {
-		t.Fatalf("pricebook entries = %d, want 1", len(cfg.Pricebook.Entries))
+	if len(cfg.Pricebook.Entries) == 0 {
+		t.Fatal("default pricebook entries empty")
 	}
-	if cfg.Pricebook.Entries[0].Model != "gpt-4o-mini" {
-		t.Fatalf("pricebook entry model = %q, want gpt-4o-mini", cfg.Pricebook.Entries[0].Model)
+	if cfg.Pricebook.AutoImportInterval != 24*time.Hour {
+		t.Fatalf("auto import interval = %s, want 24h", cfg.Pricebook.AutoImportInterval)
 	}
 }
 
@@ -101,36 +92,6 @@ func TestDefaultPricebookIncludesCurrentProviderDefaults(t *testing.T) {
 			}
 			t.Fatalf("pricebook entry for %s/%s not found", tt.provider, tt.model)
 		})
-	}
-}
-
-func TestLoadFromEnvPolicyRules(t *testing.T) {
-	t.Setenv("GATEWAY_POLICY_RULES_JSON", `[
-		{
-			"id":"tenant-local-rewrite",
-			"action":"rewrite_model",
-			"reason":"prefer cheaper model for tenant",
-			"tenants":["team-a"],
-			"models":["gpt-4o"],
-			"rewrite_model_to":"gpt-4o-mini"
-		},
-		{
-			"id":"block-expensive-cloud",
-			"action":"deny",
-			"provider_kinds":["cloud"],
-			"min_estimated_cost_micros_usd":1000000
-		}
-	]`)
-
-	cfg := LoadFromEnv()
-	if len(cfg.Governor.PolicyRules) != 2 {
-		t.Fatalf("policy rules = %d, want 2", len(cfg.Governor.PolicyRules))
-	}
-	if cfg.Governor.PolicyRules[0].ID != "tenant-local-rewrite" {
-		t.Fatalf("first rule id = %q, want tenant-local-rewrite", cfg.Governor.PolicyRules[0].ID)
-	}
-	if cfg.Governor.PolicyRules[1].MinEstimatedCostMicros != 1_000_000 {
-		t.Fatalf("second rule min estimated cost = %d, want 1000000", cfg.Governor.PolicyRules[1].MinEstimatedCostMicros)
 	}
 }
 

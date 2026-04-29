@@ -253,7 +253,6 @@ func TestGatewayFakeUpstreamNonStreamingCodex(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o-mini",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
@@ -294,7 +293,6 @@ func TestGatewayFakeUpstreamStreamingCodex(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o-mini",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
@@ -337,7 +335,6 @@ func TestGatewayFakeUpstreamClaudeCode(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=claude-sonnet-4-20250514",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=claude-sonnet-4-20250514",
@@ -395,7 +392,6 @@ func TestGatewayMultimodalCodexImageURLPassthrough(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o",
@@ -459,27 +455,21 @@ func TestGatewayMultimodalAnthropicImageURLTranslation(t *testing.T) {
 	t.Parallel()
 
 	// Fake Anthropic upstream — minimal Messages-API response.
-	fakeResp := `{"id":"msg_e2e_mm","type":"message","role":"assistant","model":"claude-opus-4-5","content":[{"type":"text","text":"It's a cat."}],"stop_reason":"end_turn","usage":{"input_tokens":50,"output_tokens":4}}`
+	fakeResp := `{"id":"msg_e2e_mm","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"It's a cat."}],"stop_reason":"end_turn","usage":{"input_tokens":50,"output_tokens":4}}`
 	upstream, captured := fakeUpstreamCapturing(t, "/v1/messages", fakeResp)
 
 	base := hecateServer(t,
-		"PROVIDER_FAKE_API_KEY=dummy",
-		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=anthropic",
-		"PROVIDER_FAKE_DEFAULT_MODEL=claude-opus-4-5",
-		// kind=local skips the cost-preflight pricebook lookup
-		// (no price entries for synthetic test models). The
-		// provider adapter is unaffected — protocol=anthropic
-		// still selects the native Anthropic wire shape.
-		"PROVIDER_FAKE_KIND=local",
-		"GATEWAY_DEFAULT_MODEL=claude-opus-4-5",
+		"PROVIDER_ANTHROPIC_API_KEY=dummy",
+		"PROVIDER_ANTHROPIC_BASE_URL="+upstream,
+		"PROVIDER_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-6",
+		"GATEWAY_DEFAULT_MODEL=claude-sonnet-4-6",
 	)
 
 	// Caller posts the OpenAI shape — this is the cross-provider
 	// route operators care about ("I use the OpenAI SDK but route
 	// to Claude").
 	body := `{
-		"model":"claude-opus-4-5",
+		"model":"claude-sonnet-4-6",
 		"max_tokens":128,
 		"messages":[{"role":"user","content":[
 			{"type":"text","text":"describe this"},
@@ -528,26 +518,20 @@ func TestGatewayMultimodalAnthropicImageURLTranslation(t *testing.T) {
 func TestGatewayMultimodalAnthropicDataURITranslation(t *testing.T) {
 	t.Parallel()
 
-	fakeResp := `{"id":"msg_e2e_b64","type":"message","role":"assistant","model":"claude-opus-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":80,"output_tokens":1}}`
+	fakeResp := `{"id":"msg_e2e_b64","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":80,"output_tokens":1}}`
 	upstream, captured := fakeUpstreamCapturing(t, "/v1/messages", fakeResp)
 
 	base := hecateServer(t,
-		"PROVIDER_FAKE_API_KEY=dummy",
-		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=anthropic",
-		"PROVIDER_FAKE_DEFAULT_MODEL=claude-opus-4-5",
-		// kind=local skips the cost-preflight pricebook lookup
-		// (no price entries for synthetic test models). The
-		// provider adapter is unaffected — protocol=anthropic
-		// still selects the native Anthropic wire shape.
-		"PROVIDER_FAKE_KIND=local",
-		"GATEWAY_DEFAULT_MODEL=claude-opus-4-5",
+		"PROVIDER_ANTHROPIC_API_KEY=dummy",
+		"PROVIDER_ANTHROPIC_BASE_URL="+upstream,
+		"PROVIDER_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-6",
+		"GATEWAY_DEFAULT_MODEL=claude-sonnet-4-6",
 	)
 
 	// `data:image/jpeg;base64,...` — the shape an OpenAI client
 	// produces when reading a local file with the official SDK.
 	body := `{
-		"model":"claude-opus-4-5",
+		"model":"claude-sonnet-4-6",
 		"max_tokens":128,
 		"messages":[{"role":"user","content":[
 			{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQ"}}
@@ -592,7 +576,6 @@ func TestGatewayRuntimeProviderHeader(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o-mini",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
@@ -626,7 +609,6 @@ func TestRealAnthropicClaudeCode(t *testing.T) {
 
 	base := hecateServer(t,
 		"PROVIDER_ANTHROPIC_API_KEY="+apiKey,
-		"PROVIDER_ANTHROPIC_PROTOCOL=anthropic",
 		"GATEWAY_DEFAULT_MODEL=claude-haiku-4-5-20251001",
 	)
 
@@ -665,7 +647,6 @@ func TestRealAnthropicClaudeCodeStreaming(t *testing.T) {
 
 	base := hecateServer(t,
 		"PROVIDER_ANTHROPIC_API_KEY="+apiKey,
-		"PROVIDER_ANTHROPIC_PROTOCOL=anthropic",
 		"GATEWAY_DEFAULT_MODEL=claude-haiku-4-5-20251001",
 	)
 
@@ -711,7 +692,6 @@ func TestRealOpenAICodex(t *testing.T) {
 
 	base := hecateServer(t,
 		"PROVIDER_OPENAI_API_KEY="+apiKey,
-		"PROVIDER_OPENAI_PROTOCOL=openai",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
 	)
 
@@ -746,7 +726,6 @@ func TestRealOpenAICodexStreaming(t *testing.T) {
 
 	base := hecateServer(t,
 		"PROVIDER_OPENAI_API_KEY="+apiKey,
-		"PROVIDER_OPENAI_PROTOCOL=openai",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
 	)
 
@@ -975,7 +954,6 @@ func TestGatewayRateLimitHeaders(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=gpt-4o-mini",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=gpt-4o-mini",
@@ -1014,7 +992,6 @@ func TestGatewayFakeUpstreamStreamingClaudeCode(t *testing.T) {
 	base := hecateServer(t,
 		"PROVIDER_FAKE_API_KEY=dummy",
 		"PROVIDER_FAKE_BASE_URL="+upstream,
-		"PROVIDER_FAKE_PROTOCOL=openai",
 		"PROVIDER_FAKE_DEFAULT_MODEL=claude-sonnet-4-20250514",
 		"PROVIDER_FAKE_KIND=local",
 		"GATEWAY_DEFAULT_MODEL=claude-sonnet-4-20250514",

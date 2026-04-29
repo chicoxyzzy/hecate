@@ -70,7 +70,7 @@ The agent gets six tools by default. None require operator config beyond the app
 
 | Tool | What it does | Policy |
 |---|---|---|
-| `shell_exec` | Run a shell command in the workspace | Default-gated by `shell_exec` approval; sandboxed in `cmd/sandboxd` |
+| `shell_exec` | Run a shell command in the workspace | Default-gated by `shell_exec` approval; executed out-of-process through `cmd/sandboxd` |
 | `git_exec` | Run a git command in the workspace | Default-gated by `git_exec` approval if configured |
 | `file_write` | Write or append a file under the workspace | Default-gated by `file_write` approval if configured |
 | `read_file` | Read a file under the workspace (8 KiB cap, binary detection) | Ungated; path must resolve within the sandbox root |

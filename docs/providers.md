@@ -52,7 +52,7 @@ PROVIDER_OPENAI_API_KEY=sk-...
 PROVIDER_OPENAI_DEFAULT_MODEL=gpt-4o-mini
 ```
 
-Advanced overrides (`PROVIDER_<NAME>_PROTOCOL`, `PROVIDER_<NAME>_API_VERSION`, `PROVIDER_<NAME>_TIMEOUT_SECONDS`) are also available — see [`internal/config/config.go`](../internal/config/config.go) for the authoritative list.
+Custom providers are not a first-class launch feature yet. Today, operator-facing provider management is limited to the built-in presets above.
 
 ### 2. Operator UI (recommended for ongoing changes)
 
@@ -60,7 +60,7 @@ The Providers tab in the operator UI lists every preset. Click a card to expand 
 
 ### 3. Control-plane API (for automation)
 
-Every UI action maps to a `PUT /admin/control-plane/providers/{id}` or `PATCH /admin/control-plane/providers/{id}` call. The full surface lives in [`internal/api/handler_controlplane.go`](../internal/api/handler_controlplane.go). Useful for terraforming a fleet of gateways from a single config source of truth.
+Every UI action maps to a `PUT /admin/control-plane/providers/{id}/api-key` or `PATCH /admin/control-plane/providers/{id}` call for a built-in preset. The full surface lives in [`internal/api/handler_controlplane.go`](../internal/api/handler_controlplane.go). Useful for terraforming a fleet of gateways from a single config source of truth.
 
 ## Health and circuit breaking
 
@@ -75,12 +75,6 @@ The Providers tab shows the current state on each card:
 
 Health state is in-process and resets on restart by design — durable health tracking would re-include known-broken upstreams that recovered while the gateway was down.
 
-## Adding a custom provider
+## Custom provider status
 
-If your upstream isn't a preset but speaks OpenAI-compatible JSON:
-
-1. POST to `/admin/control-plane/providers` with `{id, name, kind: "cloud" | "local", protocol: "openai" | "anthropic", base_url, ...}`.
-2. Set its API key with `PUT /admin/control-plane/providers/{id}/api-key`.
-3. Enable it with `PATCH /admin/control-plane/providers/{id}` `{"enabled": true}`.
-
-The custom provider then appears in the Providers tab alongside the presets, and `GET /v1/models` advertises its discovered models.
+The provider runtime can already talk to any OpenAI-compatible upstream once it is registered, but custom provider lifecycle is not productized yet: there is no create/delete endpoint and the Providers tab is built around the built-in preset catalog. The next step is a real control-plane custom-provider flow with validation, encrypted credentials, model discovery, and UI management.
