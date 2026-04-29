@@ -69,6 +69,8 @@ Hecate speaks both shapes natively, so existing CLIs work without code changes:
 
 The Operator UI's **Admin → Integrations** tab gives you copy-paste env-var snippets pre-filled with your gateway URL. For full details — `GET /v1/models` discovery, vision content, gateway-only vs. runtime modes, common 4xx codes — see [`docs/client-integration.md`](docs/client-integration.md).
 
+**Terminology:** custom clients are supported today. That means Codex, Claude Code, OpenAI/Anthropic SDKs, curl scripts, or internal tools can point at Hecate using the existing OpenAI-compatible or Anthropic-compatible API shapes. Custom providers are different: adding arbitrary new upstream provider records is not a first-class alpha workflow yet. Provider management is currently built around the shipped preset catalog.
+
 ## Architecture
 
 Hecate is two concurrent surfaces in one Go binary: a **gateway** for OpenAI- and Anthropic-shaped client traffic, and a **task runtime** for queued agent work. Both share auth, budgets, observability, and an MCP integration layer — but their request paths are independent, so you can use either in isolation.

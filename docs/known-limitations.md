@@ -15,6 +15,9 @@ operators should not assume yet.
 - Credentials, enable/disable state, base URLs, defaults, and pricebook entries
   are managed through the persisted control plane.
 - Full custom provider create/delete is not a first-class alpha workflow.
+- Custom clients are supported separately: external callers can use Hecate's
+  OpenAI-compatible or Anthropic-compatible endpoints without requiring a custom
+  provider.
 - Provider model discovery depends on each upstream's OpenAI-compatible or
   Anthropic-compatible catalog behavior; local runtimes can differ.
 

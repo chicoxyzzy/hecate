@@ -4,6 +4,13 @@ Hecate uses a vendor-neutral provider layer at the runtime boundary. It treats O
 
 ![Providers tab — every preset card with health, model count, and configured-credentials state](screenshots/providers.png)
 
+## Providers vs. clients
+
+- **Clients** call Hecate. Codex, Claude Code, OpenAI SDKs, Anthropic SDKs, curl scripts, and internal tools are supported as long as they speak Hecate's OpenAI-compatible or Anthropic-compatible gateway endpoints.
+- **Providers** are upstream model backends Hecate calls. In the current alpha, provider management is intentionally limited to the built-in preset catalog below.
+
+This means custom clients are supported today; custom provider create/delete is not a first-class workflow yet.
+
 ## Built-in presets
 
 The gateway ships with twelve providers wired up by default. The Providers tab in the operator UI lists all of them; you only need to drop in an API key (cloud) or start the local runtime (local) to enable one.
@@ -77,4 +84,4 @@ Health state is in-process and resets on restart by design — durable health tr
 
 ## Custom provider status
 
-The provider runtime can already talk to any OpenAI-compatible upstream once it is registered, but custom provider lifecycle is not productized yet: there is no create/delete endpoint and the Providers tab is built around the built-in preset catalog. The next step is a real control-plane custom-provider flow with validation, encrypted credentials, model discovery, and UI management.
+Custom provider lifecycle is not productized yet: there is no create/delete endpoint and the Providers tab is built around the built-in preset catalog. The next step is a real control-plane custom-provider flow with validation, encrypted credentials, model discovery, and UI management.

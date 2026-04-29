@@ -4,6 +4,8 @@ This guide explains how to point external coding clients at Hecate as the model 
 
 For the request lifecycle Hecate runs each call through (auth → policy → cache → router → provider), see [`architecture.md`](architecture.md#gateway-request-flow). For task-runtime (`/v1/tasks/...`) endpoints, see [`runtime-api.md`](runtime-api.md).
 
+This page is about **custom clients**, not custom providers. A custom client is any caller that already knows how to speak OpenAI Chat Completions or Anthropic Messages and sends traffic to Hecate. A custom provider is a new upstream model backend record managed by Hecate; that lifecycle is intentionally not productized in the current alpha.
+
 ## Contents
 
 - [The easy path — Admin → Integrations](#the-easy-path--admin--integrations)
