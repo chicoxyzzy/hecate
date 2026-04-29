@@ -6,6 +6,7 @@ import type {
   ChatSessionsResponse,
   ConfiguredStateResponse,
   HealthResponse,
+  MCPCacheStatsResponse,
   ModelResponse,
   PricebookEntryUpsertPayload,
   PricebookImportDiffResponse,
@@ -178,6 +179,10 @@ export async function getProviders(authToken?: string): Promise<ProviderStatusRe
 
 export async function getRuntimeStats(authToken?: string): Promise<RuntimeStatsResponse> {
   return fetchJSON<RuntimeStatsResponse>("/admin/runtime/stats", { authToken });
+}
+
+export async function getMCPCacheStats(authToken?: string): Promise<MCPCacheStatsResponse> {
+  return fetchJSON<MCPCacheStatsResponse>("/admin/mcp/cache", { authToken });
 }
 
 export async function getProviderPresets(authToken?: string): Promise<ProviderPresetResponse> {

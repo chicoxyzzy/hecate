@@ -96,6 +96,38 @@ func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleMCPCacheStats returns a snapshot of the shared MCP client
+// cache: distinct cached upstream count, total in-flight refcount,
+// and idle (refcount=0) entry count. Lets operators answer
+// "is the cache doing useful work?" without scraping OTLP.
+//
+// Configured=false when no cache is wired (deploys that explicitly
+// disabled it via SetMCPClientCache(nil), or test fixtures that
+// bypass the setter); the data block still carries zeros so clients
+// can render a "no cache" cell instead of error-handling a 4xx.
+func (h *Handler) HandleMCPCacheStats(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	_ = h.contextWithPrincipal(r.Context(), principal) // for parity with other admin handlers; no downstream use yet
+
+	item := MCPCacheStatsResponseItem{
+		CheckedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Configured: h.mcpClientCache != nil,
+	}
+	if h.mcpClientCache != nil {
+		s := h.mcpClientCache.Stats()
+		item.Entries = s.Entries
+		item.InUse = s.InUse
+		item.Idle = s.Idle
+	}
+	WriteJSON(w, http.StatusOK, MCPCacheStatsResponse{
+		Object: "mcp_cache_stats",
+		Data:   item,
+	})
+}
+
 func (h *Handler) HandleRetentionRuns(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {

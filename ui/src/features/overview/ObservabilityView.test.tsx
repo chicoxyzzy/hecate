@@ -58,4 +58,83 @@ describe("ObservabilityView", () => {
       expect(urls.some(u => u.startsWith("/admin/traces"))).toBe(true);
     });
   });
+
+  it("calls /admin/mcp/cache and renders the cache panel when configured", async () => {
+    // Route /admin/mcp/cache to a populated snapshot; everything
+    // else falls through to the default empty-list mock.
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/admin/mcp/cache")) {
+        return new Response(JSON.stringify({
+          object: "mcp_cache_stats",
+          data: { checked_at: new Date().toISOString(), configured: true, entries: 4, in_use: 1, idle: 3 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const state = createRuntimeConsoleFixture({ session: adminSession });
+    // Cast through `unknown` so TypeScript's narrowing doesn't lock
+    // the variable to `never` after the only assignment site (inside
+    // act's callback) — the React testing-library types don't expose
+    // a clean Promise<RenderResult> shape from `act` in this version.
+    let container = null as unknown as HTMLElement;
+    await act(async () => {
+      const result = render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+      container = result.container;
+    });
+
+    // Endpoint is called.
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([u]) => String(u));
+      expect(urls.some(u => u.startsWith("/admin/mcp/cache"))).toBe(true);
+    });
+    // Panel is rendered with the aria-labelled stats group.
+    await waitFor(() => {
+      expect(container.querySelector('[aria-label="MCP cache stats"]')).toBeTruthy();
+    });
+    // Headline counts surface as text. We assert the section
+    // header is present (so we know we're looking at the right
+    // panel) and that each value rendered.
+    expect(container.textContent).toMatch(/MCP client cache/i);
+  });
+
+  it("renders the 'no cache wired' fallback when configured=false", async () => {
+    // When the gateway reports configured=false, the panel shows
+    // a single muted line instead of the stats grid — operators
+    // benefit from knowing the cache is intentionally off vs.
+    // merely failing to fetch.
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/admin/mcp/cache")) {
+        return new Response(JSON.stringify({
+          object: "mcp_cache_stats",
+          data: { checked_at: new Date().toISOString(), configured: false, entries: 0, in_use: 0, idle: 0 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const state = createRuntimeConsoleFixture({ session: adminSession });
+    // Cast through `unknown` so TypeScript's narrowing doesn't lock
+    // the variable to `never` after the only assignment site (inside
+    // act's callback) — the React testing-library types don't expose
+    // a clean Promise<RenderResult> shape from `act` in this version.
+    let container = null as unknown as HTMLElement;
+    await act(async () => {
+      const result = render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+      container = result.container;
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/No cache wired/i);
+    });
+    // The configured=true stats grid (with aria-label
+    // "MCP cache stats") must NOT be present in this branch.
+    expect(container.querySelector('[aria-label="MCP cache stats"]')).toBeNull();
+  });
 });

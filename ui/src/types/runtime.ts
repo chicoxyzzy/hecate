@@ -790,3 +790,19 @@ export type RuntimeHeaders = {
 
 export type ModelFilter = "all" | "local" | "cloud";
 export type ProviderFilter = "auto" | string;
+
+// MCPCacheStatsResponse is the wire shape for GET /admin/mcp/cache.
+// `configured: false` means no cache is wired; the counters still
+// render as zeros so the UI can show a "no cache" cell instead of
+// error-handling a 4xx. See docs/mcp.md "Lifecycle and caching"
+// for the underlying contract.
+export type MCPCacheStatsResponse = {
+  object: string;
+  data: {
+    checked_at: string;
+    configured: boolean;
+    entries: number;
+    in_use: number;
+    idle: number;
+  };
+};

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getRecentTraces, getRuntimeStats, getTrace } from "../../lib/api";
+import { getMCPCacheStats, getRecentTraces, getRuntimeStats, getTrace } from "../../lib/api";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
-import type { RuntimeStatsResponse, TraceListItem, TraceResponse, TraceSpanRecord } from "../../types/runtime";
+import type { MCPCacheStatsResponse, RuntimeStatsResponse, TraceListItem, TraceResponse, TraceSpanRecord } from "../../types/runtime";
 import { Dot } from "../shared/ui";
 import { ConnectYourClient } from "./ConnectYourClient";
 
@@ -65,6 +65,7 @@ function StatCard({ label, value, sub, highlight }: StatCardProps) {
 
 export function ObservabilityView({ state }: Props) {
   const [runtimeStats, setRuntimeStats] = useState<RuntimeStatsResponse["data"] | null>(null);
+  const [mcpCacheStats, setMCPCacheStats] = useState<MCPCacheStatsResponse["data"] | null>(null);
   const [traces, setTraces] = useState<TraceListItem[]>([]);
   const [liveMode, setLiveMode] = useState(true);
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
@@ -78,6 +79,15 @@ export function ObservabilityView({ state }: Props) {
     try {
       const res = await getRuntimeStats(state.authToken);
       setRuntimeStats(res.data);
+    } catch { /* silently ignore */ }
+    // MCP cache stats are best-effort and orthogonal to runtime
+    // stats: a deploy without a wired cache returns
+    // configured=false, which we still render. A failure here
+    // (404 from older gateways, transient 5xx) leaves the prior
+    // value in place rather than wiping the panel.
+    try {
+      const res = await getMCPCacheStats(state.authToken);
+      setMCPCacheStats(res.data);
     } catch { /* silently ignore */ }
   }, [state.authToken, state.session.isAdmin]);
 
@@ -173,6 +183,27 @@ export function ObservabilityView({ state }: Props) {
             {stats.awaiting_approval_runs > 0 && <StatCard label="awaiting approval" value={stats.awaiting_approval_runs} highlight />}
             {stats.store_backend && <StatCard label="store" value={stats.store_backend} />}
           </div>
+        </div>
+      )}
+
+      {/* MCP client cache stats. Configured=false is rendered as a
+          single "no cache" cell rather than hidden — operators
+          benefit from knowing the cache is intentionally off vs.
+          merely failing to fetch. */}
+      {mcpCacheStats && (
+        <div>
+          <div className="kicker-lg" style={{ marginBottom: 8 }}>MCP client cache</div>
+          {!mcpCacheStats.configured ? (
+            <div style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>
+              No cache wired — agent_loop runs spawn fresh MCP subprocesses each time.
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} aria-label="MCP cache stats">
+              <StatCard label="entries" value={mcpCacheStats.entries} />
+              <StatCard label="in-use" value={mcpCacheStats.in_use} highlight={mcpCacheStats.in_use > 0} />
+              <StatCard label="idle" value={mcpCacheStats.idle} />
+            </div>
+          )}
         </div>
       )}
 

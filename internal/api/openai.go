@@ -446,6 +446,31 @@ type RuntimeStatsResponseItem struct {
 	StoreBackend            string `json:"store_backend,omitempty"`
 }
 
+// MCPCacheStatsResponse is the wire shape for GET /admin/mcp/cache.
+// Surfaces the SharedClientCache snapshot — entries / in-use / idle —
+// so operators can answer "is the cache doing useful work?" without
+// scraping OTLP. Configured indicates whether a cache is wired at all
+// (false on deploys that explicitly disabled it via a setter), which
+// is operationally distinct from "wired but empty."
+type MCPCacheStatsResponse struct {
+	Object string                    `json:"object"`
+	Data   MCPCacheStatsResponseItem `json:"data"`
+}
+
+type MCPCacheStatsResponseItem struct {
+	CheckedAt  string `json:"checked_at"`
+	Configured bool   `json:"configured"`
+	Entries    int    `json:"entries"`
+	// InUse is the SUM of refcounts across all entries — total live
+	// Acquire→Release pairs in flight, NOT the count of entries with
+	// at least one acquirer. See SharedClientCache.Stats for the
+	// contract.
+	InUse int `json:"in_use"`
+	// Idle is the count of entries with refcount == 0 (the ones the
+	// reaper will evict once their lastUsed crosses the TTL boundary).
+	Idle int `json:"idle"`
+}
+
 type AccountSummaryResponseItem struct {
 	Account   BudgetStatusResponseItem     `json:"account"`
 	Estimates []AccountModelEstimateRecord `json:"estimates"`

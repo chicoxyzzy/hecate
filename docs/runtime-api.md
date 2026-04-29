@@ -179,3 +179,20 @@ When `GATEWAY_TASKS_BACKEND` is `sqlite` or `postgres`, tasks/runs/steps/approva
 For `agent_loop`-specific knobs (max turns, system-prompt layers, HTTP policy for the `http_request` tool), see [`agent-runtime.md`](agent-runtime.md#configuration-knobs).
 
 `GET /admin/runtime/stats` also reports queue health fields including queue depth, queue capacity, worker count, and `queue_backend`.
+
+`GET /admin/mcp/cache` returns a snapshot of the shared MCP client cache:
+
+```json
+{
+  "object": "mcp_cache_stats",
+  "data": {
+    "checked_at": "2026-04-29T01:00:00.123Z",
+    "configured": true,
+    "entries": 4,
+    "in_use": 1,
+    "idle": 3
+  }
+}
+```
+
+`configured: false` means no cache is wired (the deploy explicitly disabled it via `Handler.SetMCPClientCache(nil)`); the counter fields are present but zero so admin UIs can render a "no cache" cell instead of error-handling. `in_use` is the **sum** of refcounts across all entries (an entry held by two concurrent runs counts as 2), not the number of entries with at least one acquirer; `idle` is the count of entries with refcount=0. See [`mcp.md`](mcp.md#lifecycle-and-caching) for the underlying contract.
