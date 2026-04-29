@@ -122,7 +122,6 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 		entry.LastError = err.Error()
 		entry.Error = err.Error()
 	} else if entry.LastError != "" {
-		entry.Healthy = false
 		entry.Status = "degraded"
 		entry.Error = entry.LastError
 	}

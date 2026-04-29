@@ -902,6 +902,10 @@ func TestClaudeCodeClientToolUseResponseShape(t *testing.T) {
 func newFakeOpenAIUpstream(t *testing.T, responseBody string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			writeFakeOpenAIModels(w)
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -920,6 +924,10 @@ func newFakeOpenAIUpstream(t *testing.T, responseBody string) *httptest.Server {
 func newFakeOpenAIStreamingUpstream(t *testing.T, id, model, content string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			writeFakeOpenAIModels(w)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -951,6 +959,11 @@ func newFakeOpenAIStreamingUpstream(t *testing.T, id, model, content string) *ht
 		))
 		writeChunk("[DONE]")
 	}))
+}
+
+func writeFakeOpenAIModels(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"object":"list","data":[{"id":"gpt-4o-mini","object":"model","owned_by":"test"},{"id":"claude-sonnet-4-20250514","object":"model","owned_by":"test"}]}`)
 }
 
 // newGatewayServerWithRealProvider builds a gateway httptest.Server wired to a

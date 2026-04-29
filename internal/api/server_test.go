@@ -3393,10 +3393,10 @@ type taskTestClient = apiTestClient
 // a second under any real load, but on GitHub's 2-core runners the
 // combination of -race overhead and t.Parallel() across many tests in
 // this package can starve the orchestrator goroutine for several seconds.
-// 30s gives generous headroom while still failing fast on real
+// 60s gives generous headroom while still failing fast on real
 // regressions — a stuck task hits the same fatal whether the cap is 10s
-// or 30s, the higher number just stops blaming the CPU scheduler.
-const asyncWaitTimeout = 30 * time.Second
+// or 60s, the higher number just stops blaming the CPU scheduler.
+const asyncWaitTimeout = 60 * time.Second
 
 func newTaskTestClient(t *testing.T, handler http.Handler) taskTestClient {
 	t.Helper()
