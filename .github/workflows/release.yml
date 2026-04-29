@@ -37,7 +37,7 @@ jobs:
       # alpine prep stage when building the arm64 image on an amd64
       # runner. Cheap to install; skips quickly if unused.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
