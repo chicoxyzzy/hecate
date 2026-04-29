@@ -365,8 +365,8 @@ func TestChatCompletionsMapsUpstreamErrors(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(response.Body.Bytes())).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if payload["error"]["type"] != "upstream_error" {
-		t.Fatalf("error type = %#v, want upstream_error", payload["error"]["type"])
+	if payload["error"]["type"] != errCodeProviderRateLimited {
+		t.Fatalf("error type = %#v, want %s", payload["error"]["type"], errCodeProviderRateLimited)
 	}
 	if payload["error"]["message"] != "rate limit exceeded" {
 		t.Fatalf("error message = %#v, want rate limit exceeded", payload["error"]["message"])
@@ -734,6 +734,7 @@ func TestModelsReturnsAggregatedProviderCapabilities(t *testing.T) {
 	registry := providers.NewRegistry(cloudProvider, localProvider)
 	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	budgetStore := governor.NewMemoryBudgetStore()
+
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
 		Cache:     cache.NewMemoryStore(time.Minute),
@@ -3561,6 +3562,10 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 		nil,
 		retention.NewMemoryHistoryStore(),
 	)
+	pricebookCfg := pricebookConfigForTests(items)
+	if cfg.Pricebook.UnknownModelPolicy != "" || len(cfg.Pricebook.Entries) > 0 {
+		pricebookCfg = cfg.Pricebook
+	}
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:   logger,
 		Cache:    cache.NewMemoryStore(time.Minute),
@@ -3582,7 +3587,7 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 		HealthTracker: healthTracker,
 		Pricebook: billing.NewStaticPricebook(config.ProvidersConfig{
 			OpenAICompatible: providerConfigsForTests(items),
-		}, pricebookConfigForTests(items)),
+		}, pricebookCfg),
 		Tracer:       profiler.NewInMemoryTracer(nil),
 		Metrics:      telemetry.NewMetrics(),
 		Retention:    retentionManager,

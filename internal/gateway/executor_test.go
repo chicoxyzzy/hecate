@@ -342,3 +342,71 @@ func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
 		t.Fatalf("final provider = %q, want ollama", report.FinalProvider)
 	}
 }
+
+func TestResilientExecutorReturnsPriceMissingWhenEveryCandidateIsUnpriced(t *testing.T) {
+	t.Parallel()
+
+	primary := &sequenceProvider{name: "openai", kind: providers.KindCloud}
+	fallback := &sequenceProvider{name: "anthropic", kind: providers.KindCloud}
+	registry := providers.NewRegistry(primary, fallback)
+	store := governor.NewMemoryBudgetStore()
+	preflight := NewDefaultRoutePreflight(
+		governor.NewStaticGovernor(config.GovernorConfig{MaxPromptTokens: 64_000}, store, store),
+		registry,
+		billing.NewStaticPricebook(config.ProvidersConfig{
+			OpenAICompatible: []config.OpenAICompatibleProviderConfig{
+				{Name: "openai", Kind: "cloud", DefaultModel: "model-a"},
+				{Name: "anthropic", Kind: "cloud", DefaultModel: "model-b"},
+			},
+		}, config.PricebookConfig{}),
+	)
+	executor := NewResilientExecutor(
+		staticFallbackRouter{
+			fallbacks: []types.RouteDecision{
+				{Provider: "anthropic", Model: "model-b", Reason: "test_failover"},
+			},
+		},
+		preflight,
+		registry,
+		nil,
+		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
+	)
+
+	trace := profiler.NewTrace("req-all-unpriced", nil)
+	defer trace.Finalize()
+
+	_, err := executor.Execute(context.Background(), trace, types.ChatRequest{
+		Model: "model-a",
+		Messages: []types.Message{
+			{Role: "user", Content: "hello"},
+		},
+	}, types.RouteDecision{Provider: "openai", Model: "model-a", Reason: "test"})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want price missing")
+	}
+	if !billing.IsPriceNotFound(err) {
+		t.Fatalf("Execute() error = %v, want price not found", err)
+	}
+	if primary.callCount != 0 {
+		t.Fatalf("primary call_count = %d, want 0 because unpriced candidate should be skipped", primary.callCount)
+	}
+	if fallback.callCount != 0 {
+		t.Fatalf("fallback call_count = %d, want 0 because unpriced candidate should be skipped", fallback.callCount)
+	}
+
+	report := buildRouteDecisionReport(trace.Spans())
+	if len(report.Candidates) != 2 {
+		t.Fatalf("candidate count = %d, want 2", len(report.Candidates))
+	}
+	for i, candidate := range report.Candidates {
+		if candidate.Outcome != "skipped" {
+			t.Fatalf("candidate[%d] outcome = %q, want skipped", i, candidate.Outcome)
+		}
+		if candidate.SkipReason != "preflight_price_missing" {
+			t.Fatalf("candidate[%d] skip reason = %q, want preflight_price_missing", i, candidate.SkipReason)
+		}
+	}
+	if report.FinalProvider != "" {
+		t.Fatalf("final provider = %q, want empty", report.FinalProvider)
+	}
+}

@@ -77,6 +77,9 @@ func TestChatCompletionsDeniedReturns403WithUserFacingMessage(t *testing.T) {
 	if !strings.Contains(payload.Error.Message, "disabled by policy") {
 		t.Errorf("error.message = %q, want underlying reason to be visible", payload.Error.Message)
 	}
+	if provider.CallCount() != 0 {
+		t.Fatalf("provider call count = %d, want 0 because governor denied pre-route", provider.CallCount())
+	}
 }
 
 // TestChatCompletionsRateLimitedReturns429 covers the rate_limit path
@@ -111,6 +114,79 @@ func TestChatCompletionsRateLimitedReturns429(t *testing.T) {
 	}
 	if got := second.Header().Get("X-RateLimit-Limit"); got != "1" {
 		t.Errorf("X-RateLimit-Limit = %q, want \"1\" (the bucket capacity)", got)
+	}
+	if provider.CallCount() != 1 {
+		t.Fatalf("provider call count = %d, want 1 because the second request was rate limited before routing", provider.CallCount())
+	}
+}
+
+func TestChatCompletionsReturnsStablePriceMissingWhenNoFallbackIsUsable(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "unpriced-model",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "unpriced-model",
+			Models:       []string{"unpriced-model"},
+		},
+		response: &types.ChatResponse{},
+	}
+	handler := newTestHTTPHandlerWithConfig(logger, provider, config.Config{
+		Pricebook: config.PricebookConfig{UnknownModelPolicy: "error"},
+		Router:    config.RouterConfig{DefaultModel: "unpriced-model"},
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			FailoverEnabled: true,
+		},
+	})
+
+	rec := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusFailedDependency {
+		t.Fatalf("status = %d, want 424; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Error.Type != errCodePriceMissing {
+		t.Fatalf("error.type = %q, want %s", payload.Error.Type, errCodePriceMissing)
+	}
+	if !strings.Contains(payload.Error.Message, "price not found") {
+		t.Fatalf("error.message = %q, want price not found", payload.Error.Message)
+	}
+	if provider.CallCount() != 0 {
+		t.Fatalf("provider call count = %d, want 0 because missing price should fail before provider call", provider.CallCount())
+	}
+}
+
+func TestChatCompletionsReturnsRouteImpossibleWhenNoProviderAvailable(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+
+	rec := performJSONRequest(t, handler, `{"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Error.Type != errCodeRouteImpossible {
+		t.Fatalf("error.type = %q, want %s", payload.Error.Type, errCodeRouteImpossible)
 	}
 }
 
