@@ -339,4 +339,4 @@ Every response from `POST /v1/chat/completions` and `POST /v1/messages` carries 
 | `X-RateLimit-Remaining` | int | Tokens still available in this key's bucket. Decrements per request. |
 | `X-RateLimit-Reset` | Unix seconds | When the bucket will be full again. |
 
-Over-limit requests get `429 Too Many Requests` with the standard error envelope and `code: "rate_limit_exceeded"`. Bucketing is keyed on the tenant API key's `KeyID`; principals without a `KeyID` (admin bearer tokens, anonymous traffic when `auth_token` is empty) all share a single `"anonymous"` bucket. See the [Rate limiting section in the README](../README.md#rate-limiting) for the env-var knobs.
+Over-limit requests get `429 Too Many Requests` with the standard error envelope and `code: "rate_limit_exceeded"`. Bucketing is keyed on the tenant API key's `KeyID`; principals without a `KeyID` (admin bearer tokens, anonymous traffic when `auth_token` is empty) all share a single `"anonymous"` bucket. See [Deployment: Rate limiting](deployment.md#rate-limiting) for the env-var knobs.

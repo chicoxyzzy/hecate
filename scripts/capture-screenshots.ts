@@ -62,6 +62,14 @@ async function snap(page: Page, name: string) {
   console.log(`  saved ${path}`);
 }
 
+async function openWorkspace(page: Page, id: "overview" | "runs" | "chats" | "providers" | "admin") {
+  await page.evaluate((workspace) => {
+    window.localStorage.setItem("hecate.workspace", workspace);
+  }, id);
+  await page.reload();
+  await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
+}
+
 // pngOptimizer is the build configuration for whichever PNG
 // optimizer was detected on PATH. Preference order matches what most
 // open-source repos use to optimize README screenshots:
@@ -240,19 +248,18 @@ async function main() {
   await snap(page, "chat");
 
   console.log("→ providers");
-  await page.keyboard.press("4");
+  await openWorkspace(page, "providers");
   await page.waitForSelector("text=Cloud providers", { timeout: 5_000 });
   await snap(page, "providers");
 
   console.log("→ admin / pricebook");
-  await page.keyboard.press("5");
-  await page.waitForSelector("button:has-text('pricebook')", { timeout: 5_000 });
-  await page.click("button:has-text('pricebook')");
+  await openWorkspace(page, "admin");
+  await page.getByRole("button", { name: /pricebook/i }).click();
   await page.waitForTimeout(800);
   await snap(page, "admin-pricebook");
 
   console.log("→ admin / budget");
-  await page.click("button:has-text('budget')");
+  await page.getByRole("button", { name: /budget/i }).click();
   await page.waitForTimeout(500);
   await snap(page, "admin-budget");
 
@@ -266,23 +273,23 @@ async function main() {
   await seedTenants();
   await page.reload();
   await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
-  await page.keyboard.press("5");
-  await page.click("button:has-text('tenants')");
+  await openWorkspace(page, "admin");
+  await page.getByRole("button", { name: /tenants/i }).click();
   await page.waitForTimeout(500);
   await snap(page, "admin-tenants");
 
   console.log("→ admin / keys");
-  await page.click("button:has-text('keys')");
+  await page.getByRole("button", { name: /keys/i }).click();
   await page.waitForTimeout(500);
   await snap(page, "admin-keys");
 
   console.log("→ admin / integrations");
-  await page.click("button:has-text('integrations')");
+  await page.getByRole("button", { name: /integrations/i }).click();
   await page.waitForTimeout(400);
   await snap(page, "admin-integrations");
 
   console.log("→ observe");
-  await page.keyboard.press("2");
+  await openWorkspace(page, "overview");
   await page.waitForTimeout(800);
   await snap(page, "observe");
 
@@ -293,7 +300,7 @@ async function main() {
   await seedTask();
   await page.reload();
   await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
-  await page.keyboard.press("3");
+  await openWorkspace(page, "runs");
   await page.waitForTimeout(800);
   await snap(page, "tasks");
 

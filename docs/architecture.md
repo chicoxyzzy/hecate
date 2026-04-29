@@ -165,7 +165,7 @@ Three runtime invariants worth pinning (full mechanics in [`agent-runtime.md`](a
 
 Three tiers — `memory`, `sqlite`, `postgres` — picked per subsystem via `GATEWAY_*_BACKEND` env vars. The bare binary defaults to `memory` everywhere; the docker image defaults to `sqlite` so `docker compose up` survives restarts. The semantic cache is the one subsystem with no `sqlite` option (indexed vector similarity needs the `sqlite-vec` extension, and the pure-Go SQLite driver can't load native extensions); single-node deploys that need persistent semantic search should run Postgres for that subsystem only.
 
-The full per-subsystem matrix and footnotes live in [`README.md`](../README.md#storage-backends) — single source of truth. Implementation notes worth pinning here:
+The full per-subsystem matrix and footnotes live in [`docs/deployment.md`](deployment.md#storage-backends) — single source of truth. Implementation notes worth pinning here:
 
 - One `GATEWAY_SQLITE_PATH` and one `POSTGRES_DSN` configure the shared clients across all opted-in subsystems.
 - SQLite's task queue uses `BEGIN IMMEDIATE` plus `UPDATE … RETURNING` for atomic claim under WAL; Postgres uses `SELECT … FOR UPDATE SKIP LOCKED`. Both are race-tested.

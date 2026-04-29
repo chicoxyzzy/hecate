@@ -25,9 +25,19 @@ To use the Postgres profile across subsystems, point each backend at it via env 
 ```bash
 GATEWAY_CONTROL_PLANE_BACKEND=postgres
 GATEWAY_TASKS_BACKEND=postgres
-# ... etc, see Storage backends in the README
+# ... etc, see Storage backends below
 POSTGRES_DSN=postgres://hecate:hecate@postgres:5432/hecate?sslmode=disable
 ```
+
+## Auth and generated state
+
+Hecate can start with almost no secrets in the environment. If `GATEWAY_AUTH_TOKEN` is unset, the gateway generates an admin bearer token on first run, prints it once, and stores bootstrap metadata under `GATEWAY_DATA_DIR`.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GATEWAY_AUTH_TOKEN` | generated | Admin bearer token. Prefer the generated first-run token for local and single-host setups. |
+| `GATEWAY_DATA_DIR` | `.data` locally, `/data` in Docker | Holds bootstrap metadata and local state files. |
+| `GATEWAY_CONTROL_PLANE_SECRET_KEY` | development fallback | Encrypts persisted provider credentials. Set a strong value before sharing a deployment. |
 
 ## Recovering a lost admin token
 
@@ -53,10 +63,43 @@ The next page load in the browser detects the rejected stale token and re-prompt
 
 For local (non-Docker) development resets, see [`development.md`](development.md#reset-state).
 
-## Choosing a backend tier
+## Storage backends
 
-Three tiers per subsystem (`memory` / `sqlite` / `postgres`); see [Storage backends](../README.md#storage-backends) for the full matrix and per-subsystem footnotes. Deployment-specific notes:
+Hecate keeps the storage model intentionally boring: each subsystem chooses a backend independently, usually `memory`, `sqlite`, or `postgres`.
+
+| Subsystem | Env var | memory | sqlite | postgres |
+|---|---|---:|---:|---:|
+| Control plane | `GATEWAY_CONTROL_PLANE_BACKEND` | local default | Docker default | yes |
+| API key auth | `GATEWAY_AUTH_BACKEND` | local default | Docker default | yes |
+| Provider credentials | `GATEWAY_PROVIDER_STORE_BACKEND` | local default | Docker default | yes |
+| Pricebook | `GATEWAY_PRICEBOOK_BACKEND` | local default | Docker default | yes |
+| Budget / balances | `GATEWAY_BUDGET_BACKEND` | local default | Docker default | yes |
+| Usage ledger | `GATEWAY_USAGE_BACKEND` | local default | Docker default | yes |
+| Audit events | `GATEWAY_AUDIT_BACKEND` | local default | Docker default | yes |
+| Policy rules | `GATEWAY_POLICY_BACKEND` | local default | Docker default | yes |
+| Exact cache | `GATEWAY_CACHE_BACKEND` | local default | Docker default | yes |
+| Semantic cache | `GATEWAY_SEMANTIC_CACHE_BACKEND` | yes | no | yes |
+| Trace snapshots | `GATEWAY_TRACE_STORE_BACKEND` | local default | Docker default | yes |
+| Retention history | `GATEWAY_RETENTION_HISTORY_BACKEND` | local default | Docker default | yes |
+| Chat sessions | `GATEWAY_CHAT_SESSIONS_BACKEND` | local default | Docker default | yes |
+| Tasks | `GATEWAY_TASKS_BACKEND` | local default | Docker default | yes |
+| Task queue | `GATEWAY_TASK_QUEUE_BACKEND` | local default | Docker default | yes |
+
+Deployment-specific notes:
 
 - The docker image **defaults to `sqlite`** for every durable subsystem, persisting state at `GATEWAY_SQLITE_PATH` (default `/data/hecate.db` on the `hecate-data` volume). This is why `docker compose up` keeps tenants, keys, pricebook, tasks, and chat sessions across restarts with no extra config.
-- The semantic cache has no SQLite backend and stays on `memory` in the docker image. To get persistent semantic search, switch just that subsystem to Postgres (`GATEWAY_SEMANTIC_CACHE_BACKEND=postgres`).
+- The semantic cache has no SQLite backend and stays on `memory` in the docker image. To get persistent semantic search, switch just that subsystem to Postgres with `GATEWAY_SEMANTIC_CACHE_BACKEND=postgres`.
+- `POSTGRES_DSN` is required when any subsystem uses `postgres`.
 - To make any subsystem ephemeral in docker, override its backend via `.env` or compose env: `GATEWAY_TASKS_BACKEND=memory`, etc.
+
+## Rate limiting
+
+Rate limiting is a per-key token bucket. It is disabled by default so first-run local testing does not surprise users.
+
+| Variable | Default | Notes |
+|---|---:|---|
+| `GATEWAY_RATE_LIMIT_ENABLED` | `false` | Enables per-key request rate limits. |
+| `GATEWAY_RATE_LIMIT_RPM` | `60` | Steady-state refill rate per API key. |
+| `GATEWAY_RATE_LIMIT_BURST` | `0` | Optional burst capacity. `0` means "same as RPM". |
+
+Over-limit requests return `429 Too Many Requests` with `code: "rate_limit_exceeded"` and standard `X-RateLimit-*` headers. Admin bearer traffic and anonymous traffic share a single `anonymous` bucket because they do not have tenant key IDs.
