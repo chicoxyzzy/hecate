@@ -18,6 +18,7 @@ ai/
     debugging.md                  how to debug deliberately
     refactoring.md                how to reshape code without changing behavior
     code-review.md                review rubric and output format
+    release.md                    cut a release tag (pre-flight, snapshot, gate, recovery)
   skills/
     backend/SKILL.md              Go backend skill (anything outside ui/)
     ui/SKILL.md                   React UI skill (ui/)

@@ -6,9 +6,46 @@ The [Quick Start](../README.md#quick-start) covers `docker compose up` end-to-en
 
 `docker-compose.yml` references `ghcr.io/chicoxyzzy/hecate:latest`, a multi-arch (`linux/amd64`, `linux/arm64`) image published from this repo on every `v*` tag. A fresh host can `docker compose pull` and start without a build step.
 
-To pin to a specific release, replace `:latest` with `:vX.Y.Z` in `docker-compose.yml`. Pinning is recommended for production — `:latest` floats over major-version bumps that may include schema or config changes.
+To pin to a specific release, replace `:latest` with the published tag (no `v` prefix — goreleaser uses the bare semver as the docker tag). Example for the current alpha:
+
+```yaml
+# docker-compose.yml
+image: ghcr.io/chicoxyzzy/hecate:0.1.0-alpha.1
+```
+
+Pinning is recommended for any deployment beyond local experimentation — `:latest` floats over alpha increments that may include schema or config changes.
 
 When the working tree is a checkout of the source, `docker compose up` rebuilds locally from the bundled `Dockerfile` instead of pulling. Useful for testing changes; remove the `image:` line or run `docker compose build` first if you want the local build to be the canonical artifact.
+
+## Binary install
+
+The release workflow publishes static, single-file binaries for `linux+darwin × amd64+arm64` to GitHub Releases. Skip Docker if you'd rather run the gateway directly:
+
+```bash
+# pick the right tarball for your OS / arch
+curl -LO https://github.com/chicoxyzzy/hecate/releases/download/v0.1.0-alpha.1/hecate_0.1.0-alpha.1_linux_amd64.tar.gz
+tar -xzf hecate_0.1.0-alpha.1_linux_amd64.tar.gz
+./hecate
+```
+
+The binary embeds the React operator UI, listens on `:8080` by default, generates an admin bearer token on first boot (saved under `GATEWAY_DATA_DIR`, default `.data/`), and prints it once to stderr. No additional runtime dependencies — the binary is statically linked and CGO-free.
+
+To pin the data directory to a known location:
+
+```bash
+GATEWAY_DATA_DIR=/var/lib/hecate ./hecate
+```
+
+For systemd, launchd, or supervisor wrappers, the only requirements are: the working directory is writable for `GATEWAY_DATA_DIR`, port 8080 is available, and `.env` (if used) sits in the working directory or is sourced into the unit file. The binary path itself can live anywhere on `$PATH`.
+
+Available tarballs for `v0.1.0-alpha.1`:
+
+- `hecate_0.1.0-alpha.1_linux_amd64.tar.gz`
+- `hecate_0.1.0-alpha.1_linux_arm64.tar.gz`
+- `hecate_0.1.0-alpha.1_darwin_amd64.tar.gz`
+- `hecate_0.1.0-alpha.1_darwin_arm64.tar.gz`
+
+Each tarball includes the binary plus `LICENSE` and `README.md`. Verify integrity against `checksums.txt` published alongside the release.
 
 ## Optional services (compose profiles)
 
