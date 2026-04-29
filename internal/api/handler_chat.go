@@ -58,29 +58,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			slog.Any("error", err),
 		)
 
-		statusCode := http.StatusInternalServerError
-		if gateway.IsClientError(err) {
-			statusCode = http.StatusBadRequest
-		}
-		if gateway.IsBudgetExceededError(err) {
-			WriteError(w, http.StatusPaymentRequired, "budget_exceeded", err.Error())
-			return
-		}
-		if gateway.IsRateLimitedError(err) {
-			WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
-			return
-		}
-		if gateway.IsDeniedError(err) {
-			statusCode = http.StatusForbidden
-		}
-		var upstreamErr *providers.UpstreamError
-		if errors.As(err, &upstreamErr) {
-			statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
-			WriteError(w, statusCode, errCodeUpstreamError, upstreamErr.Message)
-			return
-		}
-
-		WriteError(w, statusCode, errCodeGatewayError, gateway.UserFacingMessage(err))
+		writeOpenAIGatewayError(w, classifyGatewayError(err))
 		return
 	}
 
@@ -140,28 +118,7 @@ func (h *Handler) handleChatCompletionsStream(w http.ResponseWriter, r *http.Req
 			slog.String(telemetry.AttrGenAIRequestModel, req.Model),
 			slog.Any("error", err),
 		)
-		statusCode := http.StatusInternalServerError
-		if gateway.IsClientError(err) {
-			statusCode = http.StatusBadRequest
-		}
-		if gateway.IsBudgetExceededError(err) {
-			WriteError(w, http.StatusPaymentRequired, "budget_exceeded", err.Error())
-			return
-		}
-		if gateway.IsRateLimitedError(err) {
-			WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
-			return
-		}
-		if gateway.IsDeniedError(err) {
-			statusCode = http.StatusForbidden
-		}
-		errMsg := gateway.UserFacingMessage(err)
-		var upstreamErr *providers.UpstreamError
-		if errors.As(err, &upstreamErr) {
-			statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
-			errMsg = upstreamErr.Message
-		}
-		WriteError(w, statusCode, errCodeGatewayError, errMsg)
+		writeOpenAIGatewayError(w, classifyGatewayError(err))
 		return
 	}
 

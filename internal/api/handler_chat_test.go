@@ -114,6 +114,63 @@ func TestChatCompletionsRateLimitedReturns429(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsProviderAuthFailureReturnsStableCode(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{
+		name: "openai",
+		err: &providers.UpstreamError{
+			StatusCode: http.StatusUnauthorized,
+			Message:    "Incorrect API key provided",
+			Type:       "invalid_request_error",
+		},
+	}
+	handler := newTestHTTPHandler(logger, provider)
+
+	rec := performJSONRequest(t, handler, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Error.Type != errCodeProviderAuthFailed {
+		t.Errorf("error.type = %q, want %s", payload.Error.Type, errCodeProviderAuthFailed)
+	}
+	if payload.Error.Message != "Incorrect API key provided" {
+		t.Errorf("error.message = %q, want upstream diagnostic", payload.Error.Message)
+	}
+}
+
+func TestChatCompletionsUnsupportedModelReturnsStableCode(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	provider := &fakeProvider{name: "openai", response: &types.ChatResponse{}}
+	handler := newTestHTTPHandler(logger, provider)
+
+	rec := performJSONRequest(t, handler, `{"model":"llama3.1:8b","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if payload.Error.Type != errCodeUnsupportedModel {
+		t.Errorf("error.type = %q, want %s", payload.Error.Type, errCodeUnsupportedModel)
+	}
+}
+
 // TestChatCompletionsStreamRouteRejectsBudgetExceeded is the streaming
 // counterpart to TestHandleChatReturns402OnBudgetExceeded. RouteForStream
 // is a separate code path from non-stream HandleChat, with its own

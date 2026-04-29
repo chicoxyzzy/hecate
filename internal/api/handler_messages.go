@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/hecate/agent-runtime/internal/auth"
-	"github.com/hecate/agent-runtime/internal/gateway"
 	"github.com/hecate/agent-runtime/internal/providers"
 	"github.com/hecate/agent-runtime/internal/requestscope"
 	"github.com/hecate/agent-runtime/internal/telemetry"
@@ -202,50 +201,7 @@ func applyRuntimeHeaders(w http.ResponseWriter,
 }
 
 func writeMessagesError(w http.ResponseWriter, err error) {
-	statusCode := http.StatusInternalServerError
-	if gateway.IsClientError(err) {
-		statusCode = http.StatusBadRequest
-	}
-	if gateway.IsBudgetExceededError(err) {
-		WriteJSON(w, http.StatusPaymentRequired, map[string]any{
-			"type": "error",
-			"error": map[string]any{
-				"type":    "payment_required",
-				"message": err.Error(),
-			},
-		})
-		return
-	}
-	if gateway.IsRateLimitedError(err) {
-		WriteJSON(w, http.StatusTooManyRequests, map[string]any{
-			"type": "error",
-			"error": map[string]any{
-				"type":    "rate_limit_error",
-				"message": err.Error(),
-			},
-		})
-		return
-	}
-	if gateway.IsDeniedError(err) {
-		statusCode = http.StatusForbidden
-	}
-	errMsg := gateway.UserFacingMessage(err)
-	errType := "api_error"
-	var upstreamErr *providers.UpstreamError
-	if errors.As(err, &upstreamErr) {
-		statusCode = mapUpstreamStatus(upstreamErr.StatusCode)
-		errMsg = upstreamErr.Message
-		if upstreamErr.Type != "" {
-			errType = upstreamErr.Type
-		}
-	}
-	WriteJSON(w, statusCode, map[string]any{
-		"type": "error",
-		"error": map[string]any{
-			"type":    errType,
-			"message": errMsg,
-		},
-	})
+	writeAnthropicGatewayError(w, classifyGatewayError(err))
 }
 
 func normalizeAnthropicRequest(req AnthropicMessagesRequest, requestID string, principal auth.Principal) (types.ChatRequest, error) {
