@@ -9,10 +9,10 @@
 #                   non-root. Suitable for production.
 #
 # Build:   docker build -t hecate:dev .
-# Run:     docker run --rm -p 8080:8080 hecate:dev
+# Run:     docker run --rm -p 8765:8765 hecate:dev
 #
 # The runtime image needs no environment to start; it serves the API and
-# UI on :8080 immediately. Provider configuration happens through the UI
+# UI on :8765 immediately. Provider configuration happens through the UI
 # or by mounting a .env file into the container.
 
 ARG GO_VERSION=1.26.2
@@ -79,7 +79,7 @@ COPY --from=go-builder /out/hecate /usr/local/bin/hecate
 # nonroot binary can't persist its bootstrap file.
 COPY --from=go-builder --chown=65532:65532 /out/data /data
 
-ENV GATEWAY_ADDRESS=:8080 \
+ENV GATEWAY_ADDRESS=:8765 \
     GATEWAY_DATA_DIR=/data \
     GATEWAY_SQLITE_PATH=/data/hecate.db \
     # Default the durable subsystems to SQLite in the docker image so
@@ -100,6 +100,6 @@ ENV GATEWAY_ADDRESS=:8080 \
     GATEWAY_BUDGET_BACKEND=sqlite
 VOLUME ["/data"]
 
-EXPOSE 8080
+EXPOSE 8765
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/hecate"]

@@ -38,7 +38,7 @@ Acceptance:
 - Workflow run is green.
 - GitHub Releases page has the entry, marked **Pre-release** for `-alpha.N` tags.
 - `docker pull ghcr.io/chicoxyzzy/hecate:X.Y.Z` succeeds (no `v` prefix — see footgun below).
-- `docker run --rm -p 8080:8080 ghcr.io/chicoxyzzy/hecate:X.Y.Z` then `curl :8080/healthz` returns `version: "X.Y.Z"`.
+- `docker run --rm -p 8765:8765 ghcr.io/chicoxyzzy/hecate:X.Y.Z` then `curl :8765/healthz` returns `version: "X.Y.Z"`.
 
 ## Footguns
 

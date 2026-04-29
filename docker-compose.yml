@@ -1,5 +1,5 @@
 # Quickstart stack. Defaults to "just the hecate gateway" so a `docker compose up`
-# is enough to try Hecate end-to-end on http://127.0.0.1:8080.
+# is enough to try Hecate end-to-end on http://127.0.0.1:8765.
 #
 # Optional services live behind profiles so they don't start by default:
 #   docker compose --profile postgres up    # adds Postgres for state
@@ -16,7 +16,7 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/chicoxyzzy/hecate:latest
     ports:
-      - "8080:8080"
+      - "8765:8765"
     environment:
       # When the ollama profile is active, the gateway reaches it via the
       # service network. With the profile inactive these vars are still set

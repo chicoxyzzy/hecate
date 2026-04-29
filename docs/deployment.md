@@ -28,7 +28,7 @@ tar -xzf hecate_0.1.0-alpha.1_linux_amd64.tar.gz
 ./hecate
 ```
 
-The binary embeds the React operator UI, listens on `:8080` by default, generates an admin bearer token on first boot (saved under `GATEWAY_DATA_DIR`, default `.data/`), and prints it once to stderr. No additional runtime dependencies — the binary is statically linked and CGO-free.
+The binary embeds the React operator UI, listens on `:8765` by default, generates an admin bearer token on first boot (saved under `GATEWAY_DATA_DIR`, default `.data/`), and prints it once to stderr. No additional runtime dependencies — the binary is statically linked and CGO-free.
 
 To pin the data directory to a known location:
 
@@ -36,7 +36,7 @@ To pin the data directory to a known location:
 GATEWAY_DATA_DIR=/var/lib/hecate ./hecate
 ```
 
-For systemd, launchd, or supervisor wrappers, the only requirements are: the working directory is writable for `GATEWAY_DATA_DIR`, port 8080 is available, and `.env` (if used) sits in the working directory or is sourced into the unit file. The binary path itself can live anywhere on `$PATH`.
+For systemd, launchd, or supervisor wrappers, the only requirements are: the working directory is writable for `GATEWAY_DATA_DIR`, port 8765 is available, and `.env` (if used) sits in the working directory or is sourced into the unit file. The binary path itself can live anywhere on `$PATH`.
 
 Available tarballs for `v0.1.0-alpha.1`:
 

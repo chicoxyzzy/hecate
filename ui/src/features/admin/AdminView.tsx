@@ -1338,7 +1338,7 @@ function IntegrationsTab() {
   // client should hit. The OpenAI variant carries a /v1 suffix because
   // that's the OpenAI base-URL convention; Anthropic clients add /v1
   // themselves so we pass the bare origin.
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8080";
+  const origin = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8765";
   const openaiBase = `${origin}/v1`;
 
   const openaiSnippet = `export OPENAI_BASE_URL="${openaiBase}"

@@ -42,11 +42,11 @@ AI workloads are moving from simple API calls to long-running agents, tool use, 
 The fastest way is the published image — no clone required:
 
 ```bash
-docker run --rm -p 8080:8080 -v hecate-data:/data \
+docker run --rm -p 8765:8765 -v hecate-data:/data \
   ghcr.io/chicoxyzzy/hecate:0.1.0-alpha.1
 ```
 
-Open `http://127.0.0.1:8080`, paste the generated admin bearer token from the container logs, and connect your first provider in the UI.
+Open `http://127.0.0.1:8765`, paste the generated admin bearer token from the container logs, and connect your first provider in the UI.
 
 ```text
 ============================================================

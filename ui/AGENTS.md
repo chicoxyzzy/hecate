@@ -31,7 +31,7 @@ ui/src/
 | `bun run typecheck` | Fast type check after any edit (`tsgo -b` under the hood) |
 | `bun run test` | Vitest run before committing — never `bun test` (skips testing-library DOM setup) |
 | `bun run test:watch` | Iteration |
-| `bun run dev` | Vite dev server on `:5173` proxying API to `:8080` |
+| `bun run dev` | Vite dev server on `:5173` proxying API to `:8765` |
 
 Slash commands: `/typecheck` and `/test-affected` from the repo root.
 

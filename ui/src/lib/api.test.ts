@@ -135,7 +135,7 @@ describe("api client", () => {
         user: "team-a",
         messages: [{ role: "user", content: "hello" }],
       }),
-    ).rejects.toThrow("Check that the gateway is running on http://127.0.0.1:8080");
+    ).rejects.toThrow("Check that the gateway is running on http://127.0.0.1:8765");
   });
 
   it("fetches a request trace by request id", async () => {

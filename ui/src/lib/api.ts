@@ -675,7 +675,7 @@ async function fetchWithNetworkError(url: string, options: RequestInit): Promise
 function networkErrorMessage(url: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message === "Load failed" || message === "Failed to fetch" || message.includes("NetworkError")) {
-    return `Gateway request failed to load (${url}). Check that the gateway is running on http://127.0.0.1:8080 and that the Vite dev proxy is active.`;
+    return `Gateway request failed to load (${url}). Check that the gateway is running on http://127.0.0.1:8765 and that the Vite dev proxy is active.`;
   }
   return `Gateway request failed (${url}): ${message}`;
 }

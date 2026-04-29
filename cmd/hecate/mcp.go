@@ -17,8 +17,8 @@ import (
 // HTTP — the same auth token an operator uses in the UI.
 //
 // Configuration is environment-only:
-//   - HECATE_BASE_URL   — gateway URL, e.g. http://127.0.0.1:8080
-//     (default: http://127.0.0.1:8080)
+//   - HECATE_BASE_URL   — gateway URL, e.g. http://127.0.0.1:8765
+//     (default: http://127.0.0.1:8765)
 //   - HECATE_AUTH_TOKEN — bearer token (required for any non-public
 //     endpoint; surfaced in the gateway's first-run
 //     banner or under /data/hecate.bootstrap.json)
@@ -30,7 +30,7 @@ import (
 func runMCPServer() {
 	baseURL := strings.TrimSpace(os.Getenv("HECATE_BASE_URL"))
 	if baseURL == "" {
-		baseURL = "http://127.0.0.1:8080"
+		baseURL = "http://127.0.0.1:8765"
 	}
 	authToken := strings.TrimSpace(os.Getenv("HECATE_AUTH_TOKEN"))
 	if authToken == "" {

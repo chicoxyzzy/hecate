@@ -1,11 +1,11 @@
-// Capture documentation screenshots against a running gateway on :8080.
+// Capture documentation screenshots against a running gateway on :8765.
 //
 // Run via the bun script (resolves its own cwd, no `cd ui` needed):
 //   bun run capture-screenshots          # from ui/
 //   make screenshots                     # from repo root
 //
 // Prerequisites:
-//   1. `make reset-dev && ./hecate &` — gateway running on :8080 with fresh state
+//   1. `make reset-dev && ./hecate &` — gateway running on :8765 with fresh state
 //   2. ollama running on :11434 with `ollama pull llama3.1:8b` (used to seed
 //      one realistic chat session). Set HECATE_SKIP_OLLAMA=1 to skip.
 //
@@ -23,7 +23,7 @@ import { readFileSync, mkdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const BASE_URL = process.env.HECATE_URL ?? "http://127.0.0.1:8080";
+const BASE_URL = process.env.HECATE_URL ?? "http://127.0.0.1:8765";
 const OUT_DIR = resolve(import.meta.dirname, "..", "docs", "screenshots");
 mkdirSync(OUT_DIR, { recursive: true });
 

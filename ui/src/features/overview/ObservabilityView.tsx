@@ -174,7 +174,7 @@ export function ObservabilityView({ state }: Props) {
   // host:port as the API now thanks to the embed). This keeps the snippets
   // accurate whether the operator visits via 127.0.0.1, localhost, or a
   // reverse-proxy hostname.
-  const gatewayURL = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8080";
+  const gatewayURL = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8765";
 
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>

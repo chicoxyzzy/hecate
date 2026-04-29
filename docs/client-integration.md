@@ -36,7 +36,7 @@ The rest of this guide covers the same ground at the protocol level — useful f
 
 ## Base URL and endpoints
 
-Use your Hecate gateway URL (local default: `http://127.0.0.1:8080`).
+Use your Hecate gateway URL (local default: `http://127.0.0.1:8765`).
 
 Supported LLM-facing endpoints:
 
@@ -118,7 +118,7 @@ Most Codex/OpenAI-compatible tools can be configured with OpenAI-style env vars.
 Example:
 
 ```bash
-export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+export OPENAI_BASE_URL="http://127.0.0.1:8765/v1"
 export OPENAI_API_KEY="hecate-client-token"
 ```
 
@@ -132,7 +132,7 @@ If your Codex client exposes custom headers instead of `OPENAI_API_KEY`, set eit
 Claude Code and Anthropic-style clients usually support:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8765"
 export ANTHROPIC_API_KEY="hecate-client-token"
 ```
 
@@ -144,7 +144,7 @@ Cursor reads its model configuration from the in-app Settings UI, not from envir
 
 1. Open **Cursor → Settings → Cursor Settings → Models → API Keys**.
 2. Toggle **Override OpenAI Base URL** on and set:
-   - **Base URL**: `http://127.0.0.1:8080/v1` (or your Hecate gateway URL)
+   - **Base URL**: `http://127.0.0.1:8765/v1` (or your Hecate gateway URL)
    - **OpenAI API Key**: a tenant key from the Hecate UI's Keys tab (or the admin bearer for first-run testing)
 3. Click **Verify** — Cursor will probe `/v1/models`. A green check means Hecate accepted the credential and returned the model catalog.
 4. Pick a Hecate-routable model (e.g. `gpt-4o-mini`, `claude-sonnet-4`, or any model your tenant key is scoped to) in the model picker. Cursor's Composer and Tab features will now route through Hecate.
@@ -158,14 +158,14 @@ Cursor does not currently expose an Anthropic-base-URL override. To use Anthropi
 ### 1) Models
 
 ```bash
-curl -sS "http://127.0.0.1:8080/v1/models" \
+curl -sS "http://127.0.0.1:8765/v1/models" \
   -H "Authorization: Bearer hecate-client-token"
 ```
 
 ### 2) OpenAI-compatible chat
 
 ```bash
-curl -sS "http://127.0.0.1:8080/v1/chat/completions" \
+curl -sS "http://127.0.0.1:8765/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer hecate-client-token" \
   -d '{
@@ -177,7 +177,7 @@ curl -sS "http://127.0.0.1:8080/v1/chat/completions" \
 ### 3) Anthropic messages
 
 ```bash
-curl -sS "http://127.0.0.1:8080/v1/messages" \
+curl -sS "http://127.0.0.1:8765/v1/messages" \
   -H "Content-Type: application/json" \
   -H "x-api-key: hecate-client-token" \
   -d '{
@@ -192,7 +192,7 @@ curl -sS "http://127.0.0.1:8080/v1/messages" \
 `POST /v1/chat/completions` accepts the OpenAI multi-modal content shape — `messages[].content` may be either a plain string OR an array of typed blocks. Image blocks ride the `image_url` form Codex/SDKs already produce:
 
 ```bash
-curl -sS "http://127.0.0.1:8080/v1/chat/completions" \
+curl -sS "http://127.0.0.1:8765/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer hecate-client-token" \
   -d '{

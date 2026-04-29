@@ -39,15 +39,15 @@ run:
 	GOCACHE="$(GOCACHE_DIR)" go run ./cmd/hecate
 
 # serve runs the pre-built ./hecate binary. It first stops any existing
-# process listening on :8080 (the previous run that the operator forgot to
+# process listening on :8765 (the previous run that the operator forgot to
 # Ctrl-C) so a stale "address already in use" never blocks a restart.
 # It also sources .env so providers configured there are available, matching
 # the `make dev` workflow.
 serve:
 	@test -x ./hecate || (echo "hecate binary not found — run 'make build' first." && exit 1)
-	@pid=$$(lsof -ti:8080 2>/dev/null); \
+	@pid=$$(lsof -ti:8765 2>/dev/null); \
 	if [ -n "$$pid" ]; then \
-	  echo "stopping existing hecate on :8080 (pid $$pid)"; \
+	  echo "stopping existing hecate on :8765 (pid $$pid)"; \
 	  kill $$pid; \
 	  sleep 0.3; \
 	fi
@@ -107,15 +107,15 @@ docs-env-check:
 verify-alpha: docs-env-check test vet test-race test-docker-smoke ui-test ui-test-e2e build
 
 # reset-dev wipes local dev state back to first-run: stops the hecate on
-# :8080 and deletes the data directory (which holds the bootstrap file
+# :8765 and deletes the data directory (which holds the bootstrap file
 # with the admin token + AES-GCM key) so the next start regenerates
 # fresh secrets. Memory-backed control plane is already wiped on
 # restart; if you've pointed Hecate at postgres or redis, drop those
 # out yourself.
 reset-dev:
-	@pid=$$(lsof -ti:8080 2>/dev/null); \
+	@pid=$$(lsof -ti:8765 2>/dev/null); \
 	if [ -n "$$pid" ]; then \
-	  echo "stopping existing hecate on :8080 (pid $$pid)"; \
+	  echo "stopping existing hecate on :8765 (pid $$pid)"; \
 	  kill $$pid; \
 	  sleep 0.3; \
 	fi
@@ -135,14 +135,14 @@ reset-dev:
 # run the workflow without it (chat session will be empty).
 screenshots:
 	@test -d ui/node_modules/@playwright/test || (echo "UI dependencies missing. Run 'make ui-install' first." && exit 1)
-	@pid=$$(lsof -ti:8080 2>/dev/null); [ -n "$$pid" ] && (echo "stopping existing :8080 (pid $$pid)"; kill $$pid; sleep 0.3) || true
+	@pid=$$(lsof -ti:8765 2>/dev/null); [ -n "$$pid" ] && (echo "stopping existing :8765 (pid $$pid)"; kill $$pid; sleep 0.3) || true
 	@$(MAKE) --no-print-directory reset-dev > /dev/null
 	@test -x ./hecate || $(MAKE) --no-print-directory build
 	@mkdir -p .data
 	@echo "starting hecate in background…"
 	@./hecate > .data/screenshots-gateway.log 2>&1 & echo $$! > .data/screenshots-gateway.pid
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-	  curl -sf http://127.0.0.1:8080/healthz > /dev/null && break; \
+	  curl -sf http://127.0.0.1:8765/healthz > /dev/null && break; \
 	  sleep 0.3; \
 	done
 	@cd ui && bun run capture-screenshots; \

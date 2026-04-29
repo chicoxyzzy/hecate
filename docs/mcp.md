@@ -66,7 +66,7 @@ The MCP server is a stdio subprocess. Two environment variables control where it
 
 | Variable | Default | Notes |
 |---|---|---|
-| `HECATE_BASE_URL` | `http://127.0.0.1:8080` | URL of the running Hecate gateway |
+| `HECATE_BASE_URL` | `http://127.0.0.1:8765` | URL of the running Hecate gateway |
 | `HECATE_AUTH_TOKEN` | _required_ | The bearer token from the gateway's first-run banner (or `/data/hecate.bootstrap.json` → `admin_token`) |
 
 #### Claude Desktop
@@ -80,7 +80,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
       "command": "hecate",
       "args": ["mcp-server"],
       "env": {
-        "HECATE_BASE_URL": "http://127.0.0.1:8080",
+        "HECATE_BASE_URL": "http://127.0.0.1:8765",
         "HECATE_AUTH_TOKEN": "<paste from first-run banner>"
       }
     }

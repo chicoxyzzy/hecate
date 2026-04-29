@@ -334,7 +334,7 @@ func LoadFromEnv() Config {
 	providersCfg := loadProvidersFromEnv()
 	return Config{
 		Server: ServerConfig{
-			Address:   getEnv("GATEWAY_ADDRESS", ":8080"),
+			Address:   getEnv("GATEWAY_ADDRESS", ":8765"),
 			AuthToken: getEnv("GATEWAY_AUTH_TOKEN", ""),
 			// Default `.data/` keeps the auto-generated bootstrap file
 			// (admin token + AES-GCM key) out of the repo root so a stray

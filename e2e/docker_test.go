@@ -52,11 +52,11 @@ const dockerSmokeTimeout = 3 * time.Minute
 // surfaces here. None of it surfaces in the binary-only e2e suite.
 func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 	requireDocker(t)
-	if err := portFree(8080); err != nil {
+	if err := portFree(8765); err != nil {
 		// Hard-skip rather than fail: most likely a developer already has
 		// `docker compose up` running. We don't want this test to flake on
 		// a stranger's laptop just because their dev stack is up.
-		t.Skipf("host port 8080 already in use (%v) — stop your local stack and rerun", err)
+		t.Skipf("host port 8765 already in use (%v) — stop your local stack and rerun", err)
 	}
 
 	composeDir := projectRoot(t)
@@ -64,7 +64,7 @@ func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 	defer cancel()
 
 	// Always tear down — even on test failure, even on panic — so a busted
-	// run doesn't leave a stray container squatting on :8080 that breaks
+	// run doesn't leave a stray container squatting on :8765 that breaks
 	// the next attempt.
 	t.Cleanup(func() {
 		teardownCtx, cancelTeardown := context.WithTimeout(context.Background(), 30*time.Second)
@@ -81,7 +81,7 @@ func TestDockerSmokeImageBootsAndAuthenticates(t *testing.T) {
 
 	// Wait for healthz. The container takes a few seconds to start the Go
 	// binary, generate the bootstrap, and bind the listener.
-	const baseURL = "http://127.0.0.1:8080"
+	const baseURL = "http://127.0.0.1:8765"
 	if err := waitHealthyDocker(ctx, baseURL+"/healthz", 60*time.Second); err != nil {
 		// Capture container logs so the failure mode is visible in CI.
 		out, _ := dockerComposeCombined(ctx, composeDir, "logs", "hecate")
@@ -198,7 +198,7 @@ func projectRoot(t *testing.T) string {
 }
 
 // portFree returns nil when the host port is bindable. We use this as a
-// pre-flight so a developer's already-running stack on :8080 produces a
+// pre-flight so a developer's already-running stack on :8765 produces a
 // clean skip rather than an opaque "address already in use" docker error.
 func portFree(port int) error {
 	addr := fmt.Sprintf(":%d", port)

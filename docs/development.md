@@ -28,10 +28,10 @@ The gateway binary is a single executable with the React UI embedded via `//go:e
    ```bash
    make ui-install         # installs UI dependencies (bun install)
    make build              # ui-build + go build → ./hecate
-   make serve              # run prebuilt ./hecate; sources .env; auto-stops stale :8080
+   make serve              # run prebuilt ./hecate; sources .env; auto-stops stale :8765
    ```
 
-The gateway and the operator UI are both served from `http://127.0.0.1:8080`. `make serve` stops any earlier `./hecate` process still bound to that port before starting, so re-running it is always safe.
+The gateway and the operator UI are both served from `http://127.0.0.1:8765`. `make serve` stops any earlier `./hecate` process still bound to that port before starting, so re-running it is always safe.
 
 On first run, an admin-bearer banner is printed to stderr, and the bootstrap file is persisted at `.data/hecate.bootstrap.json` (mode 0600). Read the token back at any time:
 
@@ -43,23 +43,23 @@ For iterative changes that don't touch the embed boundary, skip the binary build
 
 ## UI hot reload
 
-For live UI iteration, run `make dev` (gateway on `:8080`) and the Vite dev server side by side:
+For live UI iteration, run `make dev` (gateway on `:8765`) and the Vite dev server side by side:
 
 ```bash
-make ui-dev       # Vite on :5173, proxying API calls to :8080
+make ui-dev       # Vite on :5173, proxying API calls to :8765
 ```
 
 Default addresses:
 
-- gateway + bundled UI (production): `http://127.0.0.1:8080`
+- gateway + bundled UI (production): `http://127.0.0.1:8765`
 - Vite dev server (UI hot reload): `http://127.0.0.1:5173`
 
-The Vite dev server proxies every `/v1/*`, `/admin/*`, and `/healthz` request to `:8080`, so the UI runs hot while the gateway runs as-is.
+The Vite dev server proxies every `/v1/*`, `/admin/*`, and `/healthz` request to `:8765`, so the UI runs hot while the gateway runs as-is.
 
 ## Reset state
 
 ```bash
-make reset-dev        # local dev: stops :8080, removes .data/
+make reset-dev        # local dev: stops :8765, removes .data/
 make reset-docker     # docker stack: `docker compose --profile full down -v`
 ```
 
