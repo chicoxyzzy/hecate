@@ -2241,6 +2241,50 @@ func TestTaskStartShellExecutor(t *testing.T) {
 	}
 }
 
+func TestTaskApprovalResolveReturnsConflictWhenAlreadyResolved(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks", `{"title":"Approve once","prompt":"Resolve one approval once.","execution_kind":"shell","shell_command":"printf 'approved-once\n'","working_directory":".","timeout_ms":2000}`)
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "awaiting_approval" {
+		t.Fatalf("run status = %q, want awaiting_approval", started.Data.Status)
+	}
+	approvals := mustTaskRequestJSON[TaskApprovalsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/approvals", "")
+	if len(approvals.Data) != 1 {
+		t.Fatalf("approvals = %d, want 1", len(approvals.Data))
+	}
+
+	resolved := mustTaskRequestJSON[TaskApprovalResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"approve","note":"first approval wins"}`)
+	if resolved.Data.Status != "approved" {
+		t.Fatalf("approval status = %q, want approved", resolved.Data.Status)
+	}
+
+	conflict := tasks.mustRequestStatus(http.StatusConflict, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/approvals/"+approvals.Data[0].ID+"/resolve", `{"decision":"approve","note":"duplicate"}`)
+	if !strings.Contains(conflict.Body.String(), "not pending") {
+		t.Fatalf("conflict body = %s, want mention of not pending", conflict.Body.String())
+	}
+
+	waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+	runs := mustTaskRequestJSON[TaskRunsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs", "")
+	if len(runs.Data) != 1 {
+		t.Fatalf("runs = %d, want 1 (duplicate approval must not create another run)", len(runs.Data))
+	}
+	runArtifacts := mustTaskRequestJSON[TaskArtifactsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/artifacts", "")
+	stdoutCount := 0
+	for _, artifact := range runArtifacts.Data {
+		if artifact.Kind == "stdout" && strings.Contains(artifact.ContentText, "approved-once") {
+			stdoutCount++
+		}
+	}
+	if stdoutCount != 1 {
+		t.Fatalf("stdout artifact count = %d, want 1 (duplicate approval must not execute twice)", stdoutCount)
+	}
+}
+
 func TestTaskRejectApprovalCancelsRun(t *testing.T) {
 	t.Parallel()
 

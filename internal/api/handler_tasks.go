@@ -458,7 +458,7 @@ func (h *Handler) HandleResolveTaskApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if approval.Status != "pending" {
-		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task approval is not pending")
+		WriteError(w, http.StatusConflict, errCodeInvalidRequest, "task approval is not pending")
 		return
 	}
 
