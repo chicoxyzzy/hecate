@@ -35,6 +35,59 @@ If a check is intentionally skipped, call it out in the release notes with the
 reason and the risk. Docker smoke and UI e2e are allowed to be slow; they are
 not optional for a public alpha build.
 
+## Snapshot Dry-Run
+
+Before pushing the tag, run goreleaser locally in snapshot mode to catch
+release-config issues without publishing anything:
+
+```bash
+goreleaser release --snapshot --clean
+```
+
+This builds the same set of artifacts the CI release workflow does — Go
+binaries for `linux+darwin × amd64+arm64` and the per-arch Docker images —
+into `./dist`, but skips publishing to GHCR and skips creating a GitHub
+release. The run takes ~2-3 minutes and surfaces almost every config issue
+you'd otherwise hit on the real tag push.
+
+**Inspect the auto-generated changelog.** The first tag in the repo lists
+every commit since the dawn of git history; subsequent tags list only commits
+since the previous tag. If the changelog is unusable, tune
+`.goreleaser.yaml`'s `changelog.filters` or use `--release-notes <file>` to
+override before tagging.
+
+**Pre-flight checks before the snapshot run:**
+
+- `git status` is clean. Goreleaser refuses to release from a dirty worktree
+  (and the snapshot run is the rehearsal — same constraint applies).
+- `dist/` is gitignored at repo root. The snapshot writes binaries and
+  tarballs into `./dist`; if the directory is tracked, those artifacts can
+  leak into a follow-up commit and break the next release on `--clean`. The
+  `ui/dist/` entry in `.gitignore` does **not** cover repo-root `dist/`.
+- `goreleaser` itself is on PATH (`go install github.com/goreleaser/goreleaser/v2@latest`).
+
+## Tag and Push
+
+After the snapshot dry-run passes:
+
+```bash
+git tag -a v0.x.y -m "..."     # annotated tag with release notes
+git push origin v0.x.y         # triggers .github/workflows/release.yml
+```
+
+For pre-release tags, use the dotted-suffix semver form:
+`v0.1.0-alpha.1`, `v0.1.0-alpha.2`, `v0.1.0-rc.1`. Goreleaser handles them
+the same way; consumers can opt out via semver tooling that recognizes
+pre-release tags.
+
+If the published CI run fails, recover with:
+
+```bash
+git push --delete origin v0.x.y
+git tag -d v0.x.y
+# fix root cause, retag, retry
+```
+
 ## Image Build
 
 Build and smoke-test the local image through the same path used by CI:
