@@ -1393,6 +1393,10 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 	if _, err := r.store.UpdateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	_, _ = r.emitRunEvent(ctx, task.ID, run.ID, "run."+run.Status, requestID, trace.TraceID, map[string]any{
+		"error":  run.LastError,
+		"status": run.Status,
+	})
 
 	return &StartTaskResult{
 		Task:      task,

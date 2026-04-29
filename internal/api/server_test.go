@@ -2194,6 +2194,53 @@ func TestTasksCreateListAndGet(t *testing.T) {
 	}
 }
 
+func TestTaskRunLifecycleEventsForSuccessfulRun(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := newTestHTTPHandlerForProviders(logger, nil, config.Config{})
+	tempDir := t.TempDir()
+	tasks := newTaskTestClient(t, handler)
+
+	created := mustTaskRequestJSON[TaskResponse](tasks, http.MethodPost, "/v1/tasks",
+		fmt.Sprintf(`{"title":"Lifecycle","prompt":"Pin lifecycle events.","execution_kind":"file","file_operation":"write","file_path":"lifecycle.txt","file_content":"ok","working_directory":%q}`, tempDir))
+	started := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/start", "")
+	if started.Data.Status != "queued" {
+		t.Fatalf("start status = %q, want queued", started.Data.Status)
+	}
+
+	completed := waitForRunStatus(t, handler, created.Data.ID, started.Data.ID, "completed")
+	if completed.Data.Status != "completed" {
+		t.Fatalf("completed status = %q, want completed", completed.Data.Status)
+	}
+
+	events := waitForRunEvent(t, handler, created.Data.ID, started.Data.ID, "run.completed")
+	assertEventOrder(t, events.Data, []string{"run.created", "run.queued", "run.running", "run.completed"})
+	assertEventSequencesIncrease(t, events.Data)
+
+	for _, event := range events.Data {
+		if event.RequestID == "" {
+			t.Fatalf("event %s request_id is empty", event.EventType)
+		}
+		if event.TraceID == "" {
+			t.Fatalf("event %s trace_id is empty", event.EventType)
+		}
+		if event.EventType == "run.completed" {
+			if status, _ := event.Data["status"].(string); status != "completed" {
+				t.Fatalf("run.completed status payload = %q, want completed", status)
+			}
+		}
+	}
+
+	task := mustTaskRequestJSON[TaskResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID, "")
+	if task.Data.Status != "completed" {
+		t.Fatalf("task status = %q, want completed", task.Data.Status)
+	}
+	if task.Data.LatestRunID != started.Data.ID {
+		t.Fatalf("latest_run_id = %q, want %q", task.Data.LatestRunID, started.Data.ID)
+	}
+}
+
 func TestTaskStartShellExecutor(t *testing.T) {
 	t.Parallel()
 
@@ -2552,6 +2599,26 @@ func TestTaskRunCancellation(t *testing.T) {
 	}
 	if steps.Data[0].Status != "cancelled" {
 		t.Fatalf("step status = %q, want cancelled", steps.Data[0].Status)
+	}
+	if steps.Data[0].ErrorKind != "run_cancelled" {
+		t.Fatalf("step error_kind = %q, want run_cancelled", steps.Data[0].ErrorKind)
+	}
+
+	events := waitForRunEvent(t, handler, created.Data.ID, started.Data.ID, "run.cancelled")
+	assertEventOrder(t, events.Data, []string{"run.created", "run.queued", "run.running", "run.cancelled"})
+	cancelledCount := countTaskRunEvents(events.Data, "run.cancelled")
+	if cancelledCount != 1 {
+		t.Fatalf("run.cancelled event count = %d, want 1", cancelledCount)
+	}
+
+	again := mustTaskRequestJSON[TaskRunResponse](tasks, http.MethodPost, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/cancel", "")
+	if again.Data.Status != "cancelled" {
+		t.Fatalf("second cancel status = %q, want cancelled", again.Data.Status)
+	}
+	afterDuplicate := mustTaskRequestJSON[TaskRunEventsResponse](tasks, http.MethodGet, "/v1/tasks/"+created.Data.ID+"/runs/"+started.Data.ID+"/events", "")
+	duplicateCancelledCount := countTaskRunEvents(afterDuplicate.Data, "run.cancelled")
+	if duplicateCancelledCount != 1 {
+		t.Fatalf("run.cancelled event count after duplicate cancel = %d, want 1", duplicateCancelledCount)
 	}
 }
 
@@ -3532,6 +3599,64 @@ func waitForRunStepStatus(t *testing.T, handler http.Handler, taskID, runID stri
 	}
 	t.Fatalf("timed out waiting for run %s step to reach status %q", runID, status)
 	return TaskStepsResponse{}
+}
+
+func waitForRunEvent(t *testing.T, handler http.Handler, taskID, runID, eventType string) TaskRunEventsResponse {
+	t.Helper()
+	deadline := time.Now().Add(asyncWaitTimeout)
+	for time.Now().Before(deadline) {
+		recorder := performRequest(t, handler, http.MethodGet, "/v1/tasks/"+taskID+"/runs/"+runID+"/events", "")
+		if recorder.Code == http.StatusOK {
+			events, ok := tryDecodeRecorder[TaskRunEventsResponse](recorder)
+			if ok && countTaskRunEvents(events.Data, eventType) > 0 {
+				return events
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run %s event %q", runID, eventType)
+	return TaskRunEventsResponse{}
+}
+
+func assertEventOrder(t *testing.T, events []TaskRunEventItem, want []string) {
+	t.Helper()
+	cursor := 0
+	for _, event := range events {
+		if cursor >= len(want) {
+			return
+		}
+		if event.EventType == want[cursor] {
+			cursor++
+		}
+	}
+	if cursor != len(want) {
+		got := make([]string, 0, len(events))
+		for _, event := range events {
+			got = append(got, event.EventType)
+		}
+		t.Fatalf("event order missing %v; got %v", want[cursor:], got)
+	}
+}
+
+func assertEventSequencesIncrease(t *testing.T, events []TaskRunEventItem) {
+	t.Helper()
+	var previous int64
+	for _, event := range events {
+		if event.Sequence <= previous {
+			t.Fatalf("event sequence %d after %d for %s; want strictly increasing", event.Sequence, previous, event.EventType)
+		}
+		previous = event.Sequence
+	}
+}
+
+func countTaskRunEvents(events []TaskRunEventItem, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event.EventType == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 func containsStatus(status string, statuses ...string) bool {
