@@ -239,6 +239,7 @@ func TestRecordRouteDiagnosticsAddsSkippedCandidatesToTrace(t *testing.T) {
 				Reason:       "requested_model",
 				SkipReason:   "unsupported_model",
 				HealthStatus: "healthy",
+				LatencyMS:    640,
 			},
 		},
 	}
@@ -261,6 +262,9 @@ func TestRecordRouteDiagnosticsAddsSkippedCandidatesToTrace(t *testing.T) {
 	}
 	if candidate.Index != routeDiagnosticsIndexOffset {
 		t.Fatalf("candidate index = %d, want diagnostics offset", candidate.Index)
+	}
+	if candidate.LatencyMS != 640 {
+		t.Fatalf("candidate latency = %d, want 640", candidate.LatencyMS)
 	}
 }
 

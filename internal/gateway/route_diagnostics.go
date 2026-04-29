@@ -26,6 +26,7 @@ func recordRouteDiagnostics(ctx context.Context, trace *profiler.Trace, routeRou
 			telemetry.AttrHecateRouteOutcome:         "skipped",
 			telemetry.AttrHecateRouteSkipReason:      candidate.SkipReason,
 			telemetry.AttrHecateProviderHealthStatus: candidate.HealthStatus,
+			telemetry.AttrHecateProviderLatencyMS:    candidate.LatencyMS,
 		})
 	}
 }

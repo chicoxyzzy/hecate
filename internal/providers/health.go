@@ -49,14 +49,19 @@ type HealthState struct {
 }
 
 type MemoryHealthTracker struct {
-	mu               sync.RWMutex
-	failureThreshold int
-	cooldown         time.Duration
-	providers        map[string]HealthState
-	now              func() time.Time
+	mu                       sync.RWMutex
+	failureThreshold         int
+	cooldown                 time.Duration
+	latencyDegradedThreshold time.Duration
+	providers                map[string]HealthState
+	now                      func() time.Time
 }
 
 func NewMemoryHealthTracker(failureThreshold int, cooldown time.Duration) *MemoryHealthTracker {
+	return NewMemoryHealthTrackerWithLatency(failureThreshold, cooldown, 0)
+}
+
+func NewMemoryHealthTrackerWithLatency(failureThreshold int, cooldown, latencyDegradedThreshold time.Duration) *MemoryHealthTracker {
 	if failureThreshold <= 0 {
 		failureThreshold = 3
 	}
@@ -64,10 +69,11 @@ func NewMemoryHealthTracker(failureThreshold int, cooldown time.Duration) *Memor
 		cooldown = 30 * time.Second
 	}
 	return &MemoryHealthTracker{
-		failureThreshold: failureThreshold,
-		cooldown:         cooldown,
-		providers:        make(map[string]HealthState),
-		now:              time.Now,
+		failureThreshold:         failureThreshold,
+		cooldown:                 cooldown,
+		latencyDegradedThreshold: latencyDegradedThreshold,
+		providers:                make(map[string]HealthState),
+		now:                      time.Now,
 	}
 }
 
@@ -88,13 +94,18 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 	state.LastLatency = observation.Duration
 	if observation.Error == nil {
 		state.Available = true
-		state.Status = HealthStatusHealthy
 		state.ConsecutiveFailures = 0
 		state.OpenUntil = time.Time{}
 		state.LastError = ""
-		state.LastErrorClass = ""
 		state.LastSuccessAt = now
 		state.TotalSuccesses++
+		if t.latencyDegradedThreshold > 0 && observation.Duration >= t.latencyDegradedThreshold {
+			state.Status = HealthStatusDegraded
+			state.LastErrorClass = "latency"
+		} else {
+			state.Status = HealthStatusHealthy
+			state.LastErrorClass = ""
+		}
 		t.providers[provider] = state
 		return
 	}

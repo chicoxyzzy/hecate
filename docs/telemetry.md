@@ -255,7 +255,7 @@ winner:
 
 Common skip reasons include `unsupported_model`, `circuit_open`,
 `provider_not_requested`, `no_default_model`, `no_model`,
-`preflight_price_missing`, `budget_denied`, `policy_denied`, and
+`preflight_price_missing`, `budget_denied`, `policy_denied`, `provider_slow`, and
 `route_denied`. Policy-backed denials also carry the matched rule id/action/
 reason when the governor rejected the candidate via a persisted or configured
 policy rule. Runtime failover events use the same provider/model vocabulary

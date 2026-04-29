@@ -73,6 +73,8 @@ Every UI action maps to a `PUT /admin/control-plane/providers/{id}/api-key` or `
 
 Each provider has a per-process health tracker. After a configurable threshold of consecutive retryable failures the breaker opens; the router skips that provider and falls over to the next eligible one. A half-open probe re-opens the breaker after a cooldown. Upstream `429 Too Many Requests` responses cool a provider down immediately so later requests stop hammering a rate-limited backend and can fail over cleanly.
 
+When `GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD` is set to a positive duration, successful calls that take at-or-above that latency mark the provider `degraded` with health reason `latency` instead of `healthy`. Degraded providers remain routable, but the router scores them behind healthy peers and route diagnostics surface them as `provider_slow` with the last observed latency.
+
 The Providers tab shows the current state on each card:
 
 - 🟢 **Healthy** — recent successful traffic

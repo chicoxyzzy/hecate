@@ -27,14 +27,15 @@ type RuleRouter struct {
 }
 
 type routeCandidate struct {
-	Provider     providers.Provider
-	Name         string
-	Kind         providers.Kind
-	Model        string
-	Reason       string
-	Status       string
-	HealthReason string
-	Healthy      bool
+	Provider      providers.Provider
+	Name          string
+	Kind          providers.Kind
+	Model         string
+	Reason        string
+	Status        string
+	HealthReason  string
+	Healthy       bool
+	LastLatencyMS int64
 }
 
 func NewRuleRouter(defaultModel string, catalog catalog.Catalog) *RuleRouter {
@@ -150,6 +151,7 @@ func (r *RuleRouter) RouteDiagnostics(ctx context.Context, req types.ChatRequest
 		if entry.Name == selected.Provider && model == selected.Model {
 			continue
 		}
+		skipReason = routeDiagnosticSkipReason(skipReason, entry)
 		if skipReason == "" {
 			continue
 		}
@@ -159,8 +161,9 @@ func (r *RuleRouter) RouteDiagnostics(ctx context.Context, req types.ChatRequest
 			Model:        model,
 			Reason:       routeReasonForHealth(reason, entry.Status),
 			Outcome:      "skipped",
-			SkipReason:   routeSkipReasonForHealth(skipReason, entry.HealthReason),
+			SkipReason:   skipReason,
 			HealthStatus: firstNonEmpty(entry.Status, string(providers.HealthStatusHealthy)),
+			LatencyMS:    entry.LastLatencyMS,
 		})
 	}
 
@@ -341,14 +344,15 @@ func orderedEntriesByName(entries []catalog.Entry) []catalog.Entry {
 
 func newRouteCandidate(entry catalog.Entry, model, reason string) routeCandidate {
 	return routeCandidate{
-		Provider:     entry.Provider,
-		Name:         entry.Name,
-		Kind:         entry.Kind,
-		Model:        model,
-		Reason:       routeReasonForHealth(reason, entry.Status),
-		Status:       entry.Status,
-		HealthReason: entry.HealthReason,
-		Healthy:      entry.Healthy,
+		Provider:      entry.Provider,
+		Name:          entry.Name,
+		Kind:          entry.Kind,
+		Model:         model,
+		Reason:        routeReasonForHealth(reason, entry.Status),
+		Status:        entry.Status,
+		HealthReason:  entry.HealthReason,
+		Healthy:       entry.Healthy,
+		LastLatencyMS: entry.LastLatencyMS,
 	}
 }
 
@@ -391,6 +395,23 @@ func routeSkipReasonForHealth(skipReason, healthReason string) string {
 	return skipReason
 }
 
+func routeDiagnosticSkipReason(skipReason string, entry catalog.Entry) string {
+	if skipReason != "" {
+		return routeSkipReasonForHealth(skipReason, entry.HealthReason)
+	}
+	switch strings.TrimSpace(entry.Status) {
+	case string(providers.HealthStatusDegraded):
+		if entry.HealthReason == "latency" {
+			return "provider_slow"
+		}
+		return "provider_degraded"
+	case string(providers.HealthStatusHalfOpen):
+		return "provider_recovering"
+	default:
+		return ""
+	}
+}
+
 func routeReasonForHealth(baseReason, status string) string {
 	switch status {
 	case string(providers.HealthStatusHalfOpen):
@@ -428,7 +449,15 @@ func orderCandidates(candidates []routeCandidate) []routeCandidate {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		leftRank := candidateRank(candidates[i].Status)
 		rightRank := candidateRank(candidates[j].Status)
-		return leftRank < rightRank
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftLatency := candidates[i].LastLatencyMS
+		rightLatency := candidates[j].LastLatencyMS
+		if leftLatency > 0 && rightLatency > 0 && leftLatency != rightLatency {
+			return leftLatency < rightLatency
+		}
+		return false
 	})
 	return candidates
 }

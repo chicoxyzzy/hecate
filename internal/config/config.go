@@ -136,11 +136,12 @@ type RouterConfig struct {
 }
 
 type ProviderConfig struct {
-	MaxAttempts     int
-	RetryBackoff    time.Duration
-	FailoverEnabled bool
-	HealthThreshold int
-	HealthCooldown  time.Duration
+	MaxAttempts                    int
+	RetryBackoff                   time.Duration
+	FailoverEnabled                bool
+	HealthThreshold                int
+	HealthCooldown                 time.Duration
+	HealthLatencyDegradedThreshold time.Duration
 }
 
 type ChatConfig struct {
@@ -374,11 +375,12 @@ func LoadFromEnv() Config {
 			DefaultModel: getEnv("GATEWAY_DEFAULT_MODEL", "gpt-5.4-mini"),
 		},
 		Provider: ProviderConfig{
-			MaxAttempts:     getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
-			RetryBackoff:    getEnvDuration("GATEWAY_PROVIDER_RETRY_BACKOFF", 200*time.Millisecond),
-			FailoverEnabled: getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
-			HealthThreshold: getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
-			HealthCooldown:  getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
+			MaxAttempts:                    getEnvInt("GATEWAY_PROVIDER_MAX_ATTEMPTS", 2),
+			RetryBackoff:                   getEnvDuration("GATEWAY_PROVIDER_RETRY_BACKOFF", 200*time.Millisecond),
+			FailoverEnabled:                getEnvBool("GATEWAY_PROVIDER_FAILOVER_ENABLED", true),
+			HealthThreshold:                getEnvInt("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD", 3),
+			HealthCooldown:                 getEnvDuration("GATEWAY_PROVIDER_HEALTH_COOLDOWN", 30*time.Second),
+			HealthLatencyDegradedThreshold: getEnvDuration("GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD", 0),
 		},
 		Chat: ChatConfig{
 			SessionsBackend: getEnv("GATEWAY_CHAT_SESSIONS_BACKEND", "memory"),
@@ -546,6 +548,9 @@ func (c Config) Validate() error {
 	if c.Provider.HealthThreshold < 0 {
 		errs = append(errs, errors.New("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD must be zero or positive"))
 	}
+	if c.Provider.HealthLatencyDegradedThreshold < 0 {
+		errs = append(errs, errors.New("GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD must be zero or positive"))
+	}
 	if c.Server.TaskQueueWorkers <= 0 {
 		errs = append(errs, errors.New("GATEWAY_TASK_QUEUE_WORKERS must be positive"))
 	}
@@ -597,6 +602,7 @@ func durationEnvKeys() []string {
 		"GATEWAY_TASK_HTTP_TIMEOUT",
 		"GATEWAY_PROVIDER_RETRY_BACKOFF",
 		"GATEWAY_PROVIDER_HEALTH_COOLDOWN",
+		"GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD",
 		"GATEWAY_OTEL_TRACES_TIMEOUT",
 		"GATEWAY_OTEL_METRICS_TIMEOUT",
 		"GATEWAY_OTEL_LOGS_TIMEOUT",

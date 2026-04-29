@@ -93,3 +93,35 @@ func TestMemoryHealthTrackerRateLimitOpensImmediately(t *testing.T) {
 		t.Fatalf("state.Status = %q, want %q after cooldown", state.Status, HealthStatusHalfOpen)
 	}
 }
+
+func TestMemoryHealthTrackerMarksSlowSuccessAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewMemoryHealthTrackerWithLatency(3, 15*time.Second, 500*time.Millisecond)
+	now := time.Date(2026, 4, 29, 8, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	tracker.Observe("openai", HealthObservation{Duration: 800 * time.Millisecond})
+	state := tracker.State("openai")
+	if !state.Available {
+		t.Fatalf("state.Available = false, want true for slow-but-usable provider")
+	}
+	if state.Status != HealthStatusDegraded {
+		t.Fatalf("state.Status = %q, want %q", state.Status, HealthStatusDegraded)
+	}
+	if state.LastErrorClass != "latency" {
+		t.Fatalf("state.LastErrorClass = %q, want latency", state.LastErrorClass)
+	}
+	if state.LastLatency != 800*time.Millisecond {
+		t.Fatalf("state.LastLatency = %v, want 800ms", state.LastLatency)
+	}
+
+	tracker.Observe("openai", HealthObservation{Duration: 120 * time.Millisecond})
+	state = tracker.State("openai")
+	if state.Status != HealthStatusHealthy {
+		t.Fatalf("state.Status = %q, want %q after faster recovery", state.Status, HealthStatusHealthy)
+	}
+	if state.LastErrorClass != "" {
+		t.Fatalf("state.LastErrorClass = %q, want empty after faster recovery", state.LastErrorClass)
+	}
+}

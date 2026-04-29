@@ -168,7 +168,11 @@ func main() {
 		os.Exit(1)
 	}
 	providerRegistry := providerRuntime.Registry()
-	healthTracker := providers.NewMemoryHealthTracker(cfg.Provider.HealthThreshold, cfg.Provider.HealthCooldown)
+	healthTracker := providers.NewMemoryHealthTrackerWithLatency(
+		cfg.Provider.HealthThreshold,
+		cfg.Provider.HealthCooldown,
+		cfg.Provider.HealthLatencyDegradedThreshold,
+	)
 
 	staticPricebook := billing.NewStaticPricebook(cfg.Providers, cfg.Pricebook)
 	pricebook := billing.NewRegistryAwarePricebook(billing.NewControlPlanePricebook(staticPricebook, controlPlaneStore), providerRegistry)
@@ -316,6 +320,7 @@ func main() {
 			slog.Bool("provider_failover_enabled", cfg.Provider.FailoverEnabled),
 			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
+			slog.Duration("provider_health_latency_degraded_threshold", cfg.Provider.HealthLatencyDegradedThreshold),
 			slog.Bool("retention_enabled", cfg.Retention.Enabled),
 			slog.Duration("retention_interval", cfg.Retention.Interval),
 			slog.Bool("otel_traces_enabled", cfg.OTel.Traces.Enabled),

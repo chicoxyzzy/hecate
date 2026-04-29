@@ -145,6 +145,7 @@ func TestValidateRejectsImpossibleRuntimeValues(t *testing.T) {
 	cfg.Retention.TraceSnapshots.MaxCount = -1
 	cfg.Provider.MaxAttempts = 0
 	cfg.Provider.HealthThreshold = -1
+	cfg.Provider.HealthLatencyDegradedThreshold = -time.Millisecond
 	cfg.Server.TaskQueueWorkers = 0
 	cfg.Server.TaskQueueBuffer = -1
 	cfg.Server.RateLimit.Enabled = true
@@ -164,6 +165,7 @@ func TestValidateRejectsImpossibleRuntimeValues(t *testing.T) {
 		"GATEWAY_RETENTION_TRACES_MAX_COUNT",
 		"GATEWAY_PROVIDER_MAX_ATTEMPTS",
 		"GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD",
+		"GATEWAY_PROVIDER_HEALTH_LATENCY_DEGRADED_THRESHOLD",
 		"GATEWAY_TASK_QUEUE_WORKERS",
 		"GATEWAY_TASK_QUEUE_BUFFER",
 		"GATEWAY_RATE_LIMIT_RPM",
