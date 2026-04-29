@@ -36,4 +36,4 @@ Full chain with file references: [`ai/skills/providers/SKILL.md`](../../ai/skill
 ## Pointers
 
 - Plan format: [`ai/tasks/planning.md`](../../ai/tasks/planning.md).
-- Architect role: [`ai/roles/architect.md`](../../ai/roles/architect.md).
+- Architect skill (plan template, output shape, anti-patterns): [`ai/skills/architect/SKILL.md`](../../ai/skills/architect/SKILL.md).

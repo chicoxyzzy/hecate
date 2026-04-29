@@ -18,17 +18,13 @@ ai/
     debugging.md                  how to debug deliberately
     refactoring.md                how to reshape code without changing behavior
     code-review.md                review rubric and output format
-  roles/
-    architect.md                  planning-shaped role
-    tester.md                     test-strategy role
-    devops.md                     delivery-readiness role
   skills/
     backend/SKILL.md              Go backend skill (anything outside ui/)
     ui/SKILL.md                   React UI skill (ui/)
     providers/SKILL.md            internal/providers/ skill (parallel-struct boundary, seven-step chain)
-    architect/SKILL.md            planning skill (pointer)
-    tester/SKILL.md               test-strategy skill (pointer)
-    devops/SKILL.md               delivery skill (pointer)
+    architect/SKILL.md            posture skill: plan-first for substantial changes
+    tester/SKILL.md               posture skill: test strategy and verification reporting
+    devops/SKILL.md               posture skill: delivery surfaces and rollback paths
 ```
 
 ## Where to start
@@ -37,7 +33,7 @@ ai/
 - **Backend work** (anything outside `ui/`): also read [`skills/backend/SKILL.md`](skills/backend/SKILL.md).
 - **UI work** (`ui/`): also read [`skills/ui/SKILL.md`](skills/ui/SKILL.md).
 - **Provider adapters** (`internal/providers/`): also read [`skills/providers/SKILL.md`](skills/providers/SKILL.md) — the canonical home for the seven-step "add a wire field" chain.
-- **Planning a substantial change**: see [`roles/architect.md`](roles/architect.md) and [`tasks/planning.md`](tasks/planning.md).
+- **Planning a substantial change**: see [`skills/architect/SKILL.md`](skills/architect/SKILL.md) and [`tasks/planning.md`](tasks/planning.md).
 - **Reviewing code** (yours or another agent's): see [`tasks/code-review.md`](tasks/code-review.md).
 
 ## Relationship to other agent surfaces

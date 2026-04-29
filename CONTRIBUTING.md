@@ -15,8 +15,7 @@ The `ai/` tree mirrors the operating loop:
 |---|---|
 | [`ai/core/`](ai/core/) | Project context, engineering standards, workflow, verification ladders |
 | [`ai/tasks/`](ai/tasks/) | Planning, implementation, debugging, refactoring, code-review shapes |
-| [`ai/roles/`](ai/roles/) | Architect (plan first), tester (evidence over assumptions), devops (delivery surfaces) |
-| [`ai/skills/`](ai/skills/) | Area-specific depth: `backend/`, `ui/`, `providers/`, plus role skills |
+| [`ai/skills/`](ai/skills/) | Area depth (`backend/`, `ui/`, `providers/`) and posture skills (`architect/` for plan-first, `tester/` for evidence-over-assumptions, `devops/` for delivery surfaces) |
 
 ## Verification
 

@@ -5,9 +5,11 @@ description: Use when planning a substantial change before coding — new wire f
 
 # Hecate architect skill
 
-Plan-shaped responses for substantial changes. The skill produces a plan, not code.
+Plan-shaped responses for substantial changes. The skill produces a plan, not code. Use it when "I am about to make a substantial change; I need to think before I type."
 
 ## When to use
+
+Any change that triggers a planning event in [`../../core/workflow.md`](../../core/workflow.md):
 
 - Cross-package wire-field changes (the seven-step chain — see [`../providers/SKILL.md`](../providers/SKILL.md)).
 - New persisted things — must mirror memory + sqlite + postgres tiers.
@@ -16,13 +18,15 @@ Plan-shaped responses for substantial changes. The skill produces a plan, not co
 - New persistent UI surfaces (inspector, side rail, dashboard block, summary panel).
 - Substantive refactors that cross ring boundaries or touch the api↔providers seam.
 
+When in doubt, default to using this skill. The cost of a brief plan is far less than the cost of an unplanned change that hits the wrong seam.
+
 ## Bias
 
-Plan first. Do not write code in this skill's response. The cost of a plan is far less than the cost of an unplanned change that hits the wrong seam.
+Plan first. Do not write code in this skill's response. Unless the task is trivial (typo fix, single-line dependency bump, comment touch-up), produce a plan first.
 
-## Required output shape
+## Output
 
-Use the plan template from [`../../roles/architect.md`](../../roles/architect.md). Format expectations are in [`../../tasks/planning.md`](../../tasks/planning.md). This skill is a thin pointer — the substance lives in those two files.
+Use the canonical plan structure and anti-patterns in [`../../tasks/planning.md`](../../tasks/planning.md). That doc owns the format; this skill owns when to invoke it.
 
 ## Hand-off
 

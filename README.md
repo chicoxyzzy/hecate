@@ -279,7 +279,7 @@ OpenTelemetry traces, metrics, and logs are off by default. See [`docs/telemetry
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor flow. If you're working on this repo with an AI assistant (Claude Code, Codex, Cursor), the orientation entry is [`AGENTS.md`](AGENTS.md), and the canonical, vendor-neutral agent-instruction layer lives under [`ai/`](ai/README.md) — `core/` for project-wide standards, `tasks/` for workflow shapes, `roles/` for planning/test/devops biases, `skills/` for area-specific depth (backend, ui, providers).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor flow. If you're working on this repo with an AI assistant (Claude Code, Codex, Cursor), the orientation entry is [`AGENTS.md`](AGENTS.md), and the canonical, vendor-neutral agent-instruction layer lives under [`ai/`](ai/README.md) — `core/` for project-wide standards, `tasks/` for workflow shapes, `skills/` for area depth (backend, ui, providers) and posture skills (architect, tester, devops).
 
 ## Status
 

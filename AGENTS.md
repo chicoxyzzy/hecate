@@ -17,7 +17,7 @@ guidance live in [`ai/`](ai/README.md).
 
 | Surface | What it carries |
 |---|---|
-| [`ai/`](ai/README.md) | Canonical agent guidance — rings, conventions, workflow, verification, roles, skills |
+| [`ai/`](ai/README.md) | Canonical agent guidance — project context, conventions, workflow, verification, task shapes, area + posture skills |
 | `AGENTS.md` (this) and `ui/AGENTS.md`, `internal/providers/AGENTS.md` | Codebase map per area |
 | [`CLAUDE.md`](CLAUDE.md) | Thin Claude Code adapter pointing to `ai/` |
 | [`.cursor/rules/`](.cursor/rules/) | Thin Cursor adapter pointing to `ai/` |
