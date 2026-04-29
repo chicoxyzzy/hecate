@@ -103,13 +103,25 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 	state.Status = HealthStatusDegraded
 	state.LastFailureAt = now
 	state.LastError = observation.Error.Error()
-	switch classifyHealthError(observation.Error) {
+	errorClass := classifyHealthError(observation.Error)
+	switch errorClass {
 	case "timeout":
 		state.Timeouts++
 	case "rate_limit":
 		state.RateLimits++
 	case "server_error":
 		state.ServerErrors++
+	}
+	if errorClass == "rate_limit" {
+		// Upstream 429s are a signal that the provider-side quota window is
+		// the current bottleneck, not that we should keep probing until a
+		// generic consecutive-failure threshold trips. Cool the provider
+		// down immediately so later requests can route elsewhere.
+		state.Available = false
+		state.Status = HealthStatusOpen
+		state.OpenUntil = now.Add(t.cooldown)
+		t.providers[provider] = state
+		return
 	}
 	if state.ConsecutiveFailures >= t.failureThreshold {
 		state.Available = false

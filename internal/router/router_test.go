@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -554,5 +555,25 @@ func TestRuleRouterRouteDiagnosticsExplainCircuitOpen(t *testing.T) {
 	}
 	if got[0].HealthStatus != string(providers.HealthStatusOpen) {
 		t.Fatalf("health status = %q, want open", got[0].HealthStatus)
+	}
+}
+
+func TestRuleRouterSkipsRateLimitedProviderImmediately(t *testing.T) {
+	t.Parallel()
+
+	registry := providers.NewRegistry(
+		&fakeProvider{name: "openai", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4o-mini"}},
+		&fakeProvider{name: "anthropic", kind: providers.KindCloud, defaultModel: "gpt-4o-mini", supportedModels: []string{"gpt-4o-mini"}},
+	)
+	tracker := providers.NewMemoryHealthTracker(3, time.Minute)
+	tracker.RecordFailure("openai", &providers.UpstreamError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit"})
+
+	router := NewRuleRouter("gpt-4o-mini", catalog.NewRegistryCatalog(registry, tracker))
+	got, err := router.Route(context.Background(), types.ChatRequest{})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("Route() provider = %q, want anthropic after openai 429 cooldown", got.Provider)
 	}
 }

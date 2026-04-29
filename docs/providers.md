@@ -71,7 +71,7 @@ Every UI action maps to a `PUT /admin/control-plane/providers/{id}/api-key` or `
 
 ## Health and circuit breaking
 
-Each provider has a per-process health tracker. After a configurable threshold of consecutive failures the breaker opens; the router skips that provider and falls over to the next eligible one. A half-open probe re-opens the breaker after a cooldown.
+Each provider has a per-process health tracker. After a configurable threshold of consecutive retryable failures the breaker opens; the router skips that provider and falls over to the next eligible one. A half-open probe re-opens the breaker after a cooldown. Upstream `429 Too Many Requests` responses cool a provider down immediately so later requests stop hammering a rate-limited backend and can fail over cleanly.
 
 The Providers tab shows the current state on each card:
 

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -55,5 +56,40 @@ func TestMemoryHealthTrackerOpensAndRecoversAfterCooldown(t *testing.T) {
 	}
 	if state.Status != HealthStatusHealthy {
 		t.Fatalf("state.Status = %q, want %q after success", state.Status, HealthStatusHealthy)
+	}
+}
+
+func TestMemoryHealthTrackerRateLimitOpensImmediately(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewMemoryHealthTracker(3, 15*time.Second)
+	now := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	tracker.RecordFailure("openai", &UpstreamError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit"})
+	state := tracker.State("openai")
+	if state.Available {
+		t.Fatalf("state.Available = true, want false after first rate limit")
+	}
+	if state.Status != HealthStatusOpen {
+		t.Fatalf("state.Status = %q, want %q", state.Status, HealthStatusOpen)
+	}
+	if state.RateLimits != 1 {
+		t.Fatalf("state.RateLimits = %d, want 1", state.RateLimits)
+	}
+	if state.ConsecutiveFailures != 1 {
+		t.Fatalf("state.ConsecutiveFailures = %d, want 1", state.ConsecutiveFailures)
+	}
+	if state.OpenUntil.IsZero() {
+		t.Fatalf("state.OpenUntil = zero, want cooldown deadline")
+	}
+
+	now = now.Add(16 * time.Second)
+	state = tracker.State("openai")
+	if !state.Available {
+		t.Fatalf("state.Available = false, want true after cooldown")
+	}
+	if state.Status != HealthStatusHalfOpen {
+		t.Fatalf("state.Status = %q, want %q after cooldown", state.Status, HealthStatusHalfOpen)
 	}
 }
