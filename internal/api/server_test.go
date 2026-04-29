@@ -1881,8 +1881,12 @@ func TestControlPlaneStatusReturnsAllBuiltInsWithPresetMetadata(t *testing.T) {
 }
 
 // TestControlPlaneStatusResolvesDefaultProviderConflicts verifies that when multiple
-// built-in providers share a base URL (e.g. llamacpp + localai both at 127.0.0.1:8080),
-// only one of them is enabled in the default state.
+// built-in providers share a base URL (e.g. llamacpp + localai both at 127.0.0.1:8080)
+// and none of them have been explicitly enabled by the operator, ALL of them stay
+// disabled in the default state. Previously the API auto-enabled the alphabetically-
+// first provider in the group; that produced a confusing UX where toggling the
+// auto-picked winner off "promoted" the next peer to on, reading as the system
+// enabling something on the operator's behalf.
 func TestControlPlaneStatusResolvesDefaultProviderConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -1895,15 +1899,23 @@ func TestControlPlaneStatusResolvesDefaultProviderConflicts(t *testing.T) {
 	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
 	response := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
 
-	enabledByURL := map[string][]string{}
+	// Every conflict group (>=2 providers sharing a base URL) must be entirely off
+	// when no provider in the group is explicitly enabled.
+	groupByURL := map[string][]ControlPlaneProviderRecord{}
 	for _, p := range response.Data.Providers {
-		if p.Enabled && p.BaseURL != "" {
-			enabledByURL[p.BaseURL] = append(enabledByURL[p.BaseURL], p.ID)
+		if p.BaseURL == "" {
+			continue
 		}
+		groupByURL[p.BaseURL] = append(groupByURL[p.BaseURL], p)
 	}
-	for url, ids := range enabledByURL {
-		if len(ids) > 1 {
-			t.Fatalf("multiple enabled providers share base URL %q: %v", url, ids)
+	for url, group := range groupByURL {
+		if len(group) < 2 {
+			continue
+		}
+		for _, p := range group {
+			if p.Enabled {
+				t.Fatalf("provider %q at shared base URL %q reported enabled by default; expected entire conflict group disabled until operator opts in", p.ID, url)
+			}
 		}
 	}
 }
@@ -1951,6 +1963,63 @@ func TestControlPlaneStatusResolvesConflictsFromExistingCPRecords(t *testing.T) 
 	}
 	if enabledShared != 1 {
 		t.Fatalf("enabled providers at shared base URL = %d, want 1", enabledShared)
+	}
+}
+
+// TestControlPlaneToggleOffDoesNotPromotePeer verifies the user-reported flow:
+// when an explicitly-enabled provider in a conflict group is toggled off, no peer
+// at the same base URL is auto-promoted to enabled. The whole group ends up off
+// until the operator explicitly opts another in. This is the e2e companion to the
+// resolveDefaultProviderConflicts unit assertion.
+func TestControlPlaneToggleOffDoesNotPromotePeer(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	store := controlplane.NewMemoryStore()
+
+	// Step 1: operator enables llamacpp explicitly. The backend's
+	// applySetProviderEnabled path also creates a placeholder CP record for
+	// localai with enabled=false (endpoint conflict), so both end up in the
+	// store with explicit states.
+	if _, err := store.SetProviderEnabled(context.Background(), "llamacpp", true); err != nil {
+		t.Fatalf("SetProviderEnabled(llamacpp, true) error = %v", err)
+	}
+
+	handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+		Server: config.ServerConfig{AuthToken: "admin-secret"},
+	}, governor.NewMemoryBudgetStore(), store)
+	admin := newAPITestClient(t, handler).withBearerToken("admin-secret")
+
+	// Sanity: GET reports llamacpp on, localai off.
+	pre := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
+	llamacppEnabled := false
+	localaiEnabled := false
+	for _, p := range pre.Data.Providers {
+		switch p.ID {
+		case "llamacpp":
+			llamacppEnabled = p.Enabled
+		case "localai":
+			localaiEnabled = p.Enabled
+		}
+	}
+	if !llamacppEnabled {
+		t.Fatal("pre-toggle: llamacpp.Enabled = false, want true")
+	}
+	if localaiEnabled {
+		t.Fatal("pre-toggle: localai.Enabled = true, want false (conflict resolved with llamacpp as winner)")
+	}
+
+	// Step 2: operator toggles llamacpp off.
+	if _, err := store.SetProviderEnabled(context.Background(), "llamacpp", false); err != nil {
+		t.Fatalf("SetProviderEnabled(llamacpp, false) error = %v", err)
+	}
+
+	// Step 3: GET must report BOTH off — no auto-promotion of localai.
+	post := mustRequestJSON[ControlPlaneResponse](admin, http.MethodGet, "/admin/control-plane", "")
+	for _, p := range post.Data.Providers {
+		if (p.ID == "llamacpp" || p.ID == "localai") && p.Enabled {
+			t.Fatalf("post-toggle-off: %q.Enabled = true; want both llamacpp and localai disabled (no auto-promotion of conflict peer)", p.ID)
+		}
 	}
 }
 

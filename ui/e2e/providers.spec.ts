@@ -107,6 +107,68 @@ test("enabling a conflicting provider disables the others (full flow)", async ({
   await expect(llamacpp).toHaveAttribute("aria-checked", "false");
 });
 
+test("toggling off the conflict winner does not auto-enable the peer", async ({ page }) => {
+  // Pins the user-reported flow: "toggling off one of conflicting providers
+  // should not toggle on any other." The backend's resolveDefaultProviderConflicts
+  // used to auto-promote the alphabetically-first peer when no provider in a
+  // conflict group was explicitly enabled. That made llamacpp → off "promote"
+  // localai to on visually, which read as the system enabling something the
+  // operator hadn't asked for.
+  //
+  // Stateful mock: PATCH updates in-memory state without auto-promoting peers.
+  // Same backend semantics now exist on the real server.
+  const config = JSON.parse(JSON.stringify(MOCK_ADMIN_CONFIG)) as typeof MOCK_ADMIN_CONFIG;
+
+  await page.route("/admin/control-plane*", async route => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ object: "configured_state", data: config }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.route("/admin/control-plane/providers/*", async route => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const id = decodeURIComponent(route.request().url().split("/").pop() ?? "");
+    const body = JSON.parse(route.request().postData() ?? "{}");
+    const target = config.providers.find(p => p.id === id);
+    if (target) {
+      target.enabled = body.enabled;
+      // Mirror the real backend: only auto-disable peers when ENABLING. On a
+      // disable, leave every other provider's state alone — no promotion.
+      if (body.enabled) {
+        for (const p of config.providers) {
+          if (p.id !== id && p.base_url === target.base_url) p.enabled = false;
+        }
+      }
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.reload();
+  await page.waitForSelector("text=Cloud providers");
+  await page.keyboard.press("4");
+
+  const llamacpp = page.getByRole("switch", { name: "Enable llama.cpp" });
+  const localai  = page.getByRole("switch", { name: "Enable LocalAI" });
+
+  // Pre-toggle state from MOCK_ADMIN_CONFIG: llamacpp on, localai off.
+  await expect(llamacpp).toHaveAttribute("aria-checked", "true");
+  await expect(localai).toHaveAttribute("aria-checked", "false");
+
+  // Toggle llamacpp off. localai must stay off — neither is enabled now.
+  await llamacpp.click();
+  await expect(llamacpp).toHaveAttribute("aria-checked", "false");
+  await expect(localai).toHaveAttribute("aria-checked", "false");
+});
+
 test("toggle calls PATCH endpoint with correct payload", async ({ page }) => {
   let patchURL = "";
   let patchBody = "";

@@ -529,8 +529,25 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 	}
 
 	builtIns := config.BuiltInProviders()
+
+	// Pre-compute the set of base URLs that are shared by 2+ built-ins. A
+	// provider in a conflict group with no CP record stays disabled by
+	// default — the operator must opt one in. Outside conflict groups,
+	// the legacy "default enabled" behavior holds (cloud presets light up
+	// once the operator pastes a key).
+	conflictURLs := make(map[string]int)
+	for _, b := range builtIns {
+		if b.BaseURL == "" {
+			continue
+		}
+		conflictURLs[b.BaseURL]++
+	}
+
 	records := make([]ControlPlaneProviderRecord, 0, len(builtIns))
 	for _, builtIn := range builtIns {
+		// Default Enabled depends on conflict state: shared base URLs default
+		// to off (operator opt-in), unique base URLs default to on (legacy).
+		defaultEnabled := conflictURLs[builtIn.BaseURL] < 2
 		record := ControlPlaneProviderRecord{
 			ID:           builtIn.ID,
 			Name:         builtIn.ID,
@@ -540,7 +557,7 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 			BaseURL:      builtIn.BaseURL,
 			APIVersion:   builtIn.APIVersion,
 			DefaultModel: builtIn.DefaultModel,
-			Enabled:      true,
+			Enabled:      defaultEnabled,
 		}
 		if cp, ok := cpByID[builtIn.ID]; ok {
 			record.Enabled = cp.Enabled
@@ -571,10 +588,16 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 }
 
 // resolveDefaultProviderConflicts mutates records in place: when a base URL is shared
-// between providers, only one is left enabled. The winner is the alphabetically-first
-// provider by ID that is currently enabled in the group; if none are enabled, the
-// alphabetically-first provider in the group is enabled. Built-ins are already iterated
-// in alphabetical order by `BuiltInProviders()`, so the input slice is sorted.
+// between providers, at most one is left enabled. If no record in the group is
+// explicitly enabled, the entire group stays disabled — the operator must opt one in
+// rather than having the gateway pick a winner on their behalf. The previous behavior
+// (auto-enable the alphabetically-first provider in an unconfigured conflict group)
+// produced a confusing UX: toggling the auto-picked winner off "promoted" the next
+// peer to on, which read as the system enabling something the operator didn't ask for.
+//
+// Built-ins are already iterated in alphabetical order by `BuiltInProviders()`, so
+// the input slice is sorted; that determines the winner when multiple records are
+// explicitly enabled (a degraded state the backend also defends against).
 func resolveDefaultProviderConflicts(records []ControlPlaneProviderRecord) {
 	groupByURL := make(map[string][]int)
 	for i, r := range records {
@@ -588,6 +611,7 @@ func resolveDefaultProviderConflicts(records []ControlPlaneProviderRecord) {
 			continue
 		}
 		// Alphabetically-first enabled record wins (records are already sorted by ID).
+		// If nothing is enabled, the whole group stays off — operator must opt in.
 		winner := -1
 		for _, idx := range group {
 			if records[idx].Enabled {
@@ -595,10 +619,8 @@ func resolveDefaultProviderConflicts(records []ControlPlaneProviderRecord) {
 				break
 			}
 		}
-		// Nothing enabled in the group — enable the alphabetically-first one.
 		if winner < 0 {
-			winner = group[0]
-			records[winner].Enabled = true
+			continue
 		}
 		for _, idx := range group {
 			if idx != winner {

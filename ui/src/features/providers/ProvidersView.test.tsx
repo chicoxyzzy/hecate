@@ -195,4 +195,47 @@ describe("ProvidersView conflict resolution", () => {
 
     await act(async () => { resolveAction!(); });
   });
+
+  it("defaults all conflicting providers to off when none are explicitly configured", async () => {
+    // Fresh-install case. Neither llamacpp nor localai has a CP record yet
+    // — both are known only via the preset catalog, both default to :8080.
+    // Per the user's spec, we shouldn't show two providers as "enabled" at
+    // the same URL: that's a visual contradiction (only one can serve
+    // traffic), and toggling either one off would then visibly leave the
+    // other on, which reads as auto-enabling.
+    //
+    // Behavior we pin: an unconfigured provider that conflicts with any
+    // peer at the same base URL displays as off. The operator must
+    // explicitly opt one in. Non-conflicting unconfigured providers
+    // (Ollama at :11434, cloud presets) keep the legacy default-on.
+    const state = createRuntimeConsoleFixture({
+      session: adminSession,
+      providerPresets: presets,
+      adminConfig: {
+        ...emptyAdminConfig(),
+        // No CP records for any provider. providers[] is empty. The conflict
+        // map is built from the preset catalog directly.
+        providers: [
+          // Cloud preset must appear in adminConfig for the row to render
+          // — the conflict-default rule applies to it transitively (no
+          // conflicts at https://api.anthropic.com → still on).
+          makeConfigured("anthropic", { kind: "cloud", base_url: "https://api.anthropic.com/v1" }),
+          // Local presets without explicit enable; both at :8080.
+          makeConfigured("llamacpp", { kind: "local", base_url: "http://127.0.0.1:8080/v1" }),
+          makeConfigured("localai",  { kind: "local", base_url: "http://127.0.0.1:8080/v1" }),
+          makeConfigured("ollama",   { kind: "local", base_url: "http://127.0.0.1:11434/v1" }),
+        ].map(p => ({ ...p, enabled: undefined as unknown as boolean })),
+      },
+      providers: [makeStatus("llamacpp"), makeStatus("localai"), makeStatus("ollama")],
+    });
+
+    render(<ProvidersView state={state} actions={createRuntimeConsoleActions()} />);
+
+    // Both conflicting locals default to off.
+    expect(screen.getByRole("switch", { name: "Enable llama.cpp" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Enable LocalAI"   }).getAttribute("aria-checked")).toBe("false");
+    // Non-conflicting providers keep the legacy on default.
+    expect(screen.getByRole("switch", { name: "Enable Ollama"    }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Enable Anthropic" }).getAttribute("aria-checked")).toBe("true");
+  });
 });

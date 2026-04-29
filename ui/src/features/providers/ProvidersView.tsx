@@ -52,17 +52,6 @@ export function ProvidersView({ state, actions }: Props) {
     return ai !== bi ? ai - bi : a.localeCompare(b);
   };
 
-  // The CP response is the source of truth for enabled state — it has been
-  // conflict-resolved server-side. Runtime status (state.providers) is only used
-  // for health, not for the toggle itself.
-  function configuredEnabled(id: string): boolean {
-    return configuredByID.get(id)?.enabled ?? true;
-  }
-
-  function resolveEnabled(id: string): boolean {
-    return pendingToggles.has(id) ? pendingToggles.get(id)! : configuredEnabled(id);
-  }
-
   const configuredByName = new Map(configuredProviders.filter(p => p.base_url).map(p => [p.name, p]));
   const allConfiguredIDs = configuredProviders.map(p => p.id).sort(stableSort);
   const conflictMap = buildConflictMap(
@@ -70,6 +59,33 @@ export function ProvidersView({ state, actions }: Props) {
     configuredByName,
     state.providerPresets,
   );
+
+  // The CP response is the source of truth for enabled state — it has been
+  // conflict-resolved server-side. Runtime status (state.providers) is only
+  // used for health, not for the toggle itself.
+  //
+  // Defaults when there's no explicit CP record:
+  //   - No conflict at the base URL → default to enabled (existing behavior;
+  //     fresh cloud presets show on so operators can paste a key and go).
+  //   - Conflicts present → default to disabled. Two providers sharing a
+  //     base URL (llamacpp + localai both at :8080) cannot both serve
+  //     traffic, so neither should display as "on" until the operator
+  //     explicitly opts one in. Without this guard, toggling the explicit
+  //     conflict winner off would visibly "promote" an unconfigured peer
+  //     from off (its conflict warning hid it) to on (default-true) — which
+  //     reads as "the system enabled the other provider when I disabled
+  //     this one."
+  function configuredEnabled(id: string): boolean {
+    const explicit = configuredByID.get(id)?.enabled;
+    if (explicit !== undefined) return explicit;
+    const conflicts = conflictMap.get(id) ?? [];
+    if (conflicts.length > 0) return false;
+    return true;
+  }
+
+  function resolveEnabled(id: string): boolean {
+    return pendingToggles.has(id) ? pendingToggles.get(id)! : configuredEnabled(id);
+  }
   const cloudIDs = configuredProviders.filter(p => p.kind === "cloud").map(p => p.id).sort(stableSort);
   const localIDs = configuredProviders.filter(p => p.kind === "local").map(p => p.id).sort(stableSort);
 
