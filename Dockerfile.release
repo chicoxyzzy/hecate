@@ -24,7 +24,19 @@ COPY hecate /usr/local/bin/hecate
 COPY --from=prep --chown=65532:65532 /data /data
 
 ENV GATEWAY_ADDRESS=:8765 \
-    GATEWAY_DATA_DIR=/data
+    GATEWAY_DATA_DIR=/data \
+    GATEWAY_SQLITE_PATH=/data/hecate.db \
+    GATEWAY_CONTROL_PLANE_BACKEND=sqlite \
+    GATEWAY_RETENTION_HISTORY_BACKEND=sqlite \
+    GATEWAY_CHAT_SESSIONS_BACKEND=sqlite \
+    GATEWAY_TASKS_BACKEND=sqlite \
+    GATEWAY_TASK_QUEUE_BACKEND=sqlite \
+    GATEWAY_CACHE_BACKEND=sqlite \
+    GATEWAY_BUDGET_BACKEND=sqlite \
+    PROVIDER_OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+    PROVIDER_LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1 \
+    PROVIDER_LLAMACPP_BASE_URL=http://host.docker.internal:8080/v1 \
+    PROVIDER_LOCALAI_BASE_URL=http://host.docker.internal:8080/v1
 
 VOLUME ["/data"]
 EXPOSE 8765
