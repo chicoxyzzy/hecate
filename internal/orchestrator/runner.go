@@ -1409,6 +1409,16 @@ func (r *Runner) executeRun(ctx context.Context, trace *profiler.Trace, task typ
 }
 
 func (r *Runner) finalizeFailedRun(ctx context.Context, trace *profiler.Trace, task types.Task, run types.TaskRun, requestID, status, message string) error {
+	if currentRun, found, err := r.store.GetRun(ctx, task.ID, run.ID); err == nil && found {
+		// Cancellation can arrive through the HTTP API while the worker is
+		// still unwinding a cancelled executor. In that case CancelRun has
+		// already persisted the terminal run/task state and emitted the
+		// authoritative run.cancelled event; re-emitting it here creates
+		// duplicate terminal events under racey shutdown/cancel timing.
+		if types.IsTerminalTaskRunStatus(currentRun.Status) && currentRun.Status == status {
+			return nil
+		}
+	}
 	now := time.Now().UTC()
 	var failedRunDurationMS int64
 	if !run.StartedAt.IsZero() {
