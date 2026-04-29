@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/mcp"
 )
@@ -198,10 +199,76 @@ func buildPool(ctx context.Context, configs []ServerConfig, factory clientFactor
 	return p, nil
 }
 
+// Bounded retry constants for spawnClient. Two attempts total (one
+// retry) with a 500ms backoff is the smallest useful window — enough
+// to absorb a network blip or a slow-booting subprocess that's
+// printing its first frame, tight enough that a permanent failure
+// (missing binary, bad args, auth rejected) only adds 500ms of
+// latency before the operator sees the diagnostic. We don't expose
+// these as env vars: operators don't have a meaningful signal to
+// tune them with, and a 3rd attempt would push permanent-failure
+// latency past 1s for no benefit.
+const (
+	spawnClientMaxAttempts = 2
+	spawnClientBackoff     = 500 * time.Millisecond
+)
+
 // spawnClient runs the per-config bring-up: build transport, init
 // handshake, list tools. Used by NewPool (uncached path) and by the
 // shared cache on a miss.
+//
+// Wraps spawnClientOnce in a bounded retry. The motivating failure
+// mode is a transient first-attempt failure during initialize or
+// tools/list — a network blip, a stdio server that hadn't finished
+// booting yet, an HTTP server with a brief 503. The retry rebuilds
+// the transport from scratch (a fresh exec.Command for stdio, a
+// fresh HTTP client for URL configs), so a stuck connection from
+// the failed attempt doesn't poison the second one.
+//
+// Permanent failures (missing binary, bad args, auth rejected) fail
+// twice and return the last error; the operator sees the same
+// diagnostic, just delayed by spawnClientBackoff. We don't try to
+// distinguish "transient" from "permanent" at this layer — both
+// surface as wrapped errors and the cost of retrying a permanent
+// failure is bounded.
+//
+// Respects ctx: cancellation between attempts aborts the retry
+// loop with the ctx error rather than waiting out the backoff.
 func spawnClient(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*Client, []mcp.Tool, error) {
+	var lastErr error
+	for attempt := 1; attempt <= spawnClientMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				// Surface BOTH errors: the underlying spawn failure
+				// (which is what the operator usually wants) and the
+				// ctx error (so they know we didn't get to retry).
+				return nil, nil, fmt.Errorf("%w (after %d attempt(s); ctx: %v)", lastErr, attempt-1, err)
+			}
+			return nil, nil, err
+		}
+		client, tools, err := spawnClientOnce(ctx, info, cfg)
+		if err == nil {
+			return client, tools, nil
+		}
+		lastErr = err
+		if attempt < spawnClientMaxAttempts {
+			// Don't sleep past ctx — a cancelled run shouldn't add
+			// latency before bailing.
+			select {
+			case <-time.After(spawnClientBackoff):
+			case <-ctx.Done():
+				return nil, nil, fmt.Errorf("%w (after %d attempt(s); ctx: %v)", lastErr, attempt, ctx.Err())
+			}
+		}
+	}
+	return nil, nil, lastErr
+}
+
+// spawnClientOnce is one bring-up attempt: build transport, run
+// initialize, run tools/list. Failures close the transport before
+// returning so the retry path doesn't leak file descriptors or
+// goroutines on a partially-initialized client.
+func spawnClientOnce(ctx context.Context, info mcp.ClientInfo, cfg ServerConfig) (*Client, []mcp.Tool, error) {
 	transport, err := buildTransport(ctx, cfg)
 	if err != nil {
 		return nil, nil, err

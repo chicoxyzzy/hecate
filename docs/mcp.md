@@ -233,6 +233,8 @@ Order matters and is enforced by the handler: runner first, cache second. Closin
 | Transport closed mid-run (subprocess died, HTTP server hung up) | The cache evicts the entry; the call returns a transport error to the loop, which surfaces it as a tool error on the next turn. The next task respawns. |
 | `enc:` value arrives without `GATEWAY_CONTROL_PLANE_SECRET_KEY` | Run fails fast at spawn time with a clear error. |
 
+Bring-up (initialize + tools/list) gets one bounded retry with a 500ms backoff, rebuilding the transport from scratch between attempts. Absorbs ordinary flakiness — slow-booting subprocess, brief network blip, transient 5xx — without hiding real failures: a permanent broken config (missing binary, bad args, auth rejected) fails twice and surfaces the same diagnostic, just delayed by ~500ms. Cancellation aborts the retry promptly rather than waiting out the backoff, so runner shutdown stays responsive.
+
 ### End-to-end examples
 
 **Filesystem server, no gating** — the simplest config:
