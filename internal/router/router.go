@@ -36,6 +36,7 @@ type routeCandidate struct {
 	HealthReason  string
 	Healthy       bool
 	LastLatencyMS int64
+	Stability     int64
 }
 
 func NewRuleRouter(defaultModel string, catalog catalog.Catalog) *RuleRouter {
@@ -145,11 +146,15 @@ func (r *RuleRouter) RouteDiagnostics(ctx context.Context, req types.ChatRequest
 	if globalModel == "" {
 		globalModel = r.defaultModel
 	}
+	selectedCandidate, hasSelected := r.selectedDiagnosticCandidate(ctx, req, selected, globalModel)
 
 	for _, entry := range entries {
 		model, reason, skipReason := r.diagnoseEntry(req, scope.ProviderHint, globalModel, entry)
 		if entry.Name == selected.Provider && model == selected.Model {
 			continue
+		}
+		if skipReason == "" && hasSelected {
+			skipReason = comparativeSkipReason(newRouteCandidate(entry, model, reason), selectedCandidate)
 		}
 		skipReason = routeDiagnosticSkipReason(skipReason, entry)
 		if skipReason == "" {
@@ -353,6 +358,7 @@ func newRouteCandidate(entry catalog.Entry, model, reason string) routeCandidate
 		HealthReason:  entry.HealthReason,
 		Healthy:       entry.Healthy,
 		LastLatencyMS: entry.LastLatencyMS,
+		Stability:     stabilityPenalty(entry),
 	}
 }
 
@@ -452,14 +458,93 @@ func orderCandidates(candidates []routeCandidate) []routeCandidate {
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
+		if candidates[i].Stability != candidates[j].Stability {
+			return candidates[i].Stability < candidates[j].Stability
+		}
 		leftLatency := candidates[i].LastLatencyMS
 		rightLatency := candidates[j].LastLatencyMS
 		if leftLatency > 0 && rightLatency > 0 && leftLatency != rightLatency {
 			return leftLatency < rightLatency
 		}
+		if candidates[i].Name != candidates[j].Name {
+			return strings.ToLower(candidates[i].Name) < strings.ToLower(candidates[j].Name)
+		}
 		return false
 	})
 	return candidates
+}
+
+func (r *RuleRouter) selectedDiagnosticCandidate(ctx context.Context, req types.ChatRequest, selected types.RouteDecision, globalModel string) (routeCandidate, bool) {
+	if selected.Provider == "" {
+		return routeCandidate{}, false
+	}
+	entry, ok := r.catalog.Get(ctx, selected.Provider)
+	if !ok {
+		return routeCandidate{}, false
+	}
+	model := selected.Model
+	if model == "" {
+		model = globalModel
+	}
+	if model == "" {
+		return routeCandidate{}, false
+	}
+	reason := selected.Reason
+	if reason == "" {
+		reason = inferredRouteReason(req, entry, model)
+	}
+	candidate := newRouteCandidate(entry, model, reason)
+	if selected.Reason != "" {
+		candidate.Reason = selected.Reason
+	}
+	return candidate, true
+}
+
+func inferredRouteReason(req types.ChatRequest, entry catalog.Entry, model string) string {
+	switch {
+	case requestscope.Normalize(req.Scope).ProviderHint != "":
+		if req.Model != "" {
+			return "pinned_provider_model"
+		}
+		return "pinned_provider"
+	case req.Model != "":
+		return "requested_model"
+	case entry.DefaultModel != "":
+		return "provider_default_model"
+	default:
+		return "global_default_model"
+	}
+}
+
+func comparativeSkipReason(candidate, selected routeCandidate) string {
+	if selected.Name == "" {
+		return ""
+	}
+	selectedRank := candidateRank(selected.Status)
+	candidateRankValue := candidateRank(candidate.Status)
+	if candidateRankValue > selectedRank {
+		if candidate.HealthReason == "latency" || candidate.Status == string(providers.HealthStatusDegraded) {
+			return "provider_slow"
+		}
+		if candidate.HealthReason == "rate_limit" {
+			return "provider_rate_limited"
+		}
+		return "provider_less_healthy"
+	}
+	if candidate.Stability > selected.Stability {
+		return "provider_less_stable"
+	}
+	if candidate.LastLatencyMS > 0 && selected.LastLatencyMS > 0 && candidate.LastLatencyMS > selected.LastLatencyMS {
+		return "provider_slow"
+	}
+	return "lower_priority_candidate"
+}
+
+func stabilityPenalty(entry catalog.Entry) int64 {
+	if entry.ConsecutiveFailures > 0 {
+		return int64(entry.ConsecutiveFailures) * 1_000_000
+	}
+	return entry.RateLimits*100_000 + entry.Timeouts*10_000 + entry.ServerErrors*1_000 + entry.TotalFailures
 }
 
 func routeStatusFromReason(reason string) string {

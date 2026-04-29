@@ -1847,6 +1847,152 @@ func TestGatewayTraceEndpointShowsPolicyDeniedRouteCandidate(t *testing.T) {
 	}
 }
 
+func TestGatewayTraceEndpointShowsConfiguredRouteModePolicyMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "ollama",
+		defaultModel: "llama3.1:8b",
+		capabilities: providers.Capabilities{
+			Name:         "ollama",
+			Kind:         providers.KindLocal,
+			DefaultModel: "llama3.1:8b",
+			Models:       []string{"llama3.1:8b"},
+		},
+		response: &types.ChatResponse{},
+	}
+	srv := newGatewayServer(t, provider, config.Config{
+		Router: config.RouterConfig{DefaultModel: "llama3.1:8b"},
+		Governor: config.GovernorConfig{
+			RouteMode: "cloud_only",
+		},
+	})
+	defer srv.Close()
+
+	body := `{"messages":[{"role":"user","content":"hi"}]}`
+	chatResp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	requestID := chatResp.Header.Get("X-Request-Id")
+	raw := readBody(t, chatResp)
+	if chatResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("chat status = %d, want 403, body=%s", chatResp.StatusCode, raw)
+	}
+
+	traceResp, err := http.Get(srv.URL + "/v1/traces?request_id=" + requestID)
+	if err != nil {
+		t.Fatalf("GET /v1/traces error = %v", err)
+	}
+	traceRaw := readBody(t, traceResp)
+	if traceResp.StatusCode != http.StatusOK {
+		t.Fatalf("trace status = %d, body=%s", traceResp.StatusCode, traceRaw)
+	}
+
+	var trace TraceResponse
+	if err := json.Unmarshal(traceRaw, &trace); err != nil {
+		t.Fatalf("Unmarshal() error = %v, body=%s", err, traceRaw)
+	}
+	foundDenied := false
+	for _, candidate := range trace.Data.Route.Candidates {
+		if candidate.Provider == "ollama" && candidate.Outcome == "denied" && candidate.SkipReason == "policy_denied" {
+			foundDenied = true
+			if candidate.PolicyAction != "deny" {
+				t.Fatalf("candidate.policy_action = %q, want deny", candidate.PolicyAction)
+			}
+			if candidate.PolicyReason == "" {
+				t.Fatal("candidate.policy_reason is empty")
+			}
+		}
+	}
+	if !foundDenied {
+		t.Fatalf("missing denied ollama policy_denied candidate: %+v", trace.Data.Route.Candidates)
+	}
+}
+
+func TestGatewayTraceEndpointShowsRewritePolicyMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:         "openai",
+			Kind:         providers.KindCloud,
+			DefaultModel: "gpt-4o-mini",
+			Models:       []string{"gpt-4o-mini"},
+		},
+		response: &types.ChatResponse{
+			Model: "gpt-4o-mini",
+			Choices: []types.ChatChoice{{
+				Index:        0,
+				Message:      types.Message{Role: "assistant", Content: "hi"},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+	srv := newGatewayServer(t, provider, config.Config{
+		Router: config.RouterConfig{DefaultModel: "gpt-4o-mini"},
+		Governor: config.GovernorConfig{
+			PolicyRules: []config.PolicyRuleConfig{{
+				ID:             "downgrade-default",
+				Action:         "rewrite_model",
+				Reason:         "default downgrade",
+				Models:         []string{"gpt-4o"},
+				RewriteModelTo: "gpt-4o-mini",
+			}},
+		},
+	})
+	defer srv.Close()
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	chatResp := gatewayPost(t, srv.URL+"/v1/chat/completions", body, nil)
+	requestID := chatResp.Header.Get("X-Request-Id")
+	raw := readBody(t, chatResp)
+	if chatResp.StatusCode != http.StatusOK {
+		t.Fatalf("chat status = %d, want 200, body=%s", chatResp.StatusCode, raw)
+	}
+
+	traceResp, err := http.Get(srv.URL + "/v1/traces?request_id=" + requestID)
+	if err != nil {
+		t.Fatalf("GET /v1/traces error = %v", err)
+	}
+	traceRaw := readBody(t, traceResp)
+	if traceResp.StatusCode != http.StatusOK {
+		t.Fatalf("trace status = %d, body=%s", traceResp.StatusCode, traceRaw)
+	}
+
+	var trace TraceResponse
+	if err := json.Unmarshal(traceRaw, &trace); err != nil {
+		t.Fatalf("Unmarshal() error = %v, body=%s", err, traceRaw)
+	}
+	foundRewrite := false
+	for _, span := range trace.Data.Spans {
+		for _, event := range span.Events {
+			if event.Name != "governor.model_rewrite" {
+				continue
+			}
+			foundRewrite = true
+			if event.Attributes["gen_ai.request.model.original"] != "gpt-4o" {
+				t.Fatalf("rewrite original model = %v, want gpt-4o", event.Attributes["gen_ai.request.model.original"])
+			}
+			if event.Attributes["gen_ai.request.model.rewritten"] != "gpt-4o-mini" {
+				t.Fatalf("rewrite rewritten model = %v, want gpt-4o-mini", event.Attributes["gen_ai.request.model.rewritten"])
+			}
+			if event.Attributes["hecate.policy.rule_id"] != "downgrade-default" {
+				t.Fatalf("rewrite policy rule id = %v, want downgrade-default", event.Attributes["hecate.policy.rule_id"])
+			}
+			if event.Attributes["hecate.policy.action"] != "rewrite_model" {
+				t.Fatalf("rewrite policy action = %v, want rewrite_model", event.Attributes["hecate.policy.action"])
+			}
+			if event.Attributes["hecate.policy.reason"] != "default downgrade" {
+				t.Fatalf("rewrite policy reason = %v, want default downgrade", event.Attributes["hecate.policy.reason"])
+			}
+		}
+	}
+	if !foundRewrite {
+		t.Fatal("missing governor.model_rewrite event in trace")
+	}
+}
+
 func TestGatewayTraceEndpointShowsBudgetDeniedRouteCandidate(t *testing.T) {
 	t.Parallel()
 

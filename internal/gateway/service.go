@@ -331,12 +331,23 @@ func (s *Service) buildExecutionPlan(ctx context.Context, trace *profiler.Trace,
 		telemetry.AttrHecateGovernorResult: telemetry.ResultSuccess,
 	})
 
-	rewrittenReq := s.governor.Rewrite(req)
-	if rewrittenReq.Model != req.Model {
-		trace.Record("governor.model_rewrite", map[string]any{
-			telemetry.AttrGenAIRequestModel + ".original":  req.Model,
+	rewrite := s.governor.RewriteResult(req)
+	rewrittenReq := rewrite.Request
+	if rewrite.Applied {
+		attrs := map[string]any{
+			telemetry.AttrGenAIRequestModel + ".original":  rewrite.OriginalModel,
 			telemetry.AttrGenAIRequestModel + ".rewritten": rewrittenReq.Model,
-		})
+		}
+		if rewrite.PolicyRuleID != "" {
+			attrs[telemetry.AttrHecatePolicyRuleID] = rewrite.PolicyRuleID
+		}
+		if rewrite.PolicyAction != "" {
+			attrs[telemetry.AttrHecatePolicyAction] = rewrite.PolicyAction
+		}
+		if rewrite.PolicyReason != "" {
+			attrs[telemetry.AttrHecatePolicyReason] = rewrite.PolicyReason
+		}
+		trace.Record("governor.model_rewrite", attrs)
 	}
 
 	cacheKey, err := s.keyBuilder.Key(rewrittenReq)

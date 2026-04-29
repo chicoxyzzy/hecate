@@ -22,6 +22,17 @@ type Governor interface {
 	SetBudgetBalance(ctx context.Context, filter BudgetFilter, balanceMicros int64) error
 	ResetBudget(ctx context.Context, filter BudgetFilter) error
 	Rewrite(req types.ChatRequest) types.ChatRequest
+	RewriteResult(req types.ChatRequest) RewriteResult
+}
+
+type RewriteResult struct {
+	Request        types.ChatRequest
+	Applied        bool
+	OriginalModel  string
+	RewrittenModel string
+	PolicyRuleID   string
+	PolicyAction   string
+	PolicyReason   string
 }
 
 type BudgetFilter struct {
@@ -56,7 +67,7 @@ func NewStaticGovernor(cfg config.GovernorConfig, store AccountStore, historySto
 
 func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
 	if g.config.DenyAll {
-		return fmt.Errorf("requests are disabled by policy")
+		return denyPolicyError("requests are disabled by policy")
 	}
 
 	promptEstimate := 0
@@ -64,7 +75,7 @@ func (g *StaticGovernor) Check(_ context.Context, req types.ChatRequest) error {
 		promptEstimate += len(msg.Content) / 4
 	}
 	if promptEstimate > g.config.MaxPromptTokens {
-		return fmt.Errorf("estimated prompt tokens %d exceed limit %d", promptEstimate, g.config.MaxPromptTokens)
+		return denyPolicyError(fmt.Sprintf("estimated prompt tokens %d exceed limit %d", promptEstimate, g.config.MaxPromptTokens))
 	}
 
 	if err := policy.EvaluateDeny(g.rules, policy.BuildRequestSubject(req)); err != nil {
@@ -84,31 +95,31 @@ func (g *StaticGovernor) CheckRoute(ctx context.Context, req types.ChatRequest, 
 	}
 
 	if len(g.config.AllowedProviders) > 0 && !slices.Contains(g.config.AllowedProviders, decision.Provider) {
-		return fmt.Errorf("provider %q is not allowed by policy", decision.Provider)
+		return denyPolicyError(fmt.Sprintf("provider %q is not allowed by policy", decision.Provider))
 	}
 	if slices.Contains(g.config.DeniedProviders, decision.Provider) {
-		return fmt.Errorf("provider %q is denied by policy", decision.Provider)
+		return denyPolicyError(fmt.Sprintf("provider %q is denied by policy", decision.Provider))
 	}
 
 	model := decision.Model
 	if len(g.config.AllowedModels) > 0 && !slices.Contains(g.config.AllowedModels, model) {
-		return fmt.Errorf("model %q is not allowed by policy", model)
+		return denyPolicyError(fmt.Sprintf("model %q is not allowed by policy", model))
 	}
 	if slices.Contains(g.config.DeniedModels, model) {
-		return fmt.Errorf("model %q is denied by policy", model)
+		return denyPolicyError(fmt.Sprintf("model %q is denied by policy", model))
 	}
 
 	if len(g.config.AllowedProviderKinds) > 0 && !slices.Contains(g.config.AllowedProviderKinds, providerKind) {
-		return fmt.Errorf("provider kind %q is not allowed by policy", providerKind)
+		return denyPolicyError(fmt.Sprintf("provider kind %q is not allowed by policy", providerKind))
 	}
 	switch g.config.RouteMode {
 	case "local_only":
 		if providerKind != "local" {
-			return fmt.Errorf("route mode %q denies provider kind %q", g.config.RouteMode, providerKind)
+			return denyPolicyError(fmt.Sprintf("route mode %q denies provider kind %q", g.config.RouteMode, providerKind))
 		}
 	case "cloud_only":
 		if providerKind != "cloud" {
-			return fmt.Errorf("route mode %q denies provider kind %q", g.config.RouteMode, providerKind)
+			return denyPolicyError(fmt.Sprintf("route mode %q denies provider kind %q", g.config.RouteMode, providerKind))
 		}
 	}
 
@@ -339,16 +350,45 @@ func (g *StaticGovernor) ResetBudget(ctx context.Context, filter BudgetFilter) e
 }
 
 func (g *StaticGovernor) Rewrite(req types.ChatRequest) types.ChatRequest {
-	if _, rewritten, ok := policy.EvaluateRewrite(g.rules, policy.BuildRequestSubject(req)); ok {
-		req.Model = rewritten
-		return req
+	return g.RewriteResult(req).Request
+}
+
+func (g *StaticGovernor) RewriteResult(req types.ChatRequest) RewriteResult {
+	result := RewriteResult{
+		Request:       req,
+		OriginalModel: req.Model,
+	}
+	if eval, rewritten, ok := policy.EvaluateRewrite(g.rules, policy.BuildRequestSubject(req)); ok {
+		result.Request.Model = rewritten
+		result.Applied = rewritten != req.Model
+		result.RewrittenModel = rewritten
+		if eval != nil {
+			result.PolicyRuleID = eval.RuleID
+			result.PolicyAction = eval.Action
+			result.PolicyReason = eval.Reason
+		}
+		return result
 	}
 
 	if g.config.ModelRewriteTo == "" {
-		return req
+		return result
 	}
-	req.Model = g.config.ModelRewriteTo
-	return req
+	result.Request.Model = g.config.ModelRewriteTo
+	result.Applied = g.config.ModelRewriteTo != req.Model
+	result.RewrittenModel = g.config.ModelRewriteTo
+	result.PolicyAction = policy.ActionRewriteModel
+	result.PolicyReason = "configured model rewrite"
+	return result
+}
+
+func denyPolicyError(message string) error {
+	return &policy.Error{
+		Evaluation: policy.Evaluation{
+			Action:  policy.ActionDeny,
+			Reason:  message,
+			Message: message,
+		},
+	}
 }
 
 func (g *StaticGovernor) budgetKeyForRequest(req types.ChatRequest, decision types.RouteDecision) string {

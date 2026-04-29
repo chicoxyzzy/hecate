@@ -252,13 +252,15 @@ winner:
 | `router.candidate.considered` | The executor is about to preflight/call a runtime candidate | `hecate.route.outcome=considered`, `hecate.provider.index` |
 | `router.candidate.denied` | Policy, budget, or route preflight denied a candidate | `hecate.route.skip_reason`, `hecate.cost.estimated_micros_usd`, `hecate.policy.rule_id`, `hecate.policy.reason` |
 | `router.candidate.selected` | A candidate survived preflight and will be called | `hecate.route.outcome=selected`, `hecate.cost.estimated_micros_usd` |
+| `governor.model_rewrite` | The governor rewrote the requested model before routing | `gen_ai.request.model.original`, `gen_ai.request.model.rewritten`, `hecate.policy.rule_id`, `hecate.policy.action`, `hecate.policy.reason` |
 
 Common skip reasons include `unsupported_model`, `circuit_open`,
 `provider_not_requested`, `no_default_model`, `no_model`,
-`preflight_price_missing`, `budget_denied`, `policy_denied`, `provider_slow`, and
-`route_denied`. Policy-backed denials also carry the matched rule id/action/
+`preflight_price_missing`, `budget_denied`, `policy_denied`, `provider_slow`,
+`provider_less_stable`, and `route_denied`. Policy-backed denials also carry the matched rule id/action/
 reason when the governor rejected the candidate via a persisted or configured
-policy rule. Runtime failover events use the same provider/model vocabulary
+policy rule. Rewrite events carry the same policy metadata when the governor
+changes the requested model before the router runs. Runtime failover events use the same provider/model vocabulary
 under `gateway.provider`.
 
 When `GATEWAY_TRACE_BODIES=true`, the gateway also records redacted, size-capped trace events named:

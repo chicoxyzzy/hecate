@@ -66,6 +66,10 @@ func (g *ControlPlaneGovernor) Rewrite(req types.ChatRequest) types.ChatRequest 
 	return g.current(context.Background()).Rewrite(req)
 }
 
+func (g *ControlPlaneGovernor) RewriteResult(req types.ChatRequest) RewriteResult {
+	return g.current(context.Background()).RewriteResult(req)
+}
+
 func (g *ControlPlaneGovernor) current(ctx context.Context) *StaticGovernor {
 	cfg := g.config
 	if g.cpStore != nil {

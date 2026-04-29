@@ -2,11 +2,13 @@ package governor
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
+	"github.com/hecate/agent-runtime/internal/policy"
 	"github.com/hecate/agent-runtime/pkg/types"
 )
 
@@ -219,6 +221,45 @@ func TestStaticGovernorRequestPolicyRewrite(t *testing.T) {
 	}
 }
 
+func TestStaticGovernorRewriteResultIncludesPolicyMetadata(t *testing.T) {
+	t.Parallel()
+
+	gov := NewStaticGovernor(config.GovernorConfig{
+		PolicyRules: []config.PolicyRuleConfig{
+			{
+				ID:             "tenant-default-downgrade",
+				Action:         "rewrite_model",
+				Tenants:        []string{"team-a"},
+				Models:         []string{"gpt-4o"},
+				Reason:         "tenant default downgrade",
+				RewriteModelTo: "gpt-4o-mini",
+			},
+		},
+	}, NewMemoryBudgetStore(), NewMemoryBudgetStore())
+
+	result := gov.RewriteResult(types.ChatRequest{
+		Model: "gpt-4o",
+		Scope: types.RequestScope{
+			Tenant: "team-a",
+		},
+	})
+	if !result.Applied {
+		t.Fatal("Applied = false, want true")
+	}
+	if result.Request.Model != "gpt-4o-mini" {
+		t.Fatalf("rewritten model = %q, want gpt-4o-mini", result.Request.Model)
+	}
+	if result.PolicyRuleID != "tenant-default-downgrade" {
+		t.Fatalf("policy rule id = %q, want tenant-default-downgrade", result.PolicyRuleID)
+	}
+	if result.PolicyAction != policy.ActionRewriteModel {
+		t.Fatalf("policy action = %q, want rewrite_model", result.PolicyAction)
+	}
+	if result.PolicyReason != "tenant default downgrade" {
+		t.Fatalf("policy reason = %q, want tenant default downgrade", result.PolicyReason)
+	}
+}
+
 func TestStaticGovernorRoutePolicyDenyByTenantAndProviderKind(t *testing.T) {
 	t.Parallel()
 
@@ -252,6 +293,36 @@ func TestStaticGovernorRoutePolicyDenyByTenantAndProviderKind(t *testing.T) {
 	}
 	if err.Error() != "team-a cannot use expensive cloud spillover" {
 		t.Fatalf("error = %q, want policy reason", err.Error())
+	}
+	var policyErr *policy.Error
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("error = %T, want *policy.Error", err)
+	}
+}
+
+func TestStaticGovernorRouteModeDenialReturnsPolicyError(t *testing.T) {
+	t.Parallel()
+
+	gov := NewStaticGovernor(config.GovernorConfig{
+		RouteMode: "cloud_only",
+	}, NewMemoryBudgetStore(), NewMemoryBudgetStore())
+
+	err := gov.CheckRoute(context.Background(), types.ChatRequest{}, types.RouteDecision{
+		Provider: "ollama",
+		Model:    "llama3.1:8b",
+	}, "local", 0)
+	if err == nil {
+		t.Fatal("CheckRoute() error = nil, want policy denial")
+	}
+	var policyErr *policy.Error
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("error = %T, want *policy.Error", err)
+	}
+	if policyErr.Evaluation.Action != policy.ActionDeny {
+		t.Fatalf("policy action = %q, want deny", policyErr.Evaluation.Action)
+	}
+	if policyErr.Evaluation.Reason == "" {
+		t.Fatal("policy reason is empty")
 	}
 }
 
