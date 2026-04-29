@@ -116,6 +116,7 @@ export function createRuntimeConsoleActions(): RuntimeConsoleViewModel["actions"
     setModelFilter: () => undefined,
     setProviderFilter: () => undefined,
     setProviderEnabled: async () => undefined,
+    refreshProviders: async () => undefined,
     setRetentionSubsystems: () => undefined,
     setRotateAPIKeyID: () => undefined,
     setRotateAPIKeySecret: () => undefined,

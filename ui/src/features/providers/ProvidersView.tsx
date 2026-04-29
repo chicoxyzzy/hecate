@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { buildConflictMap, providerDotColor, resolvedBaseURL } from "../../lib/provider-utils";
 import { describeCredentialState, describeHealthErrorClass, describeRoutingBlockedReason } from "../../lib/runtime-utils";
@@ -35,10 +35,25 @@ function iconColorByID(id: string): string {
   return PRESET_COLORS[id.toLowerCase()] ?? "var(--teal)";
 }
 
+// Interval for background provider discovery refresh (ms). Matches the backend's
+// local-failure TTL (30 s) so a freshly-started Ollama / LM Studio server will
+// surface its models within one poll cycle.
+const PROVIDER_POLL_INTERVAL_MS = 30_000;
+
 export function ProvidersView({ state, actions }: Props) {
   const [selectedID, setSelectedID] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState("");
   const [pendingToggles, setPendingToggles] = useState<Map<string, boolean>>(new Map());
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Auto-poll while the providers tab is visible so local inference servers
+  // that start after Hecate appear automatically without a full page reload.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void actions.refreshProviders();
+    }, PROVIDER_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [actions.refreshProviders]);
 
   const configuredProviders = state.adminConfig?.providers ?? [];
   const healthyNames = new Set(state.providers.filter(p => p.healthy).map(p => p.name));
@@ -242,11 +257,23 @@ export function ProvidersView({ state, actions }: Props) {
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
       {/* Provider list */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "center" }}>
           <Badge status="ok" label={`${readyCount} route ready`} />
           <Badge status={blockedCount > 0 ? "warn" : "ok"} label={`${blockedCount} blocked`} />
           <Badge status={unhealthyCount > 0 ? "error" : "ok"} label={`${unhealthyCount} unhealthy`} />
           <Badge status={misconfiguredCount > 0 ? "warn" : "ok"} label={`${misconfiguredCount} missing credentials`} />
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, opacity: refreshing ? 0.5 : 1 }}
+            disabled={refreshing}
+            title="Re-discover models from all local providers"
+            onClick={() => {
+              setRefreshing(true);
+              void actions.refreshProviders().finally(() => setRefreshing(false));
+            }}>
+            <Icon d={Icons.refresh} size={12} />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
         </div>
         {renderSection(
           "Cloud providers",

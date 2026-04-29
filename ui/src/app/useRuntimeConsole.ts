@@ -385,6 +385,24 @@ export function useRuntimeConsole() {
     }
   }
 
+  // refreshProviders re-fetches only /admin/providers and /v1/models without
+  // the full loadDashboard cost. Used by the ProvidersView auto-poll so local
+  // provider model lists converge within ~30 s of starting Ollama / LM Studio,
+  // regardless of when Hecate itself was started.
+  async function refreshProviders() {
+    if (!session.isAdmin || !authToken) return;
+    try {
+      const [pResult, mResult] = await Promise.allSettled([
+        getProviders(authToken),
+        getModels(authToken),
+      ]);
+      if (pResult.status === "fulfilled") setProviders(pResult.value.data ?? []);
+      if (mResult.status === "fulfilled") setModels(mResult.value.data ?? []);
+    } catch {
+      // Best-effort background refresh — ignore errors.
+    }
+  }
+
   function buildChatPayload(messages: ChatMessage[], sessionID?: string) {
     return {
       model,
@@ -1172,6 +1190,7 @@ export function useRuntimeConsole() {
       setModelFilter,
       setProviderFilter: selectProviderRoute,
       setProviderEnabled,
+      refreshProviders,
       setRetentionSubsystems,
       setRotateAPIKeyID,
       setRotateAPIKeySecret,
