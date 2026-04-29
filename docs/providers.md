@@ -90,6 +90,7 @@ returns:
 - `routing_ready` — whether the router can currently send traffic to it
 - `routing_blocked_reason` — stable reason when routing is blocked, such as `credential_missing`, `provider_disabled`, `provider_rate_limited`, `circuit_open`, `provider_unhealthy`, or `no_models`
 - `model_count`, `discovery_source`, `last_checked_at`, and `last_error` for model-discovery freshness and failure context
+- `last_error_class`, `open_until`, `last_latency_ms`, `consecutive_failures`, `timeouts`, `server_errors`, `rate_limits`, `total_successes`, and `total_failures` for richer health debugging
 
 Route reports in the trace inspector reuse the same readiness vocabulary when
 they explain why a provider/model candidate was skipped.

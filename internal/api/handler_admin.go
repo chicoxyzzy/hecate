@@ -40,27 +40,38 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 	data := make([]ProviderStatusResponseItem, 0, len(result.Providers))
 	for _, provider := range result.Providers {
 		item := ProviderStatusResponseItem{
-			Name:            provider.Name,
-			Kind:            provider.Kind,
-			BaseURL:         provider.BaseURL,
-			CredentialState: provider.CredentialState,
-			CredentialReady: provider.CredentialReady,
-			Healthy:         provider.Healthy,
-			Status:          provider.Status,
-			RoutingReady:    provider.RoutingReady,
-			RoutingBlocked:  provider.RoutingBlocked,
-			DefaultModel:    provider.DefaultModel,
-			Models:          provider.Models,
-			ModelCount:      len(provider.Models),
-			DiscoverySource: provider.DiscoverySource,
-			LastError:       provider.LastError,
-			Error:           provider.Error,
+			Name:                provider.Name,
+			Kind:                provider.Kind,
+			BaseURL:             provider.BaseURL,
+			CredentialState:     provider.CredentialState,
+			CredentialReady:     provider.CredentialReady,
+			Healthy:             provider.Healthy,
+			Status:              provider.Status,
+			RoutingReady:        provider.RoutingReady,
+			RoutingBlocked:      provider.RoutingBlocked,
+			DefaultModel:        provider.DefaultModel,
+			Models:              provider.Models,
+			ModelCount:          len(provider.Models),
+			DiscoverySource:     provider.DiscoverySource,
+			LastError:           provider.LastError,
+			LastErrorClass:      provider.LastErrorClass,
+			LastLatencyMS:       provider.LastLatencyMS,
+			ConsecutiveFailures: provider.ConsecutiveFailures,
+			TotalSuccesses:      provider.TotalSuccesses,
+			TotalFailures:       provider.TotalFailures,
+			Timeouts:            provider.Timeouts,
+			ServerErrors:        provider.ServerErrors,
+			RateLimits:          provider.RateLimits,
+			Error:               provider.Error,
 		}
 		if !provider.RefreshedAt.IsZero() {
 			item.RefreshedAt = provider.RefreshedAt.UTC().Format(time.RFC3339)
 		}
 		if !provider.LastCheckedAt.IsZero() {
 			item.LastCheckedAt = provider.LastCheckedAt.UTC().Format(time.RFC3339)
+		}
+		if !provider.OpenUntil.IsZero() {
+			item.OpenUntil = provider.OpenUntil.UTC().Format(time.RFC3339)
 		}
 		data = append(data, item)
 	}

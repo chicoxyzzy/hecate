@@ -954,6 +954,18 @@ func TestProviderStatusReturnsRateLimitedRoutingBlockReason(t *testing.T) {
 	if item.RoutingBlocked != "provider_rate_limited" {
 		t.Fatalf("routing_blocked_reason = %q, want provider_rate_limited", item.RoutingBlocked)
 	}
+	if item.LastErrorClass != "rate_limit" {
+		t.Fatalf("last_error_class = %q, want rate_limit", item.LastErrorClass)
+	}
+	if item.OpenUntil == "" {
+		t.Fatal("open_until is empty, want cooldown deadline")
+	}
+	if item.RateLimits != 1 {
+		t.Fatalf("rate_limits = %d, want 1", item.RateLimits)
+	}
+	if item.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive_failures = %d, want 1", item.ConsecutiveFailures)
+	}
 }
 
 func TestProviderPresetsReturnsCatalog(t *testing.T) {

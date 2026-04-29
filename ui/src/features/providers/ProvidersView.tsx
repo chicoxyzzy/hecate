@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import { buildConflictMap, providerDotColor, resolvedBaseURL } from "../../lib/provider-utils";
-import { describeCredentialState, describeRoutingBlockedReason } from "../../lib/runtime-utils";
+import { describeCredentialState, describeHealthErrorClass, describeRoutingBlockedReason } from "../../lib/runtime-utils";
 import { Badge, Dot, Icon, Icons, Toggle } from "../shared/ui";
 
 type Props = {
@@ -76,6 +76,12 @@ export function ProvidersView({ state, actions }: Props) {
   const selectedConfig = selectedID ? configuredByID.get(selectedID) ?? null : null;
   const selectedStatus = selectedID ? statusByName.get(selectedID) : null;
   const selectedPreset = selectedID ? state.providerPresets.find(p => p.id === selectedID) : null;
+  const selectedHealthCounters = [
+    selectedStatus?.consecutive_failures ? `${selectedStatus.consecutive_failures} consecutive` : "",
+    selectedStatus?.rate_limits ? `${selectedStatus.rate_limits} rate limits` : "",
+    selectedStatus?.timeouts ? `${selectedStatus.timeouts} timeouts` : "",
+    selectedStatus?.server_errors ? `${selectedStatus.server_errors} server errors` : "",
+  ].filter(Boolean).join(" · ");
 
   // Optimistically reflect mutual exclusion in the UI: enabling a provider flips
   // any conflicting providers to disabled in the pending overlay so the toggle
@@ -290,19 +296,41 @@ export function ProvidersView({ state, actions }: Props) {
                 {(selectedStatus?.last_error || selectedStatus?.error) && (
                   <div style={{ fontSize: 12, color: "var(--red)", lineHeight: 1.45 }}>{selectedStatus.last_error || selectedStatus.error}</div>
                 )}
-                {selectedStatus?.discovery_source && (
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
-                    discovery: <span style={{ color: "var(--t1)" }}>{selectedStatus.discovery_source}</span>
-                  </div>
-                )}
-                {(selectedStatus?.last_checked_at || selectedStatus?.refreshed_at) && (
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
-                    checked: <span style={{ color: "var(--t1)" }}>{formatProviderTime(selectedStatus.last_checked_at || selectedStatus.refreshed_at || "")}</span>
-                  </div>
-                )}
-              </div>
+          {selectedStatus?.discovery_source && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              discovery: <span style={{ color: "var(--t1)" }}>{selectedStatus.discovery_source}</span>
             </div>
           )}
+          {selectedStatus?.last_error_class && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              error class: <span style={{ color: "var(--t1)" }}>{describeHealthErrorClass(selectedStatus.last_error_class)}</span>
+            </div>
+          )}
+          {(selectedStatus?.last_checked_at || selectedStatus?.refreshed_at) && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              checked: <span style={{ color: "var(--t1)" }}>{formatProviderTime(selectedStatus.last_checked_at || selectedStatus.refreshed_at || "")}</span>
+            </div>
+          )}
+          {selectedStatus?.open_until && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              open until: <span style={{ color: "var(--t1)" }}>{formatProviderTime(selectedStatus.open_until)}</span>
+            </div>
+          )}
+          {(selectedStatus?.last_latency_ms || selectedHealthCounters) && (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              health: <span style={{ color: "var(--t1)" }}>
+                {[selectedStatus?.last_latency_ms ? `${selectedStatus.last_latency_ms}ms last latency` : "", selectedHealthCounters].filter(Boolean).join(" · ")}
+              </span>
+            </div>
+          )}
+          {(selectedStatus?.total_successes || selectedStatus?.total_failures) ? (
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+              totals: <span style={{ color: "var(--t1)" }}>{selectedStatus?.total_successes ?? 0} ok · {selectedStatus?.total_failures ?? 0} failed</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    )}
 
           {/* API key (cloud only — local providers don't need credentials) */}
           {selectedConfig.kind !== "local" && (

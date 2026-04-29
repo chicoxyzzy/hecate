@@ -116,6 +116,15 @@ export type ProviderRecord = {
   refreshed_at?: string;
   last_checked_at?: string;
   last_error?: string;
+  last_error_class?: string;
+  open_until?: string;
+  last_latency_ms?: number;
+  consecutive_failures?: number;
+  total_successes?: number;
+  total_failures?: number;
+  timeouts?: number;
+  server_errors?: number;
+  rate_limits?: number;
   error?: string;
 };
 

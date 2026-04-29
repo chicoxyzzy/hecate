@@ -131,6 +131,16 @@ func (c *RegistryCatalog) entryForProvider(ctx context.Context, provider provide
 		if checkedAt := latestHealthTimestamp(state); !checkedAt.IsZero() {
 			entry.LastCheckedAt = checkedAt.UTC().Format(time.RFC3339)
 		}
+		if !state.OpenUntil.IsZero() {
+			entry.OpenUntil = state.OpenUntil.UTC().Format(time.RFC3339)
+		}
+		entry.LastLatencyMS = state.LastLatency.Milliseconds()
+		entry.ConsecutiveFailures = state.ConsecutiveFailures
+		entry.TotalSuccesses = state.TotalSuccesses
+		entry.TotalFailures = state.TotalFailures
+		entry.Timeouts = state.Timeouts
+		entry.ServerErrors = state.ServerErrors
+		entry.RateLimits = state.RateLimits
 		if !state.Available {
 			entry.Healthy = false
 			entry.Status = string(state.Status)

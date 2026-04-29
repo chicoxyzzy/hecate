@@ -63,14 +63,20 @@ describe("ProvidersView conflict resolution", () => {
       providers: [
         makeStatus("ollama", {
           healthy: false,
-          status: "unhealthy",
+          status: "open",
           last_error: "connect: connection refused",
+          last_error_class: "rate_limit",
           model_count: 1,
           credential_state: "not_required",
           routing_ready: false,
-          routing_blocked_reason: "provider_unhealthy",
+          routing_blocked_reason: "provider_rate_limited",
           discovery_source: "live",
           last_checked_at: "2026-04-29T10:00:00Z",
+          open_until: "2026-04-29T10:01:00Z",
+          last_latency_ms: 980,
+          consecutive_failures: 1,
+          total_failures: 4,
+          rate_limits: 2,
         }),
       ],
     });
@@ -78,13 +84,17 @@ describe("ProvidersView conflict resolution", () => {
     render(<ProvidersView state={state} actions={createRuntimeConsoleActions()} />);
     expect(screen.getByText("connect: connection refused")).toBeTruthy();
     expect(screen.getByText("route blocked")).toBeTruthy();
-    expect(screen.getByText("Provider unhealthy")).toBeTruthy();
+    expect(screen.getByText("Cooling down after upstream 429")).toBeTruthy();
 
     const user = userEvent.setup();
     await user.click(screen.getByText("Ollama"));
     expect(screen.getByText("Diagnostics")).toBeTruthy();
     expect(screen.getAllByText("Not required").length).toBeGreaterThan(0);
     expect(screen.getByText(/discovery:/)).toBeTruthy();
+    expect(screen.getByText(/error class:/)).toBeTruthy();
+    expect(screen.getByText(/open until:/)).toBeTruthy();
+    expect(screen.getByText(/health:/)).toBeTruthy();
+    expect(screen.getByText(/totals:/)).toBeTruthy();
     expect(screen.getByText(/checked:/)).toBeTruthy();
   });
 

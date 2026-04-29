@@ -173,6 +173,7 @@ export function describeRoutingBlockedReason(reason?: string): string {
     credential_missing: "Missing credentials",
     provider_disabled: "Provider disabled",
     circuit_open: "Circuit open",
+    provider_rate_limited: "Cooling down after upstream 429",
     provider_unhealthy: "Provider unhealthy",
     no_models: "No discovered models",
   };
@@ -189,6 +190,21 @@ export function describeCredentialState(state?: string): string {
       return "Not required";
     default:
       return state ? titleizeIdentifier(state) : "Unknown";
+  }
+}
+
+export function describeHealthErrorClass(kind?: string): string {
+  switch (kind) {
+    case "rate_limit":
+      return "Upstream rate limit";
+    case "timeout":
+      return "Timeout";
+    case "server_error":
+      return "Server error";
+    case "other":
+      return "Other error";
+    default:
+      return kind ? titleizeIdentifier(kind) : "Unknown";
   }
 }
 

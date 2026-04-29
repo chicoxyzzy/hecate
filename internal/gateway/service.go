@@ -649,20 +649,28 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 	statuses := make([]types.ProviderStatus, 0, len(entries))
 	for _, entry := range entries {
 		status := types.ProviderStatus{
-			Name:            entry.Name,
-			Kind:            string(entry.Kind),
-			BaseURL:         entry.BaseURL,
-			CredentialState: entry.CredentialState,
-			CredentialReady: providerCredentialReady(entry.CredentialState),
-			Healthy:         entry.Healthy,
-			Status:          entry.Status,
-			RoutingReady:    providerRoutingReady(entry),
-			RoutingBlocked:  providerRoutingBlockedReason(entry),
-			DefaultModel:    entry.DefaultModel,
-			Models:          append([]string(nil), entry.Models...),
-			DiscoverySource: entry.DiscoverySource,
-			LastError:       entry.LastError,
-			Error:           entry.Error,
+			Name:                entry.Name,
+			Kind:                string(entry.Kind),
+			BaseURL:             entry.BaseURL,
+			CredentialState:     entry.CredentialState,
+			CredentialReady:     providerCredentialReady(entry.CredentialState),
+			Healthy:             entry.Healthy,
+			Status:              entry.Status,
+			RoutingReady:        providerRoutingReady(entry),
+			RoutingBlocked:      providerRoutingBlockedReason(entry),
+			DefaultModel:        entry.DefaultModel,
+			Models:              append([]string(nil), entry.Models...),
+			DiscoverySource:     entry.DiscoverySource,
+			LastError:           entry.LastError,
+			LastErrorClass:      entry.HealthReason,
+			LastLatencyMS:       entry.LastLatencyMS,
+			ConsecutiveFailures: entry.ConsecutiveFailures,
+			TotalSuccesses:      entry.TotalSuccesses,
+			TotalFailures:       entry.TotalFailures,
+			Timeouts:            entry.Timeouts,
+			ServerErrors:        entry.ServerErrors,
+			RateLimits:          entry.RateLimits,
+			Error:               entry.Error,
 		}
 		if entry.RefreshedAt != "" {
 			if ts, err := time.Parse(time.RFC3339, entry.RefreshedAt); err == nil {
@@ -672,6 +680,11 @@ func (s *Service) ProviderStatus(ctx context.Context) (*ProviderStatusResult, er
 		if entry.LastCheckedAt != "" {
 			if ts, err := time.Parse(time.RFC3339, entry.LastCheckedAt); err == nil {
 				status.LastCheckedAt = ts
+			}
+		}
+		if entry.OpenUntil != "" {
+			if ts, err := time.Parse(time.RFC3339, entry.OpenUntil); err == nil {
+				status.OpenUntil = ts
 			}
 		}
 		statuses = append(statuses, status)

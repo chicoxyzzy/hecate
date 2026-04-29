@@ -225,22 +225,31 @@ type ModelInfo struct {
 }
 
 type ProviderStatus struct {
-	Name            string
-	Kind            string
-	BaseURL         string
-	CredentialState string
-	CredentialReady bool
-	Healthy         bool
-	Status          string
-	RoutingReady    bool
-	RoutingBlocked  string
-	DefaultModel    string
-	Models          []string
-	DiscoverySource string
-	RefreshedAt     time.Time
-	LastCheckedAt   time.Time
-	LastError       string
-	Error           string
+	Name                string
+	Kind                string
+	BaseURL             string
+	CredentialState     string
+	CredentialReady     bool
+	Healthy             bool
+	Status              string
+	RoutingReady        bool
+	RoutingBlocked      string
+	DefaultModel        string
+	Models              []string
+	DiscoverySource     string
+	RefreshedAt         time.Time
+	LastCheckedAt       time.Time
+	LastError           string
+	LastErrorClass      string
+	OpenUntil           time.Time
+	LastLatencyMS       int64
+	ConsecutiveFailures int
+	TotalSuccesses      int64
+	TotalFailures       int64
+	Timeouts            int64
+	ServerErrors        int64
+	RateLimits          int64
+	Error               string
 }
 
 type BudgetStatus struct {
