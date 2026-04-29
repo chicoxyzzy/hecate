@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -485,6 +487,132 @@ func LoadFromEnv() Config {
 		Providers: providersCfg,
 		Pricebook: loadPricebookFromEnv(),
 		LogLevel:  getEnv("LOG_LEVEL", "INFO"),
+	}
+}
+
+// Validate checks configuration combinations that would otherwise fail later
+// with confusing store/provider errors. It is intentionally strict for alpha:
+// unsupported backend names, impossible retention policies, and missing shared
+// connection strings fail startup with one clear diagnostic.
+func (c Config) Validate() error {
+	var errs []error
+
+	validateBackend := func(label, value string, allowed ...string) {
+		value = strings.TrimSpace(value)
+		for _, item := range allowed {
+			if value == item {
+				return
+			}
+		}
+		errs = append(errs, fmt.Errorf("%s must be one of %s (got %q)", label, strings.Join(allowed, ", "), value))
+	}
+
+	validateBackend("GATEWAY_CONTROL_PLANE_BACKEND", c.Server.ControlPlaneBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_TASKS_BACKEND", c.Server.TasksBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_TASK_QUEUE_BACKEND", c.Server.TaskQueueBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_CHAT_SESSIONS_BACKEND", c.Chat.SessionsBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_CACHE_BACKEND", c.Cache.Backend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_BUDGET_BACKEND", c.Governor.BudgetBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_RETENTION_HISTORY_BACKEND", c.Retention.HistoryBackend, "memory", "sqlite", "postgres")
+	validateBackend("GATEWAY_SEMANTIC_CACHE_BACKEND", c.Cache.Semantic.Backend, "memory", "sqlite", "postgres")
+
+	if postgresRequired(c) && strings.TrimSpace(c.Postgres.DSN) == "" {
+		errs = append(errs, errors.New("POSTGRES_DSN is required when any backend is postgres"))
+	}
+	if c.Cache.Semantic.Enabled && strings.EqualFold(strings.TrimSpace(c.Cache.Semantic.Backend), "sqlite") {
+		errs = append(errs, errors.New("GATEWAY_SEMANTIC_CACHE_BACKEND=sqlite is unsupported; use memory or postgres"))
+	}
+	if c.Retention.Enabled && c.Retention.Interval <= 0 {
+		errs = append(errs, errors.New("GATEWAY_RETENTION_INTERVAL must be positive when retention is enabled"))
+	}
+	for label, policy := range map[string]RetentionPolicy{
+		"GATEWAY_RETENTION_TRACES":         c.Retention.TraceSnapshots,
+		"GATEWAY_RETENTION_BUDGET_EVENTS":  c.Retention.BudgetEvents,
+		"GATEWAY_RETENTION_AUDIT_EVENTS":   c.Retention.AuditEvents,
+		"GATEWAY_RETENTION_EXACT_CACHE":    c.Retention.ExactCache,
+		"GATEWAY_RETENTION_SEMANTIC_CACHE": c.Retention.SemanticCache,
+		"GATEWAY_RETENTION_TURN_EVENTS":    c.Retention.TurnEvents,
+	} {
+		if policy.MaxAge < 0 {
+			errs = append(errs, fmt.Errorf("%s_MAX_AGE must be zero or positive", label))
+		}
+		if policy.MaxCount < 0 {
+			errs = append(errs, fmt.Errorf("%s_MAX_COUNT must be zero or positive", label))
+		}
+	}
+	if c.Provider.MaxAttempts <= 0 {
+		errs = append(errs, errors.New("GATEWAY_PROVIDER_MAX_ATTEMPTS must be positive"))
+	}
+	if c.Provider.HealthThreshold < 0 {
+		errs = append(errs, errors.New("GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD must be zero or positive"))
+	}
+	if c.Server.TaskQueueWorkers <= 0 {
+		errs = append(errs, errors.New("GATEWAY_TASK_QUEUE_WORKERS must be positive"))
+	}
+	if c.Server.TaskQueueBuffer < 0 {
+		errs = append(errs, errors.New("GATEWAY_TASK_QUEUE_BUFFER must be zero or positive"))
+	}
+	if c.Server.RateLimit.Enabled && c.Server.RateLimit.RequestsPerMinute <= 0 {
+		errs = append(errs, errors.New("GATEWAY_RATE_LIMIT_RPM must be positive when rate limiting is enabled"))
+	}
+	if c.Server.RateLimit.BurstSize < 0 {
+		errs = append(errs, errors.New("GATEWAY_RATE_LIMIT_BURST must be zero or positive"))
+	}
+	if c.Cache.Semantic.MinSimilarity < 0 || c.Cache.Semantic.MinSimilarity > 1 {
+		errs = append(errs, errors.New("GATEWAY_SEMANTIC_CACHE_MIN_SIMILARITY must be between 0 and 1"))
+	}
+	if c.Cache.Semantic.MaxEntries < 0 {
+		errs = append(errs, errors.New("GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES must be zero or positive"))
+	}
+	if c.Cache.Semantic.MaxTextChars < 0 {
+		errs = append(errs, errors.New("GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS must be zero or positive"))
+	}
+
+	for _, item := range durationEnvKeys() {
+		if raw := strings.TrimSpace(os.Getenv(item)); raw != "" {
+			if _, err := time.ParseDuration(raw); err != nil {
+				errs = append(errs, fmt.Errorf("%s must be a valid Go duration: %w", item, err))
+			}
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func postgresRequired(cfg Config) bool {
+	return cfg.Cache.Backend == "postgres" ||
+		(cfg.Cache.Semantic.Enabled && cfg.Cache.Semantic.Backend == "postgres") ||
+		cfg.Governor.BudgetBackend == "postgres" ||
+		cfg.Server.ControlPlaneBackend == "postgres" ||
+		cfg.Chat.SessionsBackend == "postgres" ||
+		cfg.Server.TasksBackend == "postgres" ||
+		cfg.Server.TaskQueueBackend == "postgres" ||
+		cfg.Retention.HistoryBackend == "postgres"
+}
+
+func durationEnvKeys() []string {
+	return []string{
+		"GATEWAY_TASK_MCP_CLIENT_CACHE_PING_INTERVAL",
+		"GATEWAY_TASK_MCP_CLIENT_CACHE_PING_TIMEOUT",
+		"GATEWAY_TASK_HTTP_TIMEOUT",
+		"GATEWAY_PROVIDER_RETRY_BACKOFF",
+		"GATEWAY_PROVIDER_HEALTH_COOLDOWN",
+		"GATEWAY_OTEL_TRACES_TIMEOUT",
+		"GATEWAY_OTEL_METRICS_TIMEOUT",
+		"GATEWAY_OTEL_LOGS_TIMEOUT",
+		"GATEWAY_OTEL_METRICS_INTERVAL",
+		"GATEWAY_CACHE_TTL",
+		"GATEWAY_SEMANTIC_CACHE_TTL",
+		"GATEWAY_SEMANTIC_CACHE_EMBEDDER_TIMEOUT",
+		"GATEWAY_RETENTION_INTERVAL",
+		"GATEWAY_RETENTION_TRACES_MAX_AGE",
+		"GATEWAY_RETENTION_BUDGET_EVENTS_MAX_AGE",
+		"GATEWAY_RETENTION_AUDIT_EVENTS_MAX_AGE",
+		"GATEWAY_RETENTION_EXACT_CACHE_MAX_AGE",
+		"GATEWAY_RETENTION_SEMANTIC_CACHE_MAX_AGE",
+		"GATEWAY_RETENTION_TURN_EVENTS_MAX_AGE",
+		"GATEWAY_SQLITE_BUSY_TIMEOUT",
+		"GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL",
 	}
 }
 

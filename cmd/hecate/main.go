@@ -55,6 +55,10 @@ func main() {
 	}
 
 	cfg := config.LoadFromEnv()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("config validation failed", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	// Resolve the auto-generated bootstrap secrets (control-plane encryption
 	// key and admin bearer token). Env values win when set; otherwise the
@@ -689,7 +693,7 @@ func buildPostgresClient(cfg config.Config, logger *slog.Logger) *storage.Postgr
 
 func postgresRequired(cfg config.Config) bool {
 	return cfg.Cache.Backend == "postgres" ||
-		cfg.Cache.Semantic.Backend == "postgres" ||
+		(cfg.Cache.Semantic.Enabled && cfg.Cache.Semantic.Backend == "postgres") ||
 		cfg.Governor.BudgetBackend == "postgres" ||
 		cfg.Server.ControlPlaneBackend == "postgres" ||
 		cfg.Chat.SessionsBackend == "postgres" ||
@@ -717,7 +721,7 @@ func buildSQLiteClient(cfg config.Config, logger *slog.Logger) *storage.SQLiteCl
 
 func sqliteRequired(cfg config.Config) bool {
 	return cfg.Cache.Backend == "sqlite" ||
-		cfg.Cache.Semantic.Backend == "sqlite" ||
+		(cfg.Cache.Semantic.Enabled && cfg.Cache.Semantic.Backend == "sqlite") ||
 		cfg.Governor.BudgetBackend == "sqlite" ||
 		cfg.Server.ControlPlaneBackend == "sqlite" ||
 		cfg.Chat.SessionsBackend == "sqlite" ||

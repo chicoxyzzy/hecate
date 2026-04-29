@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,6 +61,120 @@ func TestLoadFromEnvPricebookSettings(t *testing.T) {
 	}
 	if cfg.Pricebook.AutoImportInterval != 24*time.Hour {
 		t.Fatalf("auto import interval = %s, want 24h", cfg.Pricebook.AutoImportInterval)
+	}
+}
+
+func TestValidateAcceptsDefaultConfig(t *testing.T) {
+	cfg := LoadFromEnv()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() default config error = %v, want nil", err)
+	}
+}
+
+func TestValidateRejectsInvalidBackendNames(t *testing.T) {
+	cfg := LoadFromEnv()
+	cfg.Cache.Backend = "redis"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want invalid backend error")
+	}
+	if !strings.Contains(err.Error(), "GATEWAY_CACHE_BACKEND") {
+		t.Fatalf("Validate() error = %q, want GATEWAY_CACHE_BACKEND", err)
+	}
+}
+
+func TestValidateRequiresPostgresDSNForPostgresBackends(t *testing.T) {
+	cfg := LoadFromEnv()
+	cfg.Server.ControlPlaneBackend = "postgres"
+	cfg.Postgres.DSN = ""
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want missing POSTGRES_DSN error")
+	}
+	if !strings.Contains(err.Error(), "POSTGRES_DSN") {
+		t.Fatalf("Validate() error = %q, want POSTGRES_DSN", err)
+	}
+}
+
+func TestValidateAllowsDisabledSemanticPostgresWithoutDSN(t *testing.T) {
+	cfg := LoadFromEnv()
+	cfg.Cache.Semantic.Enabled = false
+	cfg.Cache.Semantic.Backend = "postgres"
+	cfg.Postgres.DSN = ""
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() disabled semantic postgres error = %v, want nil", err)
+	}
+}
+
+func TestValidateRejectsEnabledSemanticSQLite(t *testing.T) {
+	cfg := LoadFromEnv()
+	cfg.Cache.Semantic.Enabled = true
+	cfg.Cache.Semantic.Backend = "sqlite"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want semantic sqlite error")
+	}
+	if !strings.Contains(err.Error(), "GATEWAY_SEMANTIC_CACHE_BACKEND=sqlite") {
+		t.Fatalf("Validate() error = %q, want semantic sqlite diagnostic", err)
+	}
+}
+
+func TestValidateRejectsInvalidDurationEnvValues(t *testing.T) {
+	t.Setenv("GATEWAY_CACHE_TTL", "tomorrow-ish")
+	cfg := LoadFromEnv()
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want invalid duration error")
+	}
+	if !strings.Contains(err.Error(), "GATEWAY_CACHE_TTL") {
+		t.Fatalf("Validate() error = %q, want GATEWAY_CACHE_TTL", err)
+	}
+}
+
+func TestValidateRejectsImpossibleRuntimeValues(t *testing.T) {
+	cfg := LoadFromEnv()
+	cfg.Retention.Enabled = true
+	cfg.Retention.Interval = 0
+	cfg.Retention.TraceSnapshots.MaxAge = -time.Second
+	cfg.Retention.TraceSnapshots.MaxCount = -1
+	cfg.Provider.MaxAttempts = 0
+	cfg.Provider.HealthThreshold = -1
+	cfg.Server.TaskQueueWorkers = 0
+	cfg.Server.TaskQueueBuffer = -1
+	cfg.Server.RateLimit.Enabled = true
+	cfg.Server.RateLimit.RequestsPerMinute = 0
+	cfg.Server.RateLimit.BurstSize = -1
+	cfg.Cache.Semantic.MinSimilarity = 1.5
+	cfg.Cache.Semantic.MaxEntries = -1
+	cfg.Cache.Semantic.MaxTextChars = -1
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want aggregate validation error")
+	}
+	for _, want := range []string{
+		"GATEWAY_RETENTION_INTERVAL",
+		"GATEWAY_RETENTION_TRACES_MAX_AGE",
+		"GATEWAY_RETENTION_TRACES_MAX_COUNT",
+		"GATEWAY_PROVIDER_MAX_ATTEMPTS",
+		"GATEWAY_PROVIDER_HEALTH_FAILURE_THRESHOLD",
+		"GATEWAY_TASK_QUEUE_WORKERS",
+		"GATEWAY_TASK_QUEUE_BUFFER",
+		"GATEWAY_RATE_LIMIT_RPM",
+		"GATEWAY_RATE_LIMIT_BURST",
+		"GATEWAY_SEMANTIC_CACHE_MIN_SIMILARITY",
+		"GATEWAY_SEMANTIC_CACHE_MAX_ENTRIES",
+		"GATEWAY_SEMANTIC_CACHE_MAX_TEXT_CHARS",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Validate() error = %q, want %s", err, want)
+		}
 	}
 }
 
