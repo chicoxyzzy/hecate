@@ -1040,6 +1040,119 @@ func TestProviderHealthHistoryReturnsRecentEvents(t *testing.T) {
 	}
 }
 
+func TestProviderHealthHistoryIncludesFailoverEvents(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	primary := &fakeProvider{
+		name:         "anthropic",
+		defaultModel: "claude-sonnet-4-20250514",
+		capabilities: providers.Capabilities{
+			Name:            "anthropic",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "claude-sonnet-4-20250514",
+			Models:          []string{"claude-sonnet-4-20250514"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+		errSequence: []error{
+			&providers.UpstreamError{StatusCode: http.StatusServiceUnavailable, Type: "upstream_unavailable", Message: "primary unavailable"},
+		},
+	}
+	fallback := &fakeProvider{
+		name:         "openai",
+		defaultModel: "gpt-4o-mini",
+		capabilities: providers.Capabilities{
+			Name:            "openai",
+			Kind:            providers.KindCloud,
+			DefaultModel:    "gpt-4o-mini",
+			Models:          []string{"gpt-4o-mini"},
+			DiscoverySource: "upstream_v1_models",
+			RefreshedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		},
+		response: &types.ChatResponse{
+			ID:        "chatcmpl-fallback",
+			Model:     "gpt-4o-mini",
+			CreatedAt: time.Unix(1_700_000_100, 0).UTC(),
+			Choices: []types.ChatChoice{{
+				Index:        0,
+				Message:      types.Message{Role: "assistant", Content: "fallback ok"},
+				FinishReason: "stop",
+			}},
+			Usage: types.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		},
+	}
+	handler := newTestHTTPHandlerForProviders(logger, []providers.Provider{primary, fallback}, config.Config{
+		Provider: config.ProviderConfig{
+			MaxAttempts:     1,
+			RetryBackoff:    time.Millisecond,
+			FailoverEnabled: true,
+			HistoryLimit:    20,
+		},
+	})
+	client := newAPITestClient(t, handler)
+
+	chat := decodeRecorder[OpenAIChatCompletionResponse](t, client.mustRequest(http.MethodPost, "/v1/chat/completions", `{
+		"messages": [
+			{"role":"user","content":"hello"}
+		]
+	}`))
+	if chat.Model != "gpt-4o-mini" {
+		t.Fatalf("response model = %q, want gpt-4o-mini from fallback provider", chat.Model)
+	}
+
+	response := mustRequestJSON[ProviderHealthHistoryResponse](client, http.MethodGet, "/admin/providers/history?limit=20", "")
+	if len(response.Data) < 4 {
+		t.Fatalf("history count = %d, want at least 4 rows for failure, failover, and success", len(response.Data))
+	}
+
+	var (
+		sawFailoverTriggered bool
+		sawFailoverSelected  bool
+	)
+	for _, item := range response.Data {
+		switch item.Event {
+		case "failover_triggered":
+			if item.Provider != "anthropic" {
+				t.Fatalf("failover_triggered provider = %q, want anthropic", item.Provider)
+			}
+			if item.PeerProvider != "openai" {
+				t.Fatalf("failover_triggered peer_provider = %q, want openai", item.PeerProvider)
+			}
+			if item.Reason != "provider_retry_exhausted" {
+				t.Fatalf("failover_triggered reason = %q, want provider_retry_exhausted", item.Reason)
+			}
+			if item.RequestID == "" {
+				t.Fatal("failover_triggered request_id is empty")
+			}
+			if item.TraceID == "" {
+				t.Fatal("failover_triggered trace_id is empty")
+			}
+			sawFailoverTriggered = true
+		case "failover_selected":
+			if item.Provider != "openai" {
+				t.Fatalf("failover_selected provider = %q, want openai", item.Provider)
+			}
+			if item.PeerProvider != "anthropic" {
+				t.Fatalf("failover_selected peer_provider = %q, want anthropic", item.PeerProvider)
+			}
+			if item.RequestID == "" {
+				t.Fatal("failover_selected request_id is empty")
+			}
+			if item.TraceID == "" {
+				t.Fatal("failover_selected trace_id is empty")
+			}
+			sawFailoverSelected = true
+		}
+	}
+	if !sawFailoverTriggered {
+		t.Fatal("provider history missing failover_triggered event")
+	}
+	if !sawFailoverSelected {
+		t.Fatal("provider history missing failover_selected event")
+	}
+}
+
 func TestProviderPresetsReturnsCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -3907,6 +4020,7 @@ func newTestHTTPHandlerWithControlPlane(logger *slog.Logger, items []providers.P
 		nil,
 		nil,
 		nil,
+		providerHistoryStore,
 		nil,
 		retention.NewMemoryHistoryStore(),
 	)

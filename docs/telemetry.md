@@ -307,6 +307,7 @@ The retention worker handles the following subsystems. The **subsystem name** is
 | `audit_events` | `GATEWAY_RETENTION_AUDIT_EVENTS_` | Control-plane audit log |
 | `exact_cache` | `GATEWAY_RETENTION_EXACT_CACHE_` | Exact-match response cache |
 | `semantic_cache` | `GATEWAY_RETENTION_SEMANTIC_CACHE_` | Semantic-similarity response cache |
+| `provider_history` | `GATEWAY_RETENTION_PROVIDER_HISTORY_` | Persisted provider health and failover history rows exposed by `GET /admin/providers/history` |
 | `turn_events` | `GATEWAY_RETENTION_TURN_EVENTS_` | `agent.turn.completed` rows in the run-events table — high-cardinality bulk telemetry from agent_loop runs. Other event types (`run.started`, `run.finished`, `approval.*`) are never touched |
 
 Each prefix has a `_MAX_AGE` and `_MAX_COUNT` suffix (e.g. `GATEWAY_RETENTION_TRACES_MAX_AGE=24h`). See `.env.example` for the defaults.

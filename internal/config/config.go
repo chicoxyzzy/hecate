@@ -214,14 +214,15 @@ type CacheConfig struct {
 }
 
 type RetentionConfig struct {
-	Enabled        bool
-	HistoryBackend string
-	Interval       time.Duration
-	TraceSnapshots RetentionPolicy
-	BudgetEvents   RetentionPolicy
-	AuditEvents    RetentionPolicy
-	ExactCache     RetentionPolicy
-	SemanticCache  RetentionPolicy
+	Enabled         bool
+	HistoryBackend  string
+	Interval        time.Duration
+	TraceSnapshots  RetentionPolicy
+	BudgetEvents    RetentionPolicy
+	AuditEvents     RetentionPolicy
+	ExactCache      RetentionPolicy
+	SemanticCache   RetentionPolicy
+	ProviderHistory RetentionPolicy
 	// TurnEvents prunes `agent.turn.completed` rows from the
 	// task-run events table. Other event types (run.started/finished,
 	// approval.*) are kept for forensics.
@@ -464,14 +465,15 @@ func LoadFromEnv() Config {
 			},
 		},
 		Retention: RetentionConfig{
-			Enabled:        getEnvBool("GATEWAY_RETENTION_ENABLED", false),
-			HistoryBackend: getEnv("GATEWAY_RETENTION_HISTORY_BACKEND", "memory"),
-			Interval:       getEnvDuration("GATEWAY_RETENTION_INTERVAL", 15*time.Minute),
-			TraceSnapshots: loadRetentionPolicyFromEnv("GATEWAY_RETENTION_TRACES_", 24*time.Hour, 2000),
-			BudgetEvents:   loadRetentionPolicyFromEnv("GATEWAY_RETENTION_BUDGET_EVENTS_", 30*24*time.Hour, 200),
-			AuditEvents:    loadRetentionPolicyFromEnv("GATEWAY_RETENTION_AUDIT_EVENTS_", 30*24*time.Hour, 500),
-			ExactCache:     loadRetentionPolicyFromEnv("GATEWAY_RETENTION_EXACT_CACHE_", 24*time.Hour, 10_000),
-			SemanticCache:  loadRetentionPolicyFromEnv("GATEWAY_RETENTION_SEMANTIC_CACHE_", 7*24*time.Hour, 10_000),
+			Enabled:         getEnvBool("GATEWAY_RETENTION_ENABLED", false),
+			HistoryBackend:  getEnv("GATEWAY_RETENTION_HISTORY_BACKEND", "memory"),
+			Interval:        getEnvDuration("GATEWAY_RETENTION_INTERVAL", 15*time.Minute),
+			TraceSnapshots:  loadRetentionPolicyFromEnv("GATEWAY_RETENTION_TRACES_", 24*time.Hour, 2000),
+			BudgetEvents:    loadRetentionPolicyFromEnv("GATEWAY_RETENTION_BUDGET_EVENTS_", 30*24*time.Hour, 200),
+			AuditEvents:     loadRetentionPolicyFromEnv("GATEWAY_RETENTION_AUDIT_EVENTS_", 30*24*time.Hour, 500),
+			ExactCache:      loadRetentionPolicyFromEnv("GATEWAY_RETENTION_EXACT_CACHE_", 24*time.Hour, 10_000),
+			SemanticCache:   loadRetentionPolicyFromEnv("GATEWAY_RETENTION_SEMANTIC_CACHE_", 7*24*time.Hour, 10_000),
+			ProviderHistory: loadRetentionPolicyFromEnv("GATEWAY_RETENTION_PROVIDER_HISTORY_", 7*24*time.Hour, 10_000),
 			// agent.turn.completed events accumulate fast on long
 			// agent runs (one per LLM round-trip). 7d/100k is a
 			// generous default for a single-tenant operator; tune
@@ -533,12 +535,13 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("GATEWAY_RETENTION_INTERVAL must be positive when retention is enabled"))
 	}
 	for label, policy := range map[string]RetentionPolicy{
-		"GATEWAY_RETENTION_TRACES":         c.Retention.TraceSnapshots,
-		"GATEWAY_RETENTION_BUDGET_EVENTS":  c.Retention.BudgetEvents,
-		"GATEWAY_RETENTION_AUDIT_EVENTS":   c.Retention.AuditEvents,
-		"GATEWAY_RETENTION_EXACT_CACHE":    c.Retention.ExactCache,
-		"GATEWAY_RETENTION_SEMANTIC_CACHE": c.Retention.SemanticCache,
-		"GATEWAY_RETENTION_TURN_EVENTS":    c.Retention.TurnEvents,
+		"GATEWAY_RETENTION_TRACES":           c.Retention.TraceSnapshots,
+		"GATEWAY_RETENTION_BUDGET_EVENTS":    c.Retention.BudgetEvents,
+		"GATEWAY_RETENTION_AUDIT_EVENTS":     c.Retention.AuditEvents,
+		"GATEWAY_RETENTION_EXACT_CACHE":      c.Retention.ExactCache,
+		"GATEWAY_RETENTION_SEMANTIC_CACHE":   c.Retention.SemanticCache,
+		"GATEWAY_RETENTION_PROVIDER_HISTORY": c.Retention.ProviderHistory,
+		"GATEWAY_RETENTION_TURN_EVENTS":      c.Retention.TurnEvents,
 	} {
 		if policy.MaxAge < 0 {
 			errs = append(errs, fmt.Errorf("%s_MAX_AGE must be zero or positive", label))
@@ -625,6 +628,7 @@ func durationEnvKeys() []string {
 		"GATEWAY_RETENTION_AUDIT_EVENTS_MAX_AGE",
 		"GATEWAY_RETENTION_EXACT_CACHE_MAX_AGE",
 		"GATEWAY_RETENTION_SEMANTIC_CACHE_MAX_AGE",
+		"GATEWAY_RETENTION_PROVIDER_HISTORY_MAX_AGE",
 		"GATEWAY_RETENTION_TURN_EVENTS_MAX_AGE",
 		"GATEWAY_SQLITE_BUSY_TIMEOUT",
 		"GATEWAY_PRICEBOOK_AUTO_IMPORT_INTERVAL",

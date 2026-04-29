@@ -80,6 +80,7 @@ func TestManagerSweepsRealTurnEventsButSparesOtherTypes(t *testing.T) {
 		nil, // audit events
 		nil, // exact cache
 		nil, // semantic cache
+		nil, // provider history
 		store,
 		nil, // history (in-memory not needed)
 	)
@@ -177,7 +178,7 @@ func TestManagerCountCapDoesNotAffectNonTurnEvents(t *testing.T) {
 			TurnEvents: config.RetentionPolicy{MaxCount: 2},
 		},
 		tracer,
-		nil, nil, nil, nil, nil, store, nil,
+		nil, nil, nil, nil, nil, nil, store, nil,
 	)
 	result := manager.Run(ctx, RunRequest{
 		Trigger:    "test",

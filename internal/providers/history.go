@@ -10,11 +10,17 @@ const maxHealthHistoryListLimit = 1_000
 
 type HealthHistoryRecord struct {
 	Provider            string
+	Model               string
 	Event               string
 	Status              string
 	Available           bool
 	Error               string
 	ErrorClass          string
+	Reason              string
+	RequestID           string
+	TraceID             string
+	PeerProvider        string
+	PeerModel           string
 	LatencyMS           int64
 	ConsecutiveFailures int
 	TotalSuccesses      int64
@@ -34,6 +40,10 @@ type HealthHistoryFilter struct {
 type HealthHistoryStore interface {
 	Append(ctx context.Context, record HealthHistoryRecord) error
 	List(ctx context.Context, filter HealthHistoryFilter) ([]HealthHistoryRecord, error)
+}
+
+type HealthHistoryPruner interface {
+	Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error)
 }
 
 type MemoryHealthHistoryStore struct {
@@ -76,6 +86,32 @@ func (s *MemoryHealthHistoryStore) List(_ context.Context, filter HealthHistoryF
 		}
 	}
 	return out, nil
+}
+
+func (s *MemoryHealthHistoryStore) Prune(_ context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	if s == nil {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	original := len(s.records)
+	if maxAge > 0 {
+		cutoff := time.Now().UTC().Add(-maxAge)
+		filtered := s.records[:0]
+		for _, record := range s.records {
+			ts, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+			if err != nil || ts.Before(cutoff) {
+				continue
+			}
+			filtered = append(filtered, record)
+		}
+		s.records = append([]HealthHistoryRecord(nil), filtered...)
+	}
+	if maxCount > 0 && len(s.records) > maxCount {
+		s.records = append([]HealthHistoryRecord(nil), s.records[:maxCount]...)
+	}
+	return original - len(s.records), nil
 }
 
 func normalizeHealthHistoryLimit(limit int) int {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/hecate/agent-runtime/internal/telemetry"
 )
 
 type HealthTracker interface {
@@ -15,6 +17,10 @@ type HealthTracker interface {
 	RecordSuccess(provider string)
 	RecordFailure(provider string, err error)
 	State(provider string) HealthState
+}
+
+type ContextualHealthTracker interface {
+	ObserveWithContext(ctx context.Context, provider string, observation HealthObservation)
 }
 
 type HealthStatus string
@@ -88,6 +94,10 @@ func (t *MemoryHealthTracker) RecordSuccess(provider string) {
 }
 
 func (t *MemoryHealthTracker) Observe(provider string, observation HealthObservation) {
+	t.ObserveWithContext(context.Background(), provider, observation)
+}
+
+func (t *MemoryHealthTracker) ObserveWithContext(ctx context.Context, provider string, observation HealthObservation) {
 	if provider == "" {
 		return
 	}
@@ -113,7 +123,7 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 			state.LastErrorClass = ""
 		}
 		t.providers[provider] = state
-		t.appendHistory(provider, healthHistoryEventForSuccess(state), state, now)
+		t.appendHistory(ctx, provider, "", healthHistoryEventForSuccess(state), "", "", state, now)
 		return
 	}
 
@@ -142,7 +152,7 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 		state.Status = HealthStatusOpen
 		state.OpenUntil = now.Add(t.cooldown)
 		t.providers[provider] = state
-		t.appendHistory(provider, "cooldown_opened", state, now)
+		t.appendHistory(ctx, provider, "", "cooldown_opened", "", "", state, now)
 		return
 	}
 	if state.ConsecutiveFailures >= t.failureThreshold {
@@ -150,11 +160,11 @@ func (t *MemoryHealthTracker) Observe(provider string, observation HealthObserva
 		state.Status = HealthStatusOpen
 		state.OpenUntil = now.Add(t.cooldown)
 		t.providers[provider] = state
-		t.appendHistory(provider, "cooldown_opened", state, now)
+		t.appendHistory(ctx, provider, "", "cooldown_opened", "", "", state, now)
 		return
 	}
 	t.providers[provider] = state
-	t.appendHistory(provider, "failure", state, now)
+	t.appendHistory(ctx, provider, "", "failure", "", "", state, now)
 }
 
 func HealthStateReason(state HealthState) string {
@@ -188,7 +198,7 @@ func (t *MemoryHealthTracker) State(provider string) HealthState {
 				updated.Status = HealthStatusHalfOpen
 				t.providers[provider] = updated
 				state = updated
-				t.appendHistory(provider, "cooldown_recovered", updated, t.now())
+				t.appendHistory(context.Background(), provider, "", "cooldown_recovered", "", "", updated, t.now())
 			}
 			t.mu.Unlock()
 		}
@@ -204,11 +214,17 @@ func (t *MemoryHealthTracker) State(provider string) HealthState {
 	return state
 }
 
-func (t *MemoryHealthTracker) appendHistory(provider, event string, state HealthState, now time.Time) {
+func (t *MemoryHealthTracker) appendHistory(ctx context.Context, provider, model, event, peerProvider, peerModel string, state HealthState, now time.Time) {
 	if t == nil || t.history == nil || provider == "" || event == "" {
 		return
 	}
-	_ = t.history.Append(context.Background(), buildHealthHistoryRecord(provider, event, state, now))
+	record := buildHealthHistoryRecord(provider, event, state, now)
+	record.Model = model
+	record.PeerProvider = peerProvider
+	record.PeerModel = peerModel
+	record.RequestID = telemetry.RequestIDFromContext(ctx)
+	record.TraceID = telemetry.TraceIDsFromContext(ctx).TraceID
+	_ = t.history.Append(context.Background(), record)
 }
 
 func healthHistoryEventForSuccess(state HealthState) string {

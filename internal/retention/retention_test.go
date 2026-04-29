@@ -76,6 +76,7 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 		fakeAuditPruner{deleted: 3},
 		fakeCachePruner{deleted: 4},
 		fakeCachePruner{deleted: 5},
+		nil,
 		fakeTurnEventPruner{deleted: 6},
 		NewMemoryHistoryStore(),
 	)
@@ -90,8 +91,8 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 	if result.Trigger != "manual" {
 		t.Fatalf("trigger = %q, want manual", result.Trigger)
 	}
-	if len(result.Results) != 6 {
-		t.Fatalf("results = %d, want 6", len(result.Results))
+	if len(result.Results) != 7 {
+		t.Fatalf("results = %d, want 7", len(result.Results))
 	}
 
 	if result.Results[1].Name != SubsystemBudgetEvents || result.Results[1].Deleted != 2 {
@@ -100,10 +101,10 @@ func TestManagerRunFiltersSubsystems(t *testing.T) {
 	if result.Results[3].Name != SubsystemExactCache || result.Results[3].Deleted != 4 {
 		t.Fatalf("exact cache result = %#v, want exact cache deletion count 4", result.Results[3])
 	}
-	if result.Results[5].Name != SubsystemTurnEvents || result.Results[5].Deleted != 6 {
-		t.Fatalf("turn events result = %#v, want turn-event deletion count 6", result.Results[5])
+	if result.Results[6].Name != SubsystemTurnEvents || result.Results[6].Deleted != 6 {
+		t.Fatalf("turn events result = %#v, want turn-event deletion count 6", result.Results[6])
 	}
-	if !result.Results[0].Skipped || !result.Results[2].Skipped || !result.Results[4].Skipped {
+	if !result.Results[0].Skipped || !result.Results[2].Skipped || !result.Results[4].Skipped || !result.Results[5].Skipped {
 		t.Fatalf("unexpected skip flags: %#v", result.Results)
 	}
 }
@@ -132,6 +133,7 @@ func TestManagerRunPersistsHistory(t *testing.T) {
 		fakeAuditPruner{deleted: 3},
 		fakeCachePruner{deleted: 4},
 		fakeCachePruner{deleted: 5},
+		nil,
 		fakeTurnEventPruner{deleted: 6},
 		history,
 	)
@@ -155,7 +157,7 @@ func TestManagerRunPersistsHistory(t *testing.T) {
 	if runs[0].RequestID != "req-1" {
 		t.Fatalf("request_id = %q, want req-1", runs[0].RequestID)
 	}
-	if len(runs[0].Results) != 6 {
-		t.Fatalf("results = %d, want 6", len(runs[0].Results))
+	if len(runs[0].Results) != 7 {
+		t.Fatalf("results = %d, want 7", len(runs[0].Results))
 	}
 }

@@ -216,6 +216,7 @@ func main() {
 		controlPlaneStore,
 		pruneableExactCache(cacheStore),
 		pruneableSemanticCache(semanticStore),
+		pruneableProviderHistory(providerHistoryStore),
 		taskStore,
 		retentionHistoryStore,
 	)
@@ -324,6 +325,8 @@ func main() {
 			slog.Int("provider_health_failure_threshold", cfg.Provider.HealthThreshold),
 			slog.Duration("provider_health_cooldown", cfg.Provider.HealthCooldown),
 			slog.Duration("provider_health_latency_degraded_threshold", cfg.Provider.HealthLatencyDegradedThreshold),
+			slog.String("provider_history_backend", cfg.Provider.HistoryBackend),
+			slog.Int("provider_history_limit", cfg.Provider.HistoryLimit),
 			slog.Bool("retention_enabled", cfg.Retention.Enabled),
 			slog.Duration("retention_interval", cfg.Retention.Interval),
 			slog.Bool("otel_traces_enabled", cfg.OTel.Traces.Enabled),
@@ -452,6 +455,11 @@ func pruneableExactCache(store cache.Store) retention.CachePruner {
 }
 
 func pruneableSemanticCache(store cache.SemanticStore) retention.CachePruner {
+	pruner, _ := store.(retention.CachePruner)
+	return pruner
+}
+
+func pruneableProviderHistory(store providers.HealthHistoryStore) retention.CachePruner {
 	pruner, _ := store.(retention.CachePruner)
 	return pruner
 }

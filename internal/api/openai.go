@@ -425,11 +425,17 @@ type ProviderStatusResponseItem struct {
 type ProviderHealthHistoryResponseItem struct {
 	Provider            string `json:"provider"`
 	ProviderKind        string `json:"provider_kind,omitempty"`
+	Model               string `json:"model,omitempty"`
 	Event               string `json:"event"`
 	Status              string `json:"status"`
 	Available           bool   `json:"available"`
 	Error               string `json:"error,omitempty"`
 	ErrorClass          string `json:"error_class,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	RequestID           string `json:"request_id,omitempty"`
+	TraceID             string `json:"trace_id,omitempty"`
+	PeerProvider        string `json:"peer_provider,omitempty"`
+	PeerModel           string `json:"peer_model,omitempty"`
 	LatencyMS           int64  `json:"latency_ms,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 	TotalSuccesses      int64  `json:"total_successes,omitempty"`

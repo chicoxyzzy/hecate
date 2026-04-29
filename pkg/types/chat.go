@@ -255,11 +255,17 @@ type ProviderStatus struct {
 type ProviderHealthHistoryEntry struct {
 	Provider            string
 	ProviderKind        string
+	Model               string
 	Event               string
 	Status              string
 	Available           bool
 	Error               string
 	ErrorClass          string
+	Reason              string
+	RequestID           string
+	TraceID             string
+	PeerProvider        string
+	PeerModel           string
 	LatencyMS           int64
 	ConsecutiveFailures int
 	TotalSuccesses      int64

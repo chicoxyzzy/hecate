@@ -106,6 +106,7 @@ func TestResilientExecutorRetriesRetryableError(t *testing.T) {
 		preflight,
 		registry,
 		nil,
+		nil,
 		ResilienceOptions{MaxAttempts: 2, RetryBackoff: time.Millisecond},
 	)
 	executor.sleep = func(context.Context, time.Duration) error { return nil }
@@ -182,6 +183,7 @@ func TestResilientExecutorFailsOverAfterRetryableFailure(t *testing.T) {
 		},
 		preflight,
 		registry,
+		nil,
 		nil,
 		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
 	)
@@ -300,6 +302,7 @@ func TestResilientExecutorSkipsUnpricedPrimaryAndFallsBack(t *testing.T) {
 		preflight,
 		registry,
 		nil,
+		nil,
 		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
 	)
 
@@ -368,6 +371,7 @@ func TestResilientExecutorReturnsPriceMissingWhenEveryCandidateIsUnpriced(t *tes
 		},
 		preflight,
 		registry,
+		nil,
 		nil,
 		ResilienceOptions{MaxAttempts: 1, RetryBackoff: time.Millisecond, FailoverEnabled: true},
 	)

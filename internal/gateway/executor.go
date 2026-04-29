@@ -25,6 +25,7 @@ type ResilientExecutor struct {
 	preflight     RoutePreflight
 	providers     providers.Registry
 	healthTracker providers.HealthTracker
+	history       providers.HealthHistoryStore
 	options       ResilienceOptions
 	sleep         func(context.Context, time.Duration) error
 }
@@ -34,6 +35,7 @@ func NewResilientExecutor(
 	preflight RoutePreflight,
 	providers providers.Registry,
 	healthTracker providers.HealthTracker,
+	history providers.HealthHistoryStore,
 	options ResilienceOptions,
 ) *ResilientExecutor {
 	return &ResilientExecutor{
@@ -41,6 +43,7 @@ func NewResilientExecutor(
 		preflight:     preflight,
 		providers:     providers,
 		healthTracker: healthTracker,
+		history:       history,
 		options:       normalizeResilienceOptions(options),
 		sleep:         sleepContext,
 	}
@@ -144,6 +147,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrHecateProviderIndex:          index,
 				telemetry.AttrHecateCostEstimatedMicrosUSD: preflight.EstimatedCost.TotalMicrosUSD,
 			})
+			e.appendFailoverHistory(ctx, candidate, initial.Provider, initial.Model, "failover_selected", candidate.Reason)
 		}
 
 		recordTrace(trace, "router.candidate.selected", "routing", map[string]any{
@@ -181,7 +185,11 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 					telemetry.AttrHecateProviderLatencyMS: latency.Milliseconds(),
 				})
 				if e.healthTracker != nil {
-					e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{Duration: latency})
+					if contextual, ok := e.healthTracker.(providers.ContextualHealthTracker); ok {
+						contextual.ObserveWithContext(ctx, candidate.Provider, providers.HealthObservation{Duration: latency})
+					} else {
+						e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{Duration: latency})
+					}
 				}
 				return &providerCallResult{
 					Response:             resp,
@@ -210,10 +218,15 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				if providers.IsRetryableError(err) {
 					healthErr = err
 				}
-				e.healthTracker.Observe(candidate.Provider, providers.HealthObservation{
+				observation := providers.HealthObservation{
 					Duration: latency,
 					Error:    healthErr,
-				})
+				}
+				if contextual, ok := e.healthTracker.(providers.ContextualHealthTracker); ok {
+					contextual.ObserveWithContext(ctx, candidate.Provider, observation)
+				} else {
+					e.healthTracker.Observe(candidate.Provider, observation)
+				}
 			}
 
 			if !providers.IsRetryableError(err) {
@@ -265,6 +278,7 @@ func (e *ResilientExecutor) Execute(ctx context.Context, trace *profiler.Trace, 
 				telemetry.AttrHecateFailoverReason:       "provider_retry_exhausted",
 				telemetry.AttrHecateProviderIndex:        index,
 			})
+			e.appendFailoverHistory(ctx, candidate, nextCandidate.Provider, nextCandidate.Model, "failover_triggered", "provider_retry_exhausted")
 			continue
 		}
 		break
@@ -314,6 +328,25 @@ func classifyRouteDenied(err error) string {
 
 func lowerError(err error) string {
 	return strings.ToLower(strings.TrimSpace(fmt.Sprint(err)))
+}
+
+func (e *ResilientExecutor) appendFailoverHistory(ctx context.Context, candidate types.RouteDecision, peerProvider, peerModel, event, reason string) {
+	if e == nil || e.history == nil || candidate.Provider == "" || event == "" {
+		return
+	}
+	traceIDs := telemetry.TraceIDsFromContext(ctx)
+	_ = e.history.Append(context.Background(), providers.HealthHistoryRecord{
+		Provider:     candidate.Provider,
+		Model:        candidate.Model,
+		Event:        event,
+		Status:       "failover",
+		Reason:       reason,
+		RequestID:    telemetry.RequestIDFromContext(ctx),
+		TraceID:      traceIDs.TraceID,
+		PeerProvider: peerProvider,
+		PeerModel:    peerModel,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (e *ResilientExecutor) retryDelay(attempt int) time.Duration {

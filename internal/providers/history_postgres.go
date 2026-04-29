@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hecate/agent-runtime/internal/storage"
 )
@@ -36,11 +37,17 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (
 			provider,
+			model,
 			event,
 			status,
 			available,
 			error_message,
 			error_class,
+			reason,
+			request_id,
+			trace_id,
+			peer_provider,
+			peer_model,
 			latency_ms,
 			consecutive_failures,
 			total_successes,
@@ -50,14 +57,20 @@ func (s *PostgresHealthHistoryStore) Append(ctx context.Context, record HealthHi
 			rate_limits,
 			open_until,
 			timestamp_utc
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`, s.table),
 		record.Provider,
+		record.Model,
 		record.Event,
 		record.Status,
 		record.Available,
 		record.Error,
 		record.ErrorClass,
+		record.Reason,
+		record.RequestID,
+		record.TraceID,
+		record.PeerProvider,
+		record.PeerModel,
 		record.LatencyMS,
 		record.ConsecutiveFailures,
 		record.TotalSuccesses,
@@ -78,7 +91,8 @@ func (s *PostgresHealthHistoryStore) List(ctx context.Context, filter HealthHist
 	limit := normalizeHealthHistoryLimit(filter.Limit)
 	args := make([]any, 0, 2)
 	query := fmt.Sprintf(`
-		SELECT provider, event, status, available, error_message, error_class,
+		SELECT provider, model, event, status, available, error_message, error_class,
+		       reason, request_id, trace_id, peer_provider, peer_model,
 		       latency_ms, consecutive_failures, total_successes, total_failures,
 		       timeouts, server_errors, rate_limits, open_until, timestamp_utc
 		FROM %s
@@ -103,11 +117,17 @@ func (s *PostgresHealthHistoryStore) List(ctx context.Context, filter HealthHist
 		var record HealthHistoryRecord
 		if err := rows.Scan(
 			&record.Provider,
+			&record.Model,
 			&record.Event,
 			&record.Status,
 			&record.Available,
 			&record.Error,
 			&record.ErrorClass,
+			&record.Reason,
+			&record.RequestID,
+			&record.TraceID,
+			&record.PeerProvider,
+			&record.PeerModel,
 			&record.LatencyMS,
 			&record.ConsecutiveFailures,
 			&record.TotalSuccesses,
@@ -133,11 +153,17 @@ func (s *PostgresHealthHistoryStore) migrate(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS %s (
 			id BIGSERIAL PRIMARY KEY,
 			provider TEXT NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
 			event TEXT NOT NULL,
 			status TEXT NOT NULL,
 			available BOOLEAN NOT NULL,
 			error_message TEXT NOT NULL DEFAULT '',
 			error_class TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			trace_id TEXT NOT NULL DEFAULT '',
+			peer_provider TEXT NOT NULL DEFAULT '',
+			peer_model TEXT NOT NULL DEFAULT '',
 			latency_ms BIGINT NOT NULL DEFAULT 0,
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			total_successes BIGINT NOT NULL DEFAULT 0,
@@ -160,4 +186,33 @@ func (s *PostgresHealthHistoryStore) migrate(ctx context.Context) error {
 		return fmt.Errorf("migrate postgres provider health history index: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresHealthHistoryStore) Prune(ctx context.Context, maxAge time.Duration, maxCount int) (int, error) {
+	deleted := 0
+	if maxAge > 0 {
+		cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE timestamp_utc < $1`, s.table), cutoff)
+		if err != nil {
+			return deleted, fmt.Errorf("prune postgres provider health history by age: %w", err)
+		}
+		if n, err := result.RowsAffected(); err == nil {
+			deleted += int(n)
+		}
+	}
+	if maxCount > 0 {
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE id NOT IN (
+				SELECT id FROM %s ORDER BY timestamp_utc DESC, id DESC LIMIT $1
+			)
+		`, s.table, s.table), maxCount)
+		if err != nil {
+			return deleted, fmt.Errorf("prune postgres provider health history by count: %w", err)
+		}
+		if n, err := result.RowsAffected(); err == nil {
+			deleted += int(n)
+		}
+	}
+	return deleted, nil
 }

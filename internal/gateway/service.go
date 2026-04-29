@@ -194,6 +194,7 @@ func NewService(deps Dependencies) *Service {
 			preflight,
 			deps.Providers,
 			deps.HealthTracker,
+			deps.ProviderHistory,
 			deps.Resilience,
 		)
 	}
@@ -721,11 +722,17 @@ func (s *Service) ProviderHealthHistory(ctx context.Context, provider string, li
 		item := types.ProviderHealthHistoryEntry{
 			Provider:            record.Provider,
 			ProviderKind:        kindByProvider[record.Provider],
+			Model:               record.Model,
 			Event:               record.Event,
 			Status:              record.Status,
 			Available:           record.Available,
 			Error:               record.Error,
 			ErrorClass:          record.ErrorClass,
+			Reason:              record.Reason,
+			RequestID:           record.RequestID,
+			TraceID:             record.TraceID,
+			PeerProvider:        record.PeerProvider,
+			PeerModel:           record.PeerModel,
 			LatencyMS:           record.LatencyMS,
 			ConsecutiveFailures: record.ConsecutiveFailures,
 			TotalSuccesses:      record.TotalSuccesses,

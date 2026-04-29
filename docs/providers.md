@@ -82,8 +82,15 @@ The current snapshot lives at `GET /admin/providers`. A short persisted event hi
 - `failure`
 - `cooldown_opened`
 - `cooldown_recovered`
+- `failover_triggered`
+- `failover_selected`
 
-Each row includes the resulting health status, error class, last observed latency, and current failure counters so operators can answer whether a provider is transiently failing, rate-limited, or just getting slow over time.
+Each row includes the resulting health status, error class, last observed latency, current failure counters, and correlation fields like `request_id` and `trace_id` so operators can answer whether a provider is transiently failing, rate-limited, just getting slow over time, or repeatedly losing traffic during failover.
+
+The history store is configurable with:
+
+- `GATEWAY_PROVIDER_HISTORY_BACKEND` — `memory`, `sqlite`, or `postgres`
+- `GATEWAY_PROVIDER_HISTORY_LIMIT` — default page size for `/admin/providers/history`
 
 The Providers tab shows the current state on each card:
 
