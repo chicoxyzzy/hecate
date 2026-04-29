@@ -111,6 +111,7 @@ export function ProvidersView({ state, actions }: Props) {
     const enabled = resolveEnabled(id);
     const healthy = healthyNames.has(id);
     const modelCount = rt?.models?.length ?? 0;
+    const statusLabel = rt?.status || (enabled ? "unknown" : "disabled");
     const conflicts = conflictMap.get(id) ?? [];
     const conflictTitle = conflicts.length > 0
       ? `Shares endpoint with ${conflicts.join(", ")} — only one can serve requests at a time.`
@@ -144,10 +145,18 @@ export function ProvidersView({ state, actions }: Props) {
           <span style={{ fontSize: 11, color: "var(--t2)" }}>
             <span style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", fontWeight: 500 }}>{modelCount}</span> models
           </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: healthy ? "var(--green)" : enabled ? "var(--red)" : "var(--t3)" }}>
+            {statusLabel}
+          </span>
           {baseURL && (
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{baseURL}</span>
           )}
         </div>
+        {rt?.error && (
+          <div style={{ marginTop: 8, paddingTop: 7, borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--red)", lineHeight: 1.4 }}>
+            {rt.error}
+          </div>
+        )}
       </div>
     );
   }
@@ -218,6 +227,7 @@ export function ProvidersView({ state, actions }: Props) {
               ["Models",        selectedStatus?.models?.length ?? (selectedConfig.default_model ? "1+" : "0")],
               ["Protocol",      selectedConfig.protocol || "—"],
               ["Kind",          selectedConfig.kind],
+              ["Health",        selectedStatus?.status || "unknown"],
               ["Default model", selectedConfig.default_model || "—"],
             ] as [string, string | number][]).map(([label, val]) => (
               <div key={label}>
@@ -226,6 +236,27 @@ export function ProvidersView({ state, actions }: Props) {
               </div>
             ))}
           </div>
+
+          {(selectedStatus?.error || selectedStatus?.refreshed_at || selectedStatus?.discovery_source) && (
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
+              <div className="kicker" style={{ marginBottom: 6 }}>Diagnostics</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {selectedStatus?.error && (
+                  <div style={{ fontSize: 12, color: "var(--red)", lineHeight: 1.45 }}>{selectedStatus.error}</div>
+                )}
+                {selectedStatus?.discovery_source && (
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                    discovery: <span style={{ color: "var(--t1)" }}>{selectedStatus.discovery_source}</span>
+                  </div>
+                )}
+                {selectedStatus?.refreshed_at && (
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--t3)" }}>
+                    checked: <span style={{ color: "var(--t1)" }}>{formatProviderTime(selectedStatus.refreshed_at)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* API key (cloud only — local providers don't need credentials) */}
           {selectedConfig.kind !== "local" && (
@@ -278,4 +309,12 @@ export function ProvidersView({ state, actions }: Props) {
       )}
     </div>
   );
+}
+
+function formatProviderTime(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleTimeString();
 }

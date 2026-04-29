@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getMCPCacheStats, getRecentTraces, getRuntimeStats, getTrace } from "../../lib/api";
+import { describeRouteReason, describeRouteSkipReason } from "../../lib/runtime-utils";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { MCPCacheStatsResponse, RuntimeStatsResponse, TraceListItem, TraceResponse, TraceSpanRecord } from "../../types/runtime";
 import { Dot } from "../shared/ui";
@@ -307,7 +308,7 @@ export function ObservabilityView({ state }: Props) {
                       </span>
                     ))}
                     {selectedTrace.status_code === "error" && (
-                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--red)" }}>
+                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--red)", flexBasis: "100%" }}>
                         error{selectedTrace.status_message ? `: ${selectedTrace.status_message}` : ""}
                       </span>
                     )}
@@ -397,14 +398,19 @@ export function ObservabilityView({ state }: Props) {
                   {candidates.map((c, i) => (
                     <div key={i} style={{ display: "flex", gap: 6, padding: "4px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
                       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: c.outcome === "selected" || c.outcome === "completed" ? "var(--teal)" : "var(--t3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {c.provider}/{c.model}
+                        {c.provider}/{c.model || "no model"}
                       </span>
                       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0, color: c.outcome === "completed" ? "var(--green)" : c.outcome === "selected" ? "var(--teal)" : c.outcome === "failed" ? "var(--red)" : "var(--t3)" }}>
                         {c.outcome || "—"}
                       </span>
                       {c.skip_reason && (
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 90 }} title={c.skip_reason}>
-                          {c.skip_reason}
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--amber)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 110 }} title={c.skip_reason}>
+                          {describeRouteSkipReason(c.skip_reason)}
+                        </span>
+                      )}
+                      {c.reason && (
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 110 }} title={c.reason}>
+                          {describeRouteReason(c.reason)}
                         </span>
                       )}
                       {c.latency_ms != null && c.latency_ms > 0 && (

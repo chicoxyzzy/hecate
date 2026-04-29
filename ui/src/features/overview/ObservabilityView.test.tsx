@@ -137,4 +137,60 @@ describe("ObservabilityView", () => {
     // "MCP cache stats") must NOT be present in this branch.
     expect(container.querySelector('[aria-label="MCP cache stats"]')).toBeNull();
   });
+
+  it("renders readable route skip reasons in trace detail", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/admin/traces")) {
+        return new Response(JSON.stringify({
+          object: "trace_list",
+          data: [{
+            request_id: "req-1",
+            started_at: "2026-04-29T10:00:00Z",
+            span_count: 1,
+            duration_ms: 12,
+            route: {
+              final_provider: "openai",
+              final_model: "gpt-5.4-mini",
+              final_reason: "requested_model",
+              candidates: [
+                { provider: "ollama", model: "llama3.1:8b", outcome: "skipped", skip_reason: "preflight_price_missing", reason: "requested_model" },
+                { provider: "openai", model: "gpt-5.4-mini", outcome: "selected", reason: "requested_model" },
+              ],
+            },
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.startsWith("/v1/traces")) {
+        return new Response(JSON.stringify({
+          object: "trace",
+          data: {
+            request_id: "req-1",
+            spans: [],
+            route: {
+              candidates: [
+                { provider: "ollama", model: "llama3.1:8b", outcome: "skipped", skip_reason: "preflight_price_missing", reason: "requested_model" },
+                { provider: "openai", model: "gpt-5.4-mini", outcome: "selected", reason: "requested_model" },
+              ],
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ object: "list", data: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const state = createRuntimeConsoleFixture({ session: adminSession });
+    let container = null as unknown as HTMLElement;
+    await act(async () => {
+      const result = render(<ObservabilityView state={state} actions={createRuntimeConsoleActions()} />);
+      container = result.container;
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/Missing price/);
+    });
+    expect(container.textContent).toMatch(/Requested model/);
+  });
 });

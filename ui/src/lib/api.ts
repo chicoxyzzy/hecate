@@ -39,6 +39,7 @@ type RequestOptions = {
 
 type ErrorPayload = {
   error?: {
+    type?: string;
     message?: string;
   };
 };
@@ -443,7 +444,7 @@ export async function streamTaskRun(
     { ...buildRequestOptions({ authToken }), signal },
   );
   if (!response.ok) {
-    throw new Error(await errorMessage(response, "request failed"));
+    throw await apiError(response, "request failed");
   }
   if (!response.body) {
     throw new Error("stream response body is unavailable");
@@ -509,7 +510,7 @@ export async function chatCompletionsStream(
     buildRequestOptions({ authToken, method: "POST", body: { ...payload, stream: true } }),
   );
   if (!response.ok) {
-    throw new Error(await errorMessage(response, "request failed"));
+    throw await apiError(response, "request failed");
   }
 
   const headers = readRuntimeHeaders(response);
@@ -587,7 +588,7 @@ export async function chatCompletions(
 ): Promise<{ data: ChatResponse; headers: RuntimeHeaders }> {
   const response = await fetchWithNetworkError("/v1/chat/completions", buildRequestOptions({ authToken, method: "POST", body: payload }));
   if (!response.ok) {
-    throw new Error(await errorMessage(response, "request failed"));
+    throw await apiError(response, "request failed");
   }
 
   const data = (await response.json()) as ChatResponse;
@@ -643,17 +644,19 @@ export function buildRequestOptions(options: RequestOptions): RequestInit {
 // down" — both surfaced as an opaque message and silent UI states.
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code: string;
+  constructor(message: string, status: number, code = "") {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
 export async function fetchJSON<T>(url: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetchWithNetworkError(url, buildRequestOptions(options));
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response, "request failed"), response.status);
+    throw await apiError(response, "request failed");
   }
   if (response.status === 204) {
     return undefined as T;
@@ -677,11 +680,19 @@ function networkErrorMessage(url: string, error: unknown): string {
   return `Gateway request failed (${url}): ${message}`;
 }
 
-async function errorMessage(response: Response, fallback: string): Promise<string> {
+async function apiError(response: Response, fallback: string): Promise<ApiError> {
+  const payload = await errorPayload(response, fallback);
+  return new ApiError(payload.message, response.status, payload.code);
+}
+
+async function errorPayload(response: Response, fallback: string): Promise<{ message: string; code: string }> {
   try {
     const payload = (await response.json()) as ErrorPayload;
-    return payload.error?.message ?? fallback;
+    return {
+      message: payload.error?.message ?? fallback,
+      code: payload.error?.type ?? "",
+    };
   } catch {
-    return fallback;
+    return { message: fallback, code: "" };
   }
 }

@@ -52,6 +52,35 @@ function emptyAdminConfig() {
 }
 
 describe("ProvidersView conflict resolution", () => {
+  it("shows provider health diagnostics and last errors", async () => {
+    const state = createRuntimeConsoleFixture({
+      session: adminSession,
+      providerPresets: presets,
+      adminConfig: {
+        ...emptyAdminConfig(),
+        providers: [makeConfigured("ollama", { enabled: true })],
+      },
+      providers: [
+        makeStatus("ollama", {
+          healthy: false,
+          status: "unhealthy",
+          error: "connect: connection refused",
+          discovery_source: "live",
+          refreshed_at: "2026-04-29T10:00:00Z",
+        }),
+      ],
+    });
+
+    render(<ProvidersView state={state} actions={createRuntimeConsoleActions()} />);
+    expect(screen.getByText("connect: connection refused")).toBeTruthy();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText("Ollama"));
+    expect(screen.getByText("Diagnostics")).toBeTruthy();
+    expect(screen.getByText(/discovery:/)).toBeTruthy();
+    expect(screen.getByText(/checked:/)).toBeTruthy();
+  });
+
   it("reflects the resolved enabled state from /admin/control-plane (not runtime status)", () => {
     // Backend has reconciled: llamacpp enabled, localai disabled (they share 127.0.0.1:8080).
     // Runtime status would report both as healthy — the UI must NOT use that for the toggle.

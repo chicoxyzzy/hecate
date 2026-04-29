@@ -149,6 +149,22 @@ export function describeRouteReason(reason?: string): string {
   return `${label} ${suffixes.join(", ")}`;
 }
 
+export function describeRouteSkipReason(reason?: string): string {
+  if (!reason) {
+    return "";
+  }
+  const labels: Record<string, string> = {
+    budget_denied: "Budget denied",
+    policy_denied: "Policy denied",
+    preflight_price_missing: "Missing price",
+    provider_not_found: "Provider missing",
+    route_denied: "Route denied",
+    provider_retry_exhausted: "Retry exhausted",
+    provider_unavailable: "Provider unavailable",
+  };
+  return labels[reason] ?? titleizeIdentifier(reason);
+}
+
 function titleizeIdentifier(value: string): string {
   return value
     .split("_")

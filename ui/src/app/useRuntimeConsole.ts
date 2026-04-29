@@ -4,6 +4,7 @@ import { buildLocalProviderIssue } from "../lib/provider-issues";
 import type { LocalProviderIssue } from "../lib/provider-issues";
 import { filterModelsByKind, filterModelsByProvider, parseCSV, usdToMicros } from "../lib/runtime-utils";
 import {
+  ApiError,
   type ChatMessage,
   chatCompletionsStream,
   createChatSession as createChatSessionRequest,
@@ -116,6 +117,8 @@ export function useRuntimeConsole() {
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionRecord | null>(null);
   const [runtimeHeaders, setRuntimeHeaders] = useState<RuntimeHeaders | null>(null);
   const [chatError, setChatError] = useState("");
+  const [chatErrorCode, setChatErrorCode] = useState("");
+  const [chatErrorStatus, setChatErrorStatus] = useState<number | null>(null);
   const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>("auto");
   const [copiedCommand, setCopiedCommand] = useState("");
@@ -318,6 +321,8 @@ export function useRuntimeConsole() {
     setRuntimeHeaders(null);
     clearPendingToolState();
     setChatError("");
+    setChatErrorCode("");
+    setChatErrorStatus(null);
     setSystemPrompt("");
   }
 
@@ -454,6 +459,8 @@ export function useRuntimeConsole() {
     event.preventDefault();
     setChatLoading(true);
     setChatError("");
+    setChatErrorCode("");
+    setChatErrorStatus(null);
     setRuntimeHeaders(null);
 
     try {
@@ -535,6 +542,8 @@ export function useRuntimeConsole() {
     } catch (submitError) {
       const msg = submitError instanceof Error ? submitError.message : "unknown request error";
       setChatError(msg);
+      setChatErrorCode(submitError instanceof ApiError ? submitError.code : "");
+      setChatErrorStatus(submitError instanceof ApiError ? submitError.status : null);
       // Toaster mirrors the inline error so chat failures are
       // surfaced through the same channel as other admin errors
       // (budget, retention, pricebook). Without this the operator
@@ -553,6 +562,8 @@ export function useRuntimeConsole() {
     if (!pendingThread || pendingToolCalls.length === 0) return;
     setChatLoading(true);
     setChatError("");
+    setChatErrorCode("");
+    setChatErrorStatus(null);
 
     const toolMessages: ChatMessage[] = pendingToolCalls.map((tc) => ({
       role: "tool" as const,
@@ -576,6 +587,8 @@ export function useRuntimeConsole() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown error";
       setChatError(msg);
+      setChatErrorCode(err instanceof ApiError ? err.code : "");
+      setChatErrorStatus(err instanceof ApiError ? err.status : null);
       setNoticeMessage("error", msg);
     } finally {
       setChatLoading(false);
@@ -1068,6 +1081,8 @@ export function useRuntimeConsole() {
       budgetAmountUsd,
       budgetLimitUsd,
       chatError,
+      chatErrorCode,
+      chatErrorStatus,
       chatLoading,
       streamingContent,
       chatResult,

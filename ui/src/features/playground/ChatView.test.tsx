@@ -97,6 +97,18 @@ describe("ChatView error display", () => {
     render(<ChatView state={state} actions={actions} />);
     expect(screen.getByText(/Provider returned 500/)).toBeTruthy();
   });
+
+  it("renders operator guidance for stable gateway error codes", () => {
+    const { state, actions } = setup({
+      chatError: "Incorrect API key provided",
+      chatErrorCode: "provider_auth_failed",
+      chatErrorStatus: 502,
+    });
+    render(<ChatView state={state} actions={actions} />);
+    expect(screen.getByText("Provider credentials failed")).toBeTruthy();
+    expect(screen.getByText("502 · provider_auth_failed")).toBeTruthy();
+    expect(screen.getByText(/Update the provider API key/)).toBeTruthy();
+  });
 });
 
 describe("ChatView session title", () => {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
+import { describeGatewayError, formatErrorCode } from "../../lib/error-diagnostics";
 import { parseInlineNodes, parseMarkdownBlocks } from "../../lib/markdown";
 import { CodeBlock, Icon, Icons, InlineError, ModelPicker, ProviderPicker } from "../shared/ui";
 
@@ -32,6 +33,7 @@ export function ChatView({ state, actions }: Props) {
   const sessions = state.chatSessions ?? [];
   const turns = state.activeChatSession?.turns ?? [];
   const streaming = state.chatLoading;
+  const chatDiagnostic = describeGatewayError(state.chatErrorCode, state.chatErrorStatus ?? undefined);
 
   useEffect(() => {
     if (!userScrolledRef.current) {
@@ -419,7 +421,13 @@ export function ChatView({ state, actions }: Props) {
         <form ref={formRef} onSubmit={handleSubmit} style={{ borderTop: "1px solid var(--border)", padding: "10px 12px", background: "var(--bg1)", flexShrink: 0 }}>
           {state.chatError && (
             <div style={{ marginBottom: 8 }}>
-              <InlineError message={`${state.runtimeHeaders?.provider ? `[${state.runtimeHeaders.provider}] ` : ""}${state.chatError}`} />
+              <ChatErrorPanel
+                message={state.chatError}
+                provider={state.runtimeHeaders?.provider}
+                code={state.chatErrorCode}
+                status={state.chatErrorStatus ?? undefined}
+                diagnostic={chatDiagnostic}
+              />
             </div>
           )}
           <div style={{ maxWidth: 820, margin: "0 auto", position: "relative" }}>
@@ -473,6 +481,50 @@ export function ChatView({ state, actions }: Props) {
         .cursor-blink { color: var(--teal); }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
       `}</style>
+    </div>
+  );
+}
+
+function ChatErrorPanel({
+  message,
+  provider,
+  code,
+  status,
+  diagnostic,
+}: {
+  message: string;
+  provider?: string;
+  code?: string;
+  status?: number;
+  diagnostic: ReturnType<typeof describeGatewayError>;
+}) {
+  const label = formatErrorCode(code, status);
+  if (!diagnostic) {
+    return <InlineError message={`${provider ? `[${provider}] ` : ""}${message}`} />;
+  }
+
+  return (
+    <div
+      role="alert"
+      style={{
+        border: "1px solid var(--red-border)",
+        background: "var(--red-bg)",
+        borderRadius: "var(--radius)",
+        padding: "9px 11px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--red)" }}>{diagnostic.title}</span>
+        {label && (
+          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--red)" }}>
+            {label}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: "var(--t0)", lineHeight: 1.45 }}>{message}</div>
+      <div style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.45, marginTop: 5 }}>
+        {provider ? `${provider}: ` : ""}{diagnostic.action}
+      </div>
     </div>
   );
 }

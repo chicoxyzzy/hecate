@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled, upsertPolicyRule } from "./api";
+import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled, upsertPolicyRule, type ApiError } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -327,9 +327,11 @@ describe("api client", () => {
           { status: 429, headers: { "Content-Type": "application/json" } },
         ),
       );
-      await expect(
-        getBudget("?scope=global", "admin-secret"),
-      ).rejects.toThrow(/slow down/);
+      await expect(getBudget("?scope=global", "admin-secret")).rejects.toMatchObject({
+        message: "slow down",
+        status: 429,
+        code: "rate_limit_exceeded",
+      } satisfies Partial<ApiError>);
     });
 
     it("falls back to the static label when the error body is not valid JSON", async () => {
