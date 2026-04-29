@@ -39,8 +39,11 @@ AI workloads are moving from simple API calls to long-running agents, tool use, 
 
 ## Quick Start
 
+The fastest way is the published image — no clone required:
+
 ```bash
-docker compose up
+docker run --rm -p 8080:8080 -v hecate-data:/data \
+  ghcr.io/chicoxyzzy/hecate:0.1.0-alpha.1
 ```
 
 Open `http://127.0.0.1:8080`, paste the generated admin bearer token from the container logs, and connect your first provider in the UI.
@@ -59,13 +62,20 @@ The first-run UI guides provider setup and token entry:
 
 ![First-run onboarding wizard](docs/screenshots/onboard-wizard.png)
 
+If you've cloned the repo and want optional services (Postgres profile, Ollama profile, dev rebuild from source):
+
+```bash
+docker compose up                # uses ghcr.io image; first run pulls
+docker compose --profile full up # adds Postgres + Ollama
+```
+
 For local development from source:
 
 ```bash
 make dev
 ```
 
-Provider API keys can be added in the UI after first boot. If you prefer environment bootstrap, start with `.env.example`. The full deployment guide is in [docs/deployment.md](docs/deployment.md), and local development details are in [docs/development.md](docs/development.md).
+Other install paths — pinned image tags, single-file binaries (linux/darwin × amd64/arm64), checksums — are documented in [docs/deployment.md](docs/deployment.md). Local development details are in [docs/development.md](docs/development.md). Provider API keys can be added in the UI after first boot, or pre-seeded via `.env.example`.
 
 ## Connect a Client
 

@@ -638,6 +638,97 @@ describe("useRuntimeConsole", () => {
 
     await waitFor(() => expect(result.current.state.model).toBe("llama3.1:8b"));
   });
+
+  // ─── selectProviderRoute: scoped-default never thrashes ───────────────────
+  //
+  // Regression for the "ModelPicker blinks fast when picking Ollama / LM
+  // Studio with the runtime not running" report against v0.1.0-alpha.1.
+  //
+  // The setup: provider catalog includes a local provider (Ollama) but
+  // /v1/models returns no Ollama models — the discovery probe failed
+  // because the runtime isn't listening. defaultModelForProvider("ollama",
+  // ...) returns "" in that state. Two useEffects in the hook used to
+  // fight here:
+  //   (1) "scoped validity" cleared model="" → "" each cycle, no-op
+  //   (2) "fallback to gateway default" set model "" → gpt-4o-mini
+  //       (the cross-provider default), which (1) then re-cleared.
+  // The cycle re-rendered every frame and visibly flickered the
+  // ModelPicker trigger label.
+  //
+  // Fix: gate (2) on providerFilter === "auto". When a specific provider
+  // is scoped, that effect must not override the scoped state with a
+  // cross-provider default. This test pins the no-thrash behavior by
+  // selecting Ollama and asserting the model settles empty (the correct
+  // "no model available for this provider" state) rather than landing on
+  // the openai default.
+  it("leaves model empty when selecting a provider with no discovered models", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: { authenticated: true, invalid_token: false, role: "admin", source: "bearer" },
+        });
+      }
+      if (url === "/v1/models") {
+        // Only openai models are discovered — Ollama runtime isn't up,
+        // so its preset shows no models in the catalog.
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud", default: true } },
+          ],
+        });
+      }
+      if (url === "/v1/provider-presets") {
+        return jsonResponse({
+          object: "provider_presets",
+          data: [
+            { id: "openai", name: "OpenAI", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com" },
+            { id: "ollama", name: "Ollama", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1" },
+          ],
+        });
+      }
+      if (url.startsWith("/v1/providers")) {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { name: "openai", kind: "cloud", default_model: "gpt-4o-mini", models: ["gpt-4o-mini"], healthy: true },
+            { name: "ollama", kind: "local", default_model: "", models: [], healthy: false },
+          ],
+        });
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+    await waitFor(() => expect(result.current.state.loading).toBe(false));
+    // Sanity: the gateway default is the openai model when providerFilter is "auto".
+    await waitFor(() => expect(result.current.state.model).toBe("gpt-4o-mini"));
+
+    await act(async () => {
+      result.current.actions.setProviderFilter("ollama");
+    });
+
+    // After selecting Ollama, the model must settle empty — Ollama has
+    // no discovered models. The bug was that effect (2) above kept
+    // setting it back to "gpt-4o-mini" and effect (1) kept clearing it,
+    // creating an infinite re-render loop.
+    await waitFor(() => {
+      expect(result.current.state.providerFilter).toBe("ollama");
+      expect(result.current.state.model).toBe("");
+    });
+
+    // Settle for a few microtasks and confirm the model stays empty —
+    // catches the oscillation case where the assertion above happened
+    // to land on a cycle where model === "".
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 10));
+      expect(result.current.state.model).toBe("");
+    }
+  });
+
   // ─── applyPricebookImport: notice text per outcome ────────────────────────
   //
   // The toast wording on the dashboard's notice banner is the

@@ -287,12 +287,24 @@ export function useRuntimeConsole() {
 
   // When models load, validate the selected model. If it's not in the list (e.g. stale localStorage),
   // fall back to the gateway default. If no model is set at all, pick the default.
+  //
+  // Only fires when no provider scope is active (providerFilter === "auto").
+  // When a specific provider is scoped, the effect above (lines 279-286) owns
+  // the scoped-default behavior and correctly leaves the model empty when the
+  // provider has no discovered models. Without this guard, picking a local
+  // provider whose runtime isn't running (Ollama / LM Studio without the
+  // process up) caused an infinite loop: this effect set model to the
+  // gateway-wide default (e.g. gpt-4o-mini from openai), the
+  // provider-scoped-validity effect above cleared it as invalid for the
+  // current provider, and the cycle repeated — visibly blinking the
+  // ModelPicker trigger label every render.
   useEffect(() => {
+    if (providerFilter !== "auto") return;
     if (models.length === 0) return;
     if (model !== "" && models.some((m) => m.id === model)) return;
     const defaultM = models.find((m) => m.metadata?.default)?.id ?? models[0]?.id ?? "";
     if (defaultM) setModel(defaultM);
-  }, [model, models]);
+  }, [model, models, providerFilter]);
 
   useEffect(() => {
     if (providerFilter !== "auto" && session.allowedProviders.length > 0 && !session.allowedProviders.includes(providerFilter)) {
