@@ -31,4 +31,4 @@ Shared agent guidance is repository-owned and committed. There is no `.local` ov
 
 ## Note on `AGENTS.md`
 
-[`AGENTS.md`](AGENTS.md) at the repo root, [`ui/AGENTS.md`](ui/AGENTS.md), and [`internal/providers/AGENTS.md`](internal/providers/AGENTS.md) stay useful — they're the codebase map. `AGENTS.md` is also the Codex-discoverable entry, AND it's auto-loaded by Hecate's own `agent_loop` as the workspace prompt layer (`internal/api/system_prompt.go`, 8 KiB cap). That dual purpose is why it stays scoped to map-and-recipes; conventions and longer guidance live in [`ai/`](ai/README.md).
+[`AGENTS.md`](AGENTS.md) at the repo root, [`ui/AGENTS.md`](ui/AGENTS.md), and [`internal/providers/AGENTS.md`](internal/providers/AGENTS.md) are the codebase map and the Codex-discoverable entry points. They stay scoped to map-and-recipes; conventions and longer guidance live in [`ai/`](ai/README.md).

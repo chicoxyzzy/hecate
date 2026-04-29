@@ -7,10 +7,10 @@ OpenTelemetry traces. Tenant-aware, deny-by-default, runtime-aware,
 storage-tiered (memory / sqlite / postgres). The React operator UI is
 embedded via `//go:embed ui/dist`.
 
-This file is the codebase map and recipe sheet — designed to stay useful
-both as the Codex-discoverable entry and as Hecate's own `agent_loop`
-workspace prompt layer (`internal/api/system_prompt.go`, 8 KiB cap).
-Conventions and longer-form guidance live in [`ai/`](ai/README.md).
+This file is the codebase map and recipe sheet — the entry point an
+agent (Claude Code, Codex, Cursor, or human) reaches for when starting
+work on this repo. Conventions, workflow, and longer-form guidance live
+in [`ai/`](ai/README.md).
 
 ## Where guidance lives
 

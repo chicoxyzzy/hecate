@@ -42,7 +42,7 @@ ai/
 
 ## Relationship to other agent surfaces
 
-- `/AGENTS.md` and `/ui/AGENTS.md` and `/internal/providers/AGENTS.md` — the codebase map. `AGENTS.md` is also auto-loaded by Hecate's own `agent_loop` as the workspace prompt layer (8 KiB cap), so it has dual purpose. It points here for conventions and recipes that don't need to live in a token-constrained surface.
+- `/AGENTS.md` and `/ui/AGENTS.md` and `/internal/providers/AGENTS.md` — the codebase map and Codex-discoverable entry points. They point here for conventions, workflow, and longer-form recipes.
 - `/CLAUDE.md` — thin Claude Code adapter that points here.
 - `/.cursor/rules/` — thin Cursor adapter that points here.
 - `/.claude/commands/*.md` — slash commands (`/race`, `/typecheck`, `/test-affected`).
