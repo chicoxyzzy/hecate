@@ -38,6 +38,11 @@ ui/src/
 ## Conventions
 
 - **Match existing UI design.** Reuse design tokens (`var(--bg1)`, `var(--t0)`, `var(--radius)`, `var(--font-mono)` ...), reuse primitives from `features/shared/ui.tsx`, copy layout patterns from neighboring screens. Never invent new styles.
+- **No duplicate summary surfaces by default.** If data is already visible on the page, prefer better ordering, clearer labels, or progressive disclosure over adding another panel that restates it.
+- **Ask before adding new persistent UI surfaces.** Refining an existing view is fine; adding a new inspector, side rail, dashboard block, or always-visible panel needs explicit user approval first.
+- **Keep provider ordering stable.** The Providers view should stay in its fixed alphabetical/preset order within each section. Do not re-rank providers by health, availability, or actionability unless the user asks for that behavior explicitly.
+- **Admin tabs use short tab labels and more descriptive in-view headers.** Preserve that split: concise tabs for navigation, fuller section headers inside the active tab for context.
+- **Docs-only AGENTS/SKILL updates are `chore:` commits.** When a change only adjusts local agent guidance or UI docs, propose a `chore(...)` Conventional Commit rather than `docs(...)`.
 - **No emojis** in code or copy unless explicitly requested.
 - **Tests use vitest** (`describe` / `it` / `expect`) with `@testing-library/react` + `@testing-library/user-event`. Pattern: setup function returns `{ props, user, render }`.
 - **Type names mirror Go**: `runtime.ts` shapes match `pkg/types/` and `internal/api/` exactly. When the Go side adds a field, mirror it here in the same PR — otherwise the SSE stream consumers and detail panels start dropping data silently.

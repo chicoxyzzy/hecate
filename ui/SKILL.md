@@ -87,10 +87,14 @@ If a section tries to explain the whole system at once, it should be broken apar
 - Authentication and identity context should be easy to find.
 - Tenant context should always be visible when it affects behavior.
 - Provider and model selection should expose local and cloud distinctions clearly.
+- Provider ordering should stay stable and predictable. Do not sort provider lists by health, blocked state, or availability unless explicitly asked.
 - Runtime metadata should feel first-class, not tucked away in debug crumbs.
 - Trace and failure details should be readable without scanning raw JSON first.
 - Cost, cache, routing, and retry behavior should be visible in plain language.
 - Dangerous or privileged actions should be visually separated from routine actions.
+- Short tab labels are good for navigation; the active view can use a more descriptive section header inside the page.
+- If a page already shows a piece of state, prefer hierarchy fixes over adding a second persistent summary of the same state.
+- Docs-only updates to `ui/AGENTS.md` and `ui/SKILL.md` should use a `chore:` commit message, not `docs:`.
 
 ## Layout Guidance
 
@@ -100,6 +104,8 @@ Default app layout:
 - primary navigation or mode switch
 - main workspace
 - optional secondary inspector or detail pane
+
+Do not add a new persistent inspector, side rail, dashboard block, or summary panel without explicit user approval first. Improve the existing workspace before expanding the surface area.
 
 Prefer layout primitives over card wrappers.
 
