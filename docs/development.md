@@ -5,8 +5,12 @@ This guide covers the local-build path (Go + Bun), UI hot reload, the test surfa
 ## Toolchain
 
 - **Go** — pinned via `go.mod` (`make build` runs `go build`)
-- **Bun** — pinned via `ui/package.json` (`packageManager: "bun@..."`)
+- **Bun** — pinned via `ui/package.json` (`packageManager: "bun@..."`) and used for UI dependency install, script execution, tests, screenshot tooling, and CI
 - **Docker** — only required for the docker-smoke test job; not needed for the gateway itself
+
+Do not use npm, pnpm, yarn, Corepack, Volta, or Node-specific workflow setup
+for the UI. The committed lockfile is `ui/bun.lock`, the install command is
+`bun install`, and all UI scripts run through `bun run ...`.
 
 The gateway binary is a single executable with the React UI embedded via `//go:embed ui/dist`. There's no separate UI deployment.
 

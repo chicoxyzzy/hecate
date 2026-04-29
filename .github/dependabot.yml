@@ -10,6 +10,9 @@ updates:
     labels:
       - dependencies
 
+  # GitHub Dependabot still calls JavaScript package manifests "npm" even
+  # when the project uses Bun. The UI source of truth is ui/package.json plus
+  # ui/bun.lock; local dev and CI install/run everything with Bun.
   - package-ecosystem: npm
     directory: "/ui"
     schedule:
