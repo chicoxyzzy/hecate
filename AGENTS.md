@@ -35,23 +35,49 @@ cmd/sandboxd/           out-of-process sandbox executor
 pkg/types/              public types (ChatRequest, Message, ContentBlock, ...)
                           — no internal/ imports
 
-internal/api/           inbound HTTP shapes + handlers
-                          OpenAIChatMessage, OpenAIMessageContent (uppercase)
-internal/providers/     outbound HTTP per provider (openai, anthropic)
-                          openAIChatMessage, openAIMessageContent (lowercase)
+ui/                     React/Vite operator UI, embedded via //go:embed ui/dist
+e2e/                    binary-startup tests; build tag e2e (sub-tags: ollama, docker)
+docs/                   long-form references (architecture, runtime API, events, ...)
+ai/                     canonical agent guidance (this file points there for depth)
+
+internal/
+  api/                  inbound HTTP shapes + handlers (OpenAIChatMessage, uppercase)
+  providers/            outbound HTTP per provider (openAIChatMessage, lowercase)
                           — same JSON shape as api/, deliberate duplication
-internal/orchestrator/  task runtime (queue, runner, agent_loop, sandbox)
-internal/sandbox/       policy + sandboxd boundary
-internal/taskstate/     task / run / step / artifact / approval persistence
-internal/storage/       postgres + sqlite client wrappers
-internal/retention/     retention worker (subsystems: traces, budget, audit, cache, turn_events)
-internal/mcp/           stdio MCP server (read tools + write tools)
+  gateway/              top-level request orchestration: governor → router → cache → provider
+  router/               provider/model selection, failover, retry, circuit
+  governor/             policy + budget + rate-limit decisions; tenant cost ledger
+  policy/               approval policy + provider/model allowlists
+  catalog/, models/     provider catalog + model registry
+  cache/                exact + semantic response cache
+  billing/              pricebook + invoice/usage rollups (cost tables live here)
+  orchestrator/         task runtime: queue, runner, agent_loop, sandbox boundary
+  sandbox/              policy + sandboxd boundary
+  taskstate/            task / run / step / artifact / approval persistence
+  chatstate/            chat-completion conversation persistence
+  storage/              postgres + sqlite client wrappers
+  retention/            retention worker (subsystems: traces, budget, audit, cache, turn_events)
+  mcp/                  stdio MCP server (read tools + write tools)
+  controlplane/         tenants, API keys, settings (admin surface state)
+  auth/                 bearer-token + tenant-key authentication
+  ratelimit/            per-key request limits
+  requestscope/         per-request principal + tracing context
+  config/, bootstrap/   env-driven config + startup wiring
+  secrets/              env-var and file-based secret resolution
+  telemetry/            OTel exporter wiring + span helpers
+  profiler/             pprof endpoints + runtime stats
+  version/              build-time version stamp
 ```
 
-**Architecture rings**: `pkg/types/` → `internal/api/` → `internal/providers/`,
-with `internal/orchestrator/` above. Cross-ring imports inward only. The
-api↔providers parallel-struct duplication is intentional. Full rationale:
-[`ai/skills/providers/SKILL.md`](ai/skills/providers/SKILL.md).
+**Architecture rings** (cross-ring imports inward only):
+
+```
+pkg/types/  ←  internal/api/  ←  internal/providers/
+                     ↑
+              internal/orchestrator/  (sits above api, drives runs through providers)
+```
+
+The api↔providers parallel-struct duplication (`OpenAIChatMessage` ↔ `openAIChatMessage`) is intentional — it keeps `internal/providers/` free of `internal/api/` imports. Full rationale: [`ai/skills/providers/SKILL.md`](ai/skills/providers/SKILL.md).
 
 **Storage tier rule**: every backend-bound concern mirrors three tiers —
 memory (default), sqlite (`modernc.org/sqlite`, no CGO), postgres (`pgx`).
@@ -87,7 +113,7 @@ Full standards: [`ai/core/engineering-standards.md`](ai/core/engineering-standar
 
 Full ladder: [`ai/core/verification.md`](ai/core/verification.md).
 
-- **Race suite is the floor for runtime/backend changes**: `GOCACHE=/Users/chicoxyzzy/dev/hecate/.gocache go test -race -timeout 10m ./...` (or `/race`).
+- **Race suite is the floor for runtime/backend changes**: `go test -race -timeout 10m ./...` (or `/race`). Race builds are large; if your default `$GOCACHE` is on a small volume, point it at the repo: `GOCACHE="$(pwd)/.gocache" go test -race ...`.
 - **Iteration**: `/test-affected` for narrow runs.
 - **E2E**: `go test -tags e2e ./e2e/...`. Build tag `e2e` always required; sub-tags `ollama`, `docker` opt in. `PROVIDER_FAKE_KIND=local` skips pricebook preflight on synthetic models.
 - **UI**: `cd ui && bun run typecheck` then `bun run test`. Never `bun test` (skips testing-library DOM setup).
@@ -102,11 +128,13 @@ Full ladder: [`ai/core/verification.md`](ai/core/verification.md).
 
 ## Gotchas
 
+- **`bun run test` ≠ `bun test`.** The latter skips the testing-library DOM setup and panics with `document[isPrepared]`. Always `bun run test` (which dispatches to vitest).
 - **modernc/sqlite TIME-as-text format**: the driver writes `time.Time` using Go's default `time.Time.String()` format, which doesn't lex-compare with RFC3339Nano cutoffs and silently breaks the retention sweep. Always write timestamps as `t.UTC().Format(time.RFC3339Nano)` when the column is TEXT (see `internal/taskstate/sqlite.go` `AppendRunEvent`).
-- **mermaid `loop` is a reserved keyword**: don't use it as a sequence-diagram participant name. Use `Agent` or similar.
 - **OpenAI/openAI parallel structs are intentional**: don't unify. Mirror fields when adding on either side.
+- **Streaming `wireReq` plumbing**: when adding a passthrough field, plumb it into BOTH `Chat` and `ChatStream` `wireReq` constructions in `internal/providers/openai.go`. Forgetting one is the most common provider bug — non-stream tests pass; the field silently drops in production for any client using `stream: true`.
 - **Capability-cache seeding** for provider tests: seed `cachedCaps` and `capsExpiry` to skip the discovery path. Snippet in [`ai/skills/providers/SKILL.md`](ai/skills/providers/SKILL.md).
 - **Pricebook preflight** in tests: `PROVIDER_FAKE_KIND=local` for synthetic models in e2e.
+- **mermaid `loop` is a reserved keyword**: don't use it as a sequence-diagram participant name. Use `Agent` or similar.
 - **CodeQL CWE-190**: don't compute `make([]T, 0, len(x)+N)` with arithmetic — use plain `len(x)` and let `append` grow.
 
 ## Canonical docs
