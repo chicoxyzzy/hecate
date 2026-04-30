@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSemanticCacheInsight,
+  buildSpanWaterfall,
   budgetConsumedPercent,
   buildTraceTimeline,
   countRouteHealthStatuses,
@@ -14,6 +15,7 @@ import {
   filterModelsByKind,
   filterModelsByProvider,
   findModelInTrace,
+  formatRelativeTime,
   formatTraceAttributeKey,
   formatTraceAttributeValue,
   findProvider,
@@ -21,11 +23,12 @@ import {
   parseCSV,
   providerStatusTone,
   routeOutcomeTone,
+  traceStatusBadge,
   tracePhaseFromEvent,
   usdToMicros,
 } from "./runtime-utils";
 import type { TraceRouteRecord } from "./runtime-utils";
-import type { BudgetRecord, ModelRecord, ProviderRecord, RuntimeHeaders, TraceSpanRecord } from "../types/runtime";
+import type { BudgetRecord, ModelRecord, ProviderRecord, RuntimeHeaders, TraceListItem, TraceSpanRecord } from "../types/runtime";
 
 const models: ModelRecord[] = [
   { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } },
@@ -96,6 +99,33 @@ describe("runtime-utils", () => {
       expect.objectContaining({ name: "request.received", phase: "request", offsetMs: 0 }),
       expect.objectContaining({ name: "router.selected", phase: "routing", offsetMs: 1000 }),
     ]);
+  });
+
+  it("builds a span waterfall with depth, phase, and a critical-path mark", () => {
+    const t0 = "2026-04-21T10:00:00.000Z";
+    const at = (ms: number) => new Date(Date.parse(t0) + ms).toISOString();
+    const spans: TraceSpanRecord[] = [
+      { trace_id: "t", span_id: "root", name: "gateway.request",
+        start_time: at(0), end_time: at(400) },
+      { trace_id: "t", span_id: "long", parent_span_id: "root", name: "provider.openai",
+        start_time: at(50), end_time: at(380) },
+      { trace_id: "t", span_id: "short", parent_span_id: "root", name: "gateway.usage",
+        start_time: at(385), end_time: at(395) },
+    ];
+    const wf = buildSpanWaterfall(spans);
+    expect(wf.totalMs).toBe(400);
+    expect(wf.spans).toHaveLength(3);
+    const root = wf.spans.find(s => s.span.span_id === "root")!;
+    const long = wf.spans.find(s => s.span.span_id === "long")!;
+    const short = wf.spans.find(s => s.span.span_id === "short")!;
+    expect(root.depth).toBe(0);
+    expect(long.depth).toBe(1);
+    expect(short.depth).toBe(1);
+    expect(long.phase).toBe("provider");
+    expect(long.critical).toBe(true);
+    expect(short.critical).toBe(false);
+    expect(wf.phases).toContain("request");
+    expect(wf.phases).toContain("provider");
   });
 
   it("finds a model from OTel-shaped trace attributes", () => {
@@ -483,5 +513,35 @@ describe("runtime-utils", () => {
     expect(describeRouteSkipReason("some_new_reason")).toBe("Some New Reason");
     // Missing value returns empty string
     expect(describeRouteSkipReason(undefined)).toBe("");
+  });
+
+  it("traceStatusBadge maps trace items to Badge tones", () => {
+    const base: TraceListItem = { request_id: "r", span_count: 1 };
+    expect(traceStatusBadge({ ...base, status_code: "ok" })).toEqual({ status: "healthy", label: "Healthy" });
+    expect(traceStatusBadge({ ...base, status_code: "error" })).toEqual({ status: "down", label: "Error" });
+    expect(traceStatusBadge({ ...base, status_code: "ok", route: { fallback_from: "openai" } })).toEqual({ status: "degraded", label: "Recovered" });
+    // Missing status_code falls through to a degraded "Issue" or
+    // describeRouteReason when present.
+    expect(traceStatusBadge({ ...base })).toEqual({ status: "degraded", label: "Issue" });
+    expect(traceStatusBadge({ ...base, route: { final_reason: "requested_model" } })).toEqual({ status: "degraded", label: "Requested model" });
+  });
+
+  it("formatRelativeTime renders short relative durations", () => {
+    const now = Date.now();
+    // Empty / invalid input
+    expect(formatRelativeTime("")).toEqual({ label: "—", iso: "" });
+    expect(formatRelativeTime("not-a-date").label).toBe("not-a-date");
+    // Future timestamp clamps to "just now"
+    const future = new Date(now + 5_000).toISOString();
+    expect(formatRelativeTime(future).label).toBe("just now");
+    // 0-59s -> seconds
+    const justNow = new Date(now - 3_000).toISOString();
+    expect(formatRelativeTime(justNow).label).toBe("3s ago");
+    // 1-59m -> minutes
+    const fiveMin = new Date(now - 5 * 60_000).toISOString();
+    expect(formatRelativeTime(fiveMin).label).toBe("5m ago");
+    // 1-23h -> hours
+    const twoHr = new Date(now - 2 * 60 * 60_000).toISOString();
+    expect(formatRelativeTime(twoHr).label).toBe("2h ago");
   });
 });

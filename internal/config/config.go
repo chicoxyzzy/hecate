@@ -801,19 +801,17 @@ func defaultPricebookConfig() PricebookConfig {
 }
 
 func loadProvidersFromEnv() ProvidersConfig {
-	names := make([]string, 0, len(BuiltInProviders()))
-	seen := make(map[string]struct{}, len(BuiltInProviders()))
-	for _, builtIn := range BuiltInProviders() {
-		names = append(names, builtIn.ID)
-		seen[builtIn.ID] = struct{}{}
-	}
-	for _, name := range deriveProviderNamesFromEnv() {
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		names = append(names, name)
-		seen[name] = struct{}{}
-	}
+	// Only register providers that have at least one explicit env var
+	// (PROVIDER_<NAME>_BASE_URL / _API_KEY / _DEFAULT_MODEL / etc.).
+	// Previously this seeded the list with every built-in preset and
+	// relied on providerConfigFromEnv falling back to the catalog's
+	// base_url to keep them — which auto-registered all 12 presets at
+	// startup, polluting the runtime registry with stub entries that
+	// surfaced as route candidates marked "unsupported_model" on every
+	// request. The CP-store add flow is the source of truth for
+	// "configured providers"; env vars are a deployment-time bootstrap
+	// for the same record. No env var → no registration.
+	names := deriveProviderNamesFromEnv()
 	items := make([]OpenAICompatibleProviderConfig, 0, len(names))
 	for _, name := range names {
 		cfg, ok := providerConfigFromEnv(name)
@@ -885,6 +883,17 @@ func providerConfigFromEnv(name string) (OpenAICompatibleProviderConfig, bool) {
 		cfg.StubMode = getEnvBool(prefix+"STUB_MODE", cfg.StubMode)
 		cfg.StubResponse = getEnv(prefix+"STUB_RESPONSE", cfg.StubResponse)
 		cfg.DefaultModel = getEnv(prefix+"DEFAULT_MODEL", cfg.DefaultModel)
+	}
+
+	// Auto-registration is gated on an explicit opt-in flag. Other
+	// PROVIDER_<NAME>_* env vars (BASE_URL, API_KEY, …) are deployment
+	// hints — they don't pre-add the provider to the runtime registry
+	// on their own. Operators who want a provider live from first boot
+	// set PROVIDER_<NAME>_PRECONFIGURED=1 alongside the rest. Otherwise
+	// the provider is only configured when added explicitly via the UI
+	// or POST /admin/control-plane/providers.
+	if !getEnvBool(providerEnvPrefix(name)+"PRECONFIGURED", false) {
+		return OpenAICompatibleProviderConfig{}, false
 	}
 
 	if strings.TrimSpace(cfg.BaseURL) == "" {

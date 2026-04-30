@@ -230,13 +230,22 @@ func TestSplitCSVTrimsAndDropsEmptyValues(t *testing.T) {
 }
 
 func TestLoadProvidersFromEnvUsesGenericProviderPrefixes(t *testing.T) {
+	// PROVIDER_<NAME>_PRECONFIGURED=1 is the auto-registration opt-in
+	// gate — without it the other env vars are deployment hints only.
+	t.Setenv("PROVIDER_OPENAI_PRECONFIGURED", "1")
 	t.Setenv("PROVIDER_OPENAI_API_KEY", "openai-secret")
+	t.Setenv("PROVIDER_OLLAMA_PRECONFIGURED", "1")
 	t.Setenv("PROVIDER_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("PROVIDER_ANTHROPIC_PRECONFIGURED", "1")
 	t.Setenv("PROVIDER_ANTHROPIC_API_KEY", "anthropic-secret")
 
 	cfg := LoadFromEnv()
-	if len(cfg.Providers.OpenAICompatible) != len(BuiltInProviders()) {
-		t.Fatalf("provider count = %d, want %d built-ins", len(cfg.Providers.OpenAICompatible), len(BuiltInProviders()))
+	// Only providers with an explicit env var register — three vars set
+	// → three providers. Built-ins without env vars stay out of the
+	// runtime registry; the explicit-add (CP store) flow is the
+	// canonical path for unconfigured providers.
+	if len(cfg.Providers.OpenAICompatible) != 3 {
+		t.Fatalf("provider count = %d, want 3 (env-only)", len(cfg.Providers.OpenAICompatible))
 	}
 	openai, ok := testProviderByName(cfg.Providers.OpenAICompatible, "openai")
 	if !ok {
@@ -371,12 +380,15 @@ func TestBuiltInProviderCatalogDefaults(t *testing.T) {
 }
 
 func TestLoadProvidersFromEnvIncludesCustomProviderFromCoreEnvKeys(t *testing.T) {
+	t.Setenv("PROVIDER_CUSTOM_PRECONFIGURED", "1")
 	t.Setenv("PROVIDER_CUSTOM_BASE_URL", "https://example.com/v1")
 	t.Setenv("PROVIDER_CUSTOM_API_KEY", "custom-secret")
 
 	cfg := LoadFromEnv()
-	if len(cfg.Providers.OpenAICompatible) != len(BuiltInProviders())+1 {
-		t.Fatalf("provider count = %d, want %d built-ins + custom", len(cfg.Providers.OpenAICompatible), len(BuiltInProviders()))
+	// Only providers with explicit env vars register — one custom var
+	// pair → one provider. Built-ins without env vars stay out.
+	if len(cfg.Providers.OpenAICompatible) != 1 {
+		t.Fatalf("provider count = %d, want 1 (custom only)", len(cfg.Providers.OpenAICompatible))
 	}
 	custom, ok := testProviderByName(cfg.Providers.OpenAICompatible, "custom")
 	if !ok {
@@ -391,6 +403,7 @@ func TestLoadProvidersFromEnvIncludesCustomProviderFromCoreEnvKeys(t *testing.T)
 }
 
 func TestLoadProvidersFromEnvSupportsXAIProviderEnv(t *testing.T) {
+	t.Setenv("PROVIDER_XAI_PRECONFIGURED", "1")
 	t.Setenv("PROVIDER_XAI_API_KEY", "xai-secret")
 
 	cfg := LoadFromEnv()

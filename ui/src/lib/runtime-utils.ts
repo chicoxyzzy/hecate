@@ -1,4 +1,4 @@
-import type { BudgetRecord, ModelFilter, ModelRecord, ProviderFilter, ProviderRecord, RuntimeHeaders, TraceEventRecord, TraceResponse, TraceSpanRecord } from "../types/runtime";
+import type { BudgetRecord, ModelFilter, ModelRecord, ProviderFilter, ProviderRecord, RuntimeHeaders, TraceEventRecord, TraceListItem, TraceResponse, TraceSpanRecord } from "../types/runtime";
 
 export function usdToMicros(value: string): number {
   const parsed = Number.parseFloat(value);
@@ -534,6 +534,123 @@ export function budgetConsumedPercent(budget?: BudgetRecord | null): number {
   return Math.max(0, Math.min(100, Math.round((budget.debited_micros_usd / budget.credited_micros_usd) * 100)));
 }
 
+// WaterfallSpan is the per-span shape the ObservabilityView drawer
+// renders as a horizontal bar in the trace waterfall. Depth is derived
+// from the parent_span_id chain (purely UI-side); critical = on the
+// longest single child chain rooted at the trace root.
+export type WaterfallSpan = {
+  span: TraceSpanRecord;
+  startMs: number;
+  durMs: number;
+  depth: number;
+  phase: TraceTimelineItem["phase"];
+  hasError: boolean;
+  critical: boolean;
+};
+
+export type TraceWaterfall = {
+  spans: WaterfallSpan[];
+  totalMs: number;
+  phases: TraceTimelineItem["phase"][];
+};
+
+// tracePhaseFromSpan classifies a span's phase from its name. Mirrors
+// tracePhaseFromEvent's prefix mapping but uses the span name instead
+// of an event name — the legend in the waterfall reads off these.
+export function tracePhaseFromSpan(name: string): TraceTimelineItem["phase"] {
+  const lower = name.toLowerCase();
+  if (lower.includes("request") || lower.endsWith(".parse")) return "request";
+  if (lower.includes("router") || lower.includes("route")) return "routing";
+  if (lower.includes("cache") || lower.includes("semantic")) return "cache";
+  if (lower.includes("provider")) return "provider";
+  if (lower.includes("governor")) return "governor";
+  if (lower.includes("usage") || lower.includes("cost")) return "usage";
+  if (lower.includes("response")) return "response";
+  return "other";
+}
+
+// buildSpanWaterfall computes the data shape the drawer's waterfall
+// renders. Spans are ordered by start_offset_ms; depth comes from the
+// parent_span_id chain (root = depth 0). The critical-path is the
+// longest single child chain by duration starting at the root.
+export function buildSpanWaterfall(spans: TraceSpanRecord[]): TraceWaterfall {
+  if (!spans || spans.length === 0) return { spans: [], totalMs: 0, phases: [] };
+
+  const parsed = spans.map((s) => {
+    const start = s.start_time ? Date.parse(s.start_time) : 0;
+    const end = s.end_time ? Date.parse(s.end_time) : start;
+    return { span: s, start: Number.isFinite(start) ? start : 0, end: Number.isFinite(end) ? end : 0 };
+  });
+  const t0 = Math.min(...parsed.map((p) => p.start));
+  const totalMs = Math.max(...parsed.map((p) => p.end - t0), 1);
+
+  // depth via parent_span_id chain
+  const byID = new Map<string, TraceSpanRecord>();
+  for (const s of spans) byID.set(s.span_id, s);
+  const depthCache = new Map<string, number>();
+  function depthOf(id: string, seen: Set<string> = new Set()): number {
+    if (depthCache.has(id)) return depthCache.get(id)!;
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const node = byID.get(id);
+    const parent = node?.parent_span_id;
+    const d = parent && byID.has(parent) ? depthOf(parent, seen) + 1 : 0;
+    depthCache.set(id, d);
+    return d;
+  }
+
+  // children index for critical-path walk
+  const children = new Map<string, TraceSpanRecord[]>();
+  let root: TraceSpanRecord | null = null;
+  for (const s of spans) {
+    if (!s.parent_span_id || !byID.has(s.parent_span_id)) {
+      // First top-level span is the root for critical-path purposes.
+      if (!root) root = s;
+    } else {
+      const arr = children.get(s.parent_span_id) ?? [];
+      arr.push(s);
+      children.set(s.parent_span_id, arr);
+    }
+  }
+  const criticalIDs = new Set<string>();
+  function walkCritical(node: TraceSpanRecord | null) {
+    if (!node) return;
+    criticalIDs.add(node.span_id);
+    const kids = children.get(node.span_id) ?? [];
+    if (kids.length === 0) return;
+    let longest: TraceSpanRecord | null = null;
+    let longestDur = -1;
+    for (const k of kids) {
+      const ks = k.start_time ? Date.parse(k.start_time) : 0;
+      const ke = k.end_time ? Date.parse(k.end_time) : ks;
+      const dur = Number.isFinite(ke) && Number.isFinite(ks) ? ke - ks : 0;
+      if (dur > longestDur) {
+        longestDur = dur;
+        longest = k;
+      }
+    }
+    walkCritical(longest);
+  }
+  walkCritical(root);
+
+  const out: WaterfallSpan[] = parsed
+    .map((p) => ({
+      span: p.span,
+      startMs: Math.max(0, p.start - t0),
+      durMs: Math.max(p.end - p.start, 1),
+      depth: depthOf(p.span.span_id),
+      phase: tracePhaseFromSpan(p.span.name),
+      hasError: p.span.status_code === "error" || (p.span.attributes?.["error"] != null && p.span.attributes?.["error"] !== ""),
+      critical: criticalIDs.has(p.span.span_id),
+    }))
+    .sort((a, b) => a.startMs - b.startMs || a.depth - b.depth);
+
+  const phases: TraceTimelineItem["phase"][] = [];
+  for (const s of out) if (!phases.includes(s.phase)) phases.push(s.phase);
+
+  return { spans: out, totalMs, phases };
+}
+
 export function tracePhaseFromEvent(name: string): TraceTimelineItem["phase"] {
   if (name.startsWith("request.")) {
     return "request";
@@ -576,4 +693,51 @@ export function describeBudgetScope(budget?: BudgetRecord | null): string {
 
 export function budgetWarningTone(triggered: boolean): "healthy" | "warning" | "neutral" {
   return triggered ? "warning" : "neutral";
+}
+
+// traceStatusBadge collapses a TraceListItem's status fields into the
+// Badge primitives the table uses. Mirrors resolveHealthBadge in the
+// providers view: ok → healthy, error → down, recovered (fallback
+// took over) → degraded with a "Recovered" label, otherwise a generic
+// degraded badge derived from the route reason or a fallback "Issue".
+export function traceStatusBadge(item: TraceListItem): { status: string; label: string } {
+  if (item.status_code === "error") {
+    return { status: "down", label: "Error" };
+  }
+  if (item.route?.fallback_from) {
+    return { status: "degraded", label: "Recovered" };
+  }
+  if (item.status_code === "ok") {
+    return { status: "healthy", label: "Healthy" };
+  }
+  // No status_code at all (in-flight) — show a degraded "Issue" badge
+  // derived from the route reason if we have one, otherwise the
+  // generic fallback. This mirrors the spirit of resolveHealthBadge,
+  // which surfaces a specific reason when it can.
+  if (item.route?.final_reason) {
+    return { status: "degraded", label: describeRouteReason(item.route.final_reason) };
+  }
+  return { status: "degraded", label: "Issue" };
+}
+
+// formatRelativeTime renders an ISO timestamp as a short relative
+// string ("2s ago", "5m ago", "3h ago"), falling back to the locale
+// short date when the timestamp is older than 24h. Returns the
+// original ISO alongside so callers can surface it as a title
+// tooltip without re-parsing.
+export function formatRelativeTime(iso: string): { label: string; iso: string } {
+  if (!iso) return { label: "—", iso: "" };
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return { label: iso, iso };
+  const diffMs = Date.now() - parsed;
+  // Future timestamps (clock skew) clamp to "just now" so we never
+  // show a negative duration.
+  if (diffMs < 0) return { label: "just now", iso };
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60) return { label: `${sec}s ago`, iso };
+  const min = Math.floor(sec / 60);
+  if (min < 60) return { label: `${min}m ago`, iso };
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return { label: `${hr}h ago`, iso };
+  return { label: new Date(parsed).toLocaleDateString(), iso };
 }

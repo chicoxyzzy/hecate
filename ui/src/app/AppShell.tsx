@@ -305,7 +305,7 @@ function AuthenticatedShell({
         <main className="hecate-content">
           {state.error && <div className="page-banner page-banner--error">{state.error}</div>}
           <div className={`console-content${isBare ? " console-content--bare" : ""}`}>
-            {activeWorkspace === "overview"   && <ObservabilityView actions={actions} state={state} />}
+            {activeWorkspace === "overview"   && <ObservabilityView actions={actions} state={state} onNavigate={onSelectWorkspace} />}
             {activeWorkspace === "chats" && (
               (state.adminConfig?.providers?.length ?? 0) === 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8 }}>
