@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -23,48 +24,114 @@ import (
 )
 
 // fakeProviderRuntime implements api.ProviderRuntime in memory so the
-// HandleControlPlaneSetProviderEnabled / SetProviderAPIKey handlers can
-// be exercised without the real loader plumbing (which pulls in a
-// secret store, a registry rebuild, etc.). The fake records the calls
-// so tests can assert on the payload that reaches it.
+// provider lifecycle handlers can be exercised without the real loader
+// plumbing (which pulls in a secret store, a registry rebuild, etc.).
+// The fake records the calls so tests can assert on the payload that
+// reaches it.
 type fakeProviderRuntime struct {
-	mu              sync.Mutex
-	setEnabledCalls []struct {
-		ID      string
-		Enabled bool
+	mu          sync.Mutex
+	store       controlplane.Store
+	upsertCalls []struct {
+		Provider controlplane.Provider
+		APIKey   string
 	}
 	rotateCalls []struct {
 		ID  string
 		Key string
 	}
+	deleteCalls     []string
 	deleteCredCalls []string
 	provider        controlplane.Provider
-	setEnabledErr   error
+	upsertErr       error
 	rotateErr       error
 	deleteErr       error
+	deleteCredErr   error
 }
 
 func (f *fakeProviderRuntime) Reload(_ context.Context) error { return nil }
 func (f *fakeProviderRuntime) SecretStorageEnabled() bool     { return true }
-func (f *fakeProviderRuntime) Upsert(_ context.Context, p controlplane.Provider, _ string) (controlplane.Provider, error) {
+func (f *fakeProviderRuntime) Upsert(ctx context.Context, p controlplane.Provider, key string) (controlplane.Provider, error) {
+	f.mu.Lock()
+	f.upsertCalls = append(f.upsertCalls, struct {
+		Provider controlplane.Provider
+		APIKey   string
+	}{p, key})
+	upsertErr := f.upsertErr
+	store := f.store
+	f.mu.Unlock()
+	if upsertErr != nil {
+		return controlplane.Provider{}, upsertErr
+	}
+	// Mirror production: cloud providers require a key unless one already
+	// exists in the store. Without this the create handler would silently
+	// accept cloud kind without an api_key.
+	if p.Kind == "cloud" && key == "" {
+		hasSecret := false
+		if store != nil {
+			state, _ := store.Snapshot(ctx)
+			for _, s := range state.ProviderSecrets {
+				if s.ProviderID == p.ID && s.APIKeyEncrypted != "" {
+					hasSecret = true
+					break
+				}
+			}
+		}
+		if !hasSecret {
+			return controlplane.Provider{}, errors.New("cloud providers require an api key")
+		}
+	}
+	if store != nil {
+		// Mirror runtime_manager: hydrate built-in preset defaults so a
+		// cloud preset (e.g. "Anthropic" with no base_url supplied)
+		// passes the store's base_url-required check.
+		if p.BaseURL == "" {
+			// Hydrate by PresetID first (so a "Anthropic Prod" instance with
+			// id="anthropic-prod" still inherits the catalog base URL via
+			// preset_id="anthropic"), then fall back to the id-as-preset
+			// shortcut for legacy single-instance creates.
+			lookupID := p.PresetID
+			if lookupID == "" {
+				lookupID = p.ID
+			}
+			if builtIn, ok := config.BuiltInProviderByID(lookupID); ok {
+				p.BaseURL = builtIn.BaseURL
+			}
+		}
+		var secret *controlplane.ProviderSecret
+		if key != "" {
+			secret = &controlplane.ProviderSecret{
+				ProviderID:      p.ID,
+				APIKeyEncrypted: "encrypted:" + key,
+				APIKeyPreview:   key,
+			}
+		}
+		saved, err := store.UpsertProvider(ctx, p, secret)
+		if err != nil {
+			return controlplane.Provider{}, err
+		}
+		return saved, nil
+	}
+	if p.ID == "" {
+		p.ID = f.provider.ID
+	}
+	if p.Name == "" {
+		p.Name = f.provider.Name
+	}
 	return p, nil
 }
-func (f *fakeProviderRuntime) Delete(_ context.Context, _ string) error { return nil }
-
-func (f *fakeProviderRuntime) SetEnabled(_ context.Context, id string, enabled bool) (controlplane.Provider, error) {
+func (f *fakeProviderRuntime) Delete(ctx context.Context, id string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.setEnabledCalls = append(f.setEnabledCalls, struct {
-		ID      string
-		Enabled bool
-	}{id, enabled})
-	if f.setEnabledErr != nil {
-		return controlplane.Provider{}, f.setEnabledErr
+	f.deleteCalls = append(f.deleteCalls, id)
+	deleteErr := f.deleteErr
+	store := f.store
+	f.mu.Unlock()
+	if deleteErr != nil {
+		return deleteErr
 	}
-	out := f.provider
-	out.ID = id
-	out.Enabled = enabled
-	return out, nil
+	if store != nil {
+		return store.DeleteProvider(ctx, id)
+	}
+	return nil
 }
 
 func (f *fakeProviderRuntime) RotateSecret(_ context.Context, id, key string) (controlplane.Provider, error) {
@@ -86,7 +153,7 @@ func (f *fakeProviderRuntime) DeleteCredential(_ context.Context, id string) err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleteCredCalls = append(f.deleteCredCalls, id)
-	return f.deleteErr
+	return f.deleteCredErr
 }
 
 // Compile-time assertion: the fake satisfies the ProviderRuntime interface.
@@ -102,6 +169,14 @@ func newProviderRuntimeTestHandler(t *testing.T, runtime ProviderRuntime) (apiTe
 	registry := providers.NewRegistry(prov)
 	providerCatalog := catalog.NewRegistryCatalog(registry, nil)
 	store := controlplane.NewMemoryStore()
+	// Wire the fake's CP-store handle so Upsert / Delete write through to
+	// the same store the handler reads from. Without this, create handlers
+	// can't observe their own previous create when checking duplicates.
+	if rt, ok := runtime.(*fakeProviderRuntime); ok {
+		rt.mu.Lock()
+		rt.store = store
+		rt.mu.Unlock()
+	}
 	cfg := config.Config{Server: config.ServerConfig{AuthToken: "admin-secret"}}
 	service := gateway.NewService(gateway.Dependencies{
 		Logger:    logger,
@@ -118,42 +193,7 @@ func newProviderRuntimeTestHandler(t *testing.T, runtime ProviderRuntime) (apiTe
 	return newAPITestClient(t, server).withBearerToken("admin-secret"), store
 }
 
-func TestControlPlaneSetProviderEnabledForwardsToRuntime(t *testing.T) {
-	t.Parallel()
-	rt := &fakeProviderRuntime{provider: controlplane.Provider{ID: "anthropic", Name: "Anthropic"}}
-	admin, _ := newProviderRuntimeTestHandler(t, rt)
-
-	rec := admin.mustRequest(http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"enabled":false}`)
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", got)
-	}
-
-	var resp struct {
-		Object string                     `json:"object"`
-		Data   ControlPlaneProviderRecord `json:"data"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if resp.Object != "control_plane_provider" {
-		t.Errorf("object = %q, want control_plane_provider", resp.Object)
-	}
-	if resp.Data.ID != "anthropic" || resp.Data.Enabled {
-		t.Errorf("data = %+v, want id=anthropic enabled=false", resp.Data)
-	}
-
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if len(rt.setEnabledCalls) != 1 {
-		t.Fatalf("SetEnabled calls = %d, want 1", len(rt.setEnabledCalls))
-	}
-	call := rt.setEnabledCalls[0]
-	if call.ID != "anthropic" || call.Enabled {
-		t.Errorf("call = %+v, want anthropic/false", call)
-	}
-}
-
-func TestControlPlaneSetProviderEnabledRequires400WhenRuntimeNotConfigured(t *testing.T) {
+func TestControlPlaneUpdateProviderRequires400WhenRuntimeNotConfigured(t *testing.T) {
 	t.Parallel()
 	// Pass nil runtime so the handler falls into the
 	// `dynamic provider runtime is not configured` branch — this is
@@ -161,23 +201,23 @@ func TestControlPlaneSetProviderEnabledRequires400WhenRuntimeNotConfigured(t *te
 	// gracefully rather than 500-ing.
 	admin, _ := newProviderRuntimeTestHandler(t, nil)
 
-	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"enabled":false}`)
+	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"base_url":"https://example.com/v1"}`)
 	if !contains([]string{"invalid_request"}, decodeErrorType(t, rec.Body.Bytes())) {
 		t.Errorf("error type = %q, want invalid_request", decodeErrorType(t, rec.Body.Bytes()))
 	}
 }
 
-func TestControlPlaneSetProviderEnabledSurfacesRuntimeError(t *testing.T) {
+func TestControlPlaneUpdateProviderRejectsAnonymous(t *testing.T) {
 	t.Parallel()
-	rt := &fakeProviderRuntime{setEnabledErr: errors.New("provider id is unknown")}
+	rt := &fakeProviderRuntime{}
 	admin, _ := newProviderRuntimeTestHandler(t, rt)
+	anon := apiTestClient{t: admin.t, handler: admin.handler}
 
-	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPatch, "/admin/control-plane/providers/bogus", `{"enabled":true}`)
-	// Errors from the runtime become 400 with their message verbatim —
-	// useful for the operator's UI banner; otherwise they'd see a
-	// generic "internal error".
-	if msg := decodeErrorMessage(t, rec.Body.Bytes()); msg != "provider id is unknown" {
-		t.Errorf("error.message = %q, want runtime error verbatim", msg)
+	anon.mustRequestStatus(http.StatusUnauthorized, http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"base_url":"https://example.com/v1"}`)
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.upsertCalls) != 0 {
+		t.Errorf("Upsert called %d times before auth; want 0", len(rt.upsertCalls))
 	}
 }
 
@@ -263,25 +303,11 @@ func TestControlPlaneSetProviderAPIKeyRequires400WhenRuntimeNotConfigured(t *tes
 	admin.mustRequestStatus(http.StatusBadRequest, http.MethodPut, "/admin/control-plane/providers/anthropic/api-key", `{"key":"sk-ant"}`)
 }
 
-// TestControlPlaneSetProviderEnabledRejectsAnonymous and the API-key
-// counterpart prove the auth gate fires before any handler-specific
-// logic: a request with no bearer must 401, never invoke the runtime.
-// Without these, a regression that drops `requireControlPlane` would
-// open the dynamic-runtime endpoints to anyone.
-func TestControlPlaneSetProviderEnabledRejectsAnonymous(t *testing.T) {
-	t.Parallel()
-	rt := &fakeProviderRuntime{}
-	admin, _ := newProviderRuntimeTestHandler(t, rt)
-	anon := apiTestClient{t: admin.t, handler: admin.handler} // strip the bearer
-
-	anon.mustRequestStatus(http.StatusUnauthorized, http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"enabled":false}`)
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if len(rt.setEnabledCalls) != 0 {
-		t.Errorf("SetEnabled called %d times before auth; want 0", len(rt.setEnabledCalls))
-	}
-}
-
+// TestControlPlaneSetProviderAPIKeyRejectsAnonymous proves the auth
+// gate fires before any handler-specific logic: a request with no
+// bearer must 401, never invoke the runtime. Without this, a
+// regression that drops `requireControlPlane` would open the
+// dynamic-runtime endpoints to anyone.
 func TestControlPlaneSetProviderAPIKeyRejectsAnonymous(t *testing.T) {
 	t.Parallel()
 	rt := &fakeProviderRuntime{}
@@ -293,6 +319,349 @@ func TestControlPlaneSetProviderAPIKeyRejectsAnonymous(t *testing.T) {
 	defer rt.mu.Unlock()
 	if len(rt.rotateCalls) != 0 || len(rt.deleteCredCalls) != 0 {
 		t.Errorf("runtime mutated before auth: rotate=%d delete=%d", len(rt.rotateCalls), len(rt.deleteCredCalls))
+	}
+}
+
+// ── Provider create / delete / update tests ─────────────────────────────────
+//
+// These exercise the explicit-add lifecycle (POST + DELETE + PATCH) the
+// UI relies on. The fake runtime's Upsert writes through to the real CP
+// store the handler reads from, so duplicate-id and base_url-conflict
+// detection paths see their own previous writes.
+
+func TestControlPlaneCreateProvider_Cloud_Success(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"Anthropic","kind":"cloud","protocol":"openai","api_key":"sk-ant-test"}`
+	rec := admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+	var resp struct {
+		Object string                     `json:"object"`
+		Data   ControlPlaneProviderRecord `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.Data.ID != "anthropic" || resp.Data.Name != "Anthropic" {
+		t.Errorf("data = %+v, want id=anthropic name=Anthropic", resp.Data)
+	}
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 1 || state.Providers[0].ID != "anthropic" {
+		t.Fatalf("store providers = %+v, want 1 record id=anthropic", state.Providers)
+	}
+}
+
+func TestControlPlaneCreateProvider_Local_Success(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"Ollama","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 1 || state.Providers[0].Kind != "local" {
+		t.Fatalf("store providers = %+v, want 1 local record", state.Providers)
+	}
+}
+
+func TestControlPlaneCreateProvider_NameRequired(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPost, "/admin/control-plane/providers", `{"name":"","kind":"cloud","api_key":"sk"}`)
+	if msg := decodeErrorMessage(t, rec.Body.Bytes()); msg != "provider name is required" {
+		t.Errorf("error.message = %q, want 'provider name is required'", msg)
+	}
+}
+
+func TestControlPlaneCreateProvider_DuplicateID(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"Anthropic","kind":"cloud","protocol":"openai","api_key":"sk-1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+	rec := admin.mustRequestStatus(http.StatusConflict, http.MethodPost, "/admin/control-plane/providers", body)
+	if msg := decodeErrorMessage(t, rec.Body.Bytes()); !strings.Contains(msg, "already exists") {
+		t.Errorf("error.message = %q, want substring 'already exists'", msg)
+	}
+}
+
+func TestControlPlaneCreateProvider_BaseURLConflict(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	first := `{"name":"Primary","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", first)
+	second := `{"name":"Secondary","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	rec := admin.mustRequestStatus(http.StatusConflict, http.MethodPost, "/admin/control-plane/providers", second)
+	msg := decodeErrorMessage(t, rec.Body.Bytes())
+	if !strings.Contains(msg, "Primary") {
+		t.Errorf("error.message = %q, want substring 'Primary' (existing provider name)", msg)
+	}
+}
+
+func TestControlPlaneCreateProvider_CloudWithoutKey(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPost, "/admin/control-plane/providers", `{"name":"OpenAI","kind":"cloud","protocol":"openai"}`)
+	if msg := decodeErrorMessage(t, rec.Body.Bytes()); !strings.Contains(msg, "api key") {
+		t.Errorf("error.message = %q, want substring 'api key'", msg)
+	}
+}
+
+func TestControlPlaneCreateProvider_SlugifiesName(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"My Custom Provider","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:9999/v1"}`
+	rec := admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+	var resp struct {
+		Data ControlPlaneProviderRecord `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.Data.ID != "my-custom-provider" {
+		t.Errorf("data.id = %q, want my-custom-provider", resp.Data.ID)
+	}
+}
+
+func TestControlPlaneDeleteProvider_Success(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"Ollama","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+	admin.mustRequest(http.MethodDelete, "/admin/control-plane/providers/ollama", "")
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 0 {
+		t.Fatalf("store providers = %+v, want empty after delete", state.Providers)
+	}
+}
+
+func TestControlPlaneDeleteProvider_Unknown(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	admin.mustRequestStatus(http.StatusBadRequest, http.MethodDelete, "/admin/control-plane/providers/nonexistent", "")
+}
+
+func TestControlPlaneUpdateProvider_BaseURL(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"Ollama","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	patch := `{"base_url":"http://192.168.1.10:11434/v1"}`
+	admin.mustRequest(http.MethodPatch, "/admin/control-plane/providers/ollama", patch)
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 1 || state.Providers[0].BaseURL != "http://192.168.1.10:11434/v1" {
+		t.Fatalf("provider base_url = %q, want updated value", state.Providers[0].BaseURL)
+	}
+}
+
+// TestControlPlaneUpdateProvider_RenameCustom pins that a custom provider
+// (preset_id == "") can be renamed via PATCH. Custom providers are the
+// only ones with a free-form name; presets keep their catalog name as
+// the join key, so renaming them is rejected.
+func TestControlPlaneUpdateProvider_RenameCustom(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"My Local","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:9000/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	patch := `{"name":"Workstation"}`
+	admin.mustRequest(http.MethodPatch, "/admin/control-plane/providers/my-local", patch)
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 1 || state.Providers[0].Name != "Workstation" {
+		t.Fatalf("provider name = %q, want 'Workstation'", state.Providers[0].Name)
+	}
+	// ID is the slugified original name and stays stable — renaming the
+	// display name doesn't reslugify the ID, otherwise existing tenant
+	// scopes / pricebook entries / audit history would all dangle.
+	if state.Providers[0].ID != "my-local" {
+		t.Errorf("provider id = %q, want stable 'my-local'", state.Providers[0].ID)
+	}
+}
+
+// TestControlPlaneUpdateProvider_RenamePresetRejected pins that a
+// preset-based provider's Name is fixed — it's the catalog join key
+// (brand color, default base URL, docs link). Operators reach for
+// custom_name instead when they need to disambiguate.
+func TestControlPlaneUpdateProvider_RenamePresetRejected(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"Anthropic","preset_id":"anthropic","kind":"cloud","protocol":"openai","api_key":"sk"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"name":"Frank"}`)
+	if msg := decodeErrorMessage(t, rec.Body.Bytes()); !strings.Contains(msg, "fixed name") {
+		t.Errorf("error.message = %q, want substring 'fixed name'", msg)
+	}
+}
+
+// TestControlPlaneUpdateProvider_SetCustomName pins the disambiguator
+// path: a preset provider can carry an operator-supplied label that
+// the table renders alongside Name to tell instances apart.
+func TestControlPlaneUpdateProvider_SetCustomName(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"Anthropic","preset_id":"anthropic","kind":"cloud","protocol":"openai","api_key":"sk"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	admin.mustRequest(http.MethodPatch, "/admin/control-plane/providers/anthropic", `{"custom_name":"Prod"}`)
+
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 1 {
+		t.Fatalf("providers = %+v, want 1", state.Providers)
+	}
+	got := state.Providers[0]
+	if got.CustomName != "Prod" {
+		t.Errorf("custom_name = %q, want 'Prod'", got.CustomName)
+	}
+	if got.Name != "Anthropic" {
+		t.Errorf("name = %q, want unchanged 'Anthropic' (preset name is fixed)", got.Name)
+	}
+}
+
+// TestControlPlaneCreateProvider_TwoPresetInstances pins that two
+// instances of the same preset can coexist when the second supplies a
+// custom_name — the slug includes both, producing distinct ids.
+func TestControlPlaneCreateProvider_TwoPresetInstances(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, store := newProviderRuntimeTestHandler(t, rt)
+
+	first := `{"name":"Anthropic","preset_id":"anthropic","kind":"cloud","protocol":"openai","api_key":"sk-1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", first)
+	second := `{"name":"Anthropic","preset_id":"anthropic","custom_name":"Prod","kind":"cloud","protocol":"openai","api_key":"sk-2"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", second)
+
+	state, _ := store.Snapshot(context.Background())
+	if len(state.Providers) != 2 {
+		t.Fatalf("providers count = %d, want 2", len(state.Providers))
+	}
+	ids := []string{state.Providers[0].ID, state.Providers[1].ID}
+	if !((ids[0] == "anthropic" && ids[1] == "anthropic-prod") || (ids[0] == "anthropic-prod" && ids[1] == "anthropic")) {
+		t.Errorf("ids = %v, want set {anthropic, anthropic-prod}", ids)
+	}
+}
+
+// TestControlPlaneUpdateProvider_NoFields rejects an empty PATCH body —
+// the handler used to read base_url as a required string but now both
+// fields are optional pointers, and "neither supplied" must still be a
+// 400 instead of silently no-op'ing through Upsert.
+func TestControlPlaneUpdateProvider_NoFields(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"Ollama","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	rec := admin.mustRequestStatus(http.StatusBadRequest, http.MethodPatch, "/admin/control-plane/providers/ollama", `{}`)
+	if msg := decodeErrorMessage(t, rec.Body.Bytes()); !strings.Contains(msg, "no fields to update") {
+		t.Errorf("error.message = %q, want substring 'no fields to update'", msg)
+	}
+}
+
+// TestControlPlaneUpdateProvider_BaseURL_PropagatesToRuntime pins that a
+// PATCH base_url update goes through Upsert (which calls Reload), so the
+// runtime registry actually swaps to the new endpoint instead of the
+// store and the runtime drifting apart.
+func TestControlPlaneUpdateProvider_BaseURL_PropagatesToRuntime(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	create := `{"name":"Ollama","kind":"local","protocol":"openai","base_url":"http://127.0.0.1:11434/v1"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", create)
+	patch := `{"base_url":"http://192.168.1.10:11434/v1"}`
+	admin.mustRequest(http.MethodPatch, "/admin/control-plane/providers/ollama", patch)
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.upsertCalls) != 2 {
+		t.Fatalf("Upsert call count = %d, want 2 (create + patch)", len(rt.upsertCalls))
+	}
+	last := rt.upsertCalls[len(rt.upsertCalls)-1].Provider
+	if last.BaseURL != "http://192.168.1.10:11434/v1" {
+		t.Errorf("runtime received base_url = %q, want updated value", last.BaseURL)
+	}
+}
+
+// TestBuildControlPlaneProviderList_EmptyStore confirms the list endpoint
+// returns no records when no provider has been added — the new "explicit
+// add" model. Before the redesign, this returned one record per built-in
+// preset; that behavior is gone and shouldn't regress.
+func TestBuildControlPlaneProviderList_EmptyStore(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	rec := admin.mustRequest(http.MethodGet, "/admin/control-plane", "")
+	var resp struct {
+		Data struct {
+			Providers []ControlPlaneProviderRecord `json:"providers"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(resp.Data.Providers) != 0 {
+		t.Errorf("providers = %+v, want empty list on a fresh store", resp.Data.Providers)
+	}
+}
+
+// TestBuildControlPlaneProviderList_PresetMetadataJoin pins that a record
+// created via a preset_id has its kind / base_url / protocol filled in
+// from the preset catalog when the operator didn't override them. The UI
+// renders these fields directly so a regression here would mean rows
+// missing brand color, protocol label, or endpoint text.
+func TestBuildControlPlaneProviderList_PresetMetadataJoin(t *testing.T) {
+	t.Parallel()
+	rt := &fakeProviderRuntime{}
+	admin, _ := newProviderRuntimeTestHandler(t, rt)
+
+	body := `{"name":"Anthropic","preset_id":"anthropic","kind":"cloud","protocol":"openai","api_key":"sk-ant-test"}`
+	admin.mustRequestStatus(http.StatusCreated, http.MethodPost, "/admin/control-plane/providers", body)
+
+	rec := admin.mustRequest(http.MethodGet, "/admin/control-plane", "")
+	var resp struct {
+		Data struct {
+			Providers []ControlPlaneProviderRecord `json:"providers"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(resp.Data.Providers) != 1 {
+		t.Fatalf("providers length = %d, want 1", len(resp.Data.Providers))
+	}
+	got := resp.Data.Providers[0]
+	if got.PresetID != "anthropic" {
+		t.Errorf("preset_id = %q, want 'anthropic'", got.PresetID)
+	}
+	if got.BaseURL == "" {
+		t.Errorf("base_url empty, want preset default to be joined in")
+	}
+	if got.Kind != "cloud" {
+		t.Errorf("kind = %q, want 'cloud'", got.Kind)
+	}
+	if !got.CredentialConfigured {
+		t.Errorf("credential_configured = false, want true after a key was supplied at create time")
 	}
 }
 

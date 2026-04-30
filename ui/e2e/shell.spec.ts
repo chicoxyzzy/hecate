@@ -40,10 +40,10 @@ test("shows the status bar with brand and session label", async ({ page }) => {
   await expect(bar).toContainText("Anonymous");
 });
 
-test("status bar shows provider and model counts", async ({ page }) => {
+test("status bar shows configured provider count and model count", async ({ page }) => {
   const bar = page.locator(".hecate-statusbar");
   // Wait for dashboard data to load
-  await expect(bar).toContainText("providers");
+  await expect(bar).toContainText("configured");
   await expect(bar).toContainText("models");
 });
 
@@ -56,19 +56,19 @@ test("keyboard shortcut 1 activates the Chats workspace", async ({ page }) => {
   );
 });
 
-test("keyboard shortcut 2 activates the Observability workspace", async ({ page }) => {
+test("keyboard shortcut 2 activates the Providers workspace", async ({ page }) => {
   await page.keyboard.press("2");
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
     "aria-label",
-    /Observability/,
+    /Providers/,
   );
 });
 
-test("keyboard shortcut 4 activates the Providers workspace", async ({ page }) => {
+test("keyboard shortcut 4 activates the Observability workspace", async ({ page }) => {
   await page.keyboard.press("4");
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
     "aria-label",
-    /Providers/,
+    /Observability/,
   );
 });
 

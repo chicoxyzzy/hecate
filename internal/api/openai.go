@@ -733,6 +733,7 @@ type ControlPlaneProviderRecord struct {
 	ID                   string   `json:"id"`
 	Name                 string   `json:"name"`
 	PresetID             string   `json:"preset_id,omitempty"`
+	CustomName           string   `json:"custom_name,omitempty"`
 	Kind                 string   `json:"kind"`
 	Protocol             string   `json:"protocol"`
 	BaseURL              string   `json:"base_url"`

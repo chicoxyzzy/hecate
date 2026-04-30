@@ -972,12 +972,6 @@ export function ProviderPicker({
               <div
                 className={`dropdown-item ${value === autoValue ? "selected" : ""}`}
                 onClick={() => { onChange(autoValue); setOpen(false); }}>
-                {/* Reserve the same 6px status-dot slot the option
-                    rows use so the auto-row label aligns with them
-                    on the left. No dot rendered (no provider). No
-                    check mark either — the selected highlight is
-                    sufficient signal. */}
-                <span style={{ display: "inline-flex", width: 6, flexShrink: 0 }} />
                 <span style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12, textAlign: "left" }}>{autoLabel}</span>
               </div>
               {options.length > 0 && <div className="dropdown-divider" />}
@@ -1000,17 +994,6 @@ export function ProviderPicker({
                   onChange(o.id);
                   setOpen(false);
                 }}>
-                {/* Provider row order: status → name → key. Status
-                    leads (gateway-side reachability is the leftmost
-                    primary signal); key trails on the right. The dot
-                    renders even on the selected row — the row's
-                    selected highlight already conveys selection, so
-                    a separate check mark would just be noise. */}
-                <span style={{ display: "inline-flex", width: 6, justifyContent: "center", flexShrink: 0 }}>
-                  {o.healthy && (
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", display: "inline-block" }} />
-                  )}
-                </span>
                 {/* Only the name dims when disabled — the key icon
                     keeps its red color, so the operator's eye lands
                     on it as the reason for the disabled state. */}

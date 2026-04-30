@@ -172,9 +172,10 @@ func TestMemoryStore_PruneAuditEvents(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()
 
-	// Generate some audit events.
+	// Generate some audit events via tenant lifecycle.
 	for i := 0; i < 5; i++ {
-		_, _ = store.SetProviderEnabled(ctx, "openai", i%2 == 0)
+		tenant, _ := store.UpsertTenant(ctx, Tenant{Name: "Acme"})
+		_, _ = store.SetTenantEnabled(ctx, tenant.ID, i%2 == 0)
 	}
 	state, _ := store.Snapshot(ctx)
 	if len(state.Events) == 0 {

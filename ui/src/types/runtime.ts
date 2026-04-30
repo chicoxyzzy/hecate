@@ -389,6 +389,11 @@ export type ConfiguredProviderRecord = {
   id: string;
   name: string;
   preset_id?: string;
+  // custom_name is an optional operator-supplied disambiguator that
+  // appears alongside name in the providers table. Used to tell two
+  // instances of the same preset apart ("Anthropic" + "Prod" vs
+  // "Anthropic" + "Dev"). Empty when not set.
+  custom_name?: string;
   kind: string;
   protocol: string;
   base_url: string;

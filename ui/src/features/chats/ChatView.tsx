@@ -220,42 +220,36 @@ export function ChatView({ state, actions }: Props) {
             value={state.providerFilter}
             onChange={v => actions.setProviderFilter(v as typeof state.providerFilter)}
             options={(() => {
+              // Source the picker from the operator's configured providers
+              // (the CP store), not the runtime status list. Health is not
+              // a filter — a temporarily-down provider is still a valid
+              // selection. Tenant-key sessions (no adminConfig) fall back
+              // to the runtime list which is the only thing they can see.
               const allowed = state.session.allowedProviders;
-              return state.providers
-                .filter(p => {
-                  if (!p.healthy) return false;
-                  if (allowed.length > 0 && !allowed.includes(p.name)) return false;
-                  return true;
-                })
-                .filter(p => p.name)
+              const configured = state.adminConfig?.providers ?? [];
+              const source = configured.length > 0
+                ? configured.map(c => ({ id: c.id, name: c.name, kind: c.kind }))
+                : state.providers
+                    .filter(p => p.name)
+                    .map(p => ({ id: p.name, name: p.name, kind: state.providerPresets.find(pr => pr.id === p.name)?.kind }));
+
+              return source
+                .filter(p => allowed.length === 0 || allowed.includes(p.id))
                 .map(p => {
-                  const cfg = state.adminConfig?.providers.find(c => c.name === p.name);
-                  // Three "disabled" reasons we surface to the operator
-                  // via a key icon + tooltip rather than hiding the row:
-                  //   * cloud provider with no credentials → "needs key"
-                  //   * any provider explicitly disabled in admin config
-                  // For tenant-key sessions (no adminConfig), `cfg` is
-                  // undefined, so neither flag fires — the picker
-                  // behaves as before for non-admin users.
+                  const cfg = state.adminConfig?.providers.find(c => c.id === p.id);
+                  // Cloud-with-no-credentials is the only "disabled"
+                  // reason left now that the toggle is gone — we
+                  // surface it as a tooltip + key icon rather than
+                  // hiding the row, so the operator sees why the
+                  // provider isn't usable and where to fix it.
                   const cloudUnconfigured = !!cfg && cfg.kind === "cloud" && !cfg.credential_configured;
-                  const adminDisabled = !!cfg && !cfg.enabled;
-                  let disabledReason: string | undefined;
-                  if (cloudUnconfigured) {
-                    disabledReason = `Configure ${cfg!.id.toUpperCase()} credentials in Admin → Providers`;
-                  } else if (adminDisabled) {
-                    disabledReason = "Disabled in Admin → Providers";
-                  }
                   return {
-                    id: p.name,
-                    name: state.providerPresets.find(pr => pr.id === p.name)?.name || p.name,
-                    healthy: p.healthy,
-                    // `kind` drives whether we show a key indicator at
-                    // all — local providers don't have an API-key
-                    // concept, so they get no key icon regardless of
-                    // their config state.
-                    kind: cfg?.kind ?? state.providerPresets.find(pr => pr.id === p.name)?.kind,
+                    id: p.id,
+                    name: state.providerPresets.find(pr => pr.id === p.id)?.name || p.name || p.id,
+                    healthy: true, // dot suppressed in the picker; field kept for type compatibility
+                    kind: p.kind,
                     configured: cfg ? cfg.credential_configured : undefined,
-                    disabledReason,
+                    disabledReason: cloudUnconfigured ? `Add an API key for ${cfg!.name || cfg!.id} on the Providers tab` : undefined,
                   };
                 });
             })()}
@@ -264,7 +258,23 @@ export function ChatView({ state, actions }: Props) {
           <ModelPicker
             value={state.model}
             onChange={actions.setModel}
-            models={state.providerScopedModels}
+            // Scope the model list to providers the operator has explicitly
+            // configured. The /v1/models endpoint may return models from
+            // env-driven providers too (e.g. Docker's PROVIDER_*_BASE_URL
+            // pre-filled vars), but those aren't in adminConfig.providers
+            // and shouldn't be selectable from the chat picker. Tenant-key
+            // sessions (no adminConfig) keep the unfiltered list — the CP
+            // catalog is admin-only and they have nothing better to fall
+            // back on.
+            models={(() => {
+              const configuredIDs = state.adminConfig?.providers;
+              if (!configuredIDs || configuredIDs.length === 0) return state.providerScopedModels;
+              const ids = new Set(configuredIDs.map(c => c.id));
+              return state.providerScopedModels.filter(m => {
+                const provider = m.metadata?.provider;
+                return typeof provider === "string" ? ids.has(provider) : true;
+              });
+            })()}
             presets={state.providerPresets}
             // Pinned width pairs the chat header's model picker with
             // the provider picker for a stable, non-jittery layout.
@@ -274,15 +284,13 @@ export function ChatView({ state, actions }: Props) {
             // suffix is redundant on every row.
             showProvider={state.providerFilter === "auto"}
             // Provider ids whose models should render as disabled rows
-            // (with a key indicator). Same rules as the provider
-            // picker: cloud + no credentials, or admin-disabled.
+            // (with a key indicator). Cloud-with-no-credentials is the
+            // only "disabled" reason now that the toggle is gone.
             disabledProviders={(() => {
               const out = new Map<string, string>();
               for (const cfg of state.adminConfig?.providers ?? []) {
                 if (cfg.kind === "cloud" && !cfg.credential_configured) {
-                  out.set(cfg.id, `Configure ${cfg.id.toUpperCase()} credentials in Admin → Providers`);
-                } else if (!cfg.enabled) {
-                  out.set(cfg.id, "Disabled in Admin → Providers");
+                  out.set(cfg.id, `Add an API key for ${cfg.name || cfg.id} on the Providers tab`);
                 }
               }
               return out;

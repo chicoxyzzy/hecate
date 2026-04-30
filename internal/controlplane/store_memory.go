@@ -191,13 +191,6 @@ func (s *MemoryStore) UpsertProvider(ctx context.Context, provider Provider, sec
 	return p, err
 }
 
-func (s *MemoryStore) SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, err := applySetProviderEnabled(ctx, &s.data, id, enabled)
-	return p, err
-}
-
 func (s *MemoryStore) RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

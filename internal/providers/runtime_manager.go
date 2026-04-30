@@ -97,17 +97,6 @@ func (m *ControlPlaneRuntimeManager) Upsert(ctx context.Context, provider contro
 	return saved, nil
 }
 
-func (m *ControlPlaneRuntimeManager) SetEnabled(ctx context.Context, id string, enabled bool) (controlplane.Provider, error) {
-	saved, err := m.store.SetProviderEnabled(ctx, id, enabled)
-	if err != nil {
-		return controlplane.Provider{}, err
-	}
-	if err := m.Reload(ctx); err != nil {
-		return controlplane.Provider{}, err
-	}
-	return saved, nil
-}
-
 func (m *ControlPlaneRuntimeManager) RotateSecret(ctx context.Context, id, apiKey string) (controlplane.Provider, error) {
 	if m.cipher == nil {
 		return controlplane.Provider{}, fmt.Errorf("control plane secret storage is not configured")
@@ -244,7 +233,14 @@ func (m *ControlPlaneRuntimeManager) resolvedConfigs(ctx context.Context) ([]con
 }
 
 func hydrateControlPlaneProviderDefaults(provider controlplane.Provider) controlplane.Provider {
-	for _, candidate := range []string{provider.ID, provider.Name} {
+	// Order: PresetID first (an explicit instance like "Anthropic Prod"
+	// with id="anthropic-prod" must still hydrate from the "anthropic"
+	// preset), then id-as-preset (legacy single-instance creates), then
+	// name (catches old data with empty PresetID).
+	for _, candidate := range []string{provider.PresetID, provider.ID, provider.Name} {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
 		builtIn, ok := config.BuiltInProviderByID(candidate)
 		if !ok {
 			continue

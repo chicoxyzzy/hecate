@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderEnabled, upsertPolicyRule, type ApiError } from "./api";
+import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderBaseURL, upsertPolicyRule, type ApiError } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -176,16 +176,16 @@ describe("api client", () => {
   });
 
   describe("provider REST API", () => {
-    it("PATCH /providers/{id} to enable a provider", async () => {
+    it("PATCH /providers/{id} updates the base_url", async () => {
       fetchMock.mockResolvedValue(jsonResponse({}));
 
-      await setProviderEnabled("anthropic", true, "admin-secret");
+      await setProviderBaseURL("ollama", "http://192.168.1.10:11434/v1", "admin-secret");
 
       expect(fetchMock).toHaveBeenCalledWith(
-        "/admin/control-plane/providers/anthropic",
+        "/admin/control-plane/providers/ollama",
         expect.objectContaining({
           method: "PATCH",
-          body: JSON.stringify({ enabled: true }),
+          body: JSON.stringify({ base_url: "http://192.168.1.10:11434/v1" }),
         }),
       );
     });
@@ -193,7 +193,7 @@ describe("api client", () => {
     it("PATCH /providers/{id} URL-encodes provider names with special characters", async () => {
       fetchMock.mockResolvedValue(jsonResponse({}));
 
-      await setProviderEnabled("my provider", false, "admin-secret");
+      await setProviderBaseURL("my provider", "http://localhost:11434/v1", "admin-secret");
 
       expect(fetchMock).toHaveBeenCalledWith(
         "/admin/control-plane/providers/my%20provider",

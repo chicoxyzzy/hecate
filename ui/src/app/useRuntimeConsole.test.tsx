@@ -391,11 +391,12 @@ describe("useRuntimeConsole", () => {
     });
   });
 
-  it("surfaces a chat error in the toaster (not just inline) so it's consistent with other admin notices", async () => {
-    // Without the toast wiring, a chat failure only shows in the
-    // inline chat banner — easy to miss if the operator's eyes are on
-    // the sidebar/admin panel. This test pins the toast surface so a
-    // refactor doesn't silently drop it.
+  it("surfaces a chat error inline only and humanizes the api-key-required message", async () => {
+    // The chat surface is its own page; a toast that mirrors the inline
+    // banner just duplicates the message in two places. Pin the
+    // single-channel behavior. Also pin the humanizer that translates
+    // "api key is required for cloud provider X when stub mode is
+    // disabled" into something an operator can act on.
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
@@ -428,15 +429,16 @@ describe("useRuntimeConsole", () => {
       await result.current.actions.submitChat({ preventDefault() {} } as never);
     });
 
-    // Inline error stays for chat-context.
-    await waitFor(() => expect(result.current.state.chatError).toContain("api key is required"));
-    // Toast mirrors it so chat failures are visible from anywhere on
-    // the page. Same kind ("error") as budget/retention/pricebook errors.
-    expect(result.current.state.notice?.kind).toBe("error");
-    expect(result.current.state.notice?.message).toContain("api key is required");
-    // Critically: no leaked classification prefix from the backend.
-    expect(result.current.state.notice?.message).not.toMatch(/^client error: /i);
+    // Inline error is the sole channel for chat failures — the chat
+    // surface is its own page, so a corner toast mirroring the same
+    // string is just visual duplication. Raw backend errors get
+    // humanized: "api key is required for cloud provider X" → a
+    // sentence telling the operator where to fix it.
+    await waitFor(() => expect(result.current.state.chatError).toMatch(/has no API key/i));
+    expect(result.current.state.chatError).toContain("anthropic");
     expect(result.current.state.chatError).not.toMatch(/^client error: /i);
+    // No toast — chat errors don't dispatch a notice anymore.
+    expect(result.current.state.notice).toBeNull();
   });
 
   it("loads persisted retention history for admin sessions", async () => {
@@ -699,6 +701,22 @@ describe("useRuntimeConsole", () => {
           ],
         });
       }
+      // Both providers are configured in the CP store — without this the
+      // dashboard short-circuits discovery (no point fetching /v1/models
+      // for an empty provider list) and the "default model" effect this
+      // test exercises never fires.
+      if (url === "/admin/control-plane") {
+        return jsonResponse({
+          object: "configured_state",
+          data: {
+            providers: [
+              { id: "openai", name: "OpenAI", preset_id: "openai", kind: "cloud", protocol: "openai", base_url: "https://api.openai.com", enabled: true, credential_configured: true },
+              { id: "ollama", name: "Ollama", preset_id: "ollama", kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1", enabled: true, credential_configured: false },
+            ],
+            tenants: [], api_keys: [], policy_rules: [], pricebook: [], events: [],
+          },
+        });
+      }
       return unauthorizedResponse();
     });
 
@@ -929,16 +947,18 @@ describe("useRuntimeConsole", () => {
       expect(result.current.state.adminConfigError).toContain("secret store is read-only");
     });
 
-    it("setProviderEnabled produces no success notice (silent toggle)", async () => {
-      // Toggling a provider in the cards UI must not pop a toast every
-      // click — it would spam the operator. The action keeps notice
-      // null on success while still firing the PATCH and refresh.
+    it("setProviderBaseURL PATCHes base_url and reloads providers", async () => {
+      // The toggle is gone; PATCH is now strictly a base_url update.
+      // setProviderBaseURL fires the PATCH then refreshProviders so the
+      // table converges on the new endpoint without a full page reload.
       let patchHits = 0;
+      let patchBody = "";
       fetchMock.mockImplementation(async (input, init) => {
         const url = String(input);
-        if (url === "/admin/control-plane/providers/anthropic" && init?.method === "PATCH") {
+        if (url === "/admin/control-plane/providers/ollama" && init?.method === "PATCH") {
           patchHits++;
-          return jsonResponse({ object: "control_plane_provider", data: { id: "anthropic", enabled: false } });
+          patchBody = String(init.body ?? "");
+          return jsonResponse({ object: "control_plane_provider", data: { id: "ollama", base_url: "http://192.168.1.10:11434/v1" } });
         }
         return adminFetchMock({})(input);
       });
@@ -947,11 +967,10 @@ describe("useRuntimeConsole", () => {
       await waitFor(() => expect(result.current.state.loading).toBe(false));
 
       await act(async () => {
-        await result.current.actions.setProviderEnabled("anthropic", false);
+        await result.current.actions.setProviderBaseURL("ollama", "http://192.168.1.10:11434/v1");
       });
-      // The dashboard reload fires after the PATCH, so wait for it to settle.
       await waitFor(() => expect(patchHits).toBe(1));
-      expect(result.current.state.notice).toBeNull();
+      expect(JSON.parse(patchBody)).toEqual({ base_url: "http://192.168.1.10:11434/v1" });
       expect(result.current.state.adminConfigError).toBe("");
     });
 
@@ -1191,6 +1210,27 @@ describe("useRuntimeConsole", () => {
 
       await waitFor(() => expect(result.current.state.chatSessions[0].title).toBe("Renamed"));
     });
+  });
+});
+
+describe("humanizeChatError", () => {
+  it("rewrites the api-key-required message into actionable copy", async () => {
+    const { humanizeChatError } = await import("./useRuntimeConsole");
+    expect(humanizeChatError("api key is required for cloud provider openai when stub mode is disabled"))
+      .toBe("openai has no API key. Open the Providers tab and add one.");
+  });
+
+  it("preserves the provider name verbatim including hyphens / casing", async () => {
+    const { humanizeChatError } = await import("./useRuntimeConsole");
+    expect(humanizeChatError("api key is required for cloud provider together_ai when stub mode is disabled"))
+      .toBe("together_ai has no API key. Open the Providers tab and add one.");
+  });
+
+  it("passes unrelated errors through unchanged", async () => {
+    const { humanizeChatError } = await import("./useRuntimeConsole");
+    expect(humanizeChatError("rate limit exceeded")).toBe("rate limit exceeded");
+    expect(humanizeChatError("upstream timeout")).toBe("upstream timeout");
+    expect(humanizeChatError("")).toBe("");
   });
 });
 

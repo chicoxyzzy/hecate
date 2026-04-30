@@ -1,278 +1,284 @@
-import { expect, test, MOCK_ADMIN_CONFIG } from "./fixtures";
+import { expect, test, mockGatewayAPIs, MOCK_ADMIN_CONFIG_WITH_PROVIDERS } from "./fixtures";
+import type { Page } from "@playwright/test";
+
+// Most specs use the default empty-providers fixture and exercise the
+// add-provider flow end-to-end. A few opt into a pre-populated state so
+// they can pin row-level interactions (delete, edit) without first having
+// to run the create flow.
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
-  await page.keyboard.press("4");
-  await page.waitForSelector("text=Cloud providers");
+  await page.keyboard.press("2");
+  await page.waitForSelector("text=Providers");
 });
 
-test("renders Cloud providers and Local inference section headings", async ({ page }) => {
-  await expect(page.getByText("Cloud providers", { exact: true })).toBeVisible();
-  await expect(page.getByText("Local inference", { exact: true })).toBeVisible();
+// Locator helpers — the preset cards' accessible names include the brand
+// initial and the description, so name-based regex matches are brittle.
+// Click via the inner text label (an exact-match span) instead, scoped to
+// the open dialog so the same card text in the providers table doesn't
+// collide.
+function dialog(page: Page) {
+  return page.getByRole("dialog");
+}
+function pickPreset(page: Page, name: string) {
+  return dialog(page).getByText(name, { exact: true }).click();
+}
+
+test("empty state shows the placeholder and an Add provider CTA", async ({ page }) => {
+  await expect(page.getByText("No providers configured")).toBeVisible();
+  await expect(page.getByRole("button", { name: /add provider/i }).first()).toBeVisible();
 });
 
-test("renders all 12 built-in providers", async ({ page }) => {
-  // Names use preset display names, not the raw ID.
-  const cloudNames = ["Anthropic", "DeepSeek", "Google", "Groq", "Mistral", "OpenAI", "Together AI", "xAI"];
-  const localNames = ["llama.cpp", "LM Studio", "LocalAI", "Ollama"];
-
-  for (const name of [...cloudNames, ...localNames]) {
-    await expect(page.locator(`text=${name}`).first()).toBeVisible();
-  }
+test("Add provider modal opens on the Cloud tab by default", async ({ page }) => {
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  // Anthropic is a Cloud preset — its visibility proves the Cloud tab is
+  // active without depending on a tab-specific aria attribute.
+  await expect(dialog(page).getByText("Anthropic", { exact: true })).toBeVisible();
 });
 
-test("cloud section shows enabled/total count", async ({ page }) => {
-  const cloud = MOCK_ADMIN_CONFIG.providers.filter(p => p.kind === "cloud");
-  const enabled = cloud.filter(p => p.enabled).length;
-  await expect(page.locator("text=Cloud providers").locator("..")).toContainText(`${enabled}/${cloud.length} enabled`);
+test("switching to the Local tab swaps the preset list", async ({ page }) => {
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await dialog(page).getByRole("button", { name: "Local", exact: true }).click();
+  await expect(dialog(page).getByText("Ollama", { exact: true })).toBeVisible();
+  // Anthropic is a Cloud preset — should not be visible on the Local tab.
+  await expect(dialog(page).getByText("Anthropic", { exact: true })).not.toBeVisible();
 });
 
-test("local section shows enabled/total count", async ({ page }) => {
-  const local = MOCK_ADMIN_CONFIG.providers.filter(p => p.kind === "local");
-  const enabled = local.filter(p => p.enabled).length;
-  // Use exact match — "Local inference" also appears in preset descriptions ("Local inference via …").
-  const heading = page.getByText("Local inference", { exact: true });
-  await expect(heading.locator("..")).toContainText(`${enabled}/${local.length} connected`);
+test("adding an Anthropic preset surfaces the row in the Cloud table", async ({ page }) => {
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await pickPreset(page, "Anthropic");
+
+  // Form pre-fills name from the preset.
+  const nameInput = dialog(page).locator("input[type='text']").first();
+  await expect(nameInput).toHaveValue("Anthropic");
+
+  await dialog(page).locator("input[type='password']").fill("sk-test-key");
+  await dialog(page).getByRole("button", { name: "Add provider", exact: true }).click();
+
+  // Modal closes and the row appears in the providers table.
+  await expect(page.getByText("Cloud providers")).toBeVisible();
+  await expect(page.locator("tbody tr", { hasText: "Anthropic" })).toBeVisible();
 });
 
-test("conflicting local providers do not both appear enabled by default", async ({ page }) => {
-  // llamacpp and localai both target 127.0.0.1:8080. Backend resolution: llamacpp wins.
-  const llamacpp = page.getByRole("switch", { name: "Enable llama.cpp" });
-  const localai  = page.getByRole("switch", { name: "Enable LocalAI" });
+test("adding a custom local provider surfaces the row with the entered URL", async ({ page }) => {
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await dialog(page).getByRole("button", { name: "Local", exact: true }).click();
+  await pickPreset(page, "Custom");
 
-  await expect(llamacpp).toHaveAttribute("aria-checked", "true");
-  await expect(localai).toHaveAttribute("aria-checked", "false");
+  // Custom on Local: Name + Endpoint URL are editable, no API key.
+  const inputs = dialog(page).locator("input[type='text']");
+  await inputs.nth(0).fill("My Local");
+  await inputs.nth(1).fill("http://127.0.0.1:9000/v1");
+
+  await dialog(page).getByRole("button", { name: "Add provider", exact: true }).click();
+
+  await expect(page.getByText("Local inference")).toBeVisible();
+  await expect(page.locator("tbody tr", { hasText: "My Local" })).toBeVisible();
 });
 
-test("conflicting providers display the warning indicator", async ({ page }) => {
-  // Look for the amber ⚠ marker on the llama.cpp card (it conflicts with localai).
-  const llamaCard = page.locator("text=llama.cpp").first().locator("..").locator("..");
-  await expect(llamaCard.locator("text=⚠")).toBeVisible();
-});
-
-test("enabling a conflicting provider disables the others (full flow)", async ({ page }) => {
-  // Stateful mock that mirrors real backend behaviour: a PATCH updates the in-memory
-  // state and applies conflict resolution, so subsequent GETs return the new state.
-  const config = JSON.parse(JSON.stringify(MOCK_ADMIN_CONFIG)) as typeof MOCK_ADMIN_CONFIG;
+test("multiple instances of the same preset coexist when names differ", async ({ page }) => {
+  // Override the create route — the default fixture rejects duplicate
+  // base_urls (mirrors the real backend's 409), but this test exists to
+  // pin the slug-uniqueness path: same preset, different display names →
+  // distinct rows. We skip the URL check and accept all creates so the
+  // unique-id flow shows through.
+  // The default fixture rejects duplicate base_urls (mirrors the real
+  // backend's 409). Layer a fresh stateful mock on top that only checks
+  // id uniqueness so the same-preset/different-name flow works. Also wire
+  // /admin/control-plane GET so the list reflects what was just created.
+  const created: Array<{ id: string; name: string; custom_name?: string; kind: string; protocol: string; base_url: string; enabled: boolean; credential_configured: boolean }> = [];
+  // Mirror the backend slug rule: name + space + custom_name when set,
+  // otherwise just name. The custom_name is what makes two instances of
+  // the same preset land at distinct ids.
+  const slug = (name: string, customName?: string) => {
+    const src = customName ? `${name} ${customName}` : name;
+    return src.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  };
 
   await page.route("/admin/control-plane*", async route => {
-    if (route.request().method() === "GET") {
-      await route.fulfill({
-        status: 200,
+    const url = route.request().url();
+    if (url.includes("/admin/control-plane/providers")) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ object: "configured_state", data: { providers: created, tenants: [], api_keys: [], policy_rules: [] } }) });
+  });
+
+  await page.route("/admin/control-plane/providers", async route => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const body = JSON.parse(route.request().postData() ?? "{}") as { name?: string; custom_name?: string; base_url?: string; api_key?: string; kind?: string; protocol?: string };
+    const id = slug(body.name ?? "", body.custom_name);
+    if (created.some(p => p.id === id)) {
+      await route.fulfill({ status: 409, contentType: "application/json",
+        body: JSON.stringify({ error: { message: `provider with id "${id}" already exists` } }) });
+      return;
+    }
+    const record = {
+      id,
+      name: body.name ?? id,
+      custom_name: body.custom_name,
+      kind: body.kind || "cloud",
+      protocol: body.protocol || "openai",
+      base_url: body.base_url ?? "",
+      enabled: true,
+      credential_configured: !!body.api_key,
+    };
+    created.push(record);
+    await route.fulfill({ status: 201, contentType: "application/json",
+      body: JSON.stringify({ object: "control_plane_provider", data: record }) });
+  });
+
+  // First instance — preset Name is locked, fill the Custom name field
+  // (the second text input) to disambiguate.
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await pickPreset(page, "Anthropic");
+  await dialog(page).locator("input[type='text']").nth(1).fill("Prod");
+  await dialog(page).locator("input[type='password']").fill("sk-prod");
+  await dialog(page).getByRole("button", { name: "Add provider", exact: true }).click();
+  // Row contains Name "Anthropic" and CustomName "Prod" — both render in
+  // the Provider cell, so a row-level hasText match against "Prod" finds
+  // exactly the new instance.
+  await expect(page.locator("tbody tr", { hasText: "Prod" })).toBeVisible();
+
+  // Second instance — same preset, different custom_name.
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await pickPreset(page, "Anthropic");
+  await dialog(page).locator("input[type='text']").nth(1).fill("Dev");
+  await dialog(page).locator("input[type='password']").fill("sk-dev");
+  await dialog(page).getByRole("button", { name: "Add provider", exact: true }).click();
+
+  await expect(page.locator("tbody tr", { hasText: "Prod" })).toBeVisible();
+  await expect(page.locator("tbody tr", { hasText: "Dev" })).toBeVisible();
+});
+
+test("conflict response surfaces the inline error inside the modal", async ({ page }) => {
+  // Override the create route to return 409 unconditionally — the stateful
+  // fixture would only return 409 on a real duplicate, and we want to pin
+  // the inline-error path without juggling two adds.
+  await page.route("/admin/control-plane/providers", route => {
+    if (route.request().method() === "POST") {
+      route.fulfill({
+        status: 409,
         contentType: "application/json",
-        body: JSON.stringify({ object: "configured_state", data: config }),
+        body: JSON.stringify({ error: { type: "invalid_request", message: 'base URL already used by provider "Primary"' } }),
       });
       return;
     }
-    await route.continue();
+    route.continue();
   });
 
-  await page.route("/admin/control-plane/providers/*", async route => {
-    if (route.request().method() !== "PATCH") {
-      await route.continue();
-      return;
-    }
-    const id = decodeURIComponent(route.request().url().split("/").pop() ?? "");
-    const body = JSON.parse(route.request().postData() ?? "{}");
-    const target = config.providers.find(p => p.id === id);
-    if (target) {
-      target.enabled = body.enabled;
-      // If we just enabled one, disable any other provider with the same base_url.
-      if (body.enabled) {
-        for (const p of config.providers) {
-          if (p.id !== id && p.base_url === target.base_url) p.enabled = false;
-        }
-      }
-    }
-    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-  });
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await dialog(page).getByRole("button", { name: "Local", exact: true }).click();
+  await pickPreset(page, "Ollama");
+  await dialog(page).getByRole("button", { name: "Add provider", exact: true }).click();
 
-  // Reload so the new GET handler is used for the initial fetch too.
-  await page.reload();
-  await page.waitForSelector("text=Cloud providers");
-  await page.keyboard.press("4");
-
-  const llamacpp = page.getByRole("switch", { name: "Enable llama.cpp" });
-  const localai  = page.getByRole("switch", { name: "Enable LocalAI" });
-
-  // Initial: llamacpp on, localai off.
-  await expect(llamacpp).toHaveAttribute("aria-checked", "true");
-  await expect(localai).toHaveAttribute("aria-checked", "false");
-
-  // Toggle localai on → backend disables llamacpp → eventual UI state has localai
-  // enabled and llamacpp disabled.
-  await localai.click();
-  await expect(localai).toHaveAttribute("aria-checked", "true");
-  await expect(llamacpp).toHaveAttribute("aria-checked", "false");
+  await expect(dialog(page).getByText(/base URL already used by provider/)).toBeVisible();
 });
 
-test("toggling off the conflict winner does not auto-enable the peer", async ({ page }) => {
-  // Pins the user-reported flow: "toggling off one of conflicting providers
-  // should not toggle on any other." The backend's resolveDefaultProviderConflicts
-  // used to auto-promote the alphabetically-first peer when no provider in a
-  // conflict group was explicitly enabled. That made llamacpp → off "promote"
-  // localai to on visually, which read as the system enabling something the
-  // operator hadn't asked for.
-  //
-  // Stateful mock: PATCH updates in-memory state without auto-promoting peers.
-  // Same backend semantics now exist on the real server.
-  const config = JSON.parse(JSON.stringify(MOCK_ADMIN_CONFIG)) as typeof MOCK_ADMIN_CONFIG;
+test("deleting a provider removes its row after confirmation", async ({ context }) => {
+  // Use a fresh page with the populated config — the default fixture starts
+  // empty and we want to skip the create-flow setup.
+  const populated = await context.newPage();
+  await mockGatewayAPIs(populated, { adminConfig: MOCK_ADMIN_CONFIG_WITH_PROVIDERS });
+  await populated.goto("/");
+  await populated.waitForSelector(".hecate-activitybar");
+  await populated.keyboard.press("2");
+  await populated.waitForSelector("text=Cloud providers");
 
-  await page.route("/admin/control-plane*", async route => {
-    if (route.request().method() === "GET") {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ object: "configured_state", data: config }),
-      });
-      return;
+  populated.on("dialog", d => void d.accept());
+
+  let deleteCalled = false;
+  await populated.route("/admin/control-plane/providers/anthropic", async route => {
+    if (route.request().method() === "DELETE") {
+      deleteCalled = true;
     }
-    await route.continue();
+    await route.fallback();
   });
 
-  await page.route("/admin/control-plane/providers/*", async route => {
-    if (route.request().method() !== "PATCH") {
-      await route.continue();
-      return;
-    }
-    const id = decodeURIComponent(route.request().url().split("/").pop() ?? "");
-    const body = JSON.parse(route.request().postData() ?? "{}");
-    const target = config.providers.find(p => p.id === id);
-    if (target) {
-      target.enabled = body.enabled;
-      // Mirror the real backend: only auto-disable peers when ENABLING. On a
-      // disable, leave every other provider's state alone — no promotion.
-      if (body.enabled) {
-        for (const p of config.providers) {
-          if (p.id !== id && p.base_url === target.base_url) p.enabled = false;
-        }
-      }
-    }
-    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-  });
+  // Trash button on the Anthropic row. Title attr is "Remove Anthropic".
+  await populated.getByTitle("Remove Anthropic").click();
 
-  await page.reload();
-  await page.waitForSelector("text=Cloud providers");
-  await page.keyboard.press("4");
-
-  const llamacpp = page.getByRole("switch", { name: "Enable llama.cpp" });
-  const localai  = page.getByRole("switch", { name: "Enable LocalAI" });
-
-  // Pre-toggle state from MOCK_ADMIN_CONFIG: llamacpp on, localai off.
-  await expect(llamacpp).toHaveAttribute("aria-checked", "true");
-  await expect(localai).toHaveAttribute("aria-checked", "false");
-
-  // Toggle llamacpp off. localai must stay off — neither is enabled now.
-  await llamacpp.click();
-  await expect(llamacpp).toHaveAttribute("aria-checked", "false");
-  await expect(localai).toHaveAttribute("aria-checked", "false");
+  await expect.poll(() => deleteCalled).toBe(true);
+  await expect(populated.locator("tbody tr", { hasText: "Anthropic" })).toHaveCount(0);
 });
 
-test("toggle calls PATCH endpoint with correct payload", async ({ page }) => {
-  let patchURL = "";
+test("editing the custom name PATCHes /providers/{id} with the new custom_name", async ({ context }) => {
+  // Preset providers have a fixed Name (catalog join key); the
+  // disambiguation flow is via custom_name. This test pins that
+  // editing the Custom name field on a preset row produces a
+  // PATCH with { custom_name }.
+  const populated = await context.newPage();
+  await mockGatewayAPIs(populated, { adminConfig: MOCK_ADMIN_CONFIG_WITH_PROVIDERS });
+  await populated.goto("/");
+  await populated.waitForSelector(".hecate-activitybar");
+  await populated.keyboard.press("2");
+  await populated.waitForSelector("text=Cloud providers");
+
   let patchBody = "";
-
-  await page.route("/admin/control-plane/providers/*", async route => {
+  await populated.route("/admin/control-plane/providers/anthropic", async route => {
     if (route.request().method() === "PATCH") {
-      patchURL = route.request().url();
       patchBody = route.request().postData() ?? "";
-      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-    } else {
-      await route.continue();
     }
+    await route.fallback();
   });
 
-  await page.getByRole("switch", { name: "Enable Anthropic" }).click();
-  await expect.poll(() => patchURL).toContain("/admin/control-plane/providers/anthropic");
-  expect(JSON.parse(patchBody)).toEqual({ enabled: false });
+  await populated.locator("tbody tr", { hasText: "Anthropic" }).click();
+  const dlg = populated.getByRole("dialog");
+  // Anthropic is a preset → Name section hidden, Custom name input is the
+  // first text field in the modal.
+  const customNameInput = dlg.locator("input[type='text']").first();
+  await customNameInput.fill("Prod");
+  await dlg.getByRole("button", { name: /save custom name/i }).click();
+
+  await expect.poll(() => patchBody).toContain("Prod");
+  expect(JSON.parse(patchBody)).toEqual({ custom_name: "Prod" });
 });
 
-test("clicking a cloud provider opens panel with API key input", async ({ page }) => {
-  await page.locator("text=Anthropic").first().click();
+test("editing a local endpoint URL PATCHes /providers/{id} with the new base_url", async ({ context }) => {
+  const populated = await context.newPage();
+  await mockGatewayAPIs(populated, { adminConfig: MOCK_ADMIN_CONFIG_WITH_PROVIDERS });
+  await populated.goto("/");
+  await populated.waitForSelector(".hecate-activitybar");
+  await populated.keyboard.press("2");
+  await populated.waitForSelector("text=Local inference");
 
-  // Cloud panel shows a password input + the Save/Update button. Anthropic has a vault
-  // credential configured so the placeholder is masked dots, and the action is "Update".
-  await expect(page.locator("input[type='password']")).toBeVisible();
-  await expect(page.locator("text=Update API key")).toBeVisible();
-});
-
-test("clicking a local provider opens panel with no API key input", async ({ page }) => {
-  await page.locator("text=Ollama").first().click();
-
-  // Local providers don't need credentials — no input or save/update button.
-  await expect(page.locator("input[type='password']")).toHaveCount(0);
-  await expect(page.locator("text=Save API key")).not.toBeVisible();
-  await expect(page.locator("text=Update API key")).not.toBeVisible();
-});
-
-test("removed legacy controls are gone", async ({ page }) => {
-  await page.locator("text=Anthropic").first().click();
-  // Buttons that used to exist on cards/panel are removed.
-  await expect(page.locator("text=Rotate API key")).not.toBeVisible();
-  await expect(page.locator("text=Remove provider")).not.toBeVisible();
-  await expect(page.locator("text=Test connection")).not.toBeVisible();
-  // The "test" button on local cards is gone too.
-  await page.keyboard.press("Escape");
-});
-
-test("saving an API key calls PUT /api-key with the new key", async ({ page }) => {
-  let putURL = "";
-  let putBody = "";
-
-  await page.route("/admin/control-plane/providers/*/api-key", async route => {
-    if (route.request().method() === "PUT") {
-      putURL = route.request().url();
-      putBody = route.request().postData() ?? "";
-      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-    } else {
-      await route.continue();
+  let patchBody = "";
+  await populated.route("/admin/control-plane/providers/ollama", async route => {
+    if (route.request().method() === "PATCH") {
+      patchBody = route.request().postData() ?? "";
     }
+    await route.fallback();
   });
 
-  await page.locator("text=Anthropic").first().click();
-  const input = page.getByPlaceholder(/sk-|••••/);
-  await input.fill("sk-new-key-value");
-  await page.locator("text=Update API key").click();
+  await populated.locator("tbody tr", { hasText: "Ollama" }).click();
+  const dlg = populated.getByRole("dialog");
+  // For preset providers the editable inputs are: Custom name (nth 0)
+  // and Endpoint URL (nth 1). The Name section is hidden because preset
+  // names are fixed.
+  const urlInput = dlg.locator("input[type='text']").nth(1);
+  await urlInput.fill("http://192.168.1.10:11434/v1");
+  await dlg.getByRole("button", { name: /save url/i }).click();
 
-  await expect.poll(() => putURL).toContain("/admin/control-plane/providers/anthropic/api-key");
-  expect(JSON.parse(putBody)).toEqual({ key: "sk-new-key-value" });
+  await expect.poll(() => patchBody).toContain("192.168.1.10");
+  expect(JSON.parse(patchBody)).toEqual({ base_url: "http://192.168.1.10:11434/v1" });
 });
 
-test("clearing an API key calls PUT /api-key with empty key", async ({ page }) => {
-  let putURL = "";
-  let putBody = "";
+test("breadcrumb returns from the form step to the preset picker", async ({ page }) => {
+  await page.getByRole("button", { name: /add provider/i }).first().click();
+  await pickPreset(page, "Anthropic");
 
-  await page.route("/admin/control-plane/providers/*/api-key", async route => {
-    if (route.request().method() === "PUT") {
-      putURL = route.request().url();
-      putBody = route.request().postData() ?? "";
-      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-    } else {
-      await route.continue();
-    }
-  });
+  // Form is showing — Name field is pre-filled.
+  await expect(dialog(page).locator("input[type='text']").first()).toHaveValue("Anthropic");
 
-  // Anthropic has credential_configured + credential_source: "vault", so the
-  // "Delete API key" button is visible.
-  await page.locator("text=Anthropic").first().click();
-  await page.locator("text=Delete API key").click();
+  await dialog(page).getByRole("button", { name: /all providers/i }).click();
 
-  await expect.poll(() => putURL).toContain("/admin/control-plane/providers/anthropic/api-key");
-  expect(JSON.parse(putBody)).toEqual({ key: "" });
-});
-
-test("base URL is shown on provider cards", async ({ page }) => {
-  await expect(page.locator("text=api.anthropic.com").first()).toBeVisible();
-  await expect(page.locator("text=api.openai.com").first()).toBeVisible();
-  await expect(page.locator("text=127.0.0.1:11434").first()).toBeVisible();
-});
-
-test("clicking the same card twice toggles the panel closed", async ({ page }) => {
-  const card = page.locator("text=Anthropic").first();
-  await card.click();
-  await expect(page.locator("input[type='password']")).toBeVisible();
-
-  await card.click();
-  await expect(page.locator("input[type='password']")).not.toBeVisible();
+  // Back at the picker — Anthropic preset card is visible again, and the
+  // password input from the form is gone.
+  await expect(dialog(page).getByText("Anthropic", { exact: true })).toBeVisible();
+  await expect(dialog(page).locator("input[type='password']")).toHaveCount(0);
 });

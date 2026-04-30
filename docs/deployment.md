@@ -68,6 +68,8 @@ POSTGRES_DSN=postgres://hecate:hecate@postgres:5432/hecate?sslmode=disable
 
 Hecate can start with almost no secrets in the environment. If `GATEWAY_AUTH_TOKEN` is unset, the gateway generates an admin bearer token on first run, prints it once, and stores bootstrap metadata under `GATEWAY_DATA_DIR`.
 
+`PROVIDER_*_API_KEY`, `PROVIDER_*_BASE_URL`, and `PROVIDER_*_DEFAULT_MODEL` env vars seed the runtime provider registry but do not auto-add the provider to the Providers tab. Operators who want a provider visible and editable in the UI add it explicitly via the modal; env vars are a deployment-time convenience for first boot, not a UI source of truth. See [docs/providers.md](providers.md#env-configured-providers).
+
 | Variable | Default | Notes |
 |---|---|---|
 | `GATEWAY_AUTH_TOKEN` | generated | Admin bearer token. Prefer the generated first-run token for local and single-host setups. |

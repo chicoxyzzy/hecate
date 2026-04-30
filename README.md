@@ -58,10 +58,6 @@ Open `http://127.0.0.1:8765`, paste the generated admin bearer token from the co
 ============================================================
 ```
 
-The first-run UI guides provider setup and token entry:
-
-![First-run onboarding wizard](docs/screenshots/onboard-wizard.png)
-
 If you've cloned the repo and want optional services (Postgres profile, dev rebuild from source):
 
 ```bash
@@ -77,28 +73,28 @@ make dev
 
 Other install paths — pinned image tags, single-file binaries (linux/darwin × amd64/arm64), checksums — are documented in [docs/deployment.md](docs/deployment.md). Local development details are in [docs/development.md](docs/development.md). Provider API keys can be added in the UI after first boot, or pre-seeded via `.env.example`.
 
-## Connect a Client
+The first-run UI guides provider setup and token entry:
 
-Hecate is designed to work with existing tools, not a custom SDK.
-
-The operator UI includes **Admin → Integrations** with copy-paste snippets for common clients.
-
-![Integrations tab — copy-paste client configuration snippets](docs/screenshots/admin-integrations.png)
-
-See [docs/client-integration.md](docs/client-integration.md) for other ways to setup your client.
+![First-run onboarding wizard](docs/screenshots/onboard-wizard.png)
 
 ## Add Providers
 
-Hecate ships with a built-in catalog of cloud and local provider presets. Enabling one means giving Hecate either an API key (cloud) or a reachable runtime URL (local).
+Hecate ships with a built-in catalog of cloud and local provider presets. The Providers tab starts empty — open it on first boot, click **Add provider**, pick a preset (or **Custom** for any OpenAI-compatible endpoint), and paste an API key (cloud) or endpoint URL (local).
 
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/provider-setup.png)
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-emty.png)
+
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-setup.png)
+
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-presets.png)
+
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers.png)
 
 There are other ways to do it:
 
 | Method | When |
 |---|---|
-| **Environment variables** | First-run bootstrap or fleet automation. Set `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, `PROVIDER_<NAME>_DEFAULT_MODEL` in `.env`. |
-| **Control-plane API** | Programmatic management. `PUT /admin/control-plane/providers/{id}/api-key` and `PATCH /admin/control-plane/providers/{id}` mirror every UI action. |
+| **Environment variables** | First-run bootstrap or fleet automation. Set `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, `PROVIDER_<NAME>_DEFAULT_MODEL` in `.env`. Env-seeded providers are routable but not shown in the Providers tab — add them explicitly there if you want to edit credentials from the UI. |
+| **Control-plane API** | Programmatic management. `POST /admin/control-plane/providers`, `DELETE /admin/control-plane/providers/{id}`, `PUT /admin/control-plane/providers/{id}/api-key`, and `PATCH /admin/control-plane/providers/{id}` mirror every UI action. |
 
 **Cloud presets** (need an API key): `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `deepseek`, `together_ai`, `xai`.
 
@@ -163,6 +159,8 @@ The embedded UI is a runtime console for operators.
 ![Tenants tab — tenant lifecycle and access controls](docs/screenshots/admin-tenants.png)
 
 ![API keys tab — scoped keys for clients and agents](docs/screenshots/admin-keys.png)
+
+![Integrations — easy setup for Codex, Claude Code, Cursor, etc.](docs/screenshots/admin-keys.png)
 
 </details>
 

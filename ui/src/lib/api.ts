@@ -284,8 +284,18 @@ export async function deletePolicyRule(id: string, authToken?: string): Promise<
   return fetchJSON("/admin/control-plane/policy-rules/delete", { authToken, method: "POST", body: { id } });
 }
 
-export async function setProviderEnabled(id: string, enabled: boolean, authToken?: string): Promise<unknown> {
-  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { enabled } });
+// updateProvider applies a partial update to an existing provider record.
+// Editable fields:
+//   - base_url:    any provider (repoint endpoint)
+//   - name:        custom providers only (preset names are fixed)
+//   - custom_name: any provider (operator disambiguation label)
+// Credentials live behind PUT /providers/{id}/api-key, not here.
+export async function updateProvider(
+  id: string,
+  patch: { base_url?: string; name?: string; custom_name?: string },
+  authToken?: string,
+): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: patch });
 }
 
 export async function upsertPricebookEntry(entry: PricebookEntryUpsertPayload, authToken?: string): Promise<unknown> {
@@ -308,6 +318,41 @@ export async function applyPricebookImport(keys: string[], authToken?: string): 
 export async function setProviderAPIKey(id: string, key: string, authToken?: string): Promise<unknown> {
   return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}/api-key`, { authToken, method: "PUT", body: { key } });
 }
+
+export async function createProvider(
+  params: { name: string; preset_id?: string; custom_name?: string; base_url?: string; api_key?: string; kind: string; protocol: string },
+  authToken?: string,
+): Promise<unknown> {
+  return fetchJSON("/admin/control-plane/providers", { authToken, method: "POST", body: params });
+}
+
+export async function deleteProvider(id: string, authToken?: string): Promise<unknown> {
+  return fetchJSON(`/admin/control-plane/providers/${encodeURIComponent(id)}`, { authToken, method: "DELETE" });
+}
+
+// setProviderBaseURL is a thin wrapper around updateProvider for the
+// most common edit surface — local providers rotating their endpoint.
+export async function setProviderBaseURL(id: string, baseURL: string, authToken?: string): Promise<unknown> {
+  return updateProvider(id, { base_url: baseURL }, authToken);
+}
+
+// setProviderName renames a custom (non-preset) provider's display
+// label. Rejected by the backend with 400 for preset providers — those
+// keep their catalog name and reach for setProviderCustomName instead.
+export async function setProviderName(id: string, name: string, authToken?: string): Promise<unknown> {
+  return updateProvider(id, { name }, authToken);
+}
+
+// setProviderCustomName sets/clears the operator disambiguation label
+// that appears alongside name in the providers table. Empty string
+// clears it. Allowed for any provider, including presets.
+export async function setProviderCustomName(id: string, customName: string, authToken?: string): Promise<unknown> {
+  return updateProvider(id, { custom_name: customName }, authToken);
+}
+
+// createProvider params include the optional custom_name disambiguator.
+// When two instances of the same preset are created, the second's
+// custom_name lifts the slug off the colliding default.
 
 export async function runRetention(payload: RetentionRunPayload, authToken?: string): Promise<RetentionRunResponse> {
   return fetchJSON<RetentionRunResponse>("/admin/retention/run", { authToken, method: "POST", body: payload });

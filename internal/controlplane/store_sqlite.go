@@ -296,24 +296,6 @@ func (s *SQLiteStore) UpsertProvider(ctx context.Context, provider Provider, sec
 	return provider, nil
 }
 
-func (s *SQLiteStore) SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	state, err := s.readState(ctx)
-	if err != nil {
-		return Provider{}, err
-	}
-	provider, err := applySetProviderEnabled(ctx, &state, id, enabled)
-	if err != nil {
-		return Provider{}, err
-	}
-	if err := s.writeState(ctx, state); err != nil {
-		return Provider{}, err
-	}
-	return provider, nil
-}
-
 func (s *SQLiteStore) RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

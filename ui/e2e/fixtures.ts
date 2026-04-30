@@ -23,23 +23,38 @@ export const MOCK_MODELS = [
   { id: "gpt-4o-mini",      owned_by: "openai",    metadata: { provider: "openai",    provider_kind: "cloud", default: false } },
 ];
 
-// MOCK_ADMIN_CONFIG mirrors the real backend contract: all 12 built-ins are always
-// returned, and conflicts are pre-resolved (llamacpp + localai share 127.0.0.1:8080,
-// so only the alphabetically-first — llamacpp — is enabled by default).
+// New model: providers are explicit. The list starts empty and stays empty
+// until the operator adds at least one via POST /admin/control-plane/providers.
+// Tests that need an existing provider opt into MOCK_ADMIN_CONFIG_WITH_PROVIDERS.
 export const MOCK_ADMIN_CONFIG = {
+  providers: [] as Array<{
+    id: string;
+    name: string;
+    preset_id?: string;
+    custom_name?: string;
+    kind: string;
+    protocol: string;
+    base_url: string;
+    enabled: boolean;
+    credential_configured: boolean;
+    credential_source?: string;
+  }>,
+  tenants: [],
+  api_keys: [],
+  policy_rules: [],
+};
+
+// MOCK_ADMIN_CONFIG_WITH_PROVIDERS — opt-in fixture for tests that need a
+// pre-populated provider table (chat surfaces, lifecycle integration). Two
+// cloud providers (one with a configured credential, one without) and one
+// local provider. Each carries its preset_id so the edit modal hides the
+// Name field (preset names are fixed) and the operator reaches for
+// custom_name to disambiguate.
+export const MOCK_ADMIN_CONFIG_WITH_PROVIDERS = {
   providers: [
-    { id: "anthropic", name: "anthropic", kind: "cloud", protocol: "openai", base_url: "https://api.anthropic.com/v1", enabled: true,  credential_configured: true,  credential_source: "vault" },
-    { id: "deepseek",  name: "deepseek",  kind: "cloud", protocol: "openai", base_url: "https://api.deepseek.com/v1",  enabled: true,  credential_configured: false },
-    { id: "gemini",    name: "gemini",    kind: "cloud", protocol: "openai", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", enabled: true, credential_configured: false },
-    { id: "groq",      name: "groq",      kind: "cloud", protocol: "openai", base_url: "https://api.groq.com/openai/v1", enabled: true, credential_configured: false },
-    { id: "mistral",   name: "mistral",   kind: "cloud", protocol: "openai", base_url: "https://api.mistral.ai/v1",     enabled: true, credential_configured: false },
-    { id: "openai",    name: "openai",    kind: "cloud", protocol: "openai", base_url: "https://api.openai.com/v1",     enabled: true, credential_configured: true,  credential_source: "vault" },
-    { id: "together_ai", name: "together_ai", kind: "cloud", protocol: "openai", base_url: "https://api.together.xyz/v1", enabled: true, credential_configured: false },
-    { id: "xai",       name: "xai",       kind: "cloud", protocol: "openai", base_url: "https://api.x.ai/v1",           enabled: true, credential_configured: false },
-    { id: "llamacpp",  name: "llamacpp",  kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      enabled: true,  credential_configured: false },
-    { id: "lmstudio",  name: "lmstudio",  kind: "local", protocol: "openai", base_url: "http://127.0.0.1:1234/v1",      enabled: true,  credential_configured: false },
-    { id: "localai",   name: "localai",   kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      enabled: false, credential_configured: false },
-    { id: "ollama",    name: "ollama",    kind: "local", protocol: "openai", base_url: "http://127.0.0.1:11434/v1",     enabled: true,  credential_configured: false },
+    { id: "anthropic", name: "Anthropic", preset_id: "anthropic", kind: "cloud", protocol: "anthropic", base_url: "https://api.anthropic.com/v1", enabled: true, credential_configured: true,  credential_source: "vault" },
+    { id: "openai",    name: "OpenAI",    preset_id: "openai",    kind: "cloud", protocol: "openai",    base_url: "https://api.openai.com/v1",    enabled: true, credential_configured: true,  credential_source: "vault" },
+    { id: "ollama",    name: "Ollama",    preset_id: "ollama",    kind: "local", protocol: "openai",    base_url: "http://127.0.0.1:11434/v1",    enabled: true, credential_configured: false },
   ],
   tenants: [],
   api_keys: [],
@@ -58,20 +73,37 @@ export const MOCK_FULL_PRESETS = [
   { id: "localai",   name: "LocalAI",   kind: "local", protocol: "openai", base_url: "http://127.0.0.1:8080/v1",      description: "Local inference via LocalAI." },
 ];
 
+// slugify mirrors the backend's slugify in handler_controlplane.go: lowercase,
+// non-alphanumeric → "-", strip leading/trailing "-". Used to derive provider
+// IDs at fixture-mock time so the in-memory list mirrors real backend state.
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 // ── Route mocking ─────────────────────────────────────────────────────────────
 
-export async function mockGatewayAPIs(page: Page) {
+type AdminConfig = typeof MOCK_ADMIN_CONFIG_WITH_PROVIDERS;
+
+export type GatewayMockOptions = {
+  // Seed the admin-config /admin/control-plane response. Defaults to the
+  // empty list — tests that need a populated table pass
+  // MOCK_ADMIN_CONFIG_WITH_PROVIDERS (or any custom shape).
+  adminConfig?: AdminConfig;
+};
+
+export async function mockGatewayAPIs(page: Page, opts: GatewayMockOptions = {}) {
   const ok = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify(body),
   });
 
+  // Stateful clone — POST/DELETE/PATCH mutate this in place so a single
+  // test can add → list → delete in one flow without re-mocking.
+  const state: AdminConfig = JSON.parse(JSON.stringify(opts.adminConfig ?? MOCK_ADMIN_CONFIG));
+
   await page.route("/healthz", r => r.fulfill(ok({ status: "ok", time: "2026-04-25T00:00:00Z" })));
 
-  // Two-phase dashboard load gates admin-only fetches behind an authenticated
-  // admin role. Anonymous → no /v1/models, /admin/control-plane, etc., so most
-  // specs would render empty shells. Claim admin so all endpoints fire.
   await page.route("/v1/whoami", r =>
     r.fulfill(ok({
       object: "session",
@@ -125,9 +157,115 @@ export async function mockGatewayAPIs(page: Page) {
     r.fulfill(ok({ object: "list", data: [] })),
   );
 
-  await page.route("/admin/control-plane*", r =>
-    r.fulfill(ok({ object: "configured_state", data: MOCK_ADMIN_CONFIG })),
-  );
+  // Bare /admin/control-plane (status) — register FIRST so the more-specific
+  // /admin/control-plane/providers routes registered below win. Playwright
+  // matches routes in REVERSE registration order (most recent first), so
+  // specifics-last is the right ordering.
+  await page.route("/admin/control-plane*", async route => {
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ object: "configured_state", data: state }) });
+  });
+
+  // POST /admin/control-plane/providers → create. Slugifies the name to id,
+  // appends to the in-memory list, and returns 201. Stateful so the next
+  // GET /admin/control-plane reflects the new row.
+  // DELETE /admin/control-plane/providers/{id} → drops the row.
+  // PATCH /admin/control-plane/providers/{id} → applies name/base_url.
+  // PUT  /admin/control-plane/providers/{id}/api-key → flips credential_configured.
+  await page.route("/admin/control-plane/providers", async route => {
+    if (route.request().method() === "POST") {
+      const body = JSON.parse(route.request().postData() ?? "{}") as {
+        name?: string;
+        preset_id?: string;
+        base_url?: string;
+        api_key?: string;
+        kind?: string;
+        protocol?: string;
+      };
+      const id = slugify(body.name ?? "");
+      if (!id) {
+        await route.fulfill({ status: 400, contentType: "application/json",
+          body: JSON.stringify({ error: { type: "invalid_request", message: "provider name is required" } }) });
+        return;
+      }
+      if (state.providers.some(p => p.id === id)) {
+        await route.fulfill({ status: 409, contentType: "application/json",
+          body: JSON.stringify({ error: { type: "invalid_request", message: `provider with id "${id}" already exists` } }) });
+        return;
+      }
+      const trimmedURL = (body.base_url ?? "").trim();
+      if (trimmedURL) {
+        const dup = state.providers.find(p => (p.base_url ?? "").trim() === trimmedURL);
+        if (dup) {
+          await route.fulfill({ status: 409, contentType: "application/json",
+            body: JSON.stringify({ error: { type: "invalid_request", message: `base URL already used by provider "${dup.name || dup.id}"` } }) });
+          return;
+        }
+      }
+      const record = {
+        id,
+        name: body.name ?? id,
+        kind: body.kind || "cloud",
+        protocol: body.protocol || "openai",
+        base_url: trimmedURL,
+        enabled: true,
+        credential_configured: !!body.api_key,
+        credential_source: body.api_key ? "vault" : undefined,
+      };
+      state.providers.push(record);
+      await route.fulfill({ status: 201, contentType: "application/json",
+        body: JSON.stringify({ object: "control_plane_provider", data: record }) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.route("/admin/control-plane/providers/*", async route => {
+    const url = route.request().url();
+    const method = route.request().method();
+    const tail = url.split("/admin/control-plane/providers/")[1] ?? "";
+    const [rawID, sub] = tail.split("?")[0].split("/");
+    const id = decodeURIComponent(rawID);
+
+    if (sub === "api-key" && method === "PUT") {
+      const body = JSON.parse(route.request().postData() ?? "{}") as { key?: string };
+      const target = state.providers.find(p => p.id === id);
+      if (target) {
+        if (body.key) {
+          target.credential_configured = true;
+          target.credential_source = "vault";
+        } else {
+          target.credential_configured = false;
+          target.credential_source = undefined;
+        }
+      }
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ object: "control_plane_provider_api_key", data: { id, status: body.key ? "set" : "cleared" } }) });
+      return;
+    }
+
+    if (!sub && method === "DELETE") {
+      const idx = state.providers.findIndex(p => p.id === id);
+      if (idx >= 0) state.providers.splice(idx, 1);
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ object: "control_plane_provider", id, deleted: true }) });
+      return;
+    }
+
+    if (!sub && method === "PATCH") {
+      const body = JSON.parse(route.request().postData() ?? "{}") as { name?: string; base_url?: string };
+      const target = state.providers.find(p => p.id === id);
+      if (target) {
+        if (typeof body.name === "string" && body.name.trim() !== "") target.name = body.name.trim();
+        if (typeof body.base_url === "string" && body.base_url.trim() !== "") target.base_url = body.base_url.trim();
+      }
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ object: "control_plane_provider", data: target ?? null }) });
+      return;
+    }
+
+    await route.continue();
+  });
 
   await page.route("/admin/retention/runs*", r =>
     r.fulfill(ok({ object: "list", data: [] })),
@@ -151,13 +289,6 @@ export async function mockGatewayAPIs(page: Page) {
 
 // ── Extended test fixture ─────────────────────────────────────────────────────
 
-// Seed a non-empty admin token in localStorage before any page script runs.
-// AppShell's ConsoleShell routes to TokenGate when authToken is empty, so
-// without this seed the workspace shell never renders and every spec that
-// asserts on `.hecate-activitybar` (shell, chat, providers, admin) hangs in
-// beforeEach. Tests that exercise the gate itself (auth.spec.ts) override
-// this with their own `addInitScript` — multiple init scripts run in
-// registration order, so a later `clear()` wins.
 async function seedAdminToken(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem("hecate.authToken", "e2e-test-token");

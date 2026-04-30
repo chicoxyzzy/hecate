@@ -42,9 +42,15 @@ type APIKey struct {
 }
 
 type Provider struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	PresetID       string    `json:"preset_id,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PresetID string `json:"preset_id,omitempty"`
+	// CustomName is an optional operator-supplied label that appears
+	// alongside Name in the providers table, used to tell two
+	// instances of the same preset apart ("Anthropic" + "Prod" vs
+	// "Anthropic" + "Dev"). Name itself stays fixed for preset-based
+	// providers; this is the disambiguator.
+	CustomName     string    `json:"custom_name,omitempty"`
 	Kind           string    `json:"kind"`
 	Protocol       string    `json:"protocol"`
 	BaseURL        string    `json:"base_url"`
@@ -96,7 +102,6 @@ type Store interface {
 	RotateAPIKey(ctx context.Context, id, secret string) (APIKey, error)
 	DeleteAPIKey(ctx context.Context, id string) error
 	UpsertProvider(ctx context.Context, provider Provider, secret *ProviderSecret) (Provider, error)
-	SetProviderEnabled(ctx context.Context, id string, enabled bool) (Provider, error)
 	RotateProviderSecret(ctx context.Context, id string, secret ProviderSecret) (Provider, error)
 	DeleteProviderCredential(ctx context.Context, id string) (Provider, error)
 	DeleteProvider(ctx context.Context, id string) error
@@ -159,6 +164,7 @@ func cloneState(state State) State {
 			ID:             provider.ID,
 			Name:           provider.Name,
 			PresetID:       provider.PresetID,
+			CustomName:     provider.CustomName,
 			Kind:           provider.Kind,
 			Protocol:       provider.Protocol,
 			BaseURL:        provider.BaseURL,

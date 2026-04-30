@@ -7,7 +7,8 @@
 // Prerequisites:
 //   1. `make reset-dev && ./hecate &` — gateway running on :8765 with fresh state
 //   2. ollama running on :11434 with `ollama pull llama3.1:8b` (used to seed
-//      one realistic chat session). Set HECATE_SKIP_OLLAMA=1 to skip.
+//      one realistic chat session and produce a trace for the observability
+//      screenshot). Set HECATE_SKIP_OLLAMA=1 to skip.
 //
 // Optional optimize pass — the script auto-detects the best PNG
 // optimizer on PATH (preference: oxipng > pngquant > magick) and runs
@@ -35,7 +36,6 @@ const ADMIN_TOKEN = bootstrap.admin_token;
 // 1280×800 is a comfortable docs-rendering size — wide enough to show
 // the full sidebar + main pane with no horizontal scrolling, narrow
 // enough that GitHub's README column doesn't have to downscale much.
-// Reducing from 1440×900 trims ~25% of the pixel surface up front.
 const VIEWPORT = { width: 1280, height: 800 };
 
 async function clearAndNavigate(page: Page, path = "/") {
@@ -70,36 +70,17 @@ async function openWorkspace(page: Page, id: "overview" | "runs" | "chats" | "pr
   await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
 }
 
-// pngOptimizer is the build configuration for whichever PNG
-// optimizer was detected on PATH. Preference order matches what most
-// open-source repos use to optimize README screenshots:
-//
-//   1. pngquant — lossy palette quantization with Floyd-Steinberg
-//      dithering. At quality=80-100 the output is perceptually
-//      indistinguishable from the source, files shrink ~3-4×.
-//      This is "the README screenshot optimizer".
-//   2. oxipng — gold-standard lossless. Smaller wins (5-15%) but no
-//      quality loss. Use this if you're allergic to lossy.
-//   3. magick — last-resort lossless re-encode. Marginal at best,
-//      sometimes a no-op.
 type PNGOptimizer = { name: string; args: (path: string) => string[]; lossy: boolean };
 
 function detectOptimizer(): PNGOptimizer | null {
   const candidates: PNGOptimizer[] = [
     {
       name: "pngquant",
-      // Lossy palette quantization with dithering. Quality range
-      // 80-100 means: aim for ≥80% perceptual quality, fail if it
-      // can't reach 100. --speed 1 = max compression effort. The
-      // .png ext + --force makes it overwrite the input in place.
       args: path => ["--quality=80-100", "--speed", "1", "--strip", "--ext", ".png", "--force", path],
       lossy: true,
     },
     {
       name: "oxipng",
-      // -o max enables every optimization pass; --strip safe drops
-      // metadata that's safe to remove (timestamps, EXIF) without
-      // touching color data; in-place via the bare path arg.
       args: path => ["-o", "max", "--strip", "safe", path],
       lossy: false,
     },
@@ -111,7 +92,7 @@ function detectOptimizer(): PNGOptimizer | null {
   ];
   for (const c of candidates) {
     const probe = spawnSync(c.name, ["--version"], { stdio: "ignore" });
-    if (probe.status === 0 || probe.status === 1) return c; // some tools return 1 on --version
+    if (probe.status === 0 || probe.status === 1) return c;
   }
   return null;
 }
@@ -128,8 +109,6 @@ async function optimize() {
     return;
   }
   console.log(`→ optimizing PNGs (${tool.name}, ${tool.lossy ? "lossy palette" : "lossless"})`);
-  // Each PNG is independent — run the optimizer in parallel. With docs
-  // captures this drops a serial 2-3s pngquant pass to ~0.5s.
   const { spawn } = await import("node:child_process");
   await Promise.all(captured.map(path => new Promise<void>(resolve => {
     const before = statSync(path).size;
@@ -151,18 +130,52 @@ async function optimize() {
   })));
 }
 
+const adminHeaders = {
+  "Content-Type": "application/json",
+  "Authorization": `Bearer ${ADMIN_TOKEN}`,
+} as const;
+
+// addProvider creates a provider via the same POST endpoint the UI's
+// add modal calls. Mirrors the new explicit-add lifecycle: each
+// provider is materialized in the CP store, no auto-discovery.
+async function addProvider(params: {
+  name: string;
+  preset_id?: string;
+  kind: "cloud" | "local";
+  protocol?: string;
+  base_url?: string;
+  api_key?: string;
+}) {
+  const body = {
+    name: params.name,
+    preset_id: params.preset_id,
+    kind: params.kind,
+    protocol: params.protocol ?? "openai",
+    base_url: params.base_url,
+    api_key: params.api_key,
+  };
+  const res = await fetch(`${BASE_URL}/admin/control-plane/providers`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok && res.status !== 409) {
+    const text = await res.text();
+    console.warn(`  add provider ${params.name} failed: ${res.status} ${text.slice(0, 200)}`);
+    return;
+  }
+  if (res.status === 409) {
+    console.log(`  ${params.name} already exists (409) — skipping`);
+    return;
+  }
+  console.log(`  added provider ${params.name} (${params.kind})`);
+}
+
 // seedChatSessions creates a few chat sessions through Hecate's API so
 // the sidebar isn't empty. The first session also gets a real
-// completion so the chat pane renders an assistant turn — without that
-// the screenshot is just an empty "Send a message…" placeholder.
+// completion so the chat pane renders an assistant turn — and produces
+// a trace for the observability screenshot.
 async function seedChatSessions() {
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${ADMIN_TOKEN}`,
-  };
-
-  // Session titles are taken from POST body; the gateway uses them as
-  // sidebar labels until the first turn lands.
   const titles = [
     "Go interfaces vs structs",
     "Postgres logical replication",
@@ -172,7 +185,7 @@ async function seedChatSessions() {
   for (const title of titles) {
     const res = await fetch(`${BASE_URL}/v1/chat/sessions`, {
       method: "POST",
-      headers,
+      headers: adminHeaders,
       body: JSON.stringify({ title }),
     });
     const json = (await res.json()) as { data: { id: string } };
@@ -180,11 +193,6 @@ async function seedChatSessions() {
     console.log(`  seeded session ${json.data.id} — ${title}`);
   }
 
-  // Real completion against llama3.1:8b for the first session. Keep
-  // the prompt short so the model finishes in seconds, not minutes.
-  // Ollama is optional — if it's not running or doesn't have the
-  // model, we skip the chat turn and the chat screenshot just shows
-  // the empty session. Set HECATE_SKIP_OLLAMA=1 to skip explicitly.
   const firstID = ids[0];
   if (process.env.HECATE_SKIP_OLLAMA === "1") {
     console.log("  HECATE_SKIP_OLLAMA=1 — leaving the chat session empty");
@@ -195,7 +203,7 @@ async function seedChatSessions() {
   try {
     const chatRes = await fetch(`${BASE_URL}/v1/chat/completions`, {
       method: "POST",
-      headers,
+      headers: adminHeaders,
       body: JSON.stringify({
         model: "llama3.1:8b",
         provider: "ollama",
@@ -209,7 +217,7 @@ async function seedChatSessions() {
     if (!chatRes.ok) {
       const body = await chatRes.text();
       console.warn(`  chat seed skipped: ${chatRes.status} ${body.slice(0, 200)}`);
-      console.warn("  (the chat screenshot will show an empty session)");
+      console.warn("  (the chat screenshot will show an empty session, observability will have no trace)");
       return { firstID };
     }
     console.log(`  llama replied in ${((Date.now() - start) / 1000).toFixed(1)}s`);
@@ -222,70 +230,115 @@ async function seedChatSessions() {
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
-  // deviceScaleFactor: 1 keeps the PNG file size reasonable for an
-  // open-source repo's docs/ — 2x makes the same screenshot ~3-4x
-  // larger with little visible benefit at the sizes README renders.
   const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
   const page = await context.newPage();
 
+  // ── 1. Login screen ────────────────────────────────────────────────────────
   console.log("→ onboard-wizard");
   await clearAndNavigate(page);
   await page.waitForSelector("text=Admin token required", { timeout: 5_000 });
   await snap(page, "onboard-wizard");
 
-  // Seed session content before signing the browser in, so the chat
-  // sidebar already has rows on first paint.
+  // ── 2. Empty providers list ─────────────────────────────────────────────────
+  // Sign in and land on the Providers tab before any providers exist.
+  console.log("→ providers-empty");
+  await signIn(page);
+  await openWorkspace(page, "providers");
+  await page.waitForSelector("text=No providers configured", { timeout: 5_000 });
+  await snap(page, "providers-empty");
+
+  // ── 3. Cloud presets in the Add modal ───────────────────────────────────────
+  console.log("→ providers-presets (Add modal, Cloud tab)");
+  // Click the first "Add provider" button — both the header and empty-state
+  // CTAs render with the same label; either opens the modal.
+  await page.getByRole("button", { name: "Add provider" }).first().click();
+  // Cloud tab is the default. Wait for a recognizable cloud preset to
+  // confirm the modal is rendered before snapping.
+  await page.waitForSelector("text=Anthropic", { timeout: 5_000 });
+  await page.waitForTimeout(300);
+  await snap(page, "providers-presets");
+  // Close the modal — Esc dismisses it.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+
+  // ── 4. Seed three providers via the API ─────────────────────────────────────
+  // These mirror the UI's add flow: one cloud (OpenAI with a fake key), two
+  // local (Ollama, LM Studio) on their default ports. The fake OpenAI key is
+  // enough to pass the create handler's "cloud-needs-key" guard; an actual
+  // round-trip to OpenAI isn't in the screenshot.
+  console.log("→ seeding providers");
+  await addProvider({ name: "Ollama",   preset_id: "ollama",   kind: "local" });
+  await addProvider({ name: "LM Studio", preset_id: "lmstudio", kind: "local" });
+  await addProvider({ name: "OpenAI",   preset_id: "openai",   kind: "cloud",
+    api_key: "sk-live-••••••••••••••••••••" });
+
+  // ── 5. Populated providers table ────────────────────────────────────────────
+  console.log("→ providers (populated table)");
+  await page.reload();
+  await page.waitForSelector("text=Cloud providers", { timeout: 5_000 });
+  // Give the runtime a moment to run an initial probe so the Health
+  // and Models cells aren't all "Pending".
+  await page.waitForTimeout(2_000);
+  await snap(page, "providers");
+
+  // ── 6. Chat: seed sessions + one real completion ────────────────────────────
   console.log("→ seeding chat sessions");
   const { firstID } = await seedChatSessions();
 
-  console.log("→ chat (with seeded sessions, llama3.1:8b conversation)");
-  await signIn(page);
+  console.log("→ chat (with seeded sessions)");
+  await openWorkspace(page, "chats");
   await page.waitForTimeout(500);
-  // Click the seeded session by its title so the main pane renders
-  // the user/assistant turn from the ollama completion above.
+  // Click the seeded session by its title so the main pane renders the
+  // user/assistant turn from the ollama completion above.
   await page.getByText("Go interfaces vs structs").first().click();
   await page.waitForTimeout(1500);
   await snap(page, "chat");
 
-  console.log("→ providers");
-  await openWorkspace(page, "providers");
-  await page.waitForSelector("text=Cloud providers", { timeout: 5_000 });
-  await snap(page, "providers");
+  // ── 7. Tasks ────────────────────────────────────────────────────────────────
+  console.log("→ tasks (do echo 42 + approval seeded)");
+  await seedTask();
+  await page.reload();
+  await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
+  await openWorkspace(page, "runs");
+  // Wait long enough for the task list fetch + a soft moment for the
+  // run state to surface. The task is a simple shell echo; if the
+  // runner is wired the row will show "completed", otherwise it shows
+  // its pending state — either renders a usable list view.
+  await page.waitForTimeout(2_000);
+  await snap(page, "tasks");
 
-  console.log("→ provider setup");
-  await page.getByText("OpenAI").first().click();
-  await page.waitForSelector("text=API Key", { timeout: 5_000 });
-  await page.locator("input[type='password']").fill("sk-live-••••••••••••••••••••");
-  await page.waitForTimeout(300);
-  await snap(page, "provider-setup");
-
-  console.log("→ admin / pricebook");
-  await openWorkspace(page, "admin");
-  // Tab buttons render the display label from TAB_LABELS in
-  // ui/src/features/admin/AdminView.tsx — pricebook → "Pricing",
-  // budget → "Balances", integrations → "Clients". The internal tab
-  // ids (pricebook / budget / integrations) are storage keys, not
-  // rendered text; clicking has to anchor on the visible label.
-  await page.getByRole("button", { name: /pricing/i }).click();
+  // ── 8. Observability — pick a trace first ───────────────────────────────────
+  console.log("→ observe (trace selected)");
+  await openWorkspace(page, "overview");
   await page.waitForTimeout(800);
-  await snap(page, "admin-pricebook");
+  // Click the first row in the request ledger / trace list. Selector
+  // strategy: the ledger renders rows with a monospace request id; the
+  // first selectable row gets clicked. Fall back to no-op if the list
+  // is empty (e.g. ollama wasn't running, no traces produced).
+  try {
+    const firstRow = page.locator("[data-trace-row], tbody tr").first();
+    if (await firstRow.count() > 0 && await firstRow.isVisible()) {
+      await firstRow.click({ timeout: 2_000 });
+      await page.waitForTimeout(800);
+    } else {
+      console.warn("  no trace rows found — taking the empty-list shot");
+    }
+  } catch (err) {
+    console.warn(`  trace click skipped: ${(err as Error).message}`);
+  }
+  await snap(page, "observe");
 
-  console.log("→ admin / budget");
-  await page.getByRole("button", { name: /balances/i }).click();
-  await page.waitForTimeout(500);
-  await snap(page, "admin-budget");
-
-  console.log("→ admin / tenants");
-  // Seed a couple of tenants + API keys before the snapshot so the
-  // table has rows. Tenants & keys are control-plane resources; the
-  // API matches what the UI fires when the operator clicks "New
-  // tenant" or "Create API key". Reload after seeding so the
-  // dashboard's loadDashboard() picks up the new rows — clicking a
-  // tab alone doesn't refetch.
+  // ── 9. Admin panels (left → right: Tenants, Keys, Pricing, Balances, Clients) ─
+  // Seed two tenants + two API keys so the tables aren't empty before the
+  // captures start.
+  console.log("→ seeding tenants + API keys");
   await seedTenants();
   await page.reload();
   await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
   await openWorkspace(page, "admin");
+  await page.waitForTimeout(500);
+
+  console.log("→ admin / tenants");
   await page.getByRole("button", { name: /tenants/i }).click();
   await page.waitForTimeout(500);
   await snap(page, "admin-tenants");
@@ -295,26 +348,24 @@ async function main() {
   await page.waitForTimeout(500);
   await snap(page, "admin-keys");
 
+  console.log("→ admin / pricebook");
+  await page.getByRole("button", { name: /pricing/i }).click();
+  await page.waitForTimeout(800);
+  await snap(page, "admin-pricebook");
+
+  console.log("→ admin / budget");
+  await page.getByRole("button", { name: /balances/i }).click();
+  await page.waitForTimeout(500);
+  await snap(page, "admin-budget");
+
   console.log("→ admin / integrations");
   await page.getByRole("button", { name: /clients/i }).click();
   await page.waitForTimeout(400);
   await snap(page, "admin-integrations");
 
-  console.log("→ observe");
-  await openWorkspace(page, "overview");
-  await page.waitForTimeout(800);
-  await snap(page, "observe");
-
-  console.log("→ tasks (runs workspace)");
-  // Seed a task so the panel has at least one row instead of the
-  // empty-state placeholder. Reload so TasksView's first fetch picks
-  // it up.
-  await seedTask();
-  await page.reload();
-  await page.waitForSelector(".hecate-activitybar", { timeout: 5_000 });
-  await openWorkspace(page, "runs");
-  await page.waitForTimeout(800);
-  await snap(page, "tasks");
+  // firstID is intentionally unused after the chat snap — captured for
+  // future "open this specific session" workflows.
+  void firstID;
 
   await browser.close();
   await optimize();
@@ -322,10 +373,6 @@ async function main() {
 }
 
 async function seedTenants() {
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${ADMIN_TOKEN}`,
-  };
   const tenants = [
     { id: "team-a", name: "Team A" },
     { id: "team-b", name: "Team B" },
@@ -333,11 +380,10 @@ async function seedTenants() {
   for (const t of tenants) {
     await fetch(`${BASE_URL}/admin/control-plane/tenants`, {
       method: "POST",
-      headers,
+      headers: adminHeaders,
       body: JSON.stringify({ ...t, enabled: true }),
     });
   }
-  // One API key per tenant — keep names + scopes representative.
   const keys = [
     { id: "team-a-prod", name: "team-a / prod", tenant: "team-a", role: "tenant",
       key: "sk-team-a-prod-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -351,24 +397,25 @@ async function seedTenants() {
   for (const k of keys) {
     await fetch(`${BASE_URL}/admin/control-plane/api-keys`, {
       method: "POST",
-      headers,
+      headers: adminHeaders,
       body: JSON.stringify(k),
     });
   }
   console.log(`  seeded ${tenants.length} tenants + ${keys.length} API keys`);
 }
 
+// seedTask creates a "do echo 42" task so the runs table has at least
+// one row. If the task runtime auto-resolves the implicit approval the
+// row will land in a completed state; otherwise it sits in the queue
+// until the operator approves it manually. Either renders a usable
+// shot of the tasks workspace.
 async function seedTask() {
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${ADMIN_TOKEN}`,
-  };
   const res = await fetch(`${BASE_URL}/v1/tasks`, {
     method: "POST",
-    headers,
+    headers: adminHeaders,
     body: JSON.stringify({
-      title: "Reproduce flaky integration test",
-      prompt: "Run the integration suite three times back-to-back and surface any test that fails at least once.",
+      title: "echo 42",
+      prompt: "do echo 42",
     }),
   });
   if (!res.ok) {
@@ -376,7 +423,37 @@ async function seedTask() {
     return;
   }
   const json = (await res.json()) as { data: { id: string } };
-  console.log(`  seeded task ${json.data.id}`);
+  const taskID = json.data.id;
+  console.log(`  seeded task ${taskID} (do echo 42)`);
+
+  // Try to start the task (and resolve any pending approval) so the
+  // row in the tasks list shows real progress. Best-effort — if the
+  // endpoints aren't wired in this build, the row still renders.
+  try {
+    await fetch(`${BASE_URL}/v1/tasks/${taskID}/start`, { method: "POST", headers: adminHeaders });
+  } catch (err) {
+    console.warn(`  task start skipped: ${(err as Error).message}`);
+    return;
+  }
+  // Pause briefly so an approval request has time to surface, then auto-resolve
+  // any pending approvals as "approve" so the run can proceed.
+  await new Promise(r => setTimeout(r, 600));
+  try {
+    const approvalsRes = await fetch(`${BASE_URL}/v1/tasks/${taskID}/approvals`, { headers: adminHeaders });
+    if (approvalsRes.ok) {
+      const approvals = (await approvalsRes.json()) as { data?: Array<{ id: string }> };
+      for (const a of approvals.data ?? []) {
+        await fetch(`${BASE_URL}/v1/tasks/${taskID}/approvals/${a.id}/resolve`, {
+          method: "POST",
+          headers: adminHeaders,
+          body: JSON.stringify({ decision: "approved" }),
+        });
+        console.log(`  approved task approval ${a.id}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`  task approve skipped: ${(err as Error).message}`);
+  }
 }
 
 main().catch((err) => {

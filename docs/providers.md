@@ -9,13 +9,42 @@ Hecate uses a vendor-neutral provider layer at the runtime boundary. It treats O
 ## Providers vs. clients
 
 - **Clients** call Hecate. Codex, Claude Code, OpenAI SDKs, Anthropic SDKs, curl scripts, and internal tools are supported as long as they speak Hecate's OpenAI-compatible or Anthropic-compatible gateway endpoints.
-- **Providers** are upstream model backends Hecate calls. In the current alpha, provider management is intentionally limited to the built-in preset catalog below.
+- **Providers** are upstream model backends Hecate calls. The gateway ships with a preset catalog of common cloud and local backends, and the operator adds them explicitly via the Providers tab.
 
-This means custom clients are supported today; custom provider create/delete is not a first-class workflow yet.
+## Adding a provider
+
+The Providers tab starts empty. Click **Add provider** to open the modal:
+
+1. Pick **Cloud** or **Local** at the top.
+2. Click a preset (e.g. Anthropic, OpenAI, Ollama) — or click **Custom** to point Hecate at any OpenAI-compatible endpoint.
+3. Fill in the form:
+   - **Name** is locked to the preset name; Custom lets you choose.
+   - **Endpoint URL** is shown for local and custom providers.
+   - **API Key** is shown for cloud and custom-cloud providers; stored encrypted at rest with `GATEWAY_CONTROL_PLANE_SECRET_KEY`.
+4. Click **Add provider**.
+
+A provider you add is immediately routable. There is no separate enable/disable toggle — to take a provider out of rotation, delete it.
+
+### Multiple instances
+
+The same preset can be added more than once as long as the names slugify to different IDs ("Anthropic" → `anthropic`, "Anthropic-EU" → `anthropic-eu`). Two providers may not share the same `base_url`; the second add is rejected with HTTP 409 and the existing provider's name in the error message.
+
+### Editing a provider
+
+Click any row in the providers table to open the edit modal:
+
+- **Cloud / custom-cloud** — rotate the API key, or delete it (the provider record stays so model discovery resumes once a new key is saved).
+- **Local / custom-local** — change the endpoint URL. Save URL is disabled when the new value matches the current one.
+
+The edit modal also shows live runtime status: health, route readiness, model count, last check time, and a collapsible diagnostics section with the last error, error class, latency, and totals.
+
+### Deleting a provider
+
+Each row has a trash button. Clicking it confirms via a browser dialog and then removes the provider record and its credential.
 
 ## Built-in presets
 
-The gateway ships with twelve providers wired up by default. The Providers tab in the operator UI lists all of them; you only need to drop in an API key (cloud) or start the local runtime (local) to enable one.
+The gateway ships with twelve provider presets. None of them are auto-added — operators pick from the catalog when adding a provider.
 
 ### Cloud presets
 
@@ -39,21 +68,13 @@ The gateway ships with twelve providers wired up by default. The Providers tab i
 | `localai` | LocalAI | `http://127.0.0.1:8080/v1` |
 | `ollama` | Ollama | `http://127.0.0.1:11434/v1` |
 
-`llamacpp` and `localai` share the same default port — the gateway resolves the conflict automatically by enabling whichever one was configured first; the operator can flip the active one in the Providers tab.
+`llamacpp` and `localai` share the same default port (`127.0.0.1:8080`); only one of them can be added to the gateway at a time, since the base URL conflict is rejected at create time. Operators who run both should change the port on one of them via the Custom flow or `PROVIDER_*_BASE_URL`.
 
-## Configuring a provider
+## Env-configured providers
 
-Three approaches, listed from least-to-most production-friendly:
+Setting `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, or `PROVIDER_<NAME>_DEFAULT_MODEL` in the environment seeds the runtime registry so the provider becomes reachable for routing. Env vars do **not** auto-add the provider to the Providers tab — operators who want it visible (and editable) must add it explicitly via the modal. This keeps the UI list a faithful record of operator intent rather than a mirror of every env var that happened to be set on first boot.
 
-### 1. Environment variables (good for first-run)
-
-Every preset reads three env knobs by lowercased ID:
-
-- `PROVIDER_<NAME>_API_KEY`
-- `PROVIDER_<NAME>_BASE_URL` (override the default if you're using a self-hosted proxy)
-- `PROVIDER_<NAME>_DEFAULT_MODEL`
-
-Example `.env`:
+Env vars are convenient for first-run bootstrapping in `.env` / Docker compose; the modal is the source of truth for ongoing changes.
 
 ```bash
 PROVIDER_ANTHROPIC_API_KEY=sk-ant-...
@@ -61,15 +82,16 @@ PROVIDER_OPENAI_API_KEY=sk-...
 PROVIDER_OPENAI_DEFAULT_MODEL=gpt-4o-mini
 ```
 
-Custom providers are not a first-class launch feature yet. Today, operator-facing provider management is limited to the built-in presets above.
+## Control-plane API
 
-### 2. Operator UI (recommended for ongoing changes)
+Every UI action maps to a control-plane endpoint:
 
-The Providers tab in the operator UI lists every preset. Click a card to expand its detail panel; paste the API key in. The key is encrypted at rest with `GATEWAY_CONTROL_PLANE_SECRET_KEY` and never leaves the gateway in plaintext after that point. Rotate or revoke from the same panel.
+- `POST /admin/control-plane/providers` — add a provider. Body `{name, kind, protocol, base_url?, api_key?, preset_id?}`.
+- `DELETE /admin/control-plane/providers/{id}` — remove it.
+- `PATCH /admin/control-plane/providers/{id}` — partial update; today only `base_url` is supported.
+- `PUT /admin/control-plane/providers/{id}/api-key` — set the API key (empty `key` clears it).
 
-### 3. Control-plane API (for automation)
-
-Every UI action maps to a `PUT /admin/control-plane/providers/{id}/api-key` or `PATCH /admin/control-plane/providers/{id}` call for a built-in preset. The full surface lives in [`internal/api/handler_controlplane.go`](../internal/api/handler_controlplane.go). Useful for terraforming a fleet of gateways from a single config source of truth.
+The full surface lives in [`internal/api/handler_controlplane.go`](../internal/api/handler_controlplane.go). Useful for terraforming a fleet of gateways from a single config source of truth.
 
 ## Health and circuit breaking
 
@@ -128,6 +150,3 @@ returns:
 Route reports in the trace inspector reuse the same readiness vocabulary when
 they explain why a provider/model candidate was skipped.
 
-## Custom provider status
-
-Custom provider lifecycle is not productized yet: there is no create/delete endpoint and the Providers tab is built around the built-in preset catalog. The next step is a real control-plane custom-provider flow with validation, encrypted credentials, model discovery, and UI management.

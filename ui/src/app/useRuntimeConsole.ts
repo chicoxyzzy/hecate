@@ -35,12 +35,16 @@ import {
   resetBudget as resetBudgetRequest,
   setAPIKeyEnabled as setAPIKeyEnabledRequest,
   setBudgetLimit as setBudgetLimitRequest,
-  setProviderEnabled as setProviderEnabledRequest,
   setTenantEnabled as setTenantEnabledRequest,
   topUpBudget as topUpBudgetRequest,
   upsertAPIKey as upsertAPIKeyRequest,
   upsertPolicyRule as upsertPolicyRuleRequest,
   upsertTenant as upsertTenantRequest,
+  createProvider as createProviderRequest,
+  deleteProvider as deleteProviderRequest,
+  setProviderBaseURL as setProviderBaseURLRequest,
+  setProviderName as setProviderNameRequest,
+  setProviderCustomName as setProviderCustomNameRequest,
 } from "../lib/api";
 import type { PolicyRuleUpsertPayload } from "../lib/api";
 import type {
@@ -385,12 +389,14 @@ export function useRuntimeConsole() {
     }
   }
 
-  // refreshProviders re-fetches only /admin/providers and /v1/models without
-  // the full loadDashboard cost. Used by the ProvidersView auto-poll so local
-  // provider model lists converge within ~30 s of starting Ollama / LM Studio,
-  // regardless of when Hecate itself was started.
+  // refreshProviders re-fetches /admin/providers (runtime health) and
+  // /v1/models (model catalog) for the ProvidersView auto-poll so local
+  // provider model lists converge within ~30 s of starting Ollama / LM
+  // Studio. Skipped when no providers are configured — the providers
+  // tab renders its empty state, there's nothing to converge.
   async function refreshProviders() {
     if (!session.isAdmin || !authToken) return;
+    if ((adminConfig?.providers?.length ?? 0) === 0) return;
     try {
       const [pResult, mResult] = await Promise.allSettled([
         getProviders(authToken),
@@ -569,15 +575,15 @@ export function useRuntimeConsole() {
       setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (submitError) {
-      const msg = submitError instanceof Error ? submitError.message : "unknown request error";
-      setChatError(msg);
+      const raw = submitError instanceof Error ? submitError.message : "unknown request error";
+      const friendly = humanizeChatError(raw);
+      setChatError(friendly);
       setChatErrorCode(submitError instanceof ApiError ? submitError.code : "");
       setChatErrorStatus(submitError instanceof ApiError ? submitError.status : null);
-      // Toaster mirrors the inline error so chat failures are
-      // surfaced through the same channel as other admin errors
-      // (budget, retention, pricebook). Without this the operator
-      // can miss a failure if their attention is elsewhere on the page.
-      setNoticeMessage("error", msg);
+      // Inline chat error is the single source — no toast. The user is
+      // already looking at the chat surface; mirroring the same string in
+      // a corner toast just means they see the same message twice in
+      // different fonts/positions.
     } finally {
       setChatLoading(false);
     }
@@ -614,11 +620,10 @@ export function useRuntimeConsole() {
       setStreamingContent(null);
       await refreshAdminRuntimeState();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown error";
-      setChatError(msg);
+      const raw = err instanceof Error ? err.message : "unknown error";
+      setChatError(humanizeChatError(raw));
       setChatErrorCode(err instanceof ApiError ? err.code : "");
       setChatErrorStatus(err instanceof ApiError ? err.status : null);
-      setNoticeMessage("error", msg);
     } finally {
       setChatLoading(false);
     }
@@ -837,15 +842,35 @@ export function useRuntimeConsole() {
     });
   }
 
-  async function setProviderEnabled(id: string, enabled: boolean) {
-    await runAdminMutation({
-      successMessage: "",
-      errorMessage: "Failed to update provider state.",
-      failureDetail: "failed to update provider state",
-      action: async () => {
-        await setProviderEnabledRequest(id, enabled, authToken);
-      },
-    });
+  async function createProvider(params: { name: string; preset_id?: string; custom_name?: string; base_url?: string; api_key?: string; kind: string; protocol: string }): Promise<void> {
+    await createProviderRequest(params, authToken);
+    await loadDashboard();
+  }
+
+  async function deleteProvider(id: string): Promise<void> {
+    await deleteProviderRequest(id, authToken);
+    await loadDashboard();
+  }
+
+  async function setProviderBaseURL(id: string, baseURL: string): Promise<void> {
+    await setProviderBaseURLRequest(id, baseURL, authToken);
+    // loadDashboard refreshes adminConfig (the source of truth for base_url
+    // shown in the table), then refreshProviders re-runs model discovery
+    // against the new endpoint so the model list updates immediately.
+    await loadDashboard();
+    await refreshProviders();
+  }
+
+  async function setProviderName(id: string, name: string): Promise<void> {
+    await setProviderNameRequest(id, name, authToken);
+    // The label change only affects adminConfig (table column) — no need
+    // to rerun model discovery, so skip refreshProviders.
+    await loadDashboard();
+  }
+
+  async function setProviderCustomName(id: string, customName: string): Promise<void> {
+    await setProviderCustomNameRequest(id, customName, authToken);
+    await loadDashboard();
   }
 
   async function setTenantEnabled(id: string, enabled: boolean) {
@@ -1189,7 +1214,6 @@ export function useRuntimeConsole() {
       setModel,
       setModelFilter,
       setProviderFilter: selectProviderRoute,
-      setProviderEnabled,
       refreshProviders,
       setRetentionSubsystems,
       setRotateAPIKeyID,
@@ -1213,6 +1237,11 @@ export function useRuntimeConsole() {
       upsertAPIKey,
       upsertPolicyRule,
       setProviderAPIKey,
+      createProvider,
+      deleteProvider,
+      setProviderBaseURL,
+      setProviderName,
+      setProviderCustomName,
       upsertPricebookEntry,
       deletePricebookEntry,
       previewPricebookImport,
@@ -1222,6 +1251,20 @@ export function useRuntimeConsole() {
       dismissNotice: () => setNotice(null),
     },
   };
+}
+
+// humanizeChatError translates raw gateway/provider errors into something
+// an operator can act on. The backend's "api key is required for cloud
+// provider X when stub mode is disabled" carries internal vocabulary
+// (stub mode) that's noise to the user — they just need to know they
+// should add a key. Falls back to the raw string when no pattern matches.
+export function humanizeChatError(raw: string): string {
+  const apiKeyPattern = /api key is required for cloud provider (\S+)/i;
+  const m = raw.match(apiKeyPattern);
+  if (m) {
+    return `${m[1]} has no API key. Open the Providers tab and add one.`;
+  }
+  return raw;
 }
 
 function deriveChatSessionTitle(message: string): string {
@@ -1480,24 +1523,52 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
   let retentionRuns: PromiseSettledResult<{ object: string; data: RetentionRunData[] }> = skipped();
 
   if (!invalidToken && isAuthenticated) {
-    // Tenant-or-better: chat surface is reachable.
-    const tenantFetches: Array<Promise<unknown>> = [
-      getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
-      getProviders(authToken).then(r => { providers = { status: "fulfilled", value: r }; }, e => { providers = { status: "rejected", reason: e }; }),
+    // Common-to-all-roles: preset catalog + chat sessions + provider presets
+    // — these are static-ish reference data that doesn't probe upstream
+    // providers, so they're cheap and always fetched.
+    const baseFetches: Array<Promise<unknown>> = [
       getProviderPresets(authToken).then(r => { providerPresets = { status: "fulfilled", value: r }; }, e => { providerPresets = { status: "rejected", reason: e }; }),
       getChatSessions(authToken, 20).then(r => { chatSessions = { status: "fulfilled", value: r }; }, e => { chatSessions = { status: "rejected", reason: e }; }),
     ];
+
     if (isAdmin) {
-      // Admin-only endpoints: skipped for tenant bearers.
-      tenantFetches.push(
+      // Admin path: load /admin/control-plane (CP store, source of truth
+      // for "what providers are configured") in parallel with the other
+      // admin-only endpoints AND the model catalog (admin tabs like the
+      // pricebook need the catalog regardless of configured-provider
+      // count). /admin/providers (runtime health/status) is the only
+      // discovery call we gate — when no providers are configured, the
+      // providers tab renders its empty state and there's nothing for
+      // the runtime status to feed.
+      baseFetches.push(
+        getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
         getBudget("", authToken).then(r => { budget = { status: "fulfilled", value: r }; }, e => { budget = { status: "rejected", reason: e }; }),
         getAccountSummary("", authToken).then(r => { accountSummary = { status: "fulfilled", value: r }; }, e => { accountSummary = { status: "rejected", reason: e }; }),
         getRequestLedger(authToken, 20).then(r => { requestLedger = { status: "fulfilled", value: r }; }, e => { requestLedger = { status: "rejected", reason: e }; }),
         getAdminConfig(authToken).then(r => { adminConfig = { status: "fulfilled", value: r }; }, e => { adminConfig = { status: "rejected", reason: e }; }),
         getRetentionRuns(authToken, 10).then(r => { retentionRuns = { status: "fulfilled", value: r }; }, e => { retentionRuns = { status: "rejected", reason: e }; }),
       );
+      await Promise.all(baseFetches);
+
+      const configured = adminConfig.status === "fulfilled" ? (adminConfig.value.data?.providers ?? []) : [];
+      if (configured.length > 0) {
+        await new Promise<void>(resolve => {
+          getProviders(authToken).then(
+            r => { providers = { status: "fulfilled", value: r }; resolve(); },
+            e => { providers = { status: "rejected", reason: e }; resolve(); },
+          );
+        });
+      }
+    } else {
+      // Tenant path: no /admin/control-plane access, so the runtime
+      // discovery endpoints are the only source of truth for what
+      // provider/model the operator can pick. Always fetch.
+      baseFetches.push(
+        getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
+        getProviders(authToken).then(r => { providers = { status: "fulfilled", value: r }; }, e => { providers = { status: "rejected", reason: e }; }),
+      );
+      await Promise.all(baseFetches);
     }
-    await Promise.all(tenantFetches);
   }
 
   return {

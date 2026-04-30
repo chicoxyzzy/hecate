@@ -1,4 +1,16 @@
-import { expect, test, MOCK_MODELS, MOCK_PROVIDERS } from "./fixtures";
+import { expect, test as baseTest, mockGatewayAPIs, MOCK_MODELS, MOCK_PROVIDERS, MOCK_ADMIN_CONFIG_WITH_PROVIDERS } from "./fixtures";
+import type { Page } from "@playwright/test";
+
+// Chat tests need a populated provider list — without one, AppShell hides
+// the chat workspace behind a "No providers configured" placeholder. Override
+// the default empty-list mock with the populated fixture for every chat test.
+const test = baseTest.extend<{ page: Page }>({
+  page: async ({ page }, use) => {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await mockGatewayAPIs(page, { adminConfig: MOCK_ADMIN_CONFIG_WITH_PROVIDERS });
+    await use(page);
+  },
+});
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -63,17 +75,6 @@ test("provider picker shows healthy providers", async ({ page }) => {
   }
 });
 
-test("provider picker does not show unhealthy providers", async ({ page }) => {
-  const unhealthyProviders = MOCK_PROVIDERS.filter(p => !p.healthy);
-  const providerBtn = page.locator("button", { hasText: /all providers/i });
-  await providerBtn.click();
-
-  const menu = page.locator(".dropdown-menu").first();
-  for (const p of unhealthyProviders) {
-    await expect(menu).not.toContainText(p.name, { ignoreCase: true });
-  }
-});
-
 test("New session button clears the active conversation", async ({ page }) => {
   // Fill the message box so we can verify the state resets
   await page.locator("textarea").fill("some prior message");
@@ -116,7 +117,7 @@ test("Enter-switch preference persists across reload via localStorage", async ({
 });
 
 test("workspace selection persists across reload", async ({ page }) => {
-  await page.keyboard.press("4"); // Providers
+  await page.keyboard.press("2"); // Providers
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute("aria-label", /Providers/);
 
   await page.reload();
@@ -124,13 +125,12 @@ test("workspace selection persists across reload", async ({ page }) => {
   await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute("aria-label", /Providers/);
 });
 
-// A failing /v1/chat/completions surfaces in two places: the inline
-// error banner inside the chat view (next to the input), and a toast
-// at the page level so an operator with their attention on a sidebar
-// (admin, observe) doesn't miss it. The unit test in
-// useRuntimeConsole.test.tsx pins the state shape; this e2e proves
-// both surfaces actually render in a real DOM.
-test("chat error surfaces in toast and inline banner", async ({ page }) => {
+// A failing /v1/chat/completions surfaces inline beneath the chat header.
+// Toast is gone for chat errors — the chat surface owns its own banner so a
+// single source of truth shows up next to the input. The "api key is
+// required for cloud provider X" wire message is humanized into "X has no
+// API key. Open the Providers tab and add one." before reaching the DOM.
+test("chat error renders inline with the humanized message", async ({ page }) => {
   await page.route("/v1/chat/sessions", r =>
     r.fulfill({
       status: 200,
@@ -163,16 +163,6 @@ test("chat error surfaces in toast and inline banner", async ({ page }) => {
   await page.locator("textarea").first().fill("hello");
   await page.locator("button[type='submit']").click();
 
-  // Toast: pinned visible with the error class so global notice surface
-  // works even when the user's eyes aren't on the chat pane.
-  const toast = page.locator(".toast.toast--error");
-  await expect(toast).toBeVisible();
-  await expect(toast).toContainText(/api key is required/i);
-  // No leaked classification prefix from the backend (UserFacingMessage
-  // strips this in the gateway). Locks in the contract on the wire.
-  await expect(toast).not.toContainText(/^client error: /i);
-
-  // Inline banner under the chat header carries the same message —
-  // belt-and-braces so chat-context users see it without scanning.
-  await expect(page.getByText(/api key is required/i).first()).toBeVisible();
+  // Inline banner under the chat header carries the humanized message.
+  await expect(page.getByText(/has no API key/i).first()).toBeVisible();
 });

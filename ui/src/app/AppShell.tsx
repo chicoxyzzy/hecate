@@ -41,9 +41,9 @@ function SvgIcon({ d, size = 18 }: { d: string | string[]; size?: number }) {
 
 const baseWorkspaces: WorkspaceDefinition[] = [
   { id: "chats",      label: "Chats",         shortcut: "1", icon: <SvgIcon d={IC.chat} /> },
-  { id: "overview",   label: "Observability", shortcut: "2", icon: <SvgIcon d={IC.observe} /> },
-  { id: "runs",       label: "Tasks",     shortcut: "3", icon: <SvgIcon d={IC.tasks} /> },
-  { id: "providers",  label: "Providers", shortcut: "4", icon: <SvgIcon d={IC.providers} /> },
+  { id: "providers",  label: "Providers",     shortcut: "2", icon: <SvgIcon d={IC.providers} /> },
+  { id: "runs",       label: "Tasks",         shortcut: "3", icon: <SvgIcon d={IC.tasks} /> },
+  { id: "overview",   label: "Observability", shortcut: "4", icon: <SvgIcon d={IC.observe} /> },
 ];
 
 const adminWorkspace: WorkspaceDefinition = {
@@ -283,18 +283,22 @@ function AuthenticatedShell({
       <div className="hecate-workarea">
         {/* Activity bar */}
         <nav className="hecate-activitybar" aria-label="Workspace navigation">
-          {workspaces.map(ws => (
-            <button key={ws.id}
-              aria-label={`${ws.label} (${ws.shortcut})`}
-              aria-current={activeWorkspace === ws.id ? "page" : undefined}
-              className={`hecate-activitybtn${activeWorkspace === ws.id ? " hecate-activitybtn--active" : ""}`}
-              onClick={() => onSelectWorkspace(ws.id)}
-              title={`${ws.label} — press ${ws.shortcut}`}
-              type="button">
-              {ws.icon}
-              <span className="hecate-activitybtn__key">{ws.shortcut}</span>
-            </button>
-          ))}
+          {workspaces.map(ws => {
+            const noProviders = ws.id === "chats" && (state.adminConfig?.providers?.length ?? 0) === 0;
+            return (
+              <button key={ws.id}
+                aria-label={`${ws.label} (${ws.shortcut})`}
+                aria-current={activeWorkspace === ws.id ? "page" : undefined}
+                className={`hecate-activitybtn${activeWorkspace === ws.id ? " hecate-activitybtn--active" : ""}`}
+                onClick={() => onSelectWorkspace(ws.id)}
+                title={noProviders ? "Add a provider first" : `${ws.label} — press ${ws.shortcut}`}
+                style={noProviders ? { opacity: 0.4, pointerEvents: "none" } : undefined}
+                type="button">
+                {ws.icon}
+                <span className="hecate-activitybtn__key">{ws.shortcut}</span>
+              </button>
+            );
+          })}
         </nav>
 
         {/* Main content */}
@@ -302,7 +306,19 @@ function AuthenticatedShell({
           {state.error && <div className="page-banner page-banner--error">{state.error}</div>}
           <div className={`console-content${isBare ? " console-content--bare" : ""}`}>
             {activeWorkspace === "overview"   && <ObservabilityView actions={actions} state={state} />}
-            {activeWorkspace === "chats" && <ChatView actions={actions} state={state} />}
+            {activeWorkspace === "chats" && (
+              (state.adminConfig?.providers?.length ?? 0) === 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8 }}>
+                  <div style={{ fontSize: 14, color: "var(--t1)", fontWeight: 500 }}>No providers configured</div>
+                  <div style={{ fontSize: 12, color: "var(--t3)" }}>Add a provider to start chatting</div>
+                  <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={() => onSelectWorkspace("providers")}>
+                    Go to Providers
+                  </button>
+                </div>
+              ) : (
+                <ChatView actions={actions} state={state} />
+              )
+            )}
             {activeWorkspace === "runs"       && <TasksView authToken={state.authToken} session={state.session} />}
             {activeWorkspace === "providers"  && <ProvidersView actions={actions} state={state} />}
             {activeWorkspace === "admin" && state.session.isAdmin && <AdminView actions={actions} state={state} />}
@@ -322,9 +338,30 @@ function AuthenticatedShell({
         <span className="hecate-statusbar__sep">|</span>
         <span>{state.session.label}</span>
         <span className="hecate-statusbar__sep">|</span>
-        <span>{state.healthyProviders}/{state.providers.length} providers</span>
-        <span className="hecate-statusbar__sep">|</span>
-        <span>{state.models.length} models</span>
+        {/* "configured" = providers in the CP store (operator-added).
+            "models" is intersected with the configured set so the count
+            reflects models the operator can actually route to from the
+            chat picker — env-only models would inflate the number
+            without being selectable. Tenant sessions (no adminConfig)
+            see the unfiltered model list since the runtime is their
+            only source of truth. */}
+        {(() => {
+          const configured = state.adminConfig?.providers ?? null;
+          const configuredCount = configured?.length ?? 0;
+          const modelCount = configured
+            ? state.models.filter(m => {
+                const p = m.metadata?.provider;
+                return typeof p === "string" && configured.some(c => c.id === p);
+              }).length
+            : state.models.length;
+          return (
+            <>
+              <span>{configuredCount} configured</span>
+              <span className="hecate-statusbar__sep">|</span>
+              <span>{modelCount} models</span>
+            </>
+          );
+        })()}
       </div>
 
       {/* Toast notifications */}

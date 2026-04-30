@@ -238,9 +238,9 @@ describe("status bar version chip", () => {
 
     const statusbar = document.querySelector(".hecate-statusbar");
     expect(statusbar).not.toBeNull();
-    // Status bar still renders (brand, session, providers, models) but
-    // the version chip stays out — assert by counting the separators.
-    // Three "|" instead of four means no version chip squeezed in.
+    // Status bar renders brand · session · configured · models (3
+    // separators); the version chip stays out — that would bring it
+    // to 4. Assert by counting separators.
     const sepCount = statusbar!.querySelectorAll(".hecate-statusbar__sep").length;
     expect(sepCount).toBe(3);
   });

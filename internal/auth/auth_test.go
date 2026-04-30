@@ -37,9 +37,6 @@ func (f fakeStore) RotateAPIKey(context.Context, string, string) (controlplane.A
 func (f fakeStore) UpsertProvider(context.Context, controlplane.Provider, *controlplane.ProviderSecret) (controlplane.Provider, error) {
 	return controlplane.Provider{}, nil
 }
-func (f fakeStore) SetProviderEnabled(context.Context, string, bool) (controlplane.Provider, error) {
-	return controlplane.Provider{}, nil
-}
 func (f fakeStore) RotateProviderSecret(context.Context, string, controlplane.ProviderSecret) (controlplane.Provider, error) {
 	return controlplane.Provider{}, nil
 }

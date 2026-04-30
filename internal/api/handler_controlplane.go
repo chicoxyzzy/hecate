@@ -1,12 +1,25 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/hecate/agent-runtime/internal/config"
 	"github.com/hecate/agent-runtime/internal/controlplane"
 )
+
+// slugify converts a human name into a stable URL-safe ID.
+// "My Anthropic" → "my-anthropic", leading/trailing hyphens stripped.
+func slugify(name string) string {
+	s := strings.ToLower(name)
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	s = re.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	return s
+}
 
 func (h *Handler) HandleControlPlaneStatus(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorizeAdmin(r); !ok {
@@ -261,7 +274,22 @@ func (h *Handler) HandleControlPlaneDeleteAPIKey(w http.ResponseWriter, r *http.
 	})
 }
 
-func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r *http.Request) {
+// HandleControlPlaneUpdateProvider applies a partial update to a provider record.
+// Three fields are editable via PATCH, all optional:
+//   - base_url:    any provider — repoints model discovery at a new endpoint
+//   - name:        custom providers only (preset_id == "") — preset names
+//     are fixed because they're the join key against the
+//     preset catalog; renaming would desync brand color,
+//     default base URL, and docs link.
+//   - custom_name: any provider — operator-supplied disambiguator that
+//     appears alongside Name in the table. Used to tell two
+//     instances of the same preset apart ("Anthropic" + "Prod"
+//     vs "Anthropic" + "Dev"). Free-form; empty clears it.
+//
+// The handler fetches the existing record, overlays whichever fields are
+// present, and routes through Upsert so model discovery re-runs and the
+// runtime registry stays in sync.
+func (h *Handler) HandleControlPlaneUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireControlPlane(w, r)
 	if !ok {
 		return
@@ -273,19 +301,71 @@ func (h *Handler) HandleControlPlaneSetProviderEnabled(w http.ResponseWriter, r 
 
 	id := r.PathValue("id")
 	var req struct {
-		Enabled bool `json:"enabled"`
+		BaseURL    *string `json:"base_url,omitempty"`
+		Name       *string `json:"name,omitempty"`
+		CustomName *string `json:"custom_name,omitempty"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	provider, err := h.providerRuntime.SetEnabled(controlplane.WithActor(r.Context(), controlPlaneActor(principal, r)), id, req.Enabled)
+	if req.BaseURL == nil && req.Name == nil && req.CustomName == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "no fields to update (expected base_url, name, or custom_name)")
+		return
+	}
+
+	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
+
+	state, err := h.controlPlane.Snapshot(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+	var existing *controlplane.Provider
+	for i := range state.Providers {
+		if state.Providers[i].ID == id {
+			existing = &state.Providers[i]
+			break
+		}
+	}
+	if existing == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, fmt.Sprintf("provider %q not found", id))
+		return
+	}
+	updated := *existing
+	if req.BaseURL != nil {
+		trimmed := strings.TrimSpace(*req.BaseURL)
+		if trimmed == "" {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "base_url cannot be empty")
+			return
+		}
+		updated.BaseURL = trimmed
+	}
+	if req.Name != nil {
+		// Preset providers keep a fixed Name (it's the catalog join key).
+		// CustomName is the disambiguator they should reach for instead.
+		if existing.PresetID != "" {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "preset providers have a fixed name; use custom_name to add a disambiguating label")
+			return
+		}
+		trimmed := strings.TrimSpace(*req.Name)
+		if trimmed == "" {
+			WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "name cannot be empty")
+			return
+		}
+		updated.Name = trimmed
+	}
+	if req.CustomName != nil {
+		// CustomName is allowed on any provider, including presets, and
+		// can be cleared by passing an empty string.
+		updated.CustomName = strings.TrimSpace(*req.CustomName)
+	}
+	provider, err := h.providerRuntime.Upsert(ctx, updated, "")
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
 		return
 	}
-
-	state, _ := h.controlPlane.Snapshot(r.Context())
+	state, _ = h.controlPlane.Snapshot(r.Context())
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"object": "control_plane_provider",
 		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
@@ -335,6 +415,125 @@ func (h *Handler) HandleControlPlaneSetProviderAPIKey(w http.ResponseWriter, r *
 		"object": "control_plane_provider_api_key",
 		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
 	})
+}
+
+func (h *Handler) HandleControlPlaneCreateProvider(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+
+	var req struct {
+		Name       string `json:"name"`
+		PresetID   string `json:"preset_id"`
+		CustomName string `json:"custom_name"`
+		BaseURL    string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+		Kind       string `json:"kind"`
+		Protocol   string `json:"protocol"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	// ID is derived from name + custom_name so two instances of the same
+	// preset (Name="Anthropic" twice with different CustomName values)
+	// land at distinct ids without forcing the operator to type a unique
+	// Name. CustomName is empty for the typical single-instance case;
+	// the slug then degenerates to slugify(Name) and matches pre-custom_name
+	// records.
+	idSource := strings.TrimSpace(req.Name)
+	if cn := strings.TrimSpace(req.CustomName); cn != "" {
+		idSource = idSource + " " + cn
+	}
+	id := slugify(idSource)
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "provider name is required")
+		return
+	}
+
+	state, err := h.controlPlane.Snapshot(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, errCodeGatewayError, err.Error())
+		return
+	}
+
+	for _, p := range state.Providers {
+		if p.ID == id {
+			WriteError(w, http.StatusConflict, errCodeInvalidRequest, fmt.Sprintf("provider with id %q already exists", id))
+			return
+		}
+	}
+
+	if strings.TrimSpace(req.BaseURL) != "" {
+		for _, p := range state.Providers {
+			existingURL := strings.TrimSpace(p.BaseURL)
+			if existingURL == "" {
+				continue
+			}
+			if existingURL == strings.TrimSpace(req.BaseURL) {
+				name := p.Name
+				if name == "" {
+					name = p.ID
+				}
+				WriteError(w, http.StatusConflict, errCodeInvalidRequest, fmt.Sprintf("base URL already used by provider %q", name))
+				return
+			}
+		}
+	}
+
+	kind := req.Kind
+	if kind == "" {
+		kind = "cloud"
+	}
+	protocol := req.Protocol
+	if protocol == "" {
+		protocol = "openai"
+	}
+
+	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
+	provider, err := h.providerRuntime.Upsert(ctx, controlplane.Provider{
+		ID:         id,
+		Name:       req.Name,
+		PresetID:   req.PresetID,
+		CustomName: strings.TrimSpace(req.CustomName),
+		Kind:       kind,
+		Protocol:   protocol,
+		BaseURL:    req.BaseURL,
+		Enabled:    true,
+	}, req.APIKey)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+
+	state, _ = h.controlPlane.Snapshot(r.Context())
+	WriteJSON(w, http.StatusCreated, map[string]any{
+		"object": "control_plane_provider",
+		"data":   renderControlPlaneProvider(provider, state.ProviderSecrets),
+	})
+}
+
+func (h *Handler) HandleControlPlaneDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireControlPlane(w, r)
+	if !ok {
+		return
+	}
+	if h.providerRuntime == nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "dynamic provider runtime is not configured")
+		return
+	}
+	id := r.PathValue("id")
+	ctx := controlplane.WithActor(r.Context(), controlPlaneActor(principal, r))
+	if err := h.providerRuntime.Delete(ctx, id); err != nil {
+		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"object": "control_plane_provider", "id": id, "deleted": true})
 }
 
 func (h *Handler) HandleControlPlaneUpsertPolicyRule(w http.ResponseWriter, r *http.Request) {
@@ -512,10 +711,12 @@ func renderControlPlaneAuditEvent(event controlplane.AuditEvent) ControlPlaneAud
 	return record
 }
 
-// buildControlPlaneProviderList returns one record per built-in provider. The set is
-// fixed — providers cannot be added or removed. The CP store contributes overrides for
-// `Enabled` and credential information; everything else is sourced from the preset.
-// When two built-ins share a base URL, only one is reported as enabled.
+// buildControlPlaneProviderList returns one record per provider in the
+// control-plane store. Providers are explicit: the operator adds them via
+// POST /admin/control-plane/providers, picking from the preset catalog or
+// supplying a custom OpenAI-compatible endpoint. The list starts empty and
+// stays empty until the operator adds at least one. The preset catalog is
+// served separately at GET /v1/provider-presets.
 func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) []ControlPlaneProviderRecord {
 	envKeyByID := make(map[string]bool)
 	for _, pc := range cfg.Providers.OpenAICompatible {
@@ -523,111 +724,68 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 			envKeyByID[pc.Name] = true
 		}
 	}
-	cpByID := make(map[string]controlplane.Provider, len(state.Providers))
-	for _, p := range state.Providers {
-		cpByID[p.ID] = p
+
+	presetByID := make(map[string]config.BuiltInProvider)
+	for _, b := range config.BuiltInProviders() {
+		presetByID[b.ID] = b
 	}
 
-	builtIns := config.BuiltInProviders()
-
-	// Pre-compute the set of base URLs that are shared by 2+ built-ins. A
-	// provider in a conflict group with no CP record stays disabled by
-	// default — the operator must opt one in. Outside conflict groups,
-	// the legacy "default enabled" behavior holds (cloud presets light up
-	// once the operator pastes a key).
-	conflictURLs := make(map[string]int)
-	for _, b := range builtIns {
-		if b.BaseURL == "" {
-			continue
-		}
-		conflictURLs[b.BaseURL]++
-	}
-
-	records := make([]ControlPlaneProviderRecord, 0, len(builtIns))
-	for _, builtIn := range builtIns {
-		// Default Enabled depends on conflict state: shared base URLs default
-		// to off (operator opt-in), unique base URLs default to on (legacy).
-		defaultEnabled := conflictURLs[builtIn.BaseURL] < 2
+	records := make([]ControlPlaneProviderRecord, 0, len(state.Providers))
+	for _, cp := range state.Providers {
+		preset, hasPreset := presetByID[cp.ID]
 		record := ControlPlaneProviderRecord{
-			ID:           builtIn.ID,
-			Name:         builtIn.ID,
-			PresetID:     builtIn.ID,
-			Kind:         builtIn.Kind,
-			Protocol:     builtIn.Protocol,
-			BaseURL:      builtIn.BaseURL,
-			APIVersion:   builtIn.APIVersion,
-			DefaultModel: builtIn.DefaultModel,
-			Enabled:      defaultEnabled,
+			ID:           cp.ID,
+			Name:         cp.Name,
+			CustomName:   cp.CustomName,
+			Kind:         cp.Kind,
+			Protocol:     cp.Protocol,
+			BaseURL:      cp.BaseURL,
+			DefaultModel: cp.DefaultModel,
+			Enabled:      cp.Enabled,
 		}
-		if cp, ok := cpByID[builtIn.ID]; ok {
-			record.Enabled = cp.Enabled
-			if !cp.CreatedAt.IsZero() {
-				record.CreatedAt = cp.CreatedAt.UTC().Format(time.RFC3339)
+		if record.Name == "" {
+			record.Name = cp.ID
+		}
+		if hasPreset {
+			record.PresetID = preset.ID
+			if record.Kind == "" {
+				record.Kind = preset.Kind
 			}
-			if !cp.UpdatedAt.IsZero() {
-				record.UpdatedAt = cp.UpdatedAt.UTC().Format(time.RFC3339)
+			if record.Protocol == "" {
+				record.Protocol = preset.Protocol
 			}
-			for _, secret := range state.ProviderSecrets {
-				if secret.ProviderID == builtIn.ID {
-					record.CredentialConfigured = secret.APIKeyEncrypted != ""
-					record.CredentialSource = "vault"
-					record.CredentialPreview = secret.APIKeyPreview
-					break
-				}
+			if record.BaseURL == "" {
+				record.BaseURL = preset.BaseURL
+			}
+			if record.APIVersion == "" {
+				record.APIVersion = preset.APIVersion
+			}
+			if record.DefaultModel == "" {
+				record.DefaultModel = preset.DefaultModel
 			}
 		}
-		if !record.CredentialConfigured && envKeyByID[builtIn.ID] {
+		if !cp.CreatedAt.IsZero() {
+			record.CreatedAt = cp.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		if !cp.UpdatedAt.IsZero() {
+			record.UpdatedAt = cp.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		for _, secret := range state.ProviderSecrets {
+			if secret.ProviderID == cp.ID {
+				record.CredentialConfigured = secret.APIKeyEncrypted != ""
+				record.CredentialSource = "vault"
+				record.CredentialPreview = secret.APIKeyPreview
+				break
+			}
+		}
+		if !record.CredentialConfigured && envKeyByID[cp.ID] {
 			record.CredentialConfigured = true
 			record.CredentialSource = "env"
 		}
 		records = append(records, record)
 	}
 
-	resolveDefaultProviderConflicts(records)
 	return records
-}
-
-// resolveDefaultProviderConflicts mutates records in place: when a base URL is shared
-// between providers, at most one is left enabled. If no record in the group is
-// explicitly enabled, the entire group stays disabled — the operator must opt one in
-// rather than having the gateway pick a winner on their behalf. The previous behavior
-// (auto-enable the alphabetically-first provider in an unconfigured conflict group)
-// produced a confusing UX: toggling the auto-picked winner off "promoted" the next
-// peer to on, which read as the system enabling something the operator didn't ask for.
-//
-// Built-ins are already iterated in alphabetical order by `BuiltInProviders()`, so
-// the input slice is sorted; that determines the winner when multiple records are
-// explicitly enabled (a degraded state the backend also defends against).
-func resolveDefaultProviderConflicts(records []ControlPlaneProviderRecord) {
-	groupByURL := make(map[string][]int)
-	for i, r := range records {
-		if r.BaseURL == "" {
-			continue
-		}
-		groupByURL[r.BaseURL] = append(groupByURL[r.BaseURL], i)
-	}
-	for _, group := range groupByURL {
-		if len(group) < 2 {
-			continue
-		}
-		// Alphabetically-first enabled record wins (records are already sorted by ID).
-		// If nothing is enabled, the whole group stays off — operator must opt in.
-		winner := -1
-		for _, idx := range group {
-			if records[idx].Enabled {
-				winner = idx
-				break
-			}
-		}
-		if winner < 0 {
-			continue
-		}
-		for _, idx := range group {
-			if idx != winner {
-				records[idx].Enabled = false
-			}
-		}
-	}
 }
 
 func renderControlPlaneProvider(provider controlplane.Provider, secrets []controlplane.ProviderSecret) ControlPlaneProviderRecord {
@@ -636,6 +794,7 @@ func renderControlPlaneProvider(provider controlplane.Provider, secrets []contro
 		ID:              provider.ID,
 		Name:            provider.Name,
 		PresetID:        provider.PresetID,
+		CustomName:      provider.CustomName,
 		Kind:            provider.Kind,
 		Protocol:        provider.Protocol,
 		BaseURL:         provider.BaseURL,
