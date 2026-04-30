@@ -67,6 +67,11 @@ func main() {
 	// loud-log the admin token through the same structured logger that the
 	// rest of startup uses.
 	bootstrapPath := resolveBootstrapPath(cfg.Server.BootstrapFile, cfg.Server.DataDir)
+	// Capture whether the operator supplied GATEWAY_AUTH_TOKEN themselves
+	// before bootstrap.Resolve overwrites cfg.Server.AuthToken with the
+	// resolved value. The bootstrap-token surface only exposes tokens the
+	// gateway generated; operator-set tokens stay private even on loopback.
+	envSuppliedAuthToken := strings.TrimSpace(cfg.Server.AuthToken) != ""
 	boot, printAdminToken, err := bootstrap.Resolve(bootstrapPath, cfg.Server.ControlPlaneSecretKey, cfg.Server.AuthToken)
 	if err != nil {
 		slog.Error("bootstrap secrets init failed", slog.String("path", bootstrapPath), slog.Any("error", err))
@@ -267,6 +272,11 @@ func main() {
 	)
 
 	handler := api.NewHandler(cfg, logger, service, controlPlaneStore, taskStore, taskQueue, providerRuntime)
+	// Bootstrap-token handshake exposes the auto-generated admin token to
+	// loopback callers so the local UI can skip the manual paste. We seal
+	// it when the operator supplied GATEWAY_AUTH_TOKEN themselves —
+	// that's their secret to manage, not the gateway's to hand out.
+	handler.SetBootstrapTokenExposable(!envSuppliedAuthToken)
 	// Wire the cipher into the handler and its underlying runner so MCP
 	// server env values are encrypted at task-creation time and decrypted
 	// at subprocess spawn time. SetSecretCipher is a no-op when cipher

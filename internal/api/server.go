@@ -9,6 +9,7 @@ func NewServer(logger *slog.Logger, handler *Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.HandleHealth)
 	mux.HandleFunc("GET /v1/whoami", handler.HandleSession)
+	mux.HandleFunc("GET /v1/bootstrap-token", handler.HandleBootstrapToken)
 	mux.HandleFunc("GET /v1/provider-presets", handler.HandleProviderPresets)
 	mux.HandleFunc("GET /v1/tasks", handler.HandleTasks)
 	mux.HandleFunc("POST /v1/tasks", handler.HandleCreateTask)
