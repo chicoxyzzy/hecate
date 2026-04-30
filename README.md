@@ -10,13 +10,10 @@ Hecate is an open-source **AI gateway and agent-task runtime** for teams that wa
 
 It sits between AI clients and model providers. Existing OpenAI-compatible and Anthropic-compatible clients can point at Hecate, while operators get a place to manage providers, tenants, budgets, traces, cache behavior, and queued agent work.
 
-![Chats workspace talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
-
 ## Table Of Contents
 
 - [Why Hecate](#why-hecate)
 - [Quick Start](#quick-start)
-- [Connect a Client](#connect-a-client)
 - [Add Providers](#add-providers)
 - [Architecture](#architecture)
 - [Operator UI](#operator-ui)
@@ -81,13 +78,15 @@ The first-run UI guides provider setup and token entry:
 
 Hecate ships with a built-in catalog of cloud and local provider presets. The Providers tab starts empty — open it on first boot, click **Add provider**, pick a preset (or **Custom** for any OpenAI-compatible endpoint), and paste an API key (cloud) or endpoint URL (local).
 
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-emty.png)
-
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-setup.png)
+![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-empty.png)
 
 ![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-presets.png)
 
 ![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers.png)
+
+Congrats, now you can talk to robots.
+
+![Chats workspace talking to a local Ollama llama3.1:8b model with sessions sidebar and inline runtime metadata](docs/screenshots/chat.png)
 
 There are other ways to do it:
 
