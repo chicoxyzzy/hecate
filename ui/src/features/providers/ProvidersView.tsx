@@ -541,10 +541,24 @@ export function ProvidersView({ state, actions }: Props) {
     const showAPIKey = addForm.kind === "cloud";
     const currentBaseURL = resolvedBaseURL(
       addPreset?.id ?? "",
-      addPreset ? { id: addPreset.id, name: addPreset.name, kind: addPreset.kind, protocol: addPreset.protocol, base_url: addPreset.base_url, enabled: true, credential_configured: false } : undefined,
+      addPreset ? { id: addPreset.id, name: addPreset.name, kind: addPreset.kind, protocol: addPreset.protocol, base_url: addPreset.base_url, credential_configured: false } : undefined,
       state.providerPresets,
     );
     const saveDisabled = addLoading || !addForm.name.trim();
+
+    // The URL the new provider would actually serve traffic on. For local
+    // and "custom cloud" providers that's whatever the operator typed; for
+    // a cloud preset it's the preset's fixed base_url. We use this to
+    // surface a yellow inline warning when the URL collides with an
+    // existing provider — the backend will 409 either way, but a heads-up
+    // before submit saves a round-trip.
+    const effectiveBaseURL = (showURL ? addForm.base_url.trim() : currentBaseURL).trim();
+    const baseURLConflictWith = effectiveBaseURL
+      ? configuredProviders.find(p => {
+          const url = resolvedBaseURL(p.id, p, state.providerPresets);
+          return url && url === effectiveBaseURL;
+        })
+      : undefined;
 
     // First editable field gets autofocus on modal open. Custom → Name;
     // cloud preset → API Key (Name + URL are fixed); local preset → URL
@@ -614,6 +628,22 @@ export function ProvidersView({ state, actions }: Props) {
               style={{ fontFamily: "var(--font-mono)" }}
               autoFocus={focusURL}
             />
+            {baseURLConflictWith && (
+              <div
+                role="status"
+                style={{
+                  marginTop: 6,
+                  fontSize: 11,
+                  color: "var(--amber)",
+                  lineHeight: 1.4,
+                }}>
+                This URL is already used by{" "}
+                <span style={{ fontFamily: "var(--font-mono)" }}>
+                  {baseURLConflictWith.name || baseURLConflictWith.id}
+                </span>
+                . Backend will reject.
+              </div>
+            )}
           </div>
         )}
         {showAPIKey && (
@@ -876,7 +906,7 @@ export function ProvidersView({ state, actions }: Props) {
             )}
 
             {/* Diagnostics — only when there's something to show */}
-            {(selectedStatus?.last_error || selectedStatus?.error ||
+            {(selectedStatus?.last_error ||
               selectedStatus?.last_error_class || selectedStatus?.discovery_source ||
               selectedHealthCounters) && (
               <details>
@@ -884,9 +914,9 @@ export function ProvidersView({ state, actions }: Props) {
                   Diagnostics
                 </summary>
                 <div style={{ marginTop: 8, padding: 10, background: "var(--bg2)", borderRadius: "var(--radius-sm)" }}>
-                  {(selectedStatus?.last_error || selectedStatus?.error) && (
+                  {selectedStatus?.last_error && (
                     <div style={{ fontSize: 12, color: "var(--red)", lineHeight: 1.45, marginBottom: 6 }}>
-                      {selectedStatus.last_error || selectedStatus.error}
+                      {selectedStatus.last_error}
                     </div>
                   )}
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

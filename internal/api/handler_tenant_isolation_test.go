@@ -174,6 +174,31 @@ func TestChatSession_AdminCanReadAcrossTenants(t *testing.T) {
 	}
 }
 
+// TestTenantObservabilityEndpoints_AnyAuthenticatedReader pins the
+// contract for the alpha-7 tenant-readable observability endpoints. The
+// scoping work is deferred (no tenant/key column on the in-memory
+// tracer or BudgetHistoryEntry), but tenant bearers must reach these
+// paths instead of receiving 401 — otherwise the UI banner would have
+// to come back. The /admin/* counterparts stay admin-only.
+func TestTenantObservabilityEndpoints_AnyAuthenticatedReader(t *testing.T) {
+	t.Parallel()
+	s := newTwoTenantSetup(t)
+
+	tenantReadable := []string{
+		"/v1/traces",
+		"/v1/requests",
+		"/v1/runtime/stats",
+	}
+	for _, path := range tenantReadable {
+		t.Run("tenant "+path, func(t *testing.T) {
+			s.teamA.mustRequestStatus(http.StatusOK, http.MethodGet, path, "")
+		})
+		t.Run("admin "+path, func(t *testing.T) {
+			s.admin.mustRequestStatus(http.StatusOK, http.MethodGet, path, "")
+		})
+	}
+}
+
 // TestAdminEndpoints_TenantBearerReturnsUnauthorized pins the contract
 // that admin-only endpoints reject tenant bearers — preventing a tenant
 // key from reading global budget, request ledger, or admin retention

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -20,7 +20,6 @@ function makeConfigured(id: string, overrides: Partial<ConfiguredProviderRecord>
     kind: preset?.kind ?? "cloud",
     protocol: preset?.protocol ?? "openai",
     base_url: preset?.base_url ?? "",
-    enabled: true,
     credential_configured: false,
     ...overrides,
   };
@@ -81,7 +80,7 @@ describe("ProvidersView delete", () => {
       providerPresets: presets,
       adminConfig: {
         ...emptyAdminConfig(),
-        providers: [makeConfigured("ollama", { enabled: true })],
+        providers: [makeConfigured("ollama")],
       },
       providers: [makeStatus("ollama")],
     });
@@ -365,13 +364,52 @@ describe("ProvidersView table renders", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
+  it("warns inline when the typed Endpoint URL collides with an existing provider", async () => {
+    const state = createRuntimeConsoleFixture({
+      session: adminSession,
+      providerPresets: presets,
+      adminConfig: {
+        ...emptyAdminConfig(),
+        providers: [makeConfigured("ollama", { base_url: "http://127.0.0.1:11434/v1" })],
+      },
+      providers: [makeStatus("ollama")],
+    });
+
+    render(<ProvidersView state={state} actions={createRuntimeConsoleActions()} />);
+
+    const user = userEvent.setup();
+    // Open the Add modal, then pick "Custom" so the Endpoint URL field is editable.
+    const addBtn = screen.getAllByText("Add provider").pop()!; // header button
+    await user.click(addBtn);
+    // Switch to the Local tab so the Custom flow lands on a kind whose
+    // Endpoint URL field is shown by default.
+    await user.click(screen.getByText("Local"));
+    await user.click(screen.getByText("Custom"));
+
+    // FormStep is redefined on every parent render, so per-keystroke
+    // remounts make user.type drop characters. Paste-style fireEvent
+    // sets the value in one shot, which is the realistic interaction
+    // anyway (operators paste their endpoint URL).
+    const urlInput = () => screen.getByPlaceholderText("http://localhost:11434/v1") as HTMLInputElement;
+    fireEvent.change(urlInput(), { target: { value: "http://127.0.0.1:11434/v1" } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/already used by/)).toBeTruthy();
+    });
+    expect(screen.getByText(/Backend will reject\./)).toBeTruthy();
+
+    // No collision: warning disappears.
+    fireEvent.change(urlInput(), { target: { value: "http://127.0.0.1:9999/v1" } });
+    expect(screen.queryByText(/already used by/)).toBeNull();
+  });
+
   it("shows provider health diagnostics and last errors", async () => {
     const state = createRuntimeConsoleFixture({
       session: adminSession,
       providerPresets: presets,
       adminConfig: {
         ...emptyAdminConfig(),
-        providers: [makeConfigured("ollama", { enabled: true })],
+        providers: [makeConfigured("ollama")],
       },
       providers: [
         makeStatus("ollama", {

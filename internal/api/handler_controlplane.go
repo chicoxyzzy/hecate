@@ -741,7 +741,6 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 			Protocol:     cp.Protocol,
 			BaseURL:      cp.BaseURL,
 			DefaultModel: cp.DefaultModel,
-			Enabled:      cp.Enabled,
 		}
 		if record.Name == "" {
 			record.Name = cp.ID
@@ -764,17 +763,10 @@ func buildControlPlaneProviderList(cfg config.Config, state controlplane.State) 
 				record.DefaultModel = preset.DefaultModel
 			}
 		}
-		if !cp.CreatedAt.IsZero() {
-			record.CreatedAt = cp.CreatedAt.UTC().Format(time.RFC3339)
-		}
-		if !cp.UpdatedAt.IsZero() {
-			record.UpdatedAt = cp.UpdatedAt.UTC().Format(time.RFC3339)
-		}
 		for _, secret := range state.ProviderSecrets {
 			if secret.ProviderID == cp.ID {
 				record.CredentialConfigured = secret.APIKeyEncrypted != ""
 				record.CredentialSource = "vault"
-				record.CredentialPreview = secret.APIKeyPreview
 				break
 			}
 		}
@@ -802,21 +794,13 @@ func renderControlPlaneProvider(provider controlplane.Provider, secrets []contro
 		DefaultModel:    provider.DefaultModel,
 		ExplicitFields:  append([]string(nil), provider.ExplicitFields...),
 		InheritedFields: inheritedFields,
-		Enabled:         provider.Enabled,
 	}
 	for _, secret := range secrets {
 		if secret.ProviderID == provider.ID {
 			record.CredentialConfigured = secret.APIKeyEncrypted != ""
 			record.CredentialSource = "vault"
-			record.CredentialPreview = secret.APIKeyPreview
 			break
 		}
-	}
-	if !provider.CreatedAt.IsZero() {
-		record.CreatedAt = provider.CreatedAt.UTC().Format(time.RFC3339)
-	}
-	if !provider.UpdatedAt.IsZero() {
-		record.UpdatedAt = provider.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 	return record
 }

@@ -435,7 +435,6 @@ type ProviderStatusResponseItem struct {
 	Timeouts            int64    `json:"timeouts,omitempty"`
 	ServerErrors        int64    `json:"server_errors,omitempty"`
 	RateLimits          int64    `json:"rate_limits,omitempty"`
-	Error               string   `json:"error,omitempty"`
 }
 
 type ProviderHealthHistoryResponseItem struct {
@@ -757,12 +756,8 @@ type ControlPlaneProviderRecord struct {
 	DefaultModel         string   `json:"default_model,omitempty"`
 	ExplicitFields       []string `json:"explicit_fields,omitempty"`
 	InheritedFields      []string `json:"inherited_fields,omitempty"`
-	Enabled              bool     `json:"enabled"`
 	CredentialConfigured bool     `json:"credential_configured"`
 	CredentialSource     string   `json:"credential_source,omitempty"`
-	CredentialPreview    string   `json:"credential_preview,omitempty"`
-	CreatedAt            string   `json:"created_at,omitempty"`
-	UpdatedAt            string   `json:"updated_at,omitempty"`
 }
 
 type ControlPlanePolicyRuleRecord struct {

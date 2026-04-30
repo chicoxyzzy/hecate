@@ -178,8 +178,9 @@ export async function getProviders(authToken?: string): Promise<ProviderStatusRe
   return fetchJSON<ProviderStatusResponse>("/admin/providers", { authToken });
 }
 
-export async function getRuntimeStats(authToken?: string): Promise<RuntimeStatsResponse> {
-  return fetchJSON<RuntimeStatsResponse>("/admin/runtime/stats", { authToken });
+export async function getRuntimeStats(authToken?: string, isAdmin = false): Promise<RuntimeStatsResponse> {
+  const path = isAdmin ? "/admin/runtime/stats" : "/v1/runtime/stats";
+  return fetchJSON<RuntimeStatsResponse>(path, { authToken });
 }
 
 export async function getMCPCacheStats(authToken?: string): Promise<MCPCacheStatsResponse> {
@@ -194,8 +195,9 @@ export async function getTrace(requestID: string, authToken?: string): Promise<T
   return fetchJSON<TraceResponse>(`/v1/traces?request_id=${encodeURIComponent(requestID)}`, { authToken });
 }
 
-export async function getRecentTraces(authToken?: string, limit = 50): Promise<TraceListResponse> {
-  return fetchJSON<TraceListResponse>(`/admin/traces?limit=${encodeURIComponent(String(limit))}`, { authToken });
+export async function getRecentTraces(authToken?: string, limit = 50, isAdmin = false): Promise<TraceListResponse> {
+  const base = isAdmin ? "/admin/traces" : "/v1/traces";
+  return fetchJSON<TraceListResponse>(`${base}?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
 export async function getBudget(query = "", authToken?: string): Promise<BudgetStatusResponse> {
@@ -228,8 +230,9 @@ export async function updateChatSession(id: string, title: string, authToken?: s
   return fetchJSON<ChatSessionResponse>(`/v1/chat/sessions/${encodeURIComponent(id)}`, { authToken, method: "PATCH", body: { title } });
 }
 
-export async function getRequestLedger(authToken?: string, limit = 20): Promise<RequestLedgerResponse> {
-  return fetchJSON<RequestLedgerResponse>(`/admin/requests?limit=${encodeURIComponent(String(limit))}`, { authToken });
+export async function getRequestLedger(authToken?: string, limit = 20, isAdmin = false): Promise<RequestLedgerResponse> {
+  const base = isAdmin ? "/admin/requests" : "/v1/requests";
+  return fetchJSON<RequestLedgerResponse>(`${base}?limit=${encodeURIComponent(String(limit))}`, { authToken });
 }
 
 export async function resetBudget(payload: Record<string, unknown>, authToken?: string): Promise<BudgetStatusResponse> {

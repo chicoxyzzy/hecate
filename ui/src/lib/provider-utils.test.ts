@@ -13,7 +13,7 @@ const presets: ProviderPresetRecord[] = [
 function makeCP(name: string, base_url?: string): ConfiguredProviderRecord {
   return {
     id: name, name, kind: "cloud", protocol: "openai",
-    base_url: base_url ?? "", enabled: true, credential_configured: true,
+    base_url: base_url ?? "", credential_configured: true,
   };
 }
 

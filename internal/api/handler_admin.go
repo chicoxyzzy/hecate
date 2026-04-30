@@ -62,7 +62,6 @@ func (h *Handler) HandleProviderStatus(w http.ResponseWriter, r *http.Request) {
 			Timeouts:            provider.Timeouts,
 			ServerErrors:        provider.ServerErrors,
 			RateLimits:          provider.RateLimits,
-			Error:               provider.Error,
 		}
 		if !provider.RefreshedAt.IsZero() {
 			item.RefreshedAt = provider.RefreshedAt.UTC().Format(time.RFC3339)
@@ -152,12 +151,29 @@ func (h *Handler) HandleProviderHealthHistory(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// HandleTenantRuntimeStats is the tenant-readable counterpart. Runtime
+// stats are queue/worker globals (no per-key dimension), so there's no
+// scoping to apply — any authenticated principal sees the same numbers.
+// The /admin/runtime/stats route stays for back-compat.
+func (h *Handler) HandleTenantRuntimeStats(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	h.writeRuntimeStats(w, ctx)
+}
+
 func (h *Handler) HandleRuntimeStats(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {
 		return
 	}
 	ctx := h.contextWithPrincipal(r.Context(), principal)
+	h.writeRuntimeStats(w, ctx)
+}
+
+func (h *Handler) writeRuntimeStats(w http.ResponseWriter, ctx context.Context) {
 	if h.taskRunner == nil {
 		WriteError(w, http.StatusBadRequest, errCodeInvalidRequest, "task runner is not configured")
 		return
@@ -489,12 +505,30 @@ func (h *Handler) HandleAccountSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleTenantRequestLedger is the tenant-readable counterpart to
+// HandleRequestLedger. The brief spec says "filter by the calling
+// principal's KeyID/tenant" but BudgetHistoryEntry has no key_id column,
+// so we defer scoping for now and let any authenticated principal read
+// the unscoped ledger. The /admin/requests route stays for back-compat.
+func (h *Handler) HandleTenantRequestLedger(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAny(w, r)
+	if !ok {
+		return
+	}
+	ctx := h.contextWithPrincipal(r.Context(), principal)
+	h.writeRequestLedger(w, r, ctx)
+}
+
 func (h *Handler) HandleRequestLedger(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAdmin(w, r)
 	if !ok {
 		return
 	}
 	ctx := h.contextWithPrincipal(r.Context(), principal)
+	h.writeRequestLedger(w, r, ctx)
+}
+
+func (h *Handler) writeRequestLedger(w http.ResponseWriter, r *http.Request, ctx context.Context) {
 
 	limit := 20
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {

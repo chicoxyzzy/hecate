@@ -133,7 +133,6 @@ export type ProviderRecord = {
   timeouts?: number;
   server_errors?: number;
   rate_limits?: number;
-  error?: string;
 };
 
 export type ProviderStatusResponse = {
@@ -409,12 +408,8 @@ export type ConfiguredProviderRecord = {
   default_model?: string;
   explicit_fields?: string[];
   inherited_fields?: string[];
-  enabled: boolean;
   credential_configured: boolean;
   credential_source?: "env" | "vault";
-  credential_preview?: string;
-  created_at?: string;
-  updated_at?: string;
 };
 
 export type ConfiguredPolicyRuleRecord = {

@@ -171,12 +171,13 @@ export function ObservabilityView({ state, onNavigate }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const loadStats = useCallback(async () => {
-    if (!state.session.isAdmin) return;
     try {
-      const res = await getRuntimeStats(state.authToken);
+      const res = await getRuntimeStats(state.authToken, state.session.isAdmin);
       setRuntimeStats(res.data);
     } catch { /* silently ignore */ }
-    // MCP cache stats are best-effort and orthogonal to runtime stats.
+    // MCP cache stats are admin-only (operator visibility into a shared
+    // resource that has no tenant dimension); silently skip for tenants.
+    if (!state.session.isAdmin) return;
     try {
       const res = await getMCPCacheStats(state.authToken);
       setMCPCacheStats(res.data);
@@ -184,9 +185,8 @@ export function ObservabilityView({ state, onNavigate }: Props) {
   }, [state.authToken, state.session.isAdmin]);
 
   const loadTraces = useCallback(async () => {
-    if (!state.session.isAdmin) return;
     try {
-      const res = await getRecentTraces(state.authToken, 50);
+      const res = await getRecentTraces(state.authToken, 50, state.session.isAdmin);
       setTraces(res.data ?? []);
     } catch { /* silently ignore */ }
   }, [state.authToken, state.session.isAdmin]);
@@ -373,27 +373,6 @@ export function ObservabilityView({ state, onNavigate }: Props) {
             </span>
           </div>
         </div>
-
-        {/* Tenant fallthrough notice. The /admin/runtime/stats and
-            /admin/traces endpoints are admin-only in this build, so
-            tenant sessions see an empty page. We render a banner
-            instead of leaving the page silently blank — tenant-scoped
-            observability is on the roadmap but requires backend work
-            (per-key trace/stat scoping) that's out of this pass. */}
-        {!state.session.isAdmin && (
-          <div style={{
-            padding: "10px 12px",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--bg2)",
-            fontSize: 12,
-            color: "var(--t2)",
-            marginBottom: 16,
-            lineHeight: 1.5,
-          }}>
-            Observability is admin-only in this build. Per-tenant traces and stats are on the roadmap.
-          </div>
-        )}
 
         {/* Stat strip */}
         {(stats || mcpCacheStats) && (

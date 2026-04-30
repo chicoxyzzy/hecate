@@ -870,7 +870,7 @@ func TestProviderStatusReturnsHealthAndDiscoveryFreshness(t *testing.T) {
 			}
 			foundHealthy = true
 		}
-		if item.Name == "ollama" && !item.Healthy && item.Status == "degraded" && item.Error != "" && item.LastError != "" {
+		if item.Name == "ollama" && !item.Healthy && item.Status == "degraded" && item.LastError != "" {
 			if item.CredentialState != "not_required" {
 				t.Fatalf("ollama credential_state = %q, want not_required", item.CredentialState)
 			}

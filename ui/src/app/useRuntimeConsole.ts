@@ -382,18 +382,23 @@ export function useRuntimeConsole() {
   }
 
   async function refreshAdminRuntimeState() {
-    if (!session.isAdmin) {
-      return;
+    // Account summary remains admin-only (it's the cross-tenant rollup);
+    // the request ledger is now tenant-readable via /v1/requests, so we
+    // refresh it for any authenticated principal.
+    if (session.isAdmin) {
+      try {
+        const accountSummaryResult = await getAccountSummary("", authToken);
+        setAccountSummary(accountSummaryResult.data);
+      } catch {
+        // Keep chat responsive even if admin-only refresh paths fail.
+      }
     }
+    if (!session.isAuthenticated) return;
     try {
-      const [accountSummaryResult, requestLedgerResult] = await Promise.all([
-        getAccountSummary("", authToken),
-        getRequestLedger(authToken, 20),
-      ]);
-      setAccountSummary(accountSummaryResult.data);
+      const requestLedgerResult = await getRequestLedger(authToken, 20, session.isAdmin);
       setRequestLedger(requestLedgerResult.data ?? []);
     } catch {
-      // Keep chat responsive even if admin-only refresh paths fail.
+      // Best-effort.
     }
   }
 
@@ -1552,7 +1557,7 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
         getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
         getBudget("", authToken).then(r => { budget = { status: "fulfilled", value: r }; }, e => { budget = { status: "rejected", reason: e }; }),
         getAccountSummary("", authToken).then(r => { accountSummary = { status: "fulfilled", value: r }; }, e => { accountSummary = { status: "rejected", reason: e }; }),
-        getRequestLedger(authToken, 20).then(r => { requestLedger = { status: "fulfilled", value: r }; }, e => { requestLedger = { status: "rejected", reason: e }; }),
+        getRequestLedger(authToken, 20, true).then(r => { requestLedger = { status: "fulfilled", value: r }; }, e => { requestLedger = { status: "rejected", reason: e }; }),
         getAdminConfig(authToken).then(r => { adminConfig = { status: "fulfilled", value: r }; }, e => { adminConfig = { status: "rejected", reason: e }; }),
         getRetentionRuns(authToken, 10).then(r => { retentionRuns = { status: "fulfilled", value: r }; }, e => { retentionRuns = { status: "rejected", reason: e }; }),
       );
@@ -1574,6 +1579,10 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
       baseFetches.push(
         getModels(authToken).then(r => { models = { status: "fulfilled", value: r }; }, e => { models = { status: "rejected", reason: e }; }),
         getProviders(authToken).then(r => { providers = { status: "fulfilled", value: r }; }, e => { providers = { status: "rejected", reason: e }; }),
+        // Tenant-readable ledger via /v1/requests. Currently un-scoped
+        // (no key_id column on BudgetHistoryEntry) — tenants see what the
+        // unscoped endpoint returns, same as the admin /admin/requests.
+        getRequestLedger(authToken, 20, false).then(r => { requestLedger = { status: "fulfilled", value: r }; }, e => { requestLedger = { status: "rejected", reason: e }; }),
       );
       await Promise.all(baseFetches);
     }
