@@ -66,6 +66,19 @@ override before tagging.
   `ui/dist/` entry in `.gitignore` does **not** cover repo-root `dist/`.
 - `goreleaser` itself is on PATH (`go install github.com/goreleaser/goreleaser/v2@latest`).
 
+## Bump pinned version references
+
+The README's Quick Start and Binary install sections pin the alpha tag in
+copy-pasted commands. Update them to the version you're about to cut so a
+new operator landing on the README pulls the right image / tarball:
+
+- [`README.md`](../README.md) — `docker run … ghcr.io/chicoxyzzy/hecate:<old>` → `<new>`.
+- [`docs/deployment.md`](deployment.md) — image-pinning example, tarball URLs,
+  and the "Available tarballs for `vX.Y.Z`" list.
+
+This is a docs-only sweep; commit it on the release tag's branch alongside
+the release-notes draft, before tagging.
+
 ## Tag and Push
 
 After the snapshot dry-run passes:
@@ -121,5 +134,5 @@ SLA. Keep these expectations visible:
 - The gateway/provider path is more mature than the task runtime.
 - `sandboxd` is a controlled execution boundary, not hardened OS isolation.
 - Multi-node deployments are not the primary tested path yet.
-- Custom provider lifecycle is intentionally limited to built-in presets and
-  persisted control-plane edits.
+- Provider lifecycle covers preset and Custom OpenAI-compatible adds, plus
+  persisted control-plane edits; broader provider workflows are still evolving.

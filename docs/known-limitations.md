@@ -13,13 +13,14 @@ operators should not assume yet.
 
 ## Provider Lifecycle
 
-- Built-in provider presets are the supported path today.
-- Credentials, enable/disable state, base URLs, defaults, and pricebook entries
-  are managed through the persisted control plane.
-- Full custom provider create/delete is not a first-class alpha workflow.
+- Operators add providers explicitly from the built-in preset catalog (or the
+  Custom OpenAI-compatible flow); none are auto-added.
+- Credentials, base URLs, defaults, and pricebook entries are managed through
+  the persisted control plane. Taking a provider out of rotation is done by
+  deleting it — there is no enable/disable toggle.
 - Custom clients are supported separately: external callers can use Hecate's
   OpenAI-compatible or Anthropic-compatible endpoints without requiring a custom
-  provider.
+  provider record.
 - Provider model discovery depends on each upstream's OpenAI-compatible or
   Anthropic-compatible catalog behavior; local runtimes can differ.
 

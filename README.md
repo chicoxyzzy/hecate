@@ -40,7 +40,7 @@ The fastest way is the published image — no clone required:
 
 ```bash
 docker run --rm -p 8765:8765 -v hecate-data:/data \
-  ghcr.io/chicoxyzzy/hecate:0.1.0-alpha.1
+  ghcr.io/chicoxyzzy/hecate:0.1.0-alpha.6
 ```
 
 Open `http://127.0.0.1:8765`, paste the generated admin bearer token from the container logs, and connect your first provider in the UI.
@@ -76,13 +76,13 @@ The first-run UI guides provider setup and token entry:
 
 ## Add Providers
 
-Hecate ships with a built-in catalog of cloud and local provider presets. The Providers tab starts empty — open it on first boot, click **Add provider**, pick a preset (or **Custom** for any OpenAI-compatible endpoint), and paste an API key (cloud) or endpoint URL (local).
+Hecate ships with a preset catalog of cloud and local providers. The Providers tab starts empty until you add one from the catalog (or define a custom OpenAI-compatible endpoint). Open it on first boot, click **Add provider**, pick a preset (or **Custom**), and paste an API key (cloud) or endpoint URL (local).
 
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-empty.png)
+![Empty Providers tab on first boot — Add provider CTA](docs/screenshots/providers-empty.png)
 
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers-presets.png)
+![Add provider modal on the Cloud tab — preset catalog](docs/screenshots/providers-presets.png)
 
-![Provider setup panel — select a preset, paste credentials, and save the provider key](docs/screenshots/providers.png)
+![Providers table populated with three providers — Health, Endpoint, Credentials, Models](docs/screenshots/providers.png)
 
 Congrats, now you can talk to robots.
 
@@ -92,7 +92,7 @@ There are other ways to do it:
 
 | Method | When |
 |---|---|
-| **Environment variables** | First-run bootstrap or fleet automation. Set `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, `PROVIDER_<NAME>_DEFAULT_MODEL` in `.env`. Env-seeded providers are routable but not shown in the Providers tab — add them explicitly there if you want to edit credentials from the UI. |
+| **Environment variables** | First-run bootstrap or fleet automation. Setting `PROVIDER_<NAME>_API_KEY`, `PROVIDER_<NAME>_BASE_URL`, `PROVIDER_<NAME>_DEFAULT_MODEL` in `.env` is equivalent to adding the provider via the UI on first boot — useful when you want config-as-code. Env-seeded providers are routable but don't appear in the Providers tab; add them explicitly there if you want to edit credentials from the UI. |
 | **Control-plane API** | Programmatic management. `POST /admin/control-plane/providers`, `DELETE /admin/control-plane/providers/{id}`, `PUT /admin/control-plane/providers/{id}/api-key`, and `PATCH /admin/control-plane/providers/{id}` mirror every UI action. |
 
 **Cloud presets** (need an API key): `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `deepseek`, `together_ai`, `xai`.
@@ -159,7 +159,7 @@ The embedded UI is a runtime console for operators.
 
 ![API keys tab — scoped keys for clients and agents](docs/screenshots/admin-keys.png)
 
-![Integrations — easy setup for Codex, Claude Code, Cursor, etc.](docs/screenshots/admin-keys.png)
+![Integrations — easy setup for Codex, Claude Code, Cursor, etc.](docs/screenshots/admin-integrations.png)
 
 </details>
 

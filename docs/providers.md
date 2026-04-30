@@ -4,7 +4,7 @@ Hecate uses a vendor-neutral provider layer at the runtime boundary. It treats O
 
 > Contributing here? Start at [`AGENTS.md`](../AGENTS.md) for the codebase map and runtime invariants; provider-package depth (the seven-step "add a wire field" chain, the api↔providers parallel-struct rule, capability cache seeding, streaming gotchas) lives in [`ai/skills/providers/SKILL.md`](../ai/skills/providers/SKILL.md).
 
-![Providers tab — every preset card with health, model count, and configured-credentials state](screenshots/providers.png)
+![Providers tab — populated table with health, endpoint, credentials, and models columns](screenshots/providers.png)
 
 ## Providers vs. clients
 
@@ -27,7 +27,7 @@ A provider you add is immediately routable. There is no separate enable/disable 
 
 ### Multiple instances
 
-The same preset can be added more than once as long as the names slugify to different IDs ("Anthropic" → `anthropic`, "Anthropic-EU" → `anthropic-eu`). Two providers may not share the same `base_url`; the second add is rejected with HTTP 409 and the existing provider's name in the error message.
+The same preset can be added more than once by setting a `custom_name` disambiguator. The provider ID is derived from `slugify(name + custom_name)`, so "Anthropic" plus `custom_name=EU` slugs to `anthropic-eu` and coexists with the plain `anthropic` instance. Two providers may not share the same `base_url`; the second add is rejected with HTTP 409 and the existing provider's name in the error message.
 
 ### Editing a provider
 
@@ -86,9 +86,9 @@ PROVIDER_OPENAI_DEFAULT_MODEL=gpt-4o-mini
 
 Every UI action maps to a control-plane endpoint:
 
-- `POST /admin/control-plane/providers` — add a provider. Body `{name, kind, protocol, base_url?, api_key?, preset_id?}`.
+- `POST /admin/control-plane/providers` — add a provider. Body `{name, kind, protocol, base_url?, api_key?, custom_name?, preset_id?}`.
 - `DELETE /admin/control-plane/providers/{id}` — remove it.
-- `PATCH /admin/control-plane/providers/{id}` — partial update; today only `base_url` is supported.
+- `PATCH /admin/control-plane/providers/{id}` — partial update; accepts `base_url`, `name`, and `custom_name`.
 - `PUT /admin/control-plane/providers/{id}/api-key` — set the API key (empty `key` clears it).
 
 The full surface lives in [`internal/api/handler_controlplane.go`](../internal/api/handler_controlplane.go). Useful for terraforming a fleet of gateways from a single config source of truth.
