@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildRequestOptions, chatCompletions, deletePolicyRule, getBudget, getSession, getTrace, setProviderAPIKey, setProviderBaseURL, upsertPolicyRule, type ApiError } from "./api";
+import { buildRequestOptions, chatCompletions, deletePolicyRule, getBootstrapToken, getBudget, getSession, getTrace, setProviderAPIKey, setProviderBaseURL, upsertPolicyRule, type ApiError } from "./api";
 
 describe("api client", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -65,6 +65,41 @@ describe("api client", () => {
     );
     expect(result.data.tenant).toBe("team-a");
     expect(result.data.key_id).toBe("team-a-dev");
+  });
+
+  describe("getBootstrapToken", () => {
+    it("returns the trimmed token on a 200 response", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ token: "  loopback-secret  " }));
+
+      const result = await getBootstrapToken();
+
+      expect(fetchMock).toHaveBeenCalledWith("/v1/bootstrap-token", expect.objectContaining({ method: "GET" }));
+      expect(result).toBe("loopback-secret");
+    });
+
+    it("returns null on a 403 (non-loopback / cross-origin / disabled)", async () => {
+      fetchMock.mockResolvedValue(new Response("forbidden", { status: 403 }));
+
+      expect(await getBootstrapToken()).toBeNull();
+    });
+
+    it("returns null on a 404 (older gateway without the endpoint)", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+
+      expect(await getBootstrapToken()).toBeNull();
+    });
+
+    it("returns null when the body has an empty token", async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ token: "" }));
+
+      expect(await getBootstrapToken()).toBeNull();
+    });
+
+    it("returns null on a network error and never throws", async () => {
+      fetchMock.mockRejectedValue(new Error("network down"));
+
+      expect(await getBootstrapToken()).toBeNull();
+    });
   });
 
   it("returns chat payload plus runtime headers", async () => {

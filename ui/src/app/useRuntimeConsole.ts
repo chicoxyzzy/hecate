@@ -14,6 +14,7 @@ import {
   deletePolicyRule as deletePolicyRuleRequest,
   deleteTenant as deleteTenantRequest,
   getAccountSummary,
+  getBootstrapToken,
   getBudget,
   getChatSession,
   getChatSessions,
@@ -145,6 +146,14 @@ export function useRuntimeConsole() {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem("hecate.authToken") ?? "";
   });
+  // bootstrapAttempted gates the dashboard load + TokenGate render
+  // until we've had a chance to ask the gateway for a loopback
+  // bootstrap token. When a token is already in localStorage we treat
+  // the bootstrap step as already done and skip the network call.
+  const [bootstrapAttempted, setBootstrapAttempted] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return (window.localStorage.getItem("hecate.authToken") ?? "") !== "";
+  });
   const [sessionInfo, setSessionInfo] = useState<SessionResponse["data"] | null>(null);
   const [adminConfigError, setAdminConfigError] = useState("");
   const [notice, setNotice] = useState<NoticeState | null>(null);
@@ -224,18 +233,43 @@ export function useRuntimeConsole() {
     window.localStorage.setItem("hecate.systemPrompt", systemPrompt);
   }, [systemPrompt]);
 
+  // One-shot bootstrap probe: when no bearer is in localStorage, ask
+  // the gateway for a loopback bootstrap token before falling through
+  // to TokenGate. Single-user installs running on the same host as the
+  // browser get a zero-config experience this way; everything else
+  // (remote browsers, published images, cross-origin) is fenced
+  // server-side and falls through to manual paste.
   useEffect(() => {
-    // TokenGate renders when authToken is empty; firing the dashboard
-    // anyway would 401-spam the eight admin/auth-required endpoints in
-    // the console for no benefit. Flip loading to false since there's
-    // nothing to load — anything observing `state.loading` (TokenGate's
-    // gate, the AuthLoadingShell splash) needs an authoritative answer.
-    if (!authToken) {
-      setLoading(false);
+    if (bootstrapAttempted) return;
+    let cancelled = false;
+    void (async () => {
+      const token = await getBootstrapToken();
+      if (cancelled) return;
+      if (token) {
+        setAuthToken(token);
+      }
+      setBootstrapAttempted(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapAttempted]);
+
+  useEffect(() => {
+    // Wait until the bootstrap probe has resolved one way or the
+    // other before deciding what to do — racing the probe risks
+    // flashing TokenGate for a single frame on a loopback host that's
+    // about to hand us a token.
+    if (!bootstrapAttempted) {
       return;
     }
+    // Even with no bearer we still load the dashboard once so whoami
+    // can tell us whether the gateway runs in auth-disabled mode. The
+    // load helper short-circuits per-endpoint based on the resolved
+    // role, so an enabled-auth + empty-token combination still avoids
+    // 401-spamming admin endpoints.
     void loadDashboard();
-  }, [authToken]);
+  }, [authToken, bootstrapAttempted]);
 
   useEffect(() => {
     window.localStorage.setItem("hecate.authToken", authToken);
@@ -1141,6 +1175,7 @@ export function useRuntimeConsole() {
       apiKeyFormSecret,
       apiKeyFormTenant,
       authToken,
+      bootstrapAttempted,
       budget,
       accountSummary,
       requestLedger,
@@ -1535,7 +1570,10 @@ async function loadDashboardResults(authToken: string): Promise<DashboardResults
   let adminConfig: PromiseSettledResult<ConfiguredStateResponse> = skipped();
   let retentionRuns: PromiseSettledResult<{ object: string; data: RetentionRunData[] }> = skipped();
 
-  if (!invalidToken && isAuthenticated) {
+  // auth_disabled mode reports authenticated:false but still wants
+  // the full dashboard load — treat it as authenticated for gating.
+  const authDisabled = sessionData?.source === "auth_disabled";
+  if (!invalidToken && (isAuthenticated || authDisabled)) {
     // Common-to-all-roles: preset catalog + chat sessions + provider presets
     // — these are static-ish reference data that doesn't probe upstream
     // providers, so they're cheap and always fetched.

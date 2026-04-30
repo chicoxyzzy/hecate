@@ -287,3 +287,86 @@ describe("status bar version chip", () => {
   });
 });
 
+// Bootstrap probe + auth-disabled escape hatches. ConsoleShell holds
+// back TokenGate while the loopback bootstrap probe is in flight, and
+// skips the gate entirely once whoami reports auth_disabled.
+describe("ConsoleShell bootstrap / auth-disabled gating", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows AuthLoadingShell instead of TokenGate while the bootstrap probe is in flight", () => {
+    const state = createRuntimeConsoleFixture({
+      authToken: "",
+      bootstrapAttempted: false,
+    });
+    render(
+      <ConsoleShell
+        activeWorkspace="overview"
+        onSelectWorkspace={() => {}}
+        state={state}
+        actions={createRuntimeConsoleActions()}
+      />,
+    );
+    // No TokenGate copy yet.
+    expect(screen.queryByRole("heading", { name: /admin token required/i })).toBeNull();
+  });
+
+  it("falls back to TokenGate once the bootstrap probe finishes empty", () => {
+    const state = createRuntimeConsoleFixture({
+      authToken: "",
+      bootstrapAttempted: true,
+    });
+    render(
+      <ConsoleShell
+        activeWorkspace="overview"
+        onSelectWorkspace={() => {}}
+        state={state}
+        actions={createRuntimeConsoleActions()}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: /admin token required/i })).toBeInTheDocument();
+  });
+
+  it("skips TokenGate entirely when whoami reports auth_disabled", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const state = createRuntimeConsoleFixture({
+      authToken: "",
+      bootstrapAttempted: true,
+      session: {
+        kind: "anonymous",
+        label: "Anonymous",
+        role: "anonymous",
+        isAdmin: true,
+        isAuthenticated: false,
+        capabilities: [],
+        name: "",
+        tenant: "",
+        source: "auth_disabled",
+        keyID: "",
+        allowedProviders: [],
+        allowedModels: [],
+        multiTenant: false,
+        authDisabled: true,
+      },
+    });
+    render(
+      <ConsoleShell
+        activeWorkspace="overview"
+        onSelectWorkspace={() => {}}
+        state={state}
+        actions={createRuntimeConsoleActions()}
+      />,
+    );
+    expect(screen.queryByRole("heading", { name: /admin token required/i })).toBeNull();
+  });
+});
+

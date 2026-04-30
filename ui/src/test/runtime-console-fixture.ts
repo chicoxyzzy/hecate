@@ -12,6 +12,7 @@ export function createRuntimeConsoleFixture(
     apiKeyFormSecret: "",
     apiKeyFormTenant: "",
     authToken: "",
+    bootstrapAttempted: true,
     accountSummary: null,
     budget: null,
     budgetActionError: "",

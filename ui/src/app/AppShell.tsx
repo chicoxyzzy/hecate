@@ -236,24 +236,38 @@ export function ConsoleShell({
 }) {
   // Block the rest of the console behind the token gate when no admin token
   // is set OR when the saved token was rejected on the most recent attempt.
-  // The gateway always requires a token now, so an empty token == new user;
-  // a rejected token (from a stale localStorage entry, a rotated key, or a
-  // gateway reset) re-prompts with an inline explanation rather than dumping
-  // the operator into a 401-spinning workspace.
+  // Two escape hatches:
+  //   * Loopback bootstrap probe — the gateway hands back its admin
+  //     bearer over /v1/bootstrap-token when the request is
+  //     same-origin and from a loopback client. We wait for that
+  //     probe to resolve before deciding whether to render the gate,
+  //     otherwise localhost installs flash TokenGate for a frame.
+  //   * auth_disabled mode — the gateway accepts unauthenticated
+  //     requests, so an empty bearer is the intended state and we
+  //     route straight to the workspace.
   if (!state.authToken) {
-    return <TokenGate onSubmit={actions.setAuthToken} />;
-  }
-  // While the very first dashboard load is in flight we don't yet know if
-  // the saved token is valid. Render a quiet placeholder instead of
-  // flashing the workspace with stale state — once /healthz returns, the
-  // session check below routes to TokenGate(rejected) or the workspace.
-  // `state.health` stays populated across subsequent reloads, so this
-  // splash only shows on the very first load after a refresh.
-  if (state.health === null && !state.error) {
-    return <AuthLoadingShell />;
-  }
-  if (state.session.kind === "invalid") {
-    return <TokenGate onSubmit={actions.setAuthToken} rejected />;
+    if (!state.bootstrapAttempted) {
+      return <AuthLoadingShell />;
+    }
+    if (state.health === null && !state.error) {
+      return <AuthLoadingShell />;
+    }
+    if (!state.session.authDisabled) {
+      return <TokenGate onSubmit={actions.setAuthToken} />;
+    }
+  } else {
+    // While the very first dashboard load is in flight we don't yet know if
+    // the saved token is valid. Render a quiet placeholder instead of
+    // flashing the workspace with stale state — once /healthz returns, the
+    // session check below routes to TokenGate(rejected) or the workspace.
+    // `state.health` stays populated across subsequent reloads, so this
+    // splash only shows on the very first load after a refresh.
+    if (state.health === null && !state.error) {
+      return <AuthLoadingShell />;
+    }
+    if (state.session.kind === "invalid") {
+      return <TokenGate onSubmit={actions.setAuthToken} rejected />;
+    }
   }
   return (
     <AuthenticatedShell

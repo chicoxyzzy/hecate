@@ -170,6 +170,26 @@ export async function getSession(authToken?: string): Promise<SessionResponse> {
   return fetchJSON<SessionResponse>("/v1/whoami", { authToken });
 }
 
+// getBootstrapToken asks the gateway to hand back its admin bearer over
+// the loopback interface. The endpoint is fenced server-side: it only
+// returns 200 when the request comes from a loopback address, the
+// origin matches the request host, and the gateway is exposing a
+// gateway-managed token. Any other condition yields 403/404 and we
+// fall through to the manual TokenGate. Returns the token string on
+// success or null on any failure (network, 4xx, empty body) — the
+// caller never throws.
+export async function getBootstrapToken(): Promise<string | null> {
+  try {
+    const response = await fetch("/v1/bootstrap-token", { method: "GET" });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { token?: string };
+    const token = typeof data?.token === "string" ? data.token.trim() : "";
+    return token === "" ? null : token;
+  } catch {
+    return null;
+  }
+}
+
 export async function getModels(authToken?: string): Promise<ModelResponse> {
   return fetchJSON<ModelResponse>("/v1/models", { authToken });
 }

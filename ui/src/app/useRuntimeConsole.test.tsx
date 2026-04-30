@@ -59,22 +59,62 @@ describe("useRuntimeConsole", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not fire any fetches when there is no auth token", async () => {
-    // Override the beforeEach seed so we land on the empty-token branch.
-    // TokenGate is what renders in this case; firing the dashboard would
-    // 401-spam the eight admin/auth-required endpoints in the console.
+  it("probes /v1/bootstrap-token + whoami when no token is present, then stops", async () => {
+    // No bearer in localStorage: we still want to hit two endpoints.
+    //   1. /v1/bootstrap-token — loopback handshake (returns 403 here
+    //      because the test environment isn't loopback-fenced; the UI
+    //      treats any non-200 as "no token, fall through").
+    //   2. /healthz + /v1/whoami — establishes identity. With whoami
+    //      returning anonymous and not auth_disabled, the dashboard
+    //      stops there (no admin-endpoint 401 storm).
     window.localStorage.removeItem("hecate.authToken");
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/v1/bootstrap-token") return new Response("forbidden", { status: 403 });
+      if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: { authenticated: false, invalid_token: false, role: "anonymous", source: "anonymous" },
+        });
+      }
+      return unauthorizedResponse();
+    });
 
     const { result } = renderHook(() => useRuntimeConsole());
 
-    // Give the empty-token effect a tick to settle before asserting; it
-    // should flip `loading` to false synchronously since there's nothing
-    // to load. We assert via waitFor for resilience to scheduling.
     await waitFor(() => expect(result.current.state.loading).toBe(false));
 
-    expect(fetchMock).not.toHaveBeenCalled();
-    // Health stays at its initial null because /healthz never fired.
-    expect(result.current.state.health).toBeNull();
+    const calledURLs = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(calledURLs).toContain("/v1/bootstrap-token");
+    expect(calledURLs).toContain("/healthz");
+    expect(calledURLs).toContain("/v1/whoami");
+    // Admin / dashboard endpoints stay quiet — anonymous + not
+    // auth_disabled means the gate above skips them.
+    expect(calledURLs.some((u) => u.startsWith("/admin/"))).toBe(false);
+    expect(calledURLs).not.toContain("/v1/models");
+    expect(result.current.state.bootstrapAttempted).toBe(true);
+  });
+
+  it("adopts a bootstrap token when the loopback handshake succeeds", async () => {
+    window.localStorage.removeItem("hecate.authToken");
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/v1/bootstrap-token") return jsonResponse({ token: "loopback-secret" });
+      if (url === "/healthz") return jsonResponse({ status: "ok", time: "2026-04-20T00:00:00Z" });
+      if (url === "/v1/whoami") {
+        return jsonResponse({
+          object: "session",
+          data: { authenticated: true, invalid_token: false, role: "admin", source: "admin_token" },
+        });
+      }
+      return unauthorizedResponse();
+    });
+
+    const { result } = renderHook(() => useRuntimeConsole());
+
+    await waitFor(() => expect(result.current.state.authToken).toBe("loopback-secret"));
+    expect(result.current.state.bootstrapAttempted).toBe(true);
   });
 
   it("loads dashboard data and tolerates unauthorized admin endpoints", async () => {
