@@ -1,8 +1,11 @@
 import { expect, test } from "./fixtures";
 
-// Admin workspace is admin-only. We need to seed an authenticated admin session.
+// Settings workspace (id stays "admin" for back-compat; label is now
+// "Settings"). The fixture's /v1/whoami doesn't set multi_tenant, so the
+// Settings page renders the single-tenant tab subset by default —
+// Pricing / Policy / Retention. Tenants and Keys are gated off.
 test.beforeEach(async ({ page }) => {
-  // Override /v1/whoami to report admin so the Admin nav button appears.
+  // Override /v1/whoami to report admin so the Settings nav button appears.
   await page.route("/v1/whoami*", r => r.fulfill({
     status: 200,
     contentType: "application/json",
@@ -13,22 +16,33 @@ test.beforeEach(async ({ page }) => {
   }));
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
-  // Press 5 → Admin. The admin lineup is Chats / Providers / Tasks /
-  // Observability / Admin, so Admin's positional shortcut is 5.
-  await page.keyboard.press("5");
+  // Press 6 → Settings. Admin lineup is Chats / Providers / Tasks /
+  // Observability / Costs / Settings, so Settings sits at position 6.
+  await page.keyboard.press("6");
   await page.waitForSelector("text=Admin token");
 });
 
-test("renders all 7 admin tabs", async ({ page }) => {
-  // Display labels from ui/src/features/admin/AdminView.tsx TAB_LABELS.
-  // Anchor on the rendered text (what operators click), not internal tab
-  // ids — the id list and label list are deliberately distinct. The
-  // former "Clients" tab is gone in the alpha; client-setup snippets
-  // are documentation-only for now.
-  for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention"]) {
+test("renders the single-tenant settings tabs (Pricing / Policy / Retention)", async ({ page }) => {
+  // The default fixture is single-tenant — only the always-visible
+  // tabs render. Tenants and Keys are gated to multi-tenant. Balances
+  // and Usage moved out to the Costs workspace.
+  for (const tab of ["Pricing", "Policy", "Retention"]) {
     await expect(page.getByRole("button", { name: tab })).toBeVisible();
   }
+  await expect(page.getByRole("button", { name: "Tenants" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Keys" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Balances" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Usage" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clients" })).toHaveCount(0);
+});
+
+test("Settings nav button uses the 'Settings' label, not 'Admin'", async ({ page }) => {
+  await expect(
+    page.locator(".hecate-activitybar [aria-label^='Settings']"),
+  ).toBeVisible();
+  await expect(
+    page.locator(".hecate-activitybar [aria-label^='Admin ']"),
+  ).toHaveCount(0);
 });
 
 test("admin token panel shows reveal/rotate", async ({ page }) => {
@@ -38,13 +52,8 @@ test("admin token panel shows reveal/rotate", async ({ page }) => {
   expect(await page.getByRole("button", { name: /Rotate/i }).count()).toBeGreaterThan(0);
 });
 
-test("clicking tenants tab reveals 'New tenant' button", async ({ page }) => {
-  await page.getByRole("button", { name: "tenants" }).click();
-  await expect(page.locator("text=New tenant")).toBeVisible();
-});
-
 test("retention tab shows known subsystem chips", async ({ page }) => {
-  await page.getByRole("button", { name: "retention" }).click();
+  await page.getByRole("button", { name: "Retention" }).click();
   for (const sub of ["trace_snapshots", "budget_events", "audit_events", "exact_cache", "semantic_cache"]) {
     await expect(page.locator(`text=${sub}`).first()).toBeVisible();
   }
@@ -61,27 +70,27 @@ test("retention 'Run now' fires POST request", async ({ page }) => {
     }
   });
 
-  await page.getByRole("button", { name: "retention" }).click();
+  await page.getByRole("button", { name: "Retention" }).click();
   await page.getByRole("button", { name: /Run now/i }).click();
   await expect.poll(() => posted).toBe(true);
 });
 
-test("usage tab shows empty state with no events", async ({ page }) => {
-  await page.getByRole("button", { name: "usage" }).click();
+test("Costs workspace shows the empty ledger state", async ({ page }) => {
+  // Costs sits at shortcut 5 in the admin lineup. Default fixture has
+  // no request-ledger entries so the empty state should render.
+  await page.keyboard.press("5");
   await expect(page.locator("text=No usage events recorded yet")).toBeVisible();
 });
 
-test("budget tab shows admin-required hint when no budget", async ({ page }) => {
-  // Default fixture stubs no budget data.
+test("Costs workspace shows the admin-required hint when budget is missing", async ({ page }) => {
   await page.route("/admin/budget*", r => r.fulfill({ status: 404, body: "" }));
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
-  await page.keyboard.press("6");
-  await page.getByRole("button", { name: "Balances" }).click();
+  await page.keyboard.press("5"); // Costs
   // Either shows the hint (no budget) or shows budget data — both are acceptable.
   const ok = await Promise.race([
-    page.locator("text=Admin access required").first().waitFor({ timeout: 1000 }).then(() => true).catch(() => false),
-    page.locator("text=Account budget").first().waitFor({ timeout: 1000 }).then(() => true).catch(() => false),
+    page.locator("text=Budget data unavailable").first().waitFor({ timeout: 1000 }).then(() => true).catch(() => false),
+    page.locator("text=No usage events recorded yet").first().waitFor({ timeout: 1000 }).then(() => true).catch(() => false),
   ]);
   expect(ok).toBe(true);
 });
@@ -161,6 +170,11 @@ test("pricebook import all triggers preview + apply round-trip", async ({ page }
     });
   });
 
+  // Pricing is the first visible Settings tab (single-tenant default), so
+  // it has already mounted once during beforeEach — before our route
+  // handler was registered. Navigate away to Policy and back to Pricing
+  // so the mount-time preview fetch fires under the test's mocked route.
+  await page.getByRole("button", { name: "Policy" }).click();
   await page.getByRole("button", { name: "Pricing" }).click();
   // Preview is fetched on mount of the tab; the "Import all" button
   // becomes enabled once the diff arrives. Without this assertion, a

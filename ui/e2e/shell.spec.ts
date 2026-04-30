@@ -25,7 +25,7 @@ test("renders the activity bar with all workspace buttons", async ({ page }) => 
   const nav = page.locator(".hecate-activitybar");
   await expect(nav).toBeVisible();
 
-  for (const label of ["Chats", "Observability", "Tasks", "Providers"]) {
+  for (const label of ["Chats", "Observability", "Tasks", "Providers", "Costs", "Settings"]) {
     await expect(nav.locator(`[aria-label^="${label}"]`)).toBeVisible();
   }
 });
@@ -80,9 +80,25 @@ test("clicking a nav button switches the active workspace", async ({ page }) => 
   );
 });
 
-test("does not show Admin nav button for anonymous session", async ({ page }) => {
+test("keyboard shortcut 5 activates the Costs workspace", async ({ page }) => {
+  await page.keyboard.press("5");
+  await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
+    "aria-label",
+    /Costs/,
+  );
+});
+
+test("keyboard shortcut 6 activates the Settings workspace", async ({ page }) => {
+  await page.keyboard.press("6");
+  await expect(page.locator(".hecate-activitybar [aria-current='page']")).toHaveAttribute(
+    "aria-label",
+    /Settings/,
+  );
+});
+
+test("does not show Settings nav button for anonymous session", async ({ page }) => {
   await asAnonymous(page);
   await page.reload();
   await page.waitForSelector(".hecate-activitybar");
-  await expect(page.locator(".hecate-activitybar [aria-label^='Admin']")).not.toBeVisible();
+  await expect(page.locator(".hecate-activitybar [aria-label^='Settings']")).not.toBeVisible();
 });

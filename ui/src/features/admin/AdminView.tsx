@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord, ConfiguredPolicyRuleRecord } from "../../types/runtime";
 import type { PolicyRuleUpsertPayload } from "../../lib/api";
-import { Badge, ChipInput, ConfirmModal, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
+import { Badge, ChipInput, ConfirmModal, CopyBtn, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
 import { PricebookTab } from "./PricebookTab";
 
 type Props = {
@@ -10,38 +10,58 @@ type Props = {
   actions: RuntimeConsoleViewModel["actions"];
 };
 
-// TABS is the single source of truth for the admin sub-tab order.
-// Adding a new tab means: add the id here, add a body conditional in
-// the render, and add a content component. Don't duplicate the list
-// — both the tab bar and the localStorage validator read from this.
-const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "policy", "retention"] as const;
+// TABS is the candidate set. The visible subset is computed at render
+// time from session.multiTenant — single-tenant deployments hide the
+// tenant + key management surfaces (those endpoints stay live; the
+// tabs are simply UI noise when there's only one tenant). Balances
+// and Usage have moved to the Costs workspace.
+const TABS = ["pricebook", "policy", "retention", "tenants", "keys"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Record<Tab, string> = {
   keys: "Keys",
   tenants: "Tenants",
-  budget: "Balances",
-  usage: "Usage",
   pricebook: "Pricing",
   policy: "Policy",
   retention: "Retention",
 };
 
+// Tabs that only appear in multi-tenant deployments. Single-tenant
+// (default) hides them — the operator has no use for tenant/key CRUD
+// when there's only one tenant.
+const MULTI_TENANT_TABS: ReadonlySet<Tab> = new Set(["tenants", "keys"]);
+
 const TAB_STORAGE_KEY = "hecate.adminTab";
 
 export function AdminView({ state, actions }: Props) {
+  const visibleTabs = useMemo<readonly Tab[]>(() => {
+    const multi = state.session.multiTenant;
+    return TABS.filter(t => multi || !MULTI_TENANT_TABS.has(t));
+  }, [state.session.multiTenant]);
+
   // Persist the admin sub-tab so refreshing while on (say) Pricebook
-  // returns the operator to Pricebook, not Keys. The lazy initializer
-  // reads localStorage; the setter wrapper writes it back. Validating
-  // against VALID_TABS guards against stale values from older builds
-  // (e.g. a tab id that no longer exists).
+  // returns the operator to Pricebook. If the saved id has fallen out
+  // of the visible set (e.g. stored "usage" from a pre-Costs build, or
+  // "tenants" while multi-tenant is off), default to the first visible
+  // tab instead of rendering an empty body.
   const [tab, setTabRaw] = useState<Tab>(() => {
     const saved = localStorage.getItem(TAB_STORAGE_KEY);
-    return saved && (TABS as readonly string[]).includes(saved) ? (saved as Tab) : "keys";
+    if (saved && (visibleTabs as readonly string[]).includes(saved)) return saved as Tab;
+    return visibleTabs[0];
   });
   const setTab = (next: Tab) => {
     localStorage.setItem(TAB_STORAGE_KEY, next);
     setTabRaw(next);
   };
+
+  // If the visible set changes (e.g. multi-tenant flips off mid-session)
+  // and the active tab vanishes, snap to the first visible tab.
+  if (!(visibleTabs as readonly string[]).includes(tab)) {
+    const fallback = visibleTabs[0];
+    if (fallback && fallback !== tab) {
+      // Defer to next render to avoid a setState-in-render warning.
+      queueMicrotask(() => setTab(fallback));
+    }
+  }
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -50,7 +70,7 @@ export function AdminView({ state, actions }: Props) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button key={t} type="button"
             onClick={() => setTab(t)}
             style={{
@@ -76,8 +96,6 @@ export function AdminView({ state, actions }: Props) {
         {tab === "keys"         && <KeysTab state={state} actions={actions} />}
         {tab === "tenants"      && <TenantsTab state={state} actions={actions} />}
         {tab === "policy"       && <PolicyTab state={state} actions={actions} />}
-        {tab === "budget"       && <BudgetTab state={state} actions={actions} />}
-        {tab === "usage"        && <UsageTab state={state} />}
         {tab === "pricebook"    && <PricebookTab state={state} actions={actions} />}
         {tab === "retention"    && <RetentionTab state={state} actions={actions} />}
       </div>
@@ -966,191 +984,6 @@ function PolicyTab({ state, actions }: Props) {
           onClose={() => setDeleteCandidate(null)}
           onConfirm={() => void handleDelete()}
         />
-      )}
-    </>
-  );
-}
-
-// ─── Budget tab ───────────────────────────────────────────────────────────────
-
-function BudgetTab({ state, actions }: Props) {
-  const [editingID, setEditingID] = useState<string | null>(null);
-  const [editLimit, setEditLimit] = useState("");
-  const [editWarn, setEditWarn] = useState("");
-
-  const budget = state.budget;
-  const accountSummary = state.accountSummary;
-
-  function pct(debited: number, limit: number) {
-    if (!limit) return 0;
-    return Math.min(100, Math.round((debited / limit) * 100));
-  }
-
-  function barClass(p: number, warnThreshold: number): string {
-    if (p >= 90) return "progress-red";
-    if (p >= warnThreshold) return "progress-amber";
-    return "progress-teal";
-  }
-
-  if (!budget) {
-    return (
-      <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
-        Budget data unavailable. Admin access required.
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <SectionHeader
-        title="Balances and limits"
-        description="Track credits, balance, and warning thresholds."
-      />
-      <div className="card" style={{ padding: "14px 16px", marginBottom: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--t0)" }}>{budget.scope}</span>
-          {budget.enforced ? <Badge status="enabled" label="enforced" /> : <Badge status="disabled" label="not enforced" />}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            {editingID === "account" ? (
-              <>
-                <button className="btn btn-primary btn-sm" onClick={() => { void actions.setBudgetLimit(); setEditingID(null); }}>Save</button>
-                <button className="btn btn-sm" onClick={() => setEditingID(null)}>Cancel</button>
-              </>
-            ) : (
-              <>
-                <button className="btn btn-ghost btn-sm" onClick={() => void actions.topUpBudget()} style={{ gap: 4, fontSize: 11 }}>
-                  <Icon d={Icons.plus} size={12} /> Top up
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => {
-                  setEditingID("account");
-                  setEditLimit(String(budget.credited_micros_usd / 1_000_000));
-                  setEditWarn("80");
-                }} style={{ gap: 4, fontSize: 11 }}>
-                  <Icon d={Icons.edit} size={12} /> Adjust
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-            <span style={{ fontSize: 11, color: "var(--t2)" }}>
-              <span style={{ fontFamily: "var(--font-mono)", color: "var(--t0)", fontWeight: 500 }}>{budget.debited_usd}</span>{" "}spent of {budget.credited_usd} credited
-            </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--t2)" }}>
-              {pct(budget.debited_micros_usd, budget.credited_micros_usd)}%
-            </span>
-          </div>
-          <div className="progress-wrap">
-            <div className={`progress-bar ${barClass(pct(budget.debited_micros_usd, budget.credited_micros_usd), 75)}`}
-              style={{ width: `${pct(budget.debited_micros_usd, budget.credited_micros_usd)}%` }} />
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
-            <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>balance: {budget.balance_usd}</span>
-            <span style={{ fontSize: 10, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>available: {budget.available_usd}</span>
-          </div>
-        </div>
-
-        {editingID === "account" && (
-          <div style={{ display: "flex", gap: 10, marginBottom: 10, padding: 10, background: "var(--bg3)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
-            <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>CREDIT AMOUNT ($)</label>
-              <input className="input" type="number" value={editLimit}
-                onChange={e => { setEditLimit(e.target.value); void actions.setBudgetAmountUsd(e.target.value); }}
-                style={{ fontFamily: "var(--font-mono)" }} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 10, color: "var(--t3)", display: "block", marginBottom: 3, fontFamily: "var(--font-mono)" }}>LIMIT ($)</label>
-              <input className="input" type="number" value={editWarn}
-                onChange={e => { setEditWarn(e.target.value); void actions.setBudgetLimitUsd(e.target.value); }}
-                style={{ fontFamily: "var(--font-mono)" }} />
-            </div>
-          </div>
-        )}
-
-        {budget.warnings?.some(w => w.triggered) && (
-          <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 6 }}>
-            <Icon d={Icons.warning} size={13} /> Warning threshold triggered at {budget.warnings.find(w => w.triggered)?.threshold_percent}%
-          </div>
-        )}
-      </div>
-
-      {/* Model cost estimates */}
-      {accountSummary?.estimates && accountSummary.estimates.length > 0 && (
-        <>
-          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 10 }}>Model cost estimates</div>
-          <div className="card" style={{ overflow: "hidden" }}>
-            <table className="table" style={{ tableLayout: "fixed" }}>
-              <colgroup>
-                <col /><col style={{ width: 100 }} /><col style={{ width: 140 }} /><col style={{ width: 120 }} />
-              </colgroup>
-              <thead>
-                <tr><th>Model</th><th>Provider</th><th>Est. prompt tokens</th><th>Est. output tokens</th></tr>
-              </thead>
-              <tbody>
-                {accountSummary.estimates.slice(0, 10).map((e, i) => (
-                  <tr key={`${e.provider}-${e.model}-${i}`}>
-                    <td className="mono" style={{ color: "var(--t0)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.model}</td>
-                    <td className="mono" style={{ color: "var(--t2)" }}>{e.provider}</td>
-                    <td className="mono">{e.estimated_remaining_prompt_tokens?.toLocaleString() ?? "—"}</td>
-                    <td className="mono">{e.estimated_remaining_output_tokens?.toLocaleString() ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
-// ─── Usage tab ────────────────────────────────────────────────────────────────
-
-function UsageTab({ state }: { state: Props["state"] }) {
-  const ledger = state.requestLedger ?? [];
-
-  return (
-    <>
-      <SectionHeader
-        title="Request ledger"
-        description="Review live request usage, token counts, and request IDs."
-        actions={
-          <>
-            <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--font-mono)" }}>live</span>
-            <Dot color="green" />
-          </>
-        }
-      />
-      {ledger.length > 0 ? (
-        <div className="card" style={{ overflow: "hidden" }}>
-          <table className="table" style={{ tableLayout: "fixed" }}>
-            <colgroup>
-              <col style={{ width: 80 }} /><col style={{ width: 90 }} /><col /><col style={{ width: 80 }} /><col style={{ width: 70 }} /><col style={{ width: 130 }} /><col style={{ width: 52 }} />
-            </colgroup>
-            <thead>
-              <tr><th>Time</th><th>Tenant</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Request ID</th><th></th></tr>
-            </thead>
-            <tbody>
-              {ledger.slice(0, 100).map(e => (
-                <tr key={e.request_id || e.timestamp}>
-                  <td className="mono" style={{ color: "var(--t3)" }}>{e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : "—"}</td>
-                  <td className="mono" style={{ color: "var(--teal)" }}>{e.tenant || "—"}</td>
-                  <td className="mono" style={{ color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.model || "—"}</td>
-                  <td className="mono">{e.total_tokens?.toLocaleString() ?? "—"}</td>
-                  <td className="mono" style={{ color: "var(--t0)", fontWeight: 500 }}>{e.amount_usd || "—"}</td>
-                  <td className="mono" style={{ color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.request_id || "—"}</td>
-                  <td>{e.request_id && <CopyBtn text={e.request_id} />}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>
-          No usage events recorded yet.
-        </div>
       )}
     </>
   );

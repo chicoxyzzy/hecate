@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AdminView } from "../features/admin/AdminView";
+import { CostsView } from "../features/costs/CostsView";
 import { ObservabilityView } from "../features/overview/ObservabilityView";
 import { ChatView } from "../features/chats/ChatView";
 import { ProvidersView } from "../features/providers/ProvidersView";
@@ -8,7 +9,7 @@ import { TasksView } from "../features/runs/TasksView";
 import { InlineError } from "../features/shared/ui";
 import type { RuntimeConsoleViewModel } from "./useRuntimeConsole";
 
-export type WorkspaceID = "overview" | "runs" | "chats" | "providers" | "admin";
+export type WorkspaceID = "overview" | "runs" | "chats" | "providers" | "costs" | "admin";
 
 type WorkspaceDefinition = {
   id: WorkspaceID;
@@ -28,6 +29,10 @@ const IC = {
   providers: ["M5 12h14","M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2","M9 10h.01","M9 16h.01"],
   keys:    "M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z",
   budgets: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  // Stack-of-coins outline. Three stacked ellipses with side rails —
+  // visually distinct from IC.budgets (the dollar-circle) so the
+  // activity bar doesn't have two near-identical glyphs.
+  costs:   ["M4 7c0-1.657 3.582-3 8-3s8 1.343 8 3-3.582 3-8 3-8-1.343-8-3z", "M4 7v5c0 1.657 3.582 3 8 3s8-1.343 8-3V7", "M4 12v5c0 1.657 3.582 3 8 3s8-1.343 8-3v-5"],
 };
 
 function SvgIcon({ d, size = 18 }: { d: string | string[]; size?: number }) {
@@ -40,20 +45,25 @@ function SvgIcon({ d, size = 18 }: { d: string | string[]; size?: number }) {
 }
 
 // Workspace order is role-aware. The admin lineup is:
-//   Chats (1) · Providers (2) · Tasks (3) · Observability (4) · Admin (5)
-// Tenants drop Providers and Admin (they don't have CP store access),
-// so their lineup is:
-//   Chats (1) · Tasks (2) · Observability (3)
+//   Chats (1) · Providers (2) · Tasks (3) · Observability (4) · Costs (5) · Settings (6)
+// Tenants drop Providers and Settings (they don't have CP store access),
+// but keep Costs so they can monitor their own spend:
+//   Chats (1) · Tasks (2) · Observability (3) · Costs (4)
 // Anonymous fallthrough (TokenGate normally blocks this) is just
 // [chats] so the activity bar isn't empty if a session somehow slips
 // through.
+//
+// Note: the workspace id stays "admin" for back-compat with operator
+// localStorage values from earlier builds; only the rendered label
+// changes to "Settings".
 type WorkspaceLineupEntry = Omit<WorkspaceDefinition, "shortcut">;
 const WS: Record<WorkspaceID, WorkspaceLineupEntry> = {
   chats:     { id: "chats",     label: "Chats",         icon: <SvgIcon d={IC.chat} /> },
   providers: { id: "providers", label: "Providers",     icon: <SvgIcon d={IC.providers} /> },
   runs:      { id: "runs",      label: "Tasks",         icon: <SvgIcon d={IC.tasks} /> },
   overview:  { id: "overview",  label: "Observability", icon: <SvgIcon d={IC.observe} /> },
-  admin:     { id: "admin",     label: "Admin",         icon: <SvgIcon d={IC.keys} /> },
+  costs:     { id: "costs",     label: "Costs",         icon: <SvgIcon d={IC.costs} /> },
+  admin:     { id: "admin",     label: "Settings",      icon: <SvgIcon d={IC.keys} /> },
 };
 
 const BARE_WORKSPACES: WorkspaceID[] = ["chats", "runs"];
@@ -74,9 +84,9 @@ export function getAvailableWorkspaces(
         : "anonymous";
   let lineup: WorkspaceLineupEntry[];
   if (role === "admin") {
-    lineup = [WS.chats, WS.providers, WS.runs, WS.overview, WS.admin];
+    lineup = [WS.chats, WS.providers, WS.runs, WS.overview, WS.costs, WS.admin];
   } else if (role === "tenant") {
-    lineup = [WS.chats, WS.runs, WS.overview];
+    lineup = [WS.chats, WS.runs, WS.overview, WS.costs];
   } else {
     lineup = [WS.chats];
   }
@@ -353,6 +363,7 @@ function AuthenticatedShell({
             )}
             {activeWorkspace === "runs"          && <TasksView authToken={state.authToken} session={state.session} />}
             {activeWorkspace === "providers"     && <ProvidersView actions={actions} state={state} />}
+            {activeWorkspace === "costs"         && <CostsView actions={actions} state={state} />}
             {activeWorkspace === "admin" && state.session.isAdmin && <AdminView actions={actions} state={state} />}
           </div>
         </main>

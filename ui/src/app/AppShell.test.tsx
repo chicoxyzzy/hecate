@@ -9,16 +9,17 @@ import { createRuntimeConsoleActions, createRuntimeConsoleFixture } from "../tes
 // fallthrough sees just [chats] so the activity bar isn't empty if
 // a session somehow slips past the TokenGate.
 describe("getAvailableWorkspaces", () => {
-  it("admin lineup is chats / providers / runs / overview / admin", () => {
+  it("admin lineup is chats / providers / runs / overview / costs / admin", () => {
     const ws = getAvailableWorkspaces({ isAdmin: true, isAuthenticated: true });
-    expect(ws.map(w => w.id)).toEqual(["chats", "providers", "runs", "overview", "admin"]);
+    expect(ws.map(w => w.id)).toEqual(["chats", "providers", "runs", "overview", "costs", "admin"]);
     // Shortcuts are positional 1..N.
-    expect(ws.map(w => w.shortcut)).toEqual(["1", "2", "3", "4", "5"]);
+    expect(ws.map(w => w.shortcut)).toEqual(["1", "2", "3", "4", "5", "6"]);
   });
 
-  it("tenant lineup drops Providers and Admin", () => {
+  it("tenant lineup drops Providers and Admin but keeps Costs", () => {
     const ws = getAvailableWorkspaces({ isAdmin: false, isAuthenticated: true });
-    expect(ws.map(w => w.id)).toEqual(["chats", "runs", "overview"]);
+    expect(ws.map(w => w.id)).toEqual(["chats", "runs", "overview", "costs"]);
+    expect(ws.map(w => w.shortcut)).toEqual(["1", "2", "3", "4"]);
   });
 
   it("anonymous fallthrough is chats only", () => {
@@ -30,6 +31,13 @@ describe("getAvailableWorkspaces", () => {
     const ws = getAvailableWorkspaces(true);
     expect(ws.map(w => w.id)).toContain("admin");
     expect(ws.map(w => w.id)).toContain("providers");
+    expect(ws.map(w => w.id)).toContain("costs");
+  });
+
+  it("admin label is now 'Settings' (id stays 'admin' for back-compat)", () => {
+    const ws = getAvailableWorkspaces({ isAdmin: true, isAuthenticated: true });
+    const adminEntry = ws.find(w => w.id === "admin");
+    expect(adminEntry?.label).toBe("Settings");
   });
 });
 
