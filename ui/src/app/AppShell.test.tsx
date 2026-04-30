@@ -52,6 +52,8 @@ const invalidSession = {
   keyID: "",
   allowedProviders: [],
   allowedModels: [],
+  multiTenant: false,
+  authDisabled: false,
 };
 
 function renderEmptyTokenGate(overrides: Partial<ReturnType<typeof createRuntimeConsoleActions>> = {}) {
@@ -216,6 +218,8 @@ describe("status bar version chip", () => {
     keyID: "",
     allowedProviders: [],
     allowedModels: [],
+    multiTenant: false,
+    authDisabled: false,
   };
 
   function renderWorkspace(healthOverrides: Record<string, unknown> | null) {

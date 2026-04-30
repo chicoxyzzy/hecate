@@ -60,6 +60,8 @@ export function createRuntimeConsoleFixture(
       keyID: "",
       allowedProviders: [],
       allowedModels: [],
+      multiTenant: false,
+      authDisabled: false,
     },
     providerFilter: "auto",
     providerPresets: [],

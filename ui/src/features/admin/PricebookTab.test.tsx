@@ -31,6 +31,8 @@ const adminSession = {
   keyID: "",
   allowedProviders: [],
   allowedModels: [],
+  multiTenant: false,
+  authDisabled: false,
 };
 
 const sampleRows: ConfiguredPricebookRecord[] = [

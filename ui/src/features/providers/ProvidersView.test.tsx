@@ -41,6 +41,7 @@ const adminSession = {
   kind: "admin" as const, label: "Admin", role: "admin", isAdmin: true, isAuthenticated: true,
   capabilities: [], name: "", tenant: "", source: "", keyID: "",
   allowedProviders: [], allowedModels: [],
+  multiTenant: false, authDisabled: false,
 };
 
 function emptyAdminConfig() {

@@ -10,7 +10,7 @@ function setup(stateOverrides = {}, actionOverrides = {}) {
     session: {
       kind: "tenant", label: "Tenant", role: "tenant", isAdmin: false, isAuthenticated: true,
       capabilities: [], name: "ci", tenant: "team-a", source: "config", keyID: "k1",
-      allowedProviders: [], allowedModels: [],
+      allowedProviders: [], allowedModels: [], multiTenant: false, authDisabled: false,
     },
     providerScopedModels: [
       { id: "gpt-4o-mini", owned_by: "openai", metadata: { provider: "openai", provider_kind: "cloud" } },

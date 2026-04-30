@@ -82,6 +82,14 @@ type SessionState = {
   keyID: string;
   allowedProviders: string[];
   allowedModels: string[];
+  // multiTenant: when true, the operator console exposes Tenants and
+  // Keys management surfaces. Mirrors the server's GATEWAY_MULTI_TENANT
+  // flag via /v1/whoami's features object. Defaults to false for
+  // clients talking to an older gateway that doesn't ship features yet.
+  multiTenant: boolean;
+  // authDisabled: when true, the gateway accepts unauthenticated
+  // requests. The UI uses this to skip the TokenGate entirely.
+  authDisabled: boolean;
 };
 type NoticeState = {
   kind: "success" | "error";
@@ -1724,5 +1732,11 @@ function deriveSessionState(sessionInfo: SessionResponse["data"] | null): Sessio
     keyID: sessionInfo?.key_id ?? "",
     allowedProviders: sessionInfo?.allowed_providers ?? [],
     allowedModels: sessionInfo?.allowed_models ?? [],
+    multiTenant: sessionInfo?.features?.multi_tenant === true,
+    // Two paths to "auth disabled": the explicit features.auth_disabled
+    // flag from a fresh gateway, and the legacy source==="auth_disabled"
+    // signal from older builds. Either one means the TokenGate should
+    // step out of the way.
+    authDisabled: sessionInfo?.features?.auth_disabled === true || sessionInfo?.source === "auth_disabled",
   };
 }

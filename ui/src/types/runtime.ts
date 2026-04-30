@@ -34,6 +34,14 @@ export type SessionResponse = {
     key_id?: string;
     allowed_providers?: string[];
     allowed_models?: string[];
+    // features mirrors GATEWAY_MULTI_TENANT and GATEWAY_AUTH_DISABLED so
+    // the UI can decide whether to render the multi-tenant tabs and
+    // whether to skip the TokenGate. Both default to false for clients
+    // talking to an older gateway that doesn't yet ship the field.
+    features?: {
+      multi_tenant?: boolean;
+      auth_disabled?: boolean;
+    };
   };
 };
 
