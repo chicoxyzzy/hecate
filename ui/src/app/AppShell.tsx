@@ -39,21 +39,50 @@ function SvgIcon({ d, size = 18 }: { d: string | string[]; size?: number }) {
   );
 }
 
-const baseWorkspaces: WorkspaceDefinition[] = [
-  { id: "chats",      label: "Chats",         shortcut: "1", icon: <SvgIcon d={IC.chat} /> },
-  { id: "providers",  label: "Providers",     shortcut: "2", icon: <SvgIcon d={IC.providers} /> },
-  { id: "runs",       label: "Tasks",         shortcut: "3", icon: <SvgIcon d={IC.tasks} /> },
-  { id: "overview",   label: "Observability", shortcut: "4", icon: <SvgIcon d={IC.observe} /> },
-];
-
-const adminWorkspace: WorkspaceDefinition = {
-  id: "admin", label: "Admin", shortcut: "5", icon: <SvgIcon d={IC.keys} />,
+// Workspace order is role-aware. The admin lineup is:
+//   Chats (1) · Providers (2) · Tasks (3) · Observability (4) · Admin (5)
+// Tenants drop Providers and Admin (they don't have CP store access),
+// so their lineup is:
+//   Chats (1) · Tasks (2) · Observability (3)
+// Anonymous fallthrough (TokenGate normally blocks this) is just
+// [chats] so the activity bar isn't empty if a session somehow slips
+// through.
+type WorkspaceLineupEntry = Omit<WorkspaceDefinition, "shortcut">;
+const WS: Record<WorkspaceID, WorkspaceLineupEntry> = {
+  chats:     { id: "chats",     label: "Chats",         icon: <SvgIcon d={IC.chat} /> },
+  providers: { id: "providers", label: "Providers",     icon: <SvgIcon d={IC.providers} /> },
+  runs:      { id: "runs",      label: "Tasks",         icon: <SvgIcon d={IC.tasks} /> },
+  overview:  { id: "overview",  label: "Observability", icon: <SvgIcon d={IC.observe} /> },
+  admin:     { id: "admin",     label: "Admin",         icon: <SvgIcon d={IC.keys} /> },
 };
 
 const BARE_WORKSPACES: WorkspaceID[] = ["chats", "runs"];
 
-export function getAvailableWorkspaces(isAdmin: boolean): WorkspaceDefinition[] {
-  return isAdmin ? [...baseWorkspaces, adminWorkspace] : baseWorkspaces;
+type SessionRole = "anonymous" | "tenant" | "admin";
+
+export function getAvailableWorkspaces(
+  isAdminOrLegacy: boolean | { isAdmin: boolean; isAuthenticated: boolean },
+): WorkspaceDefinition[] {
+  // Back-compat: tests historically passed a single boolean. Map it
+  // to the equivalent role so the new role-aware lineup applies.
+  const role: SessionRole = typeof isAdminOrLegacy === "boolean"
+    ? (isAdminOrLegacy ? "admin" : "tenant")
+    : isAdminOrLegacy.isAdmin
+      ? "admin"
+      : isAdminOrLegacy.isAuthenticated
+        ? "tenant"
+        : "anonymous";
+  let lineup: WorkspaceLineupEntry[];
+  if (role === "admin") {
+    lineup = [WS.chats, WS.providers, WS.runs, WS.overview, WS.admin];
+  } else if (role === "tenant") {
+    lineup = [WS.chats, WS.runs, WS.overview];
+  } else {
+    lineup = [WS.chats];
+  }
+  // Shortcut keys are positional (1..N) — keeps the keyboard contract
+  // the same regardless of which workspaces the role can see.
+  return lineup.map((ws, i) => ({ ...ws, shortcut: String(i + 1) }));
 }
 
 // TokenGate is the first-run / forgotten-token landing screen. The gateway
@@ -263,7 +292,10 @@ function AuthenticatedShell({
   state: ConsoleState;
   actions: ConsoleActions;
 }) {
-  const workspaces = getAvailableWorkspaces(state.session.isAdmin);
+  const workspaces = getAvailableWorkspaces({
+    isAdmin: state.session.isAdmin,
+    isAuthenticated: state.session.isAuthenticated,
+  });
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -319,8 +351,8 @@ function AuthenticatedShell({
                 <ChatView actions={actions} state={state} />
               )
             )}
-            {activeWorkspace === "runs"       && <TasksView authToken={state.authToken} session={state.session} />}
-            {activeWorkspace === "providers"  && <ProvidersView actions={actions} state={state} />}
+            {activeWorkspace === "runs"          && <TasksView authToken={state.authToken} session={state.session} />}
+            {activeWorkspace === "providers"     && <ProvidersView actions={actions} state={state} />}
             {activeWorkspace === "admin" && state.session.isAdmin && <AdminView actions={actions} state={state} />}
           </div>
         </main>

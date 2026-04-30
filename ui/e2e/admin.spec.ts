@@ -13,18 +13,22 @@ test.beforeEach(async ({ page }) => {
   }));
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
-  // Press 5 → Admin (since admin nav is shortcut 5 for admins).
+  // Press 5 → Admin. The admin lineup is Chats / Providers / Tasks /
+  // Observability / Admin, so Admin's positional shortcut is 5.
   await page.keyboard.press("5");
   await page.waitForSelector("text=Admin token");
 });
 
-test("renders all 8 admin tabs", async ({ page }) => {
+test("renders all 7 admin tabs", async ({ page }) => {
   // Display labels from ui/src/features/admin/AdminView.tsx TAB_LABELS.
   // Anchor on the rendered text (what operators click), not internal tab
-  // ids — the id list and label list are deliberately distinct.
-  for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention", "Clients"]) {
+  // ids — the id list and label list are deliberately distinct. The
+  // former "Clients" tab is gone in the alpha; client-setup snippets
+  // are documentation-only for now.
+  for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention"]) {
     await expect(page.getByRole("button", { name: tab })).toBeVisible();
   }
+  await expect(page.getByRole("button", { name: "Clients" })).toHaveCount(0);
 });
 
 test("admin token panel shows reveal/rotate", async ({ page }) => {
@@ -72,7 +76,7 @@ test("budget tab shows admin-required hint when no budget", async ({ page }) => 
   await page.route("/admin/budget*", r => r.fulfill({ status: 404, body: "" }));
   await page.goto("/");
   await page.waitForSelector(".hecate-activitybar");
-  await page.keyboard.press("5");
+  await page.keyboard.press("6");
   await page.getByRole("button", { name: "Balances" }).click();
   // Either shows the hint (no budget) or shows budget data — both are acceptable.
   const ok = await Promise.race([

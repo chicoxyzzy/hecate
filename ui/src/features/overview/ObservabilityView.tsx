@@ -374,6 +374,27 @@ export function ObservabilityView({ state, onNavigate }: Props) {
           </div>
         </div>
 
+        {/* Tenant fallthrough notice. The /admin/runtime/stats and
+            /admin/traces endpoints are admin-only in this build, so
+            tenant sessions see an empty page. We render a banner
+            instead of leaving the page silently blank — tenant-scoped
+            observability is on the roadmap but requires backend work
+            (per-key trace/stat scoping) that's out of this pass. */}
+        {!state.session.isAdmin && (
+          <div style={{
+            padding: "10px 12px",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bg2)",
+            fontSize: 12,
+            color: "var(--t2)",
+            marginBottom: 16,
+            lineHeight: 1.5,
+          }}>
+            Observability is admin-only in this build. Per-tenant traces and stats are on the roadmap.
+          </div>
+        )}
+
         {/* Stat strip */}
         {(stats || mcpCacheStats) && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }} aria-label="Runtime stats">

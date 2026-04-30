@@ -358,11 +358,6 @@ async function main() {
   await page.waitForTimeout(500);
   await snap(page, "admin-budget");
 
-  console.log("→ admin / integrations");
-  await page.getByRole("button", { name: /clients/i }).click();
-  await page.waitForTimeout(400);
-  await snap(page, "admin-integrations");
-
   // firstID is intentionally unused after the chat snap — captured for
   // future "open this specific session" workflows.
   void firstID;

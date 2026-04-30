@@ -1,8 +1,37 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ConsoleShell } from "./AppShell";
+import { ConsoleShell, getAvailableWorkspaces } from "./AppShell";
 import { createRuntimeConsoleActions, createRuntimeConsoleFixture } from "../test/runtime-console-fixture";
+
+// Role-aware workspace nav. Tenants see chats / runs / overview;
+// admins see the full set including providers + admin; anonymous
+// fallthrough sees just [chats] so the activity bar isn't empty if
+// a session somehow slips past the TokenGate.
+describe("getAvailableWorkspaces", () => {
+  it("admin lineup is chats / providers / runs / overview / admin", () => {
+    const ws = getAvailableWorkspaces({ isAdmin: true, isAuthenticated: true });
+    expect(ws.map(w => w.id)).toEqual(["chats", "providers", "runs", "overview", "admin"]);
+    // Shortcuts are positional 1..N.
+    expect(ws.map(w => w.shortcut)).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  it("tenant lineup drops Providers and Admin", () => {
+    const ws = getAvailableWorkspaces({ isAdmin: false, isAuthenticated: true });
+    expect(ws.map(w => w.id)).toEqual(["chats", "runs", "overview"]);
+  });
+
+  it("anonymous fallthrough is chats only", () => {
+    const ws = getAvailableWorkspaces({ isAdmin: false, isAuthenticated: false });
+    expect(ws.map(w => w.id)).toEqual(["chats"]);
+  });
+
+  it("legacy boolean signature still works (maps true → admin lineup)", () => {
+    const ws = getAvailableWorkspaces(true);
+    expect(ws.map(w => w.id)).toContain("admin");
+    expect(ws.map(w => w.id)).toContain("providers");
+  });
+});
 
 // TokenGate is a private helper inside AppShell. We exercise it indirectly
 // through ConsoleShell: an empty `authToken` triggers the empty-token

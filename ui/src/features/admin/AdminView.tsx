@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { RuntimeConsoleViewModel } from "../../app/useRuntimeConsole";
 import type { ConfiguredAPIKeyRecord, ConfiguredPolicyRuleRecord } from "../../types/runtime";
 import type { PolicyRuleUpsertPayload } from "../../lib/api";
-import { Badge, ChipInput, CodeBlock, ConfirmModal, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
+import { Badge, ChipInput, ConfirmModal, CopyBtn, Dot, Icon, Icons, InlineError, SlideOver } from "../shared/ui";
 import { PricebookTab } from "./PricebookTab";
 
 type Props = {
@@ -14,7 +14,7 @@ type Props = {
 // Adding a new tab means: add the id here, add a body conditional in
 // the render, and add a content component. Don't duplicate the list
 // — both the tab bar and the localStorage validator read from this.
-const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "policy", "retention", "integrations"] as const;
+const TABS = ["keys", "tenants", "budget", "usage", "pricebook", "policy", "retention"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Record<Tab, string> = {
   keys: "Keys",
@@ -24,7 +24,6 @@ const TAB_LABELS: Record<Tab, string> = {
   pricebook: "Pricing",
   policy: "Policy",
   retention: "Retention",
-  integrations: "Clients",
 };
 
 const TAB_STORAGE_KEY = "hecate.adminTab";
@@ -80,7 +79,6 @@ export function AdminView({ state, actions }: Props) {
         {tab === "budget"       && <BudgetTab state={state} actions={actions} />}
         {tab === "usage"        && <UsageTab state={state} />}
         {tab === "pricebook"    && <PricebookTab state={state} actions={actions} />}
-        {tab === "integrations" && <IntegrationsTab />}
         {tab === "retention"    && <RetentionTab state={state} actions={actions} />}
       </div>
     </div>
@@ -1320,98 +1318,6 @@ function RetentionTab({ state, actions }: Props) {
           No retention runs yet.
         </div>
       )}
-    </>
-  );
-}
-
-// ─── Integrations tab ─────────────────────────────────────────────────────────
-
-// IntegrationsTab is the copy-paste landing page for pointing third-party
-// coding clients (Codex, Claude Code, anything OpenAI- or Anthropic-shaped)
-// at this gateway. The base URL is auto-derived from the current
-// browser location so the snippets work as-is in any environment —
-// localhost, internal hostname, or a public DNS name behind a TLS
-// terminator. The API key is left as a placeholder; operators copy it
-// from the Keys tab (or use the admin token directly during bootstrap).
-function IntegrationsTab() {
-  // window.location is the source of truth for the gateway URL the
-  // client should hit. The OpenAI variant carries a /v1 suffix because
-  // that's the OpenAI base-URL convention; Anthropic clients add /v1
-  // themselves so we pass the bare origin.
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8765";
-  const openaiBase = `${origin}/v1`;
-
-  const openaiSnippet = `export OPENAI_BASE_URL="${openaiBase}"
-export OPENAI_API_KEY="<paste an API key from the Keys tab>"`;
-
-  const anthropicSnippet = `export ANTHROPIC_BASE_URL="${origin}"
-export ANTHROPIC_API_KEY="<paste an API key from the Keys tab>"`;
-
-  // Cursor reads its model config from the in-app Settings UI, not from
-  // environment variables. The "snippet" here is a labeled value pair the
-  // operator pastes into Cursor → Settings → Models → API Keys.
-  const cursorSnippet = `Cursor → Settings → Cursor Settings → Models → API Keys
-
-Override OpenAI Base URL:  ${openaiBase}
-OpenAI API Key:            <paste an API key from the Keys tab>
-
-Click "Verify" — a green check means Cursor reached /v1/models through this gateway.`;
-
-  const curlSnippet = `curl -sS "${openaiBase}/chat/completions" \\
-  -H "Authorization: Bearer <api-key>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'`;
-
-  return (
-    <>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--t0)", marginBottom: 4 }}>
-          Client setup
-        </div>
-        <div style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>
-          Copy the env vars below into your shell (or your client's settings) to route Codex,
-          Claude Code, Cursor, or any OpenAI- / Anthropic-compatible client through this
-          gateway. The base URL is auto-filled from your browser location, so the snippets
-          work for local dev, internal hostnames, and public deploys alike.
-        </div>
-      </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-        <div>
-          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
-            Codex / OpenAI-compatible
-          </div>
-          <CodeBlock code={openaiSnippet} lang="bash" />
-        </div>
-
-        <div>
-          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
-            Claude Code / Anthropic Messages
-          </div>
-          <CodeBlock code={anthropicSnippet} lang="bash" />
-        </div>
-
-        <div>
-          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
-            Cursor (Settings UI, not env vars)
-          </div>
-          <CodeBlock code={cursorSnippet} lang="text" />
-        </div>
-
-        <div>
-          <div className="kicker-lg" style={{ color: "var(--t2)", marginBottom: 6 }}>
-            Smoke test (curl)
-          </div>
-          <CodeBlock code={curlSnippet} lang="bash" />
-        </div>
-      </div>
-
-      <div style={{ marginTop: 18, fontSize: 12, color: "var(--t2)", lineHeight: 1.6 }}>
-        Need an API key? Create one in the <strong style={{ color: "var(--t0)" }}>Keys</strong> tab
-        — keys can be scoped to a specific tenant, provider list, or model list. For full
-        client-integration notes (auth header precedence, common 4xx responses, two-mode
-        runtime guidance), see <code style={{ fontFamily: "var(--font-mono)" }}>docs/client-integration.md</code>.
-      </div>
     </>
   );
 }

@@ -159,8 +159,6 @@ The embedded UI is a runtime console for operators.
 
 ![API keys tab — scoped keys for clients and agents](docs/screenshots/admin-keys.png)
 
-![Integrations — easy setup for Codex, Claude Code, Cursor, etc.](docs/screenshots/admin-integrations.png)
-
 </details>
 
 ## What Works Today
@@ -201,7 +199,6 @@ The README intentionally stays light on configuration. The source of truth is:
 - [Agent runtime](docs/agent-runtime.md)
 - [Runtime API](docs/runtime-api.md)
 - [Providers](docs/providers.md)
-- [Client integration](docs/client-integration.md)
 - [MCP integration](docs/mcp.md)
 - [Telemetry](docs/telemetry.md)
 - [Deployment](docs/deployment.md)

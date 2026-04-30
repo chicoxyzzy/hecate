@@ -22,9 +22,15 @@ describe("AdminView tabs", () => {
   it("renders the operator tab labels", () => {
     const { state, actions } = setup();
     render(<AdminView state={state} actions={actions} />);
-    for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention", "Clients"]) {
+    for (const tab of ["Keys", "Tenants", "Balances", "Usage", "Pricing", "Policy", "Retention"]) {
       expect(screen.getByRole("button", { name: tab })).toBeTruthy();
     }
+  });
+
+  it("does not render the legacy Clients tab (moved to top-level Integrations)", () => {
+    const { state, actions } = setup();
+    render(<AdminView state={state} actions={actions} />);
+    expect(screen.queryByRole("button", { name: "Clients" })).toBeNull();
   });
 
   it("starts on the keys tab", () => {
