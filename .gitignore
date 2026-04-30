@@ -37,4 +37,5 @@ coverage.out
 # Goreleaser output. Snapshot and release runs both write into ./dist
 # at repo root. Anchored with / so it doesn't shadow ui/dist/ (which
 # has its own rules above, keeping ui/dist/.gitkeep tracked).
-/dist/
+dist/
+!dist/.gitkeep
