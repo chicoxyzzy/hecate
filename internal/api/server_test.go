@@ -1694,8 +1694,65 @@ func TestSessionEndpointReturnsAnonymousTenantAndAdminStates(t *testing.T) {
 			if response.Data.InvalidToken != tc.wantInvalid {
 				t.Fatalf("invalid_token = %t, want %t", response.Data.InvalidToken, tc.wantInvalid)
 			}
+			// features mirrors server config; this fixture configures
+			// neither flag, so both should be false on every role.
+			if response.Data.Features.MultiTenant {
+				t.Fatalf("features.multi_tenant = true, want false (not configured in fixture)")
+			}
+			if response.Data.Features.AuthDisabled {
+				t.Fatalf("features.auth_disabled = true, want false (admin token is set)")
+			}
 		})
 	}
+}
+
+// TestSessionFeaturesReflectServerConfig pins that /v1/whoami's features
+// object surfaces GATEWAY_MULTI_TENANT and GATEWAY_AUTH_DISABLED so the
+// UI can decide whether to render multi-tenant tabs and whether to skip
+// the TokenGate.
+func TestSessionFeaturesReflectServerConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multi_tenant=true surfaces in features", func(t *testing.T) {
+		logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+		store := controlplane.NewMemoryStore()
+		handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+			Server: config.ServerConfig{
+				AuthToken:   "admin-secret",
+				MultiTenant: true,
+			},
+		}, governor.NewMemoryBudgetStore(), store)
+
+		client := newAPITestClient(t, handler).withBearerToken("admin-secret")
+		response := mustRequestJSON[SessionResponse](client, http.MethodGet, "/v1/whoami", "")
+		if !response.Data.Features.MultiTenant {
+			t.Fatalf("features.multi_tenant = false, want true")
+		}
+		if response.Data.Features.AuthDisabled {
+			t.Fatalf("features.auth_disabled = true, want false")
+		}
+	})
+
+	t.Run("auth_disabled=true surfaces in features and grants anonymous access", func(t *testing.T) {
+		logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+		store := controlplane.NewMemoryStore()
+		handler := newBudgetTestHandlerWithConfig(logger, config.Config{
+			Server: config.ServerConfig{
+				AuthToken:    "admin-secret",
+				AuthDisabled: true,
+			},
+		}, governor.NewMemoryBudgetStore(), store)
+
+		// No token — auth-disabled means the gateway accepts anonymous.
+		client := newAPITestClient(t, handler)
+		response := mustRequestJSON[SessionResponse](client, http.MethodGet, "/v1/whoami", "")
+		if !response.Data.Features.AuthDisabled {
+			t.Fatalf("features.auth_disabled = false, want true")
+		}
+		if response.Data.Source != "auth_disabled" {
+			t.Fatalf("source = %q, want auth_disabled", response.Data.Source)
+		}
+	})
 }
 
 func TestClientEndpointsAcceptXAPIKeyAuth(t *testing.T) {

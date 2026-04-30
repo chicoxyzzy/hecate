@@ -225,15 +225,31 @@ type UpdateChatSessionRequest struct {
 }
 
 type SessionResponseItem struct {
-	Authenticated    bool     `json:"authenticated"`
-	InvalidToken     bool     `json:"invalid_token"`
-	Role             string   `json:"role"`
-	Name             string   `json:"name,omitempty"`
-	Tenant           string   `json:"tenant,omitempty"`
-	Source           string   `json:"source,omitempty"`
-	KeyID            string   `json:"key_id,omitempty"`
-	AllowedProviders []string `json:"allowed_providers,omitempty"`
-	AllowedModels    []string `json:"allowed_models,omitempty"`
+	Authenticated    bool            `json:"authenticated"`
+	InvalidToken     bool            `json:"invalid_token"`
+	Role             string          `json:"role"`
+	Name             string          `json:"name,omitempty"`
+	Tenant           string          `json:"tenant,omitempty"`
+	Source           string          `json:"source,omitempty"`
+	KeyID            string          `json:"key_id,omitempty"`
+	AllowedProviders []string        `json:"allowed_providers,omitempty"`
+	AllowedModels    []string        `json:"allowed_models,omitempty"`
+	Features         SessionFeatures `json:"features"`
+}
+
+// SessionFeatures advertises the gateway's UI-visibility flags so the
+// client console can show / hide surfaces accordingly. Both fields
+// reflect server config — the client never overrides them.
+//
+//   - MultiTenant: when true, the operator UI exposes Tenants/Keys/Usage
+//     management surfaces. Default false: a single-user workspace where
+//     tenant management is hidden. Backend endpoints are unaffected.
+//   - AuthDisabled: when true, the gateway accepts unauthenticated requests
+//     (GATEWAY_AUTH_DISABLED=1). The UI uses this to skip the TokenGate
+//     entirely instead of waiting for a paste / handshake.
+type SessionFeatures struct {
+	MultiTenant  bool `json:"multi_tenant"`
+	AuthDisabled bool `json:"auth_disabled"`
 }
 
 type ChatSessionSummaryItem struct {

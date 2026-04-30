@@ -30,15 +30,21 @@ type Authenticator struct {
 }
 
 // NewAuthenticator wires the authenticator. Auth is "enabled" iff at least
-// one credential source is configured (an admin token or an API-key store);
-// the gateway boot path always supplies the admin token now (auto-generated
-// in bootstrap), so the only path where Enabled() returns false is in tests
-// that pass a bare ServerConfig with no store.
+// one credential source is configured (an admin token or an API-key store)
+// AND the operator hasn't explicitly opted out via GATEWAY_AUTH_DISABLED.
+// The gateway boot path always supplies the admin token now (auto-generated
+// in bootstrap), so the natural default is enabled. Operators reach for
+// AuthDisabled when running behind a reverse proxy that terminates auth
+// upstream, in test envs, or in a controlled no-auth local setup.
 func NewAuthenticator(cfg config.ServerConfig, store controlplane.Store) *Authenticator {
+	enabled := cfg.AuthToken != "" || store != nil
+	if cfg.AuthDisabled {
+		enabled = false
+	}
 	return &Authenticator{
 		adminToken: cfg.AuthToken,
 		store:      store,
-		enabled:    cfg.AuthToken != "" || store != nil,
+		enabled:    enabled,
 	}
 }
 

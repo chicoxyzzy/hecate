@@ -30,8 +30,20 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Address                    string
-	AuthToken                  string
+	Address   string
+	AuthToken string
+	// AuthDisabled forces the gateway into a no-auth mode regardless of
+	// AuthToken / store presence. Wired to GATEWAY_AUTH_DISABLED. Used
+	// by test envs and reverse-proxy-fronted deployments where auth is
+	// terminated upstream. The single-user localhost path is served by
+	// the bootstrap-token handshake instead, not by flipping this flag.
+	AuthDisabled bool
+	// MultiTenant exposes the tenants/keys management surface in the
+	// operator UI. Wired to GATEWAY_MULTI_TENANT. Default false: a
+	// single-user workspace where Tenants/Keys/Usage tabs are hidden.
+	// The data layer is unaffected — multi_tenant is a UI-visibility
+	// flag, not a server-side gate.
+	MultiTenant                bool
 	DataDir                    string
 	BootstrapFile              string
 	ControlPlaneBackend        string
@@ -334,8 +346,10 @@ func LoadFromEnv() Config {
 	providersCfg := loadProvidersFromEnv()
 	return Config{
 		Server: ServerConfig{
-			Address:   getEnv("GATEWAY_ADDRESS", ":8765"),
-			AuthToken: getEnv("GATEWAY_AUTH_TOKEN", ""),
+			Address:      getEnv("GATEWAY_ADDRESS", ":8765"),
+			AuthToken:    getEnv("GATEWAY_AUTH_TOKEN", ""),
+			AuthDisabled: getEnvBool("GATEWAY_AUTH_DISABLED", false),
+			MultiTenant:  getEnvBool("GATEWAY_MULTI_TENANT", false),
 			// Default `.data/` keeps the auto-generated bootstrap file
 			// (admin token + AES-GCM key) out of the repo root so a stray
 			// `git add .` can't sweep it up. Docker overrides this to /data

@@ -271,6 +271,10 @@ func (h *Handler) HandleSession(w http.ResponseWriter, r *http.Request) {
 			KeyID:            introspection.Principal.KeyID,
 			AllowedProviders: introspection.Principal.AllowedProviders,
 			AllowedModels:    introspection.Principal.AllowedModels,
+			Features: SessionFeatures{
+				MultiTenant:  h.config.Server.MultiTenant,
+				AuthDisabled: !h.authenticator.Enabled(),
+			},
 		},
 	})
 }
