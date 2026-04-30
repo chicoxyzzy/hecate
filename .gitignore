@@ -35,9 +35,8 @@ ui/playwright-report/
 ui/coverage/
 coverage.out
 # Goreleaser output. Snapshot and release runs both write into ./dist
-# at repo root. Anchored with leading / so it doesn't shadow ui/dist/.
-# Excludes contents with /* (not the directory itself) so the
-# !/dist/.gitkeep negation can take effect — git can't recurse into a
-# directory that's been wholly excluded.
-/dist/*
-!/dist/.gitkeep
+# at repo root and `--clean` deletes anything in there — so nothing
+# under dist/ should ever be tracked, otherwise goreleaser hits "git
+# is in a dirty state" the next time it cleans. Anchored with leading
+# / so the rule doesn't shadow ui/dist/ (which has its own block above).
+/dist/
