@@ -29,3 +29,9 @@ test-acp-real-direct adapters='cursor_agent,grok_build': _go-cache
 test-browser-smoke: _go-cache
 	@test -n "${HECATE_TASK_BROWSER_EXECUTABLE:-}" || { echo "HECATE_TASK_BROWSER_EXECUTABLE must name an absolute Chromium-compatible executable" >&2; exit 2; }
 	HECATE_BROWSER_SMOKE=1 {{go_env}} go test -count=1 -timeout 10m ./internal/browserrunner
+
+# Exercise model tool selection through real Project assignments. This is
+# opt-in because it uses an operator-configured provider and may consume quota.
+# Run the code-intelligence model dogfood scorecard.
+test-codeintel-dogfood: _go-cache
+	E2E_HECATE_BIN= HECATE_CODEINTEL_AGENT_DOGFOOD=1 {{go_env}} go test -tags e2e -count=1 -run '^TestCodeIntelligenceModelDogfood$' -timeout 3h -v ./e2e
