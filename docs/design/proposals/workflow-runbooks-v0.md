@@ -12,16 +12,17 @@
 > structured read-only inspection, and wraps a model final response in a
 > versioned `workflow_report`. The report keeps agent-reported prose separate
 > from Hecate-observed posture and evidence references.
-> **Implemented prerequisite:** Hecate also has a small native
-> `browser_inspect` evidence capability for browser-enabled native
-> project-assignment tasks. It is local-only, approval-gated, exact-origin,
-> fresh-profile, script-disabled, `GET`/`HEAD`-only, and produces bounded
-> static text evidence. It is
-> not this proposal's runbook engine and is not interactive browser automation,
-> visual capture, persistent browser state, Hecate Chat, or External Agent
-> support.
+> **Implemented prerequisite:** Hecate has two small native browser
+> capabilities for eligible project-assignment Tasks. `browser_inspect` is
+> script-disabled static evidence. Independently granted `browser_flow` runs
+> one fully declared, approved exact-origin sequence of 1–6 accessibility
+> click/wait actions with scripts enabled. Both use a fresh process/profile,
+> `GET`/`HEAD` transport controls, and bounded plain-text evidence. Neither is
+> this proposal's runbook engine, visual capture, typing, persistent browser
+> state, Hecate Chat, External Agent, QA, or remote-runtime support.
 > **Deferred:** generic workflow scheduling, arbitrary runbook records, test
-> command execution, browser automation, and workflow-driven memory writes.
+> command execution, general browser automation, and workflow-driven memory
+> writes.
 > Those need separate product and permission decisions; this slice does not
 > create a standalone workflow engine.
 
@@ -198,8 +199,8 @@ The implemented QA v0 contract has a much narrower posture:
   the metadata-free snapshot as unavailable without invoking Git.
 - QA blocks workspace writes, patch/proposal artifacts, shell and terminal
   commands, semantic and structural code intelligence, external MCP tools,
-  native HTTP requests, web search, and browser inspection. It does not run
-  test commands or add a `test_command` input.
+  native HTTP requests, web search, static browser inspection, and browser
+  interaction. It does not run test commands or add a `test_command` input.
   It also skips automatic post-run Git summary capture and has no Git evidence
   in v0; source Git metadata is not copied into the QA workspace.
 - It emits `workflow_manifest` at run start. If the agent produces a final
@@ -217,9 +218,9 @@ Future modes should reuse existing Hecate concepts first:
 - ProcessRunner/GitRunner execution through sandbox policy.
 - MCP server approval policy.
 - Network egress policy.
-- Implemented browser evidence as a separate, approval-gated task capability
-  with exact origins; future stateful or interactive browser access needs a
-  separate permission model.
+- Implemented static browser evidence and separately granted, approval-bound
+  accessibility flows with exact origins; future typing, visual capture, or
+  stateful browser access needs a separate permission model.
 - Future GitHub/deploy actions as explicit approval gates.
 
 Future approval gates should be ordinary blocking approvals. Workflow-specific
@@ -258,51 +259,63 @@ or network tool.
 
 ## Browser Support
 
-The first implementation is intentionally smaller than a workflow browser
-worker: `browser_inspect` lets a native project-assignment task load one
-approved exact-origin page through an explicitly configured local
-Chromium-compatible executable. Each call creates a fresh temporary profile,
-requires a blocking approval, limits URL-loader traffic to the selected exact
-origin using `GET`/`HEAD`, disables page scripts and service workers, blocks
-downloads, and emits bounded static text evidence.
-It accepts a page path but rejects credentials, query strings, and fragments so
-those values do not enter task records. It does not attach to the operator's
-browser, import cookies, reuse a logged-in session, click, type, upload, use a
-device, or expose raw CDP.
+The implemented runtime remains smaller than a workflow browser worker. An
+Agent Preset independently grants `browser_allowed` for script-disabled
+`browser_inspect` and `browser_interactions_allowed` for `browser_flow`; either
+grant requires the shared exact `browser_allowed_origins` list. Hecate snapshots
+both grants and the normalized origins only when it launches a native
+project-assignment Task. The capability is not inherited from generic
+`network_allowed` or Cairnline coordination intent.
 
-The Agent Preset owns the exact origin list and Hecate snapshots it to the
-native task at assignment launch. A preset can make several origins eligible,
-but each approved call permits only its selected origin; another configured
-origin is not a cross-origin subresource destination. Browser evidence is not inherited from
-generic `network_allowed`, is not exposed to Hecate Chat or External Agents,
-and is unavailable in remote runtime. Private-IP checking is initial
-application-level preflight, not an OS-level network sandbox; stronger egress
-controls remain an operator deployment responsibility. Even a `GET` request
-can have an application-specific side effect, so each call remains explicitly
-approval-gated.
+Both calls use an explicitly configured local Chromium-compatible executable,
+one query-free URL, one selected exact origin, a blocking approval, a fresh
+process/profile, `GET`/`HEAD` URL-loader interception, private-IP policy, one
+deadline/response budget, and bounded plain-text evidence. A preset can make
+several origins eligible, but another configured origin is not a cross-origin
+subresource destination for the call. Private-IP checking and DNS pinning are
+application controls, not an OS-level network sandbox.
 
-QA v0 does not invoke or reference browser evidence. Choosing
-`workflow_mode=qa` blocks browser inspection, does not add a URL input, and
-does not enable browser automation. A future QA contract needs an explicit
-Hecate-owned assignment-launch selection before it can claim constrained
-browser evidence.
+`browser_inspect` disables scripts and service workers and captures bounded
+static evidence. `browser_flow` enables scripts for one complete declared
+sequence of 1–6 exact accessibility `click` / `wait_for` actions. It exposes no
+selectors, coordinates, arbitrary JavaScript, typing, form values, uploads,
+downloads, screenshots, saved authentication, or retained session. Scripts,
+same-origin `GET`/`HEAD` requests, and approved clicks can cause application
+effects, so approval authorizes the full ordered flow. If a later action fails,
+Hecate keeps partial action evidence because an earlier click may already have
+changed the application.
 
-Future workflow work should build on that narrow primitive in this order:
+Neither tool attaches to the operator's browser or appears in Hecate Chat,
+External Agents, QA, legacy/manual Tasks, or remote runtime. QA v0 explicitly
+blocks both tools and does not add a browser URL input. A future QA contract
+needs a separate Hecate-owned assignment-launch selection before it can claim
+either constrained browser capability.
 
-1. **Next:** evaluate the manifest/report distinction and define an explicit
-   assignment-launch selection if constrained browser evidence is justified.
-2. **Later, if justified:** independently review visual capture or additional
+Future workflow work should build on these primitives in this order:
+
+1. **Next:** evaluate whether the bounded static/interaction evidence improves
+   project-assignment review without weakening approval comprehension.
+2. **Later, if justified:** independently review screenshots or additional
    read-only evidence types with their own redaction and retention model.
-3. **Much later:** consider stateful or interactive browser work only with a
-   separate permission model and a clearly stronger isolation story.
+3. **Much later:** consider typing, secret entry, or retained browser state only
+   with separate permissions and a clearly stronger isolation story.
 
 ### Browser Artifacts
 
-The implemented artifact is `browser_evidence` (`text/plain`): redacted final
-URL/origin, page title, a small accessibility summary, bounded console lines,
-and network counters. It is intentionally not a screenshot, DOM dump, HAR,
-browser profile, cookie export, storage export, request/response body, or raw
-CDP transcript.
+The implemented artifacts are:
+
+- `browser_evidence` (`text/plain`): redacted final URL/origin, page title,
+  bounded accessibility tree, bounded console lines, and network counters from
+  script-disabled static inspection.
+- `browser_flow_evidence` (`text/plain`): approved origin, redacted final URL,
+  page title, ordered action outcomes, initial/final accessibility snapshots,
+  and network counters. A failure after an attempted action keeps bounded
+  partial evidence and warns that an earlier click may already have changed the
+  application.
+
+Neither artifact is a screenshot, DOM dump, HAR, browser profile, cookie or
+storage export, form-value capture, request/response body, or raw CDP
+transcript.
 
 Potential future evidence types need separate review rather than piggybacking
 on the current tool:
@@ -320,17 +333,19 @@ methods need a deny-default allowlist with per-method rationale.
 Browser workflows are high-risk because they can observe logged-in state.
 Initial rules:
 
-1. The implemented capability creates a new temporary profile per inspection;
-   it never imports a host profile, cookies, extensions, or saved logins.
+1. The implemented capability creates a new browser process and temporary
+   profile per call; it never imports a host profile, cookies, extensions, or
+   saved logins.
    That is not a hard identity-isolation boundary: OS or enterprise Chromium
    policy can still provide integrated authentication or client certificates.
 2. It retains no browser storage or downloads and exposes no cookie, storage,
-   request body, response body, screenshot, or raw-CDP artifact.
+   form value, request body, response body, screenshot, or raw-CDP artifact.
 3. Requested URLs with credentials, queries, or fragments are rejected before
    tool-call persistence. Text evidence redacts final URLs and is bounded.
-4. A future stateful or visual browser feature must not reuse this approval as
-   authorization. It needs explicit state ownership, redaction, retention,
-   audit events, and a separate permission decision.
+4. Static inspection and interaction are independent preset grants. A future
+   typing, stateful, authenticated, or visual browser feature must not reuse
+   either approval as authorization. It needs explicit input/state ownership,
+   redaction, retention, audit events, and a separate permission decision.
 5. Browser workers remain in Hecate's local-first threat model: useful
    application controls, not a VM boundary or complete network sandbox.
 
@@ -374,8 +389,8 @@ The available experiment is a report-only `qa` Task:
   store or Project/Cairnline record
 - structured evidence: bounded file/search/artifact/directory inspection; Git
   evidence is unavailable in QA v0; no shell test runner
-- browser evidence: unavailable in QA v0; no browser automation or general
-  URL checker
+- browser capability: `browser_inspect` and `browser_flow` are unavailable in
+  QA v0; no general URL checker
 - output: a static `workflow_manifest` plus a `workflow_report` only after an
   agent final response exists
 - mutation policy: no file or Git writes, patch/proposal creation, deploys,
@@ -392,8 +407,10 @@ operator trust before Hecate considers a broader workflow engine.
   subsystems.
 - Supporting user-authenticated browser state in v0.
 - Shell or terminal test execution, including an arbitrary `test_command`.
-- Interactive navigation, clicking, typing, form submission, uploads, or
-  downloads through the browser-evidence capability.
+- Browser typing, secret entry, arbitrary selectors/JavaScript, screenshots,
+  form-value capture, uploads, downloads, or retained sessions. The only
+  interaction is one separately granted, fully declared 1–6-action exact
+  accessibility flow.
 - Remote browser sharing or hosted browser sessions.
 - Auto-fixing during `review`, `qa`, `security-audit`, or `design-review`.
 - Auto-pushing, deploying, or opening ready PRs from `ship`.
@@ -410,8 +427,10 @@ operator trust before Hecate considers a broader workflow engine.
   final response.
 - UI tests proving Task Detail labels agent-reported narrative separately from
   Hecate-observed posture/evidence.
-- Existing browser tests retain responsibility for fresh-profile evidence; QA
-  does not create a broader browser or test-runner surface.
+- Browser tests retain responsibility for static script-disablement,
+  fresh-process/profile isolation, fully declared interaction, exact-origin
+  transport controls, bounded complete/partial evidence, and teardown. QA does
+  not create a broader browser or test-runner surface.
 
 ## Open Questions
 
@@ -421,10 +440,10 @@ operator trust before Hecate considers a broader workflow engine.
   project-configurable runbook record is considered?
 - Should a future workflow report appear outside Task Detail, such as project
   activity, without duplicating Cairnline coordination state?
-- What evidence, if any, is worth adding beyond the current text-only,
-  report-only browser inspection?
-- What isolation and explicit permissions would interactive or stateful
-  browser work require?
+- What evidence, if any, is worth adding beyond current bounded static and
+  accessibility-flow text artifacts?
+- What isolation, secret-input contract, and explicit permissions would
+  typing, visual capture, or retained browser state require?
 - Should `ship` integrate with GitHub connector flows or stay a checklist until
   PR/deploy permissions are better modeled?
 
@@ -434,5 +453,6 @@ Do not add a broad framework next. Evaluate this slice with operators: does the
 manifest/report distinction make evidence easier to review, and is a separately
 authorized, constrained test runner valuable enough to warrant its own
 permission model? Any such runner must be a new explicit capability, not an
-exception to QA's report-only boundary. Browser automation, generic workflow
-records, and workflow-managed Project memory remain separate decisions.
+exception to QA's report-only boundary. Browser typing/visual/stateful work,
+generic workflow records, and workflow-managed Project memory remain separate
+decisions.

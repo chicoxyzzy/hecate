@@ -1,4 +1,5 @@
 import type { ModelReadinessRecord } from "./model";
+import type { BrowserEvidenceRuntimeReadiness } from "./provider";
 
 export type ProjectRootRecord = {
   id: string;
@@ -664,11 +665,24 @@ export type ProjectAssignmentLaunchProfilePostureRecord = {
   tools_enabled: boolean;
   writes_allowed: boolean;
   network_allowed: boolean;
-  // Browser evidence is native-task-only. `not_applicable` means the
+  // Browser capabilities are native-task-only. `not_applicable` means the
   // resolved preset is being used for an External Agent assignment.
-  browser_evidence_status?: "enabled" | "disabled" | "not_applicable" | (string & {});
-  browser_allowed?: boolean;
+  browser_evidence_status:
+    | "enabled"
+    | "disabled"
+    | "unavailable"
+    | "not_applicable"
+    | (string & {});
+  browser_allowed: boolean;
+  browser_interaction_status:
+    | "enabled"
+    | "disabled"
+    | "unavailable"
+    | "not_applicable"
+    | (string & {});
+  browser_interactions_allowed: boolean;
   browser_allowed_origins?: string[];
+  browser_runtime_readiness?: BrowserEvidenceRuntimeReadiness;
   approval_policy?: string;
   project_memory_policy?: string;
   context_source_policy?: string;

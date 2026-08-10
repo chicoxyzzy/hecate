@@ -178,6 +178,21 @@ When choosing between "elegant" and "operationally explicit," choose explicit.
   the cleanup helper back to HTTP or claim success from partial fencing. A
   future quiescer must close admission, drain and generation-fence delayed
   writers, run cleanup, advance its epoch, and reopen.
+- **Browser interaction is a separate immutable grant.** Keep
+  `browser_allowed` (script-disabled `browser_inspect`) independent from
+  `browser_interactions_allowed` (`browser_flow`), with one shared normalized
+  `browser_allowed_origins` list. Only `projectworkapp` may snapshot these onto
+  an eligible native project-assignment Task; never infer either grant from
+  Cairnline intent, `sandbox_network`, Hecate Chat, External Agent/ACP, QA,
+  legacy/manual Tasks, or a later preset edit. A flow is one strict,
+  approval-bound, query-free URL plus 1–6 exact accessibility click/wait
+  actions. Preserve a fresh process/profile, one exact origin, `GET`/`HEAD`
+  transport interception, private-IP policy, response/deadline bounds, and
+  complete-or-partial plain-text evidence. Static inspection must remain
+  script-disabled. Interaction scripts and approved clicks may cause effects;
+  do not add typing, uploads, downloads, screenshots, authentication import,
+  retained state, selectors, arbitrary JavaScript, or raw protocol output to
+  this contract.
 - **Cost is in micro-USD when present.** Money fields stay `int64` in micro-USD (`1_000_000` = $1). Never `float64` for money. The gateway records usage events for visibility; it does not enforce global spend controls.
 - **OTel is first-class.** Every request gets a trace ID surfaced in the response header (`X-Trace-Id`) and persisted on the run record. New code paths add spans, not just log lines.
 - **Metric labels are guarded.** Record metrics through `internal/telemetry` helpers and normalizers. Closed-set dimensions collapse unknown values to `other`; free-form dimensions must reject control characters and oversized labels. Put raw commands, paths, stdout/stderr snippets, and adapter diagnostics in spans, logs, or persisted events — never metric labels.

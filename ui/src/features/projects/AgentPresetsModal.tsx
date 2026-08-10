@@ -97,7 +97,8 @@ export function AgentPresetsModal({
   }
 
   const browserUsesNativeTaskSurface = form.surface === "any" || form.surface === "hecate_task";
-  const browserOriginsError = form.browserAllowed
+  const browserConfigured = form.browserAllowed || form.browserInteractionsAllowed;
+  const browserOriginsError = browserConfigured
     ? browserAllowedOriginsValidationError(form.browserAllowedOrigins)
     : null;
   const canSave = !editingBuiltIn && form.name.trim().length > 0 && !browserOriginsError;
@@ -307,6 +308,10 @@ export function AgentPresetsModal({
                           surface === "any" || surface === "hecate_task"
                             ? current.browserAllowed
                             : false,
+                        browserInteractionsAllowed:
+                          surface === "any" || surface === "hecate_task"
+                            ? current.browserInteractionsAllowed
+                            : false,
                         browserAllowedOrigins:
                           surface === "any" || surface === "hecate_task"
                             ? current.browserAllowedOrigins
@@ -375,6 +380,9 @@ export function AgentPresetsModal({
                         ...current,
                         toolsEnabled: event.target.checked,
                         browserAllowed: event.target.checked ? current.browserAllowed : false,
+                        browserInteractionsAllowed: event.target.checked
+                          ? current.browserInteractionsAllowed
+                          : false,
                         browserAllowedOrigins: event.target.checked
                           ? current.browserAllowedOrigins
                           : "",
@@ -415,32 +423,64 @@ export function AgentPresetsModal({
                       !browserUsesNativeTaskSurface ||
                       !form.toolsEnabled
                     }
-                    aria-describedby="browser-evidence-help"
+                    aria-describedby="browser-evidence-help browser-capability-scope-help"
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
                         browserAllowed: event.target.checked,
-                        browserAllowedOrigins: event.target.checked
-                          ? current.browserAllowedOrigins
-                          : "",
+                        browserAllowedOrigins:
+                          event.target.checked || current.browserInteractionsAllowed
+                            ? current.browserAllowedOrigins
+                            : "",
                       }))
                     }
                   />
-                  Allow browser evidence
+                  Allow static browser evidence
+                </label>
+                <label style={presetRoleCheckboxLabelStyle}>
+                  <input
+                    type="checkbox"
+                    checked={form.browserInteractionsAllowed}
+                    disabled={
+                      pending ||
+                      editingBuiltIn ||
+                      !browserUsesNativeTaskSurface ||
+                      !form.toolsEnabled
+                    }
+                    aria-describedby="browser-interaction-help browser-capability-scope-help"
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        browserInteractionsAllowed: event.target.checked,
+                        browserAllowedOrigins:
+                          event.target.checked || current.browserAllowed
+                            ? current.browserAllowedOrigins
+                            : "",
+                      }))
+                    }
+                  />
+                  Allow browser interaction
                 </label>
               </div>
               <div id="browser-evidence-help" style={presetRoleSubtleTextStyle}>
-                Browser evidence is approval-gated static evidence: a fresh temporary browser
-                profile can inspect only the exact origins below. Page scripts and service workers
-                are disabled, so it cannot inspect script-rendered content or run workers,
-                WebSockets, or other dynamic browser activity. It cannot click, type, upload,
-                download, use saved browser state, or access clipboard/device permissions. A
-                temporary profile does not override OS or enterprise browser identity or network
-                policy. It applies only to Hecate-native task launches; External Agents and Hecate
-                Chat do not receive browser evidence. Each approved inspection is limited to its
-                selected origin.
-                {!browserUsesNativeTaskSurface && " Select any or hecate_task to enable it."}
-                {!form.toolsEnabled && " Enable Tools to configure browser evidence."}
+                Static browser evidence is approval-gated. It inspects allowed origins in a fresh
+                temporary profile with page scripts disabled, and cannot interact with the page.
+              </div>
+              <div id="browser-interaction-help" style={presetRoleSubtleTextStyle}>
+                Browser interaction is stronger than static evidence. An approved flow opens a fresh
+                temporary browser profile and performs up to six click or wait actions that each
+                exactly match an accessible role and name on the allowed origins. The complete flow
+                is approved before the browser starts. Clicks can run page scripts and may change
+                state in the allowed app. The flow cannot type, upload, download, use saved browser
+                state, access clipboard or device permissions, or leave the allowed origins.
+              </div>
+              <div id="browser-capability-scope-help" style={presetRoleSubtleTextStyle}>
+                Browser capabilities apply only to Hecate-native task launches and do not enable
+                general task network access. A temporary profile does not override operating-system
+                or enterprise browser identity or network policy.
+                {!browserUsesNativeTaskSurface &&
+                  " External Agents and Hecate Chat do not receive either browser capability. Select All Hecate work or Hecate Task to enable them."}
+                {!form.toolsEnabled && " Select Allow tools to configure browser capabilities."}
               </div>
               {browserUsesNativeTaskSurface && (
                 <div id="browser-evidence-runtime" style={presetRoleSubtleTextStyle} role="status">
@@ -451,7 +491,7 @@ export function AgentPresetsModal({
                       : "Browser runtime status has not loaded. This work policy records capability intent; task runs still require a configured local browser runtime."}
                 </div>
               )}
-              {form.browserAllowed && (
+              {browserConfigured && (
                 <div style={presetRoleFieldStyle}>
                   <label htmlFor="browser-allowed-origins" style={presetRoleFieldLabelStyle}>
                     Allowed browser origins

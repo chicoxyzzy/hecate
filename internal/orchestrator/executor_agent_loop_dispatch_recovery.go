@@ -179,6 +179,7 @@ func validateAgentToolCallBatch(calls []types.ToolCall) error {
 		return fmt.Errorf("assistant tool-call bundle contains %d calls; maximum is %d", len(calls), agentToolCallMaxPerBatch)
 	}
 	seen := make(map[string]struct{}, len(calls))
+	browserFlows := 0
 	for index, call := range calls {
 		callID := call.ID
 		if strings.TrimSpace(callID) == "" {
@@ -191,6 +192,12 @@ func validateAgentToolCallBatch(calls []types.ToolCall) error {
 			return fmt.Errorf("assistant tool call %d duplicates id %q", index+1, truncateUTF8(callID, toolRecoveryLabelMaxBytes))
 		}
 		seen[callID] = struct{}{}
+		if call.Function.Name == AgentToolBrowserFlow {
+			browserFlows++
+			if browserFlows > 1 {
+				return fmt.Errorf("assistant tool-call bundle contains more than one browser flow")
+			}
+		}
 	}
 	return nil
 }

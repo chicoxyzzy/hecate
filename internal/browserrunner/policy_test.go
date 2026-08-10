@@ -221,8 +221,16 @@ func TestRequestPolicyPreflightHostMappingsPinsVettedAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hostResolverRules() error = %v", err)
 	}
-	if wantRules := "MAP api.example.test 1.1.1.1, MAP ui.example.test [2001:4860:4860::8888]"; rules != wantRules {
+	if wantRules := "MAP api.example.test 1.1.1.1, MAP ui.example.test [2001:4860:4860::8888], MAP * ~NOTFOUND"; rules != wantRules {
 		t.Fatalf("hostResolverRules() = %q, want %q", rules, wantRules)
+	}
+}
+
+func TestHostResolverRulesDenyUnapprovedLookupsWithoutMappings(t *testing.T) {
+	t.Parallel()
+	rules, err := hostResolverRules(nil)
+	if err != nil || rules != "MAP * ~NOTFOUND" {
+		t.Fatalf("hostResolverRules(nil) = %q, %v", rules, err)
 	}
 }
 
@@ -253,5 +261,12 @@ func TestRequestPolicyPreflightHostMappingsRejectsPrivateLiteral(t *testing.T) {
 	}
 	if _, err := policy.preflightHostMappings(context.Background(), false, lookup); !errors.Is(err, ErrPrivateNetwork) {
 		t.Fatalf("preflightHostMappings() error = %v, want ErrPrivateNetwork", err)
+	}
+	mappings, err := policy.preflightHostMappings(context.Background(), true, lookup)
+	if err != nil {
+		t.Fatalf("private literal opt-in preflightHostMappings() error = %v", err)
+	}
+	if want := []browserHostMapping{{Hostname: "127.0.0.1", Address: "127.0.0.1"}}; !reflect.DeepEqual(mappings, want) {
+		t.Fatalf("private literal mappings = %#v, want %#v", mappings, want)
 	}
 }

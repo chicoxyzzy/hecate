@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hecatehq/cairnline"
@@ -12,6 +13,7 @@ import (
 	"github.com/hecatehq/hecate/internal/projects"
 	"github.com/hecatehq/hecate/internal/projectskills"
 	"github.com/hecatehq/hecate/internal/projectwork"
+	"github.com/hecatehq/hecate/internal/projectworkapp"
 	"github.com/hecatehq/hecate/internal/providers"
 )
 
@@ -20,6 +22,11 @@ func TestProjectWorkAPI_AssignmentLaunchReadinessReturnsNativePlanWithoutSideEff
 	handler, server := newProjectWorkTestServerWithProviders(&fakeProvider{
 		name: "anthropic",
 	})
+	handler.browserEvidenceReadiness = BrowserEvidenceRuntimeReadinessResponse{
+		Available: true,
+		Status:    "ready",
+		Message:   "The native browser runtime is ready on this local runtime for static evidence and approved interaction.",
+	}
 	workspace := t.TempDir()
 	seedProjectWorkAssignmentStartTest(t, handler, projectWorkAssignmentStartSeed{
 		Workspace:           workspace,
@@ -33,14 +40,15 @@ func TestProjectWorkAPI_AssignmentLaunchReadinessReturnsNativePlanWithoutSideEff
 		t.Fatalf("Update project defaults: %v", err)
 	}
 	if _, err := handler.agentProfiles.Create(t.Context(), agentprofiles.Profile{
-		ID:                    "browser_review",
-		Name:                  "Browser review",
-		Surface:               agentprofiles.SurfaceHecateTask,
-		ExecutionProfile:      "coding_agent",
-		ToolsEnabled:          true,
-		WritesAllowed:         true,
-		BrowserAllowed:        true,
-		BrowserAllowedOrigins: []string{"https://qa.example.test"},
+		ID:                         "browser_review",
+		Name:                       "Browser review",
+		Surface:                    agentprofiles.SurfaceHecateTask,
+		ExecutionProfile:           "coding_agent",
+		ToolsEnabled:               true,
+		WritesAllowed:              true,
+		BrowserAllowed:             true,
+		BrowserInteractionsAllowed: true,
+		BrowserAllowedOrigins:      []string{"https://qa.example.test"},
 	}); err != nil {
 		t.Fatalf("Create browser review preset: %v", err)
 	}
@@ -85,8 +93,11 @@ func TestProjectWorkAPI_AssignmentLaunchReadinessReturnsNativePlanWithoutSideEff
 	if readiness.Data.Provider != "anthropic" || readiness.Data.Model != "gpt-4o-mini" || readiness.Data.ExecutionProfile != "coding_agent" {
 		t.Fatalf("launch hints = provider/model/profile %q/%q/%q, want anthropic/gpt-4o-mini/coding_agent", readiness.Data.Provider, readiness.Data.Model, readiness.Data.ExecutionProfile)
 	}
-	if readiness.Data.ProfilePosture == nil || readiness.Data.ProfilePosture.ID != "browser_review" || !readiness.Data.ProfilePosture.ToolsEnabled || !readiness.Data.ProfilePosture.WritesAllowed || readiness.Data.ProfilePosture.NetworkAllowed || readiness.Data.ProfilePosture.BrowserEvidenceStatus != projectAssignmentBrowserEvidenceStatusEnabled || !readiness.Data.ProfilePosture.BrowserAllowed || !reflect.DeepEqual(readiness.Data.ProfilePosture.BrowserAllowedOrigins, []string{"https://qa.example.test"}) {
+	if readiness.Data.ProfilePosture == nil || readiness.Data.ProfilePosture.ID != "browser_review" || !readiness.Data.ProfilePosture.ToolsEnabled || !readiness.Data.ProfilePosture.WritesAllowed || readiness.Data.ProfilePosture.NetworkAllowed || readiness.Data.ProfilePosture.BrowserEvidenceStatus != projectAssignmentBrowserEvidenceStatusEnabled || !readiness.Data.ProfilePosture.BrowserAllowed || readiness.Data.ProfilePosture.BrowserInteractionStatus != projectAssignmentBrowserInteractionStatusEnabled || !readiness.Data.ProfilePosture.BrowserInteractionsAllowed || !reflect.DeepEqual(readiness.Data.ProfilePosture.BrowserAllowedOrigins, []string{"https://qa.example.test"}) {
 		t.Fatalf("profile_posture = %+v, want browser-enabled native task posture with tools/writes on and network off", readiness.Data.ProfilePosture)
+	}
+	if runtime := readiness.Data.ProfilePosture.BrowserRuntimeReadiness; runtime == nil || !runtime.Available || runtime.Status != "ready" {
+		t.Fatalf("browser_runtime_readiness = %+v, want ready runtime", runtime)
 	}
 	if readiness.Data.ModelReadiness == nil || !readiness.Data.ModelReadiness.Ready {
 		t.Fatalf("model_readiness = %+v, want ready", readiness.Data.ModelReadiness)
@@ -100,6 +111,129 @@ func TestProjectWorkAPI_AssignmentLaunchReadinessReturnsNativePlanWithoutSideEff
 	}
 	if len(tasks) != 0 {
 		t.Fatalf("tasks = %+v, want no task created by launch readiness", tasks)
+	}
+}
+
+func TestProjectWorkAPI_AssignmentLaunchReadinessWarnsWhenGrantedBrowserToolsAreUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name           string
+		readiness      BrowserEvidenceRuntimeReadinessResponse
+		wantStatus     string
+		wantMessage    string
+		wantActionText string
+	}{
+		{
+			name: "not configured",
+			readiness: BrowserEvidenceRuntimeReadinessResponse{
+				Status:         "not_configured",
+				Message:        "The native browser runtime is not configured on this runtime.",
+				OperatorAction: "Set HECATE_TASK_BROWSER_EXECUTABLE, then restart Hecate.",
+			},
+			wantStatus:     "not_configured",
+			wantMessage:    "not configured on this runtime",
+			wantActionText: "HECATE_TASK_BROWSER_EXECUTABLE",
+		},
+		{
+			name: "invalid executable",
+			readiness: BrowserEvidenceRuntimeReadinessResponse{
+				Status:         "unavailable",
+				Message:        "The native browser runtime is unavailable from the current runtime configuration.",
+				OperatorAction: "Check HECATE_TASK_BROWSER_EXECUTABLE and its executable permissions, then restart Hecate.",
+			},
+			wantStatus:     "unavailable",
+			wantMessage:    "unavailable from the current runtime configuration",
+			wantActionText: "executable permissions",
+		},
+		{
+			name: "remote runtime",
+			readiness: BrowserEvidenceRuntimeReadinessResponse{
+				Status:         "local_only",
+				Message:        "The native browser runtime is unavailable in remote runtime.",
+				OperatorAction: "Run the task on a local Hecate runtime with browser capabilities configured.",
+			},
+			wantStatus:     "local_only",
+			wantMessage:    "unavailable in remote runtime",
+			wantActionText: "local Hecate runtime",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, server := newProjectWorkTestServerWithProviders(&fakeProvider{name: "anthropic"})
+			handler.browserEvidenceReadiness = test.readiness
+			seedProjectWorkAssignmentStartTest(t, handler, projectWorkAssignmentStartSeed{
+				Workspace:           t.TempDir(),
+				Driver:              projectwork.AssignmentDriverHecateTask,
+				WithoutRoleDefaults: true,
+			})
+			if _, err := handler.projects.Update(t.Context(), "proj_start", func(project *projects.Project) {
+				project.DefaultProvider = "anthropic"
+				project.DefaultModel = "gpt-4o-mini"
+			}); err != nil {
+				t.Fatalf("Update project defaults: %v", err)
+			}
+			if _, err := handler.agentProfiles.Create(t.Context(), agentprofiles.Profile{
+				ID:                         "browser_review",
+				Name:                       "Browser review",
+				Surface:                    agentprofiles.SurfaceHecateTask,
+				ToolsEnabled:               true,
+				BrowserAllowed:             true,
+				BrowserInteractionsAllowed: true,
+				BrowserAllowedOrigins:      []string{"https://qa.example.test"},
+			}); err != nil {
+				t.Fatalf("Create browser review preset: %v", err)
+			}
+			if _, err := handler.projectWork.UpdateRole(t.Context(), "proj_start", "role_backend", func(role *projectwork.AgentRoleProfile) {
+				role.DefaultAgentProfile = "browser_review"
+			}); err != nil {
+				t.Fatalf("Update role preset: %v", err)
+			}
+
+			response := mustRequestJSON[ProjectAssignmentLaunchReadinessEnvelope](newAPITestClient(t, server), http.MethodGet, "/hecate/v1/projects/proj_start/work-items/work_start/assignments/asgn_start/launch-readiness", "")
+			if !response.Data.Ready || response.Data.Status != projectAssignmentLaunchReadinessStatusReady || len(response.Data.Blockers) != 0 {
+				t.Fatalf("readiness = %+v, want ready launch with a non-blocking browser warning", response.Data)
+			}
+			posture := response.Data.ProfilePosture
+			if posture == nil || posture.BrowserEvidenceStatus != projectAssignmentBrowserEvidenceStatusUnavailable || posture.BrowserInteractionStatus != projectAssignmentBrowserInteractionStatusUnavailable {
+				t.Fatalf("profile_posture = %+v, want both granted browser tools unavailable", posture)
+			}
+			if !posture.BrowserAllowed || !posture.BrowserInteractionsAllowed || !reflect.DeepEqual(posture.BrowserAllowedOrigins, []string{"https://qa.example.test"}) {
+				t.Fatalf("profile_posture = %+v, want immutable preset grants and origins preserved", posture)
+			}
+			if runtime := posture.BrowserRuntimeReadiness; runtime == nil || runtime.Available || runtime.Status != test.wantStatus || !strings.Contains(runtime.Message, test.wantMessage) || !strings.Contains(runtime.OperatorAction, test.wantActionText) {
+				t.Fatalf("browser_runtime_readiness = %+v, want status %q with actionable guidance", runtime, test.wantStatus)
+			}
+			warning := strings.Join(response.Data.Warnings, "\n")
+			for _, want := range []string{"browser_inspect", "browser_flow", "will be omitted", test.wantMessage, test.wantActionText} {
+				if !strings.Contains(warning, want) {
+					t.Fatalf("warnings = %q, want %q", warning, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderProjectAssignmentLaunchProfilePosture_PreservesIndependentBrowserGrant(t *testing.T) {
+	t.Parallel()
+
+	profile := projectworkapp.ResolvedAgentProfile{
+		BrowserInteractionsAllowed: true,
+		BrowserAllowedOrigins:      []string{"https://app.example.test"},
+	}
+	item := renderProjectAssignmentLaunchProfilePosture(profile, projectwork.AssignmentDriverHecateTask, BrowserEvidenceRuntimeReadinessResponse{
+		Available: true,
+		Status:    "ready",
+	})
+	if item.BrowserEvidenceStatus != projectAssignmentBrowserEvidenceStatusDisabled || item.BrowserAllowed {
+		t.Fatalf("browser evidence posture = %+v, want independently disabled", item)
+	}
+	if item.BrowserInteractionStatus != projectAssignmentBrowserInteractionStatusEnabled || !item.BrowserInteractionsAllowed || !reflect.DeepEqual(item.BrowserAllowedOrigins, profile.BrowserAllowedOrigins) {
+		t.Fatalf("browser interaction posture = %+v, want independently enabled with origins", item)
+	}
+
+	external := renderProjectAssignmentLaunchProfilePosture(profile, projectwork.AssignmentDriverExternalAgent, BrowserEvidenceRuntimeReadinessResponse{})
+	if external.BrowserEvidenceStatus != projectAssignmentBrowserEvidenceStatusNotApplicable || external.BrowserInteractionStatus != projectAssignmentBrowserInteractionStatusNotApplicable || external.BrowserAllowed || external.BrowserInteractionsAllowed || len(external.BrowserAllowedOrigins) != 0 {
+		t.Fatalf("external browser posture = %+v, want capabilities not applicable", external)
 	}
 }
 

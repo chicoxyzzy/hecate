@@ -249,7 +249,7 @@ func TestQAToolPolicyFailsClosedOutsideStructuredInspection(t *testing.T) {
 			t.Errorf("BlocksTool(qa, %q) = true, want allowed evidence tool", name)
 		}
 	}
-	for _, name := range []string{"shell_exec", "git_exec", "file_write", "file_edit", "apply_patch", "code_intelligence", "http_request", "web_search", "browser_inspect", "mcp__docs__lookup", "draft_project_proposal"} {
+	for _, name := range []string{"shell_exec", "git_exec", "file_write", "file_edit", "apply_patch", "code_intelligence", "http_request", "web_search", "browser_inspect", "browser_flow", "mcp__docs__lookup", "draft_project_proposal"} {
 		if !BlocksTool(types.WorkflowModeQA, name) {
 			t.Errorf("BlocksTool(qa, %q) = false, want blocked", name)
 		}

@@ -53,6 +53,7 @@ levels.
 | Surface                                               | Boundary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hecate Chat with tools on / native `agent_loop` tasks | Hecate owns the task loop. Tool calls use WorkspaceFS, ProcessRunner, or GitRunner as appropriate, with env sanitisation, output caps, timeouts, policy checks, approvals, and `bwrap` / `sandbox-exec` wrappers where available. This is not a VM or container boundary.                                                                                                                                                                                                                                                                                                                                                 |
+| Native browser tools                                  | Only eligible native project-assignment Tasks can receive the independently granted `browser_inspect` or `browser_flow` tool. Every call is bound to one query-free URL, one exact origin, an explicit approval, a fresh Chromium process/profile, `GET`/`HEAD` transport controls, and bounded plain-text evidence. Static inspection disables scripts; an approved flow enables scripts and runs only its declared accessibility click/wait actions. These controls are not an OS browser sandbox, hard identity boundary, or guarantee that a `GET` or click is side-effect-free.                                      |
 | External Agents                                       | Codex, Claude Code, Cursor Agent, Grok Build, and similar integrations run as trusted local subprocesses in the selected workspace. Hecate supervises lifecycle, approvals, diagnostics, Git diffs, and opt-in workspace-scoped ACP terminal RPCs, but it does not sandbox the agent's internal runtime.                                                                                                                                                                                                                                                                                                                  |
 | Operator shell access                                 | Hecate can open the operator's normal OS terminal from the workspace menu. It can also expose opt-in operator terminal sessions over the local runtime API when `HECATE_OPERATOR_TERMINALS=1`; those sessions are loopback-only, blocked in remote runtime mode, workspace-scoped, env-sanitized, output-bounded, and routed through the same static command checks / OS wrapper path as shell tools where available. Remote and container operators should otherwise use the surrounding infrastructure shell (`ssh`, `docker exec`, `kubectl exec`, provider console, or equivalent) when they need direct host access. |
 
@@ -84,6 +85,67 @@ Native web discovery is opt-in. The `web_search` agent tool is only advertised
 when an operator configures a search provider and API key; it returns bounded
 search results, while fetching a result URL still goes through `http_request`
 and that tool's SSRF/host policy.
+
+## Native browser capability boundary
+
+Browser capability belongs to Hecate runtime policy, not Cairnline coordination
+intent. An Agent Preset may independently grant script-disabled static evidence
+with `browser_allowed` and approved interaction with
+`browser_interactions_allowed`; both grants share
+`browser_allowed_origins`. Hecate snapshots those values only when it launches
+a native project-assignment Task. Hecate Chat, External Agent/ACP sessions, QA,
+manual/legacy Tasks, and remote runtime never receive these tools.
+
+Each browser call rejects credentials, queries, and fragments, then permits one
+exact origin even when the Task snapshot lists more. Loopback, private,
+link-local, multicast, and other non-public addresses fail preflight unless the
+operator deliberately enables `HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS`.
+Hostname calls pin one preflight-selected address. Origin checks, DNS pinning,
+method interception, and private-IP policy reduce accidental scope; they are
+application-level checks, not a browser-process firewall or a substitute for a
+VM/container network boundary.
+
+`browser_inspect` disables page scripts and service workers and captures only
+bounded static text evidence. `browser_flow` enables scripts for one fully
+declared approval-bound sequence of 1–6 exact accessibility `click` /
+`wait_for` actions. It does not accept selectors, coordinates, arbitrary
+JavaScript, typing, secrets, uploads, downloads, screenshots, popups, workers,
+realtime transports, or retained sessions. The approval names the query-free
+URL and every ordered action. Treat it as authorization for the scripts,
+same-origin `GET`/`HEAD` requests, and clicks in that complete flow: a read-like
+HTTP method or link click can still change server or application state.
+
+Every call starts a fresh Chromium process and temporary profile, owns the
+browser process tree, and removes the profile after teardown. Hecate retries a
+failed removal and fails the tool with path-free operator guidance rather than
+claiming that cleanup succeeded; a stale temporary profile can remain until the
+operator stops Hecate and removes it. Before creation, Hecate canonicalizes the
+temporary base, rejects known network/FUSE/unknown filesystem classes, and
+rechecks the created directory's opened filesystem handle. Hecate does not
+import cookies, saved
+logins, storage, extensions, downloads, clipboard, or device permissions.
+Machine or enterprise browser policy can nevertheless supply integrated
+authentication or client certificates outside profile storage. Use a dedicated
+unmanaged browser/container for identity-sensitive destinations.
+
+Evidence is bounded plain text. Static inspection emits `browser_evidence`;
+interaction emits `browser_flow_evidence` with ordered action outcomes,
+initial/final accessibility snapshots, and network counters. Neither artifact
+contains screenshots, form values, cookies, storage, raw protocol data, or
+request/response bodies. If a flow fails after an earlier click, Hecate retains
+bounded partial-action evidence and warns that the application may already have
+changed. That audit record is evidence of attempted actions, not transactional
+rollback.
+
+The DevTools relay rejects any browser-to-Hecate protocol message over 4 MiB
+and stops a call after 32 MiB of aggregate inbound protocol payload. Interactive
+origin storage is independently quota-limited to 8 MiB inside the ephemeral
+profile, and Chromium audio output is muted. These application bounds protect
+Hecate's evidence path; they are not a browser sandbox or a precise upper bound
+on Chromium's own transient memory and filesystem bookkeeping.
+Hecate also disables Chromium Breakpad crash reporting for the launched
+process. Machine or enterprise policy outside the temporary profile remains an
+operator-controlled boundary and can weaken browser-level privacy assumptions.
 
 ## External-agent executable trust
 

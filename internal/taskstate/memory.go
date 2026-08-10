@@ -769,6 +769,10 @@ func cloneTask(task types.Task) types.Task {
 		browserAllowed := *task.AgentPresetBrowserAllowed
 		task.AgentPresetBrowserAllowed = &browserAllowed
 	}
+	if task.AgentPresetBrowserInteractionsAllowed != nil {
+		browserInteractionsAllowed := *task.AgentPresetBrowserInteractionsAllowed
+		task.AgentPresetBrowserInteractionsAllowed = &browserInteractionsAllowed
+	}
 	task.AgentPresetBrowserAllowedOrigins = append([]string(nil), task.AgentPresetBrowserAllowedOrigins...)
 	if task.MCPServers != nil {
 		task.MCPServers = append([]types.MCPServerConfig(nil), task.MCPServers...)

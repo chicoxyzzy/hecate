@@ -251,7 +251,7 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 	taskOriginRunGate := taskruncoord.NewOriginGate()
 	workspaceCoordinator := workspacecoord.NewRegistry()
 	modelToolProbeStore := modelprobe.NewMemoryStore()
-	browserInspector, browserEvidenceReadiness := browserInspectorFromConfig(cfg, logger)
+	browserInspector, browserFlowRunner, browserEvidenceReadiness := browserRuntimesFromConfig(cfg, logger)
 	runner := orchestrator.NewRunner(logger, taskStore, tracer, orchestrator.Config{
 		DefaultModel:           cfg.Router.DefaultModel,
 		ApprovalPolicies:       cfg.Server.TaskApprovalPolicies,
@@ -269,8 +269,9 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service *gateway.Service
 			AllowPrivateIPs:  cfg.Server.TaskHTTPAllowPrivateIPs,
 			AllowedHosts:     cfg.Server.TaskHTTPAllowedHosts,
 		},
-		WebSearch:        webSearchClientFromConfig(cfg, logger),
-		BrowserInspector: browserInspector,
+		WebSearch:         webSearchClientFromConfig(cfg, logger),
+		BrowserInspector:  browserInspector,
+		BrowserFlowRunner: browserFlowRunner,
 		ShellNetwork: orchestrator.ShellNetworkPolicy{
 			AllowPrivateIPs: cfg.Server.TaskShellAllowPrivateIPs,
 			AllowedHosts:    cfg.Server.TaskShellAllowedHosts,

@@ -53,10 +53,12 @@ func (e *AgentLoopExecutor) runModelCall(ctx context.Context, spec ExecutionSpec
 	}
 
 	assistantMsg := resp.Choices[0].Message
-	// Browser targets intentionally exclude query strings and fragments. Strip
-	// any invalid raw arguments before the assistant message is emitted or
-	// checkpointed, where a query could otherwise be retained as operator data.
+	// Browser targets intentionally exclude query strings and fragments, and
+	// flow selectors have a compact safe grammar. Strip invalid raw arguments
+	// before the assistant message is emitted or checkpointed, where rejected
+	// fields could otherwise retain operator or application data.
 	assistantMsg = sanitizeBrowserInspectionToolCalls(assistantMsg)
+	assistantMsg = sanitizeBrowserFlowToolCalls(assistantMsg)
 	toolCallValidationErr := validateAgentToolCallBatch(assistantMsg.ToolCalls)
 	if toolCallValidationErr == nil {
 		emitAssistantMessageEvents(spec, modelCall, assistantMsg)

@@ -552,7 +552,7 @@ sequenceDiagram
     participant LLM
     participant Tools
     participant Sandbox
-    participant Browser as Local browser inspector
+    participant Browser as Fresh local Chromium
     participant MCP as External MCP server
     participant Store
     Worker->>Agent: Execute
@@ -574,7 +574,7 @@ sequenceDiagram
                 Agent->>Store: record policy.tool_blocked (agent_preset_tools)
                 Note over Agent,MCP: skip approval and dispatch, then append a denied tool result
             else tools available
-                opt any tool gated by policy (built-in or per-MCP-server)
+                opt any tool gated by policy, or any browser call
                     Agent->>Store: persist agent_loop_tool_call approval
                     Agent-->>Worker: pause as awaiting_approval
                 end
@@ -583,6 +583,10 @@ sequenceDiagram
                     alt browser_inspect
                         Tools->>Browser: approved exact-origin, script-disabled fresh-profile inspection
                         Browser-->>Tools: bounded text evidence
+                    else browser_flow
+                        Tools->>Browser: approved query-free URL + 1–6 exact accessibility actions
+                        Note over Browser: scripts enabled on one exact origin with GET/HEAD only
+                        Browser-->>Tools: bounded complete or partial action evidence
                     else other built-in tool
                         Tools->>Sandbox: shell_exec / file_write / http_request / ...
                         Sandbox-->>Tools: result
@@ -608,18 +612,32 @@ Three runtime invariants worth pinning (full mechanics in [`agent-runtime.md`](.
 - **Provider hint.** `ChatRequest.Scope.ProviderHint` is set from `run.Provider` (mirrored from `task.RequestedProvider`), so the operator's pinned provider actually routes — no fallback to the default for generic model ids.
 - **Resolved route survives streaming.** Streaming and non-streaming model calls both copy the resolved provider, provider kind, and model back onto the run result, so task detail and resumes see what actually served the call.
 - **Cost ceiling is task-cumulative.** The per-task `BudgetMicrosUSD` is checked against `priorCost + costSpent` after each model call, where `priorCost` includes every prior run in the resume chain. A chain of resumes can't escape the ceiling.
-- **Browser evidence is its own narrow capability.** Only a native
-  project-assignment task whose Agent Preset snapshot permits exact origins can
-  reach the local browser inspector, and every call pauses for approval. The
-  inspector launches a fresh profile, disables page scripts, bypasses service
-  workers, blocks downloads, cancels after observing 4 MiB of aggregate
-  response data (with possible browser/socket-buffered overshoot), and returns
-  bounded static text evidence only;
-  Hecate Chat and External Agent paths never receive it. The selected origin
-  gates URL-loader traffic for that one inspection. Fresh-profile isolation
-  does not override OS or enterprise browser identity policy, and the
-  origin/private-IP checks are application controls, not a substitute for
+- **Browser grants are independent runtime capabilities.** Only a native
+  project-assignment Task whose immutable Agent Preset snapshot grants the
+  requested capability and shared exact origins can reach the local browser
+  runtime. `browser_inspect` disables scripts and returns bounded static text;
+  `browser_flow` enables scripts for one approval-bound sequence of 1–6 exact
+  accessibility click/wait actions and retains partial evidence if a later
+  action fails. Both start a fresh owned process tree/profile, permit only one selected
+  origin and `GET`/`HEAD` URL-loader traffic, block downloads, use one bounded
+  deadline, response budget, and browser-to-Hecate DevTools relay budget, and
+  always pause for approval. Hecate Chat,
+  External Agent, QA, legacy/manual, and remote-runtime paths never receive
+  them. Fresh-profile isolation does not override OS or enterprise browser
+  identity policy, and origin/private-IP checks are application controls, not
   OS-level browser network isolation.
+
+The interaction authority and audit path is intentionally one-way:
+
+```mermaid
+flowchart LR
+    Preset["Agent Preset<br/>browser_interactions_allowed + origins"] --> Snapshot["Immutable native assignment Task snapshot"]
+    Snapshot --> Approval["One approval<br/>query-free URL + complete ordered actions"]
+    Approval --> Browser["Fresh Chromium process/profile<br/>one exact origin"]
+    Browser --> Relay["Loopback bounded DevTools relay<br/>per-message + per-call budgets"]
+    Relay --> Evidence["Bounded browser_flow_evidence<br/>complete or partial action audit"]
+    Evidence --> Teardown["Process-tree drain + profile removal<br/>cleanup failure is explicit"]
+```
 
 ## Storage tiers
 

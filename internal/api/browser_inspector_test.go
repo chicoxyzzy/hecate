@@ -81,3 +81,44 @@ func TestSettingsStatusBrowserEvidenceReadinessIsPathFree(t *testing.T) {
 		})
 	}
 }
+
+func TestBrowserRuntimesFromConfigOmitUnavailableInterfaces(t *testing.T) {
+	t.Parallel()
+	executable := filepath.Join(t.TempDir(), "local-browser")
+	if err := os.WriteFile(executable, []byte("browser"), 0o700); err != nil {
+		t.Fatalf("write executable: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		cfg    config.Config
+		status string
+	}{
+		{name: "not configured", status: "not_configured"},
+		{
+			name: "remote runtime",
+			cfg: config.Config{Server: config.ServerConfig{
+				RemoteRuntimeMode:     true,
+				TaskBrowserExecutable: executable,
+			}},
+			status: "local_only",
+		},
+		{
+			name: "unavailable executable",
+			cfg: config.Config{Server: config.ServerConfig{
+				TaskBrowserExecutable: filepath.Join(t.TempDir(), "missing-browser"),
+			}},
+			status: "unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inspector, flowRunner, readiness := browserRuntimesFromConfig(test.cfg, quietLogger())
+			if inspector != nil || flowRunner != nil {
+				t.Fatalf("browser runtimes = inspector %T flow %T, want both nil", inspector, flowRunner)
+			}
+			if readiness.Available || readiness.Status != test.status {
+				t.Fatalf("browser readiness = %+v, want unavailable status %q", readiness, test.status)
+			}
+		})
+	}
+}

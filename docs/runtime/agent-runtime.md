@@ -207,18 +207,18 @@ dispatcher both fail closed. File and artifact inspection can run:
 and `git_diff` tool names return a clear unavailable result in QA v0 without
 invoking Git, so the agent can record that limitation rather than observe a
 live source repository. QA blocks shell and terminal commands, all
-workspace/Git writes,
-`file_edit` / `apply_patch` proposals, `draft_project_proposal`, external MCP
-tools, `http_request`, `web_search`, and `browser_inspect`. A model that nevertheless returns one
-of those calls receives a policy-denied tool result; Hecate does not create an
+workspace/Git writes, `file_edit` / `apply_patch` proposals,
+`draft_project_proposal`, external MCP tools, `http_request`, `web_search`,
+`browser_inspect`, and `browser_flow`. A model that nevertheless returns one of
+those calls receives a policy-denied tool result; Hecate does not create an
 approval or contact the blocked executor/service.
 
-QA v0 also blocks `browser_inspect`. Its public Task creation surface has no
-assignment-launch selector for browser evidence, so it must not imply a
+QA v0 also blocks both browser tools. Its public Task creation surface has no
+assignment-launch selector for either browser grant, so it must not imply a
 conditional capability that operators cannot actually select. A future QA
-contract may add constrained browser evidence only with an explicit Hecate
-runtime selection and its own review; it would still not enable browser
-automation.
+contract may add constrained browser capability only with an explicit Hecate
+runtime selection and its own review; it would still not enable a general URL
+checker, typing, or retained browser state.
 
 At Run start, Hecate writes a `workflow_manifest` JSON artifact containing the
 versioned contract and no prompt, workspace path, credentials, or model output.
@@ -241,7 +241,8 @@ filesystem work needed to create its managed workspace.
 The agent gets its standard workspace tools by default. None require operator
 config beyond the approval policies; `http_request` reads the network policy
 from env. A configured web-search provider can add `web_search`; the separate
-native browser-evidence capability is opt-in, local-only, and much narrower.
+native browser capabilities are opt-in, local-only, and much narrower than
+general browser automation.
 Chat-origin Task Runs for project-linked Hecate Chat receive one additional
 proposal-only tool.
 
@@ -268,6 +269,7 @@ proposal-only tool.
 | `http_request`           | Make an outbound HTTP request                                         | For preset-backed tasks, advertised only when the preset snapshot has `sandbox_network=true`; unexpected calls fail closed. Then gated by `network_egress` or `all_tools`, with private-IP, scheme, and optional host allowlist checks                                                                                                                                                                                                    |
 | `web_search`             | Search the web through the configured search provider                 | For preset-backed tasks, advertised only when configured and the snapshot has `sandbox_network=true`; unexpected calls fail closed. Then gated by `network_egress` or `all_tools`; endpoint and API key stay operator-owned                                                                                                                                                                                                               |
 | `browser_inspect`        | Load one approved static page and return bounded, text-only evidence  | Available only to native project-assignment tasks whose Agent Preset snapshot explicitly enables browser evidence with exact origins, and only when a local executable is configured. Every call requires an `agent_loop_tool_call` approval even if global tool approvals are disabled. Page scripts are disabled. It is not controlled by `sandbox_network`, and is omitted from Hecate Chat, External Agent, legacy, and manual tasks. |
+| `browser_flow`           | Run one approved accessibility click/wait flow                        | Independently granted to eligible native project-assignment Tasks. One approval covers the query-free start URL and fully declared 1–6 action flow; scripts and same-origin `GET`/`HEAD` may cause effects. No Hecate Chat, External Agent, QA, legacy/manual, or remote-runtime use.                                                                                                                                                     |
 | `draft_project_proposal` | Draft a Project Assistant proposal artifact for the linked project    | Available only to Chat-origin Task Runs backing Hecate Chat Turns with `origin_kind=chat`, `execution_profile=chat_agent`, and a `project_id`; gated only by `all_tools`. Creates a `project_assistant_proposal` artifact for operator review and does not apply or start anything.                                                                                                                                                       |
 
 Tool argument schemas are JSON-Schema-shaped and surfaced to the LLM in the standard `tools` array on each `Chat` request. Bad arguments are returned to the model as a tool-result error string rather than failing the run, so the model can correct itself.
@@ -435,76 +437,127 @@ still apply. When the master tools gate is enabled, external MCP servers are
 separately configured trusted tool sources and keep their own per-server
 approval policy.
 
-### Browser evidence
+### Browser capabilities
 
-`browser_inspect` is a deliberately narrow local inspection tool, not general
-browser automation. It is exposed only when all of the following are true:
+Hecate exposes two deliberately narrow local tools instead of a general browser
+controller:
 
-- The gateway is running locally and an operator configured an absolute path to
-  a Chromium-compatible executable with `HECATE_TASK_BROWSER_EXECUTABLE`.
-  Hecate does not search `PATH`, download a browser, attach to an existing
-  browser, or enable this capability in remote-runtime mode.
-- The native project-assignment task has a resolved `hecate_task` (or `any`)
-  Agent Preset with tools enabled, `browser_allowed=true`, and one or more
-  exact `browser_allowed_origins`. Those normalized origins are copied to the
-  output-only task snapshot fields
-  `agent_preset_browser_allowed` and
-  `agent_preset_browser_allowed_origins`; later preset edits cannot expand an
-  existing task's browser scope.
-- The model requests an absolute HTTP(S) page URL at one of those origins. URLs
-  containing credentials, a query string, or a fragment are rejected rather
-  than recorded or redacted later. A path is allowed. This keeps query-borne
-  secrets out of tool-call records and conversation artifacts.
+- `browser_inspect` captures static text evidence with page scripts disabled.
+- `browser_flow` runs one fully declared accessibility interaction with page
+  scripts enabled.
 
-Each request pauses for explicit operator approval. This is unconditional:
-empty `HECATE_TASK_APPROVAL_POLICIES` and the absence of `all_tools` do not
-make browser inspection automatic. The approval describes the requested safe
-page target (origin plus path). Credentials, queries, and fragments were
-already rejected, and a target that cannot fit in the approval display is
-rejected before it reaches task records or the browser. This keeps every
-approval bound to the complete page it authorizes.
+Both tools are available only when the gateway runs locally, the operator sets
+`HECATE_TASK_BROWSER_EXECUTABLE` to an absolute Chromium-compatible executable,
+and the Task came from a native project assignment with a resolved
+`hecate_task` (or `any`) Agent Preset and tools enabled. Hecate does not search
+`PATH`, download a browser, attach to an existing browser, or expose either
+tool in Hecate Chat, External Agent sessions, QA v0, legacy/manual Tasks, or
+remote-runtime mode.
 
-For every inspection Hecate launches a fresh temporary profile and removes it
-after the browser exits. It imports no host cookies, saved logins, extensions,
-clipboard, or device permissions; it blocks downloads and retains no browser
-profile data. The evidence is a bounded `browser_evidence` `text/plain`
-artifact containing a redacted final URL/origin, page title, small
-accessibility summary, bounded console lines, and network counters. It never
-contains screenshots, downloaded bytes, raw CDP traffic, cookies, storage, or
-request/response bodies.
+The grants are independent. `browser_allowed=true` enables only
+`browser_inspect`; `browser_interactions_allowed=true` enables only
+`browser_flow`. If either grant is enabled, the preset must include one or more
+exact `browser_allowed_origins`. Hecate normalizes and snapshots the two grants
+and their shared origin list as `agent_preset_browser_allowed`,
+`agent_preset_browser_interactions_allowed`, and
+`agent_preset_browser_allowed_origins`. Retries and resumes keep that immutable
+snapshot; enabling static evidence never implies interaction, and a later
+preset edit cannot broaden an existing Task.
 
-One `HECATE_TASK_BROWSER_TIMEOUT` wall-clock budget covers origin preflight,
-browser startup, and page capture together. The inspector also disables its
-network cache and cancels the capture once CDP observes aggregate streamed
-response data beyond 4 MiB, including chunked or other unknown-length
-responses. This is a cancellation threshold, not a hard wire-byte limit:
-browser, socket, and peer buffers can add bytes before cancellation reaches
+Both tools accept an absolute HTTP(S) start URL at an allowed origin. A path is
+allowed; credentials, query strings, and fragments are rejected before the
+tool call is persisted or shown for approval. Each call receives only the
+selected exact origin, even if the preset lists several. Another allowed preset
+origin is therefore not a cross-origin subresource destination for that call.
+
+Every otherwise-permitted call pauses for an `agent_loop_tool_call` approval,
+even when `HECATE_TASK_APPROVAL_POLICIES` is empty. The approval shows the full
+query-free target. A `browser_flow` approval additionally shows the complete
+ordered action list, warns that scripts and same-origin `GET`/`HEAD` requests
+may run, and states that clicks may change the approved application. The agent
+loop admits at most one `browser_flow` call in a single model tool-call batch,
+so one approval cannot hide several separately state-changing flows.
+
+#### Static inspection
+
+`browser_inspect` disables page JavaScript before navigation, bypasses service
+workers, and permits only selected-origin `GET`/`HEAD` URL-loader traffic. It
+does not expose scripts, workers, WebSockets, WebTransport, WebRTC, click,
+type, form submission, upload, download, clipboard, or device primitives. Its
+bounded `browser_evidence` `text/plain` artifact contains a redacted final
+URL/origin, title, bounded accessibility tree, bounded console lines, and
+network counters. It contains no screenshot, downloaded bytes, raw CDP,
+cookies, storage, or request/response body.
+
+#### Approved accessibility flow
+
+`browser_flow` accepts 1–6 actions. Each action is either `wait_for`, which
+waits for one exact computed accessibility role and accessible name, or
+`click`, which targets one exact role/name pair. Click roles are limited to
+`button`, `link`, `checkbox`, `radio`, `tab`, `menuitem`, and `switch`. Hecate
+does not accept CSS selectors, XPath, coordinates, arbitrary JavaScript,
+keyboard input, text or secret entry, form values, uploads, downloads,
+screenshots, or retained sessions.
+
+The browser re-resolves the approved accessibility target immediately before a
+physical click and fails closed if the target is absent, ambiguous, disabled,
+obscured, or otherwise unavailable. Page scripts are enabled because many
+applications need them to render and respond to a click. Workers, realtime
+transports, downloads, popups, file choosers, and navigation or subresources
+that leave the exact origin are blocked. Only `GET` and `HEAD` URL-loader
+requests are admitted, but HTTP does not make those requests side-effect-free,
+and an approved click can deliberately mutate the application.
+
+The bounded `browser_flow_evidence` `text/plain` artifact contains the
+approved origin, redacted final URL, title, ordered action outcomes, initial and
+final accessibility snapshots, and network counters. It excludes console and
+form values, screenshots, cookies, storage, raw protocol data, and
+request/response bodies. If an action or policy check fails after an earlier
+click, Hecate retains the bounded partial action evidence and explicitly warns
+that the application may already have changed; the tool never reports that
+partial flow as completed.
+
+#### Shared process, network, and identity boundary
+
+Every inspection or flow starts a new owned Chromium process tree with a fresh
+temporary profile, disables the network cache, bypasses service workers, blocks
+downloads, and removes the profile after process teardown. Profile removal is
+retried; if it still fails, the tool fails with path-free stale-profile cleanup
+guidance and does not claim that no browser state remains. The profile base is
+canonicalized and must pass Hecate's known-local filesystem classification both
+before creation and through the created directory's opened handle.
+One `HECATE_TASK_BROWSER_TIMEOUT` deadline covers origin preflight, browser
+startup, and the complete capture or flow. Hecate cancels after CDP observes
+more than 4 MiB of aggregate streamed response data, including unknown-length
+responses. That is a cancellation threshold rather than a wire-byte guarantee:
+browser, socket, and peer buffers can overshoot before cancellation reaches
 Chromium.
 
-A fresh Hecate profile is not a hard identity-isolation boundary. Machine or
-enterprise Chromium policy can still supply integrated authentication or a
-client certificate outside profile storage. Do not use this capability against
-identity-sensitive sites unless the configured executable runs in a dedicated,
-unmanaged browser environment with the required OS/network isolation.
-
-The inspector disables page JavaScript before navigation, bypasses service
-workers, and uses an allow-first browser URL gate plus `GET`/`HEAD` interception
-for the selected exact origin. It therefore captures static server-rendered
-content only: no scripts, workers, WebSockets, WebTransport, WebRTC, click,
-type, form-submit, upload, download, clipboard, or device-control primitive is
-available. This makes ordinary browser writes unavailable, but HTTP does not
-guarantee that a `GET` endpoint is semantically safe. Treat every approval as
-permission to load that origin and page, and do not enable it for an application
-whose read route can cause a side effect.
+Chromedp connects through a loopback-only relay that rejects any complete
+browser-to-Hecate DevTools message over 4 MiB and ends the call after 32 MiB of
+aggregate inbound protocol payload. This bounds page-controlled protocol frames
+before Hecate decodes them. `browser_flow` additionally gives its ephemeral
+origin an 8 MiB storage quota and launches Chromium with audio muted. Browser
+bookkeeping and in-flight writes can overshoot the storage quota slightly; none
+of these limits bounds Chromium's entire child-process address space.
+The launcher also disables Chromium Breakpad crash reporting. Host-managed
+browser policy remains outside the temporary profile and can override broader
+privacy or identity expectations, so identity-sensitive use still requires a
+dedicated unmanaged runtime.
 
 Before launch, Hecate resolves configured origins and rejects loopback,
 private, link-local, multicast, and otherwise non-public addresses unless
-`HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS=true` is set. For hostname origins, it
-passes the preflight-selected numeric address to Chromium for that inspection,
-which reduces the DNS-rebinding window. That defense in depth and the
-exact-origin check are application-level guardrails, not an OS-level egress
-firewall or a sandbox boundary for the browser process. Operators who need a
-hard network boundary must provide it outside Hecate.
+`HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS=true`. Hostname origins are pinned to a
+preflight-selected address for the call to reduce DNS-rebinding exposure. This
+and the exact-origin request gate are application controls, not an OS-level
+egress firewall or browser sandbox.
+
+A fresh profile is also not a hard identity boundary. Machine or enterprise
+Chromium policy can still supply integrated authentication or client
+certificates outside profile storage. Do not use either tool for
+identity-sensitive sites unless the configured executable runs inside a
+dedicated unmanaged browser/container with the required OS and network
+controls.
 
 When `sandbox_read_only=true`, the agent loop removes broad subprocess and
 interactive surfaces that cannot provide a hard read-only workspace guarantee:
@@ -664,9 +717,10 @@ included project memory and workspace-instruction bodies are sent to that
 provider as normal task prompt content. The task also snapshots the resolved
 preset id and `tools_enabled`, maps `writes_allowed=false` to
 `sandbox_read_only=true`, and maps `network_allowed` to `sandbox_network`;
-when the preset enables browser evidence, it separately snapshots the exact
-browser-origin allowlist. Retries and resumes reuse those task snapshots rather
-than resolving a mutable preset again.
+when the preset enables static browser evidence or browser interaction, it
+separately snapshots both browser grants and their shared exact-origin
+allowlist. Retries and resumes reuse those task snapshots rather than resolving
+a mutable preset again.
 
 Project-linked Hecate Chat uses a separate bounded project prelude in the chat
 system prompt. It may include project identity, root metadata, role hints,
@@ -689,7 +743,7 @@ profile, maps `writes_allowed=false` to `sandbox_read_only=true`, and maps
 create a tools-on Task; it keeps the session on the direct-model path.
 
 This Chat contract intentionally does not resolve a live preset at run time or
-carry project-memory/context-source policy, skills, browser evidence, MCP
+carry project-memory/context-source policy, skills, browser capabilities, MCP
 servers, approval-policy defaults, or External Agent options into the Task.
 Later preset edits and deletion do not change an existing Chat or its backing
 Task. The preset is Hecate runtime state, not Cairnline coordination intent;
@@ -715,11 +769,13 @@ When the LLM calls a gated tool inside an `agent_loop` run, the loop pauses. Pol
 - `network_egress` → pauses on `http_request` and configured `web_search` tool calls
 - `all_tools` → pauses on every otherwise-permitted tool call (`shell_exec`, `terminal_open`, `terminal_write`, `terminal_read`, `terminal_wait`, `terminal_kill`, `git_exec`, `git_status`, `git_diff`, `file_write`, `file_edit`, `apply_patch`, `read_file`, `grep`, `glob`, `code_intelligence`, `artifact_read`, `list_dir`, `http_request`, `web_search`, `draft_project_proposal`); QA v0 Git evidence remains unavailable without an approval
 
-`browser_inspect` is intentionally not in that policy mapping: every otherwise
-permitted browser-inspection call pauses for `agent_loop_tool_call` approval,
-regardless of `HECATE_TASK_APPROVAL_POLICIES`. That extra gate is required
-because loading even a read-only page can disclose operator-visible content or
-trigger an application-specific `GET` side effect.
+`browser_inspect` and `browser_flow` are intentionally not in that policy
+mapping: every otherwise-permitted browser call pauses for
+`agent_loop_tool_call` approval regardless of
+`HECATE_TASK_APPROVAL_POLICIES`. Loading even a static page can disclose
+operator-visible content or trigger an application-specific `GET` effect;
+`browser_flow` additionally runs scripts and approved clicks that can change
+the application.
 
 Approval never grants a capability denied by the resolved runtime policy. In
 particular, unexpected calls on a task whose Agent Preset snapshot sets
@@ -779,9 +835,9 @@ Env vars that affect agent_loop runs:
 | `HECATE_CODEINTEL_GOPLS_PATH`            | `""`               | Exact absolute `gopls` executable; empty discovers `gopls` from the trusted global PATH                                                                                                                       |
 | `HECATE_CODEINTEL_TSC_PATH`              | `""`               | Exact absolute TypeScript 7+ native `tsc` executable; empty discovers `tsc` from the trusted global PATH                                                                                                      |
 | `HECATE_CODEINTEL_AST_GREP_PATH`         | `""`               | Exact absolute `ast-grep` executable; empty discovers `ast-grep` from the trusted global PATH                                                                                                                 |
-| `HECATE_TASK_BROWSER_EXECUTABLE`         | `""`               | Absolute path to a local Chromium-compatible executable for optional native browser evidence. Empty disables it; Hecate never finds or downloads a browser automatically, and remote-runtime mode rejects it. |
-| `HECATE_TASK_BROWSER_TIMEOUT`            | `20s`              | Positive wall-clock limit for one browser inspection, including preflight, browser startup, and page capture                                                                                                  |
-| `HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS`  | `false`            | Allows private/local destinations after an explicit operator opt-in. The inspector pins hostname resolution for the inspection, but this is still not an OS/network isolation boundary.                       |
+| `HECATE_TASK_BROWSER_EXECUTABLE`         | `""`               | Absolute path to a local Chromium-compatible executable for these optional browser tools. Empty disables both; Hecate never finds or downloads a browser automatically, and remote-runtime mode rejects them. |
+| `HECATE_TASK_BROWSER_TIMEOUT`            | `20s`              | Positive wall-clock limit for one static inspection or complete flow, including preflight and browser startup                                                                                                 |
+| `HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS`  | `false`            | Allows private/local destinations after explicit opt-in. Hostname resolution is pinned for the call, but this is not an OS/network isolation boundary.                                                        |
 | `HECATE_TASK_WEB_SEARCH_PROVIDER`        | `""`               | Empty disables native web search. Supported values: `brave`, `tavily`, `exa`                                                                                                                                  |
 | `HECATE_TASK_WEB_SEARCH_API_KEY`         | `""`               | API key for the configured search provider. Provider aliases: `BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`                                                                                         |
 | `HECATE_TASK_WEB_SEARCH_ENDPOINT`        | provider default   | Optional provider endpoint override, mostly for tests or private proxies                                                                                                                                      |
@@ -793,7 +849,7 @@ Env vars that affect agent_loop runs:
 | `HECATE_TASK_SHELL_ALLOW_PRIVATE_IPS`    | `false`            | Same private-IP block, applied to URLs in shell_exec / git_exec commands when the task has `sandbox_network=true`                                                                                             |
 | `HECATE_TASK_SHELL_ALLOWED_HOSTS`        | `""`               | Same exact-host allowlist, applied to shell_exec / git_exec command URLs                                                                                                                                      |
 
-For `HECATE_TASK_APPROVAL_POLICIES` (which gates mid-loop tool calls and the matching pre-execution task gates; valid values: `shell_exec`, `git_exec`, `file_write`, `network_egress`, `read_file`, `all_tools`) see [`runtime-api.md#approval-policy-configuration`](runtime-api.md#approval-policy-configuration). `shell_exec` gates one-shot shell calls plus native agent-loop terminal tools. `git_exec` gates arbitrary git commands plus structured `git_status` and `git_diff`; QA v0 is an exception because it reports the metadata-free Git limitation without invoking Git or asking for approval. `file_write` gates full-file writes, exact-match `file_edit`, and structured `apply_patch` calls. `read_file` gates direct reads, structured search tools (`grep`, `glob`, `code_intelligence`), and task artifact reads. Browser evidence is different: `browser_inspect` always requires its own explicit approval and cannot be enabled by changing this list. For per-task `mcp_servers` knobs (max-servers cap, client-cache sizing, ping intervals) see [`runtime-api.md#runtime-backend-and-queue-configuration`](runtime-api.md#runtime-backend-and-queue-configuration) and [`mcp.md#resource-limits`](mcp.md#resource-limits).
+For `HECATE_TASK_APPROVAL_POLICIES` (which gates mid-loop tool calls and the matching pre-execution task gates; valid values: `shell_exec`, `git_exec`, `file_write`, `network_egress`, `read_file`, `all_tools`) see [`runtime-api.md#approval-policy-configuration`](runtime-api.md#approval-policy-configuration). `shell_exec` gates one-shot shell calls plus native agent-loop terminal tools. `git_exec` gates arbitrary git commands plus structured `git_status` and `git_diff`; QA v0 is an exception because it reports the metadata-free Git limitation without invoking Git or asking for approval. `file_write` gates full-file writes, exact-match `file_edit`, and structured `apply_patch` calls. `read_file` gates direct reads, structured search tools (`grep`, `glob`, `code_intelligence`), and task artifact reads. Browser capabilities are different: `browser_inspect` and `browser_flow` always require explicit approval and cannot be enabled by changing this list. For per-task `mcp_servers` knobs (max-servers cap, client-cache sizing, ping intervals) see [`runtime-api.md#runtime-backend-and-queue-configuration`](runtime-api.md#runtime-backend-and-queue-configuration) and [`mcp.md#resource-limits`](mcp.md#resource-limits).
 
 Hecate Chat can opt a session into RTK command-output compaction from
 the chat settings panel. The setting is off by default. Hecate only
@@ -836,23 +892,26 @@ Per-task fields on `POST /hecate/v1/tasks` that affect agent_loop:
 - **`escapes allowed root`** — the LLM picked a path outside the workspace. The env system message normally prevents this; if you see it, check that `task.WorkingDirectory` matches what the model is using, or switch to `workspace_mode=in_place` to align them.
 - **`api key is required for cloud provider X`** — the operator pinned provider X but no credentials are configured. The router uses `Scope.ProviderHint` from `run.Provider` (mirrored from `task.RequestedProvider`).
 - **`model "X" does not support tool-calling`** — the chosen model rejects the `tools` field. Tiny / chat-only models (e.g. `smollm2:135m`) hit this. Pick a tool-capable model: `gpt-4o-mini`, `claude-sonnet-4-6`, or `qwen2.5-coder` for Ollama. Hecate Chat normally avoids this for new prompts by falling back to direct model chat when tool support is unknown or absent. Native Tasks require a tool-capable model when their effective catalog is non-empty; preset-backed model-only tasks send no tools.
-- **`browser inspection is unavailable`** — this is expected unless the local
-  gateway has an explicit `HECATE_TASK_BROWSER_EXECUTABLE`, the task came from
-  a browser-enabled native Agent Preset, and the model requested the tool after
-  approval. It is never offered to Hecate Chat or External Agent sessions.
+- **`browser inspection is unavailable`** or **`native browser interaction is
+unavailable`** — this is expected unless the local gateway has an explicit
+  `HECATE_TASK_BROWSER_EXECUTABLE`, the task came from an eligible native
+  project assignment, and the resolved Agent Preset independently granted the
+  requested browser capability with exact origins. Neither tool is offered to
+  Hecate Chat, External Agent, QA, legacy/manual, or remote-runtime tasks.
 - **`workflow_mode=qa requires an ephemeral workspace`**, **`does not allow
 native network access`**, or **`does not allow mcp_servers`** — QA v0 deliberately
   refuses a caller-supplied posture that would widen its report-only contract.
   Omit the conflicting field; Hecate supplies the required ephemeral,
   read-only, native-HTTP-and-search-disabled posture itself. QA v0 also blocks
-  browser inspection; browser evidence needs a later explicitly selected
-  Hecate runtime contract.
-- **`browser inspection URL is invalid`** or **`browser inspection origin is
-not allowed`** — use an absolute HTTP(S) URL without credentials, a query
-  string, or a fragment, and add only its exact origin (not a path) to the
-  native Agent Preset. Keep the origin-plus-path short enough to appear in
-  full in the approval. Do not use this capability for a private/local origin
-  unless the operator deliberately enabled
+  static browser inspection and browser interaction; either would need a later
+  explicitly selected Hecate runtime contract.
+- **`browser inspection URL is invalid`**, **`browser inspection origin is not
+allowed`**, or **`the approved browser flow was invalid`** — use an absolute
+  HTTP(S) URL without credentials, a query string, or a fragment, and add only
+  its exact origin (not a path) to the native Agent Preset. A flow needs 1–6
+  exact accessibility `click` / `wait_for` actions. Keep the origin-plus-path
+  short enough to appear in full in the approval. Do not use either capability
+  for a private/local origin unless the operator deliberately enabled
   `HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS`.
 - **`agent loop hit per-task cost ceiling`** — `Task.BudgetMicrosUSD` was reached across the run + prior chain. Raise the ceiling and resume to continue.
 - **`agent loop reached the maximum of N model calls without producing a final answer`** — the model didn't terminate. Either raise `HECATE_TASK_AGENT_LOOP_MAX_MODEL_CALLS`, narrow the prompt, or resume to give it more model calls.

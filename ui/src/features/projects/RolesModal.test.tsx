@@ -14,6 +14,7 @@ function preset(overrides: Partial<AgentPresetRecord> = {}): AgentPresetRecord {
     tools_enabled: true,
     writes_allowed: true,
     network_allowed: false,
+    browser_interactions_allowed: false,
     approval_policy: "inherit",
     project_memory_policy: "inherit",
     context_source_policy: "inherit",

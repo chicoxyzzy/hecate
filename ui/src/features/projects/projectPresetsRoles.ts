@@ -19,6 +19,7 @@ export type AgentPresetForm = {
   writesAllowed: boolean;
   networkAllowed: boolean;
   browserAllowed: boolean;
+  browserInteractionsAllowed: boolean;
   browserAllowedOrigins: string;
   approvalPolicy: string;
   projectMemoryPolicy: string;
@@ -67,6 +68,7 @@ export function emptyAgentPresetForm(): AgentPresetForm {
     writesAllowed: false,
     networkAllowed: false,
     browserAllowed: false,
+    browserInteractionsAllowed: false,
     browserAllowedOrigins: "",
     approvalPolicy: "inherit",
     projectMemoryPolicy: "inherit",
@@ -90,6 +92,7 @@ export function presetFormFromRecord(preset: AgentPresetRecord): AgentPresetForm
     writesAllowed: preset.writes_allowed,
     networkAllowed: preset.network_allowed,
     browserAllowed: preset.browser_allowed ?? false,
+    browserInteractionsAllowed: preset.browser_interactions_allowed,
     browserAllowedOrigins: (preset.browser_allowed_origins ?? []).join("\n"),
     approvalPolicy: preset.approval_policy || "inherit",
     projectMemoryPolicy: preset.project_memory_policy || "inherit",
@@ -119,9 +122,11 @@ export function presetUpdatePayloadFromForm(form: AgentPresetForm): UpdateAgentP
     writes_allowed: form.writesAllowed,
     network_allowed: form.networkAllowed,
     browser_allowed: form.browserAllowed,
-    browser_allowed_origins: form.browserAllowed
-      ? splitBrowserOrigins(form.browserAllowedOrigins)
-      : [],
+    browser_interactions_allowed: form.browserInteractionsAllowed,
+    browser_allowed_origins:
+      form.browserAllowed || form.browserInteractionsAllowed
+        ? splitBrowserOrigins(form.browserAllowedOrigins)
+        : [],
     approval_policy: form.approvalPolicy.trim() || "inherit",
     project_memory_policy: form.projectMemoryPolicy.trim() || "inherit",
     context_source_policy: form.contextSourcePolicy.trim() || "inherit",
@@ -245,7 +250,7 @@ export function splitBrowserOrigins(value: string): string[] {
 export function browserAllowedOriginsValidationError(value: string): string | null {
   const origins = splitBrowserOrigins(value);
   if (origins.length === 0) {
-    return "Add at least one exact origin before saving this browser-enabled preset.";
+    return "Add at least one exact origin before saving this browser-enabled work policy.";
   }
   for (const origin of origins) {
     let parsed: URL;

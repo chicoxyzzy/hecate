@@ -141,14 +141,15 @@ func TestNewAssignmentTask_SnapshotsAgentPresetSandboxPolicy(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		profile      ResolvedAgentProfile
-		wantTools    bool
-		wantReadOnly bool
-		wantNetwork  bool
-		wantBrowser  bool
-		wantOrigins  []string
-		wantPresetID string
+		name                    string
+		profile                 ResolvedAgentProfile
+		wantTools               bool
+		wantReadOnly            bool
+		wantNetwork             bool
+		wantBrowser             bool
+		wantBrowserInteractions bool
+		wantOrigins             []string
+		wantPresetID            string
 	}{
 		{
 			name:         "review preset is read only and offline",
@@ -157,13 +158,14 @@ func TestNewAssignmentTask_SnapshotsAgentPresetSandboxPolicy(t *testing.T) {
 			wantPresetID: "review_qa",
 		},
 		{
-			name:         "implementation preset permits writes and network",
-			profile:      ResolvedAgentProfile{ID: "implementation", ToolsEnabled: true, WritesAllowed: true, NetworkAllowed: true, BrowserAllowed: true, BrowserAllowedOrigins: []string{"https://app.example.test"}},
-			wantTools:    true,
-			wantNetwork:  true,
-			wantBrowser:  true,
-			wantOrigins:  []string{"https://app.example.test"},
-			wantPresetID: "implementation",
+			name:                    "implementation preset permits writes and network",
+			profile:                 ResolvedAgentProfile{ID: "implementation", ToolsEnabled: true, WritesAllowed: true, NetworkAllowed: true, BrowserAllowed: true, BrowserInteractionsAllowed: true, BrowserAllowedOrigins: []string{"https://app.example.test"}},
+			wantTools:               true,
+			wantNetwork:             true,
+			wantBrowser:             true,
+			wantBrowserInteractions: true,
+			wantOrigins:             []string{"https://app.example.test"},
+			wantPresetID:            "implementation",
 		},
 		{
 			name:         "missing preset posture fails closed",
@@ -199,6 +201,9 @@ func TestNewAssignmentTask_SnapshotsAgentPresetSandboxPolicy(t *testing.T) {
 			}
 			if task.AgentPresetBrowserAllowed == nil || *task.AgentPresetBrowserAllowed != test.wantBrowser {
 				t.Fatalf("task browser snapshot = %v, want explicit %v", task.AgentPresetBrowserAllowed, test.wantBrowser)
+			}
+			if task.AgentPresetBrowserInteractionsAllowed == nil || *task.AgentPresetBrowserInteractionsAllowed != test.wantBrowserInteractions {
+				t.Fatalf("task browser interaction snapshot = %v, want explicit %v", task.AgentPresetBrowserInteractionsAllowed, test.wantBrowserInteractions)
 			}
 			if strings.Join(task.AgentPresetBrowserAllowedOrigins, ",") != strings.Join(test.wantOrigins, ",") {
 				t.Fatalf("task browser origins = %v, want %v", task.AgentPresetBrowserAllowedOrigins, test.wantOrigins)

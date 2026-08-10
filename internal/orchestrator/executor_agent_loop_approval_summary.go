@@ -224,6 +224,12 @@ func summarizeApprovalToolCall(call types.ToolCall) (string, bool) {
 			return "browser_inspect details unavailable", false
 		}
 		return "browser_inspect url=" + browserInspectionApprovalTarget(args), true
+	case AgentToolBrowserFlow:
+		args, _, err := decodeBrowserFlowArgs(raw)
+		if err != nil {
+			return "browser_flow details unavailable", false
+		}
+		return fmt.Sprintf("browser_flow url=%s actions=%d", args.URL, len(args.Actions)), true
 	case AgentToolCodeIntelligence:
 		var args codeIntelligenceArgs
 		if !decodeApprovalArgs(raw, &args, "operation", "path", "language", "query", "selector", "line", "column", "max_results") || !safeApprovalAtom(args.Operation, false) || !safeApprovalPath(args.Path, true) || !safeApprovalOptionalTokens(args.Language, args.Selector) {

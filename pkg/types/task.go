@@ -47,8 +47,14 @@ type Task struct {
 	// legacy/manual tasks and fails closed: browser evidence is never inferred
 	// from SandboxNetwork or a later preset edit.
 	AgentPresetBrowserAllowed *bool `json:",omitempty"`
+	// AgentPresetBrowserInteractionsAllowed independently snapshots whether
+	// the resolved preset permits approval-gated browser interaction. nil marks
+	// legacy/manual tasks and fails closed; static browser evidence never grants
+	// interaction implicitly.
+	AgentPresetBrowserInteractionsAllowed *bool `json:",omitempty"`
 	// AgentPresetBrowserAllowedOrigins is the exact normalized origin allowlist
-	// snapshotted with AgentPresetBrowserAllowed. It is deliberately distinct
+	// shared by the two browser grants and snapshotted with them. It is
+	// deliberately distinct
 	// from generic network policy so browser navigation cannot broaden with a
 	// task's HTTP settings or a later preset change.
 	AgentPresetBrowserAllowedOrigins []string `json:",omitempty"`

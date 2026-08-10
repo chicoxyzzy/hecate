@@ -54,17 +54,21 @@ type Profile struct {
 	// BrowserAllowed enables only Hecate's native, approval-gated,
 	// read-only browser evidence tool. It does not grant external agents or
 	// generic network tools browser access.
-	BrowserAllowed        bool
-	BrowserAllowedOrigins []string
-	ApprovalPolicy        string
-	ProjectMemoryPolicy   string
-	ContextSourcePolicy   string
-	SkillIDs              []string
-	ExternalAgentKind     string
-	ExternalAgentOptions  map[string]string
-	BuiltIn               bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	BrowserAllowed bool
+	// BrowserInteractionsAllowed independently enables Hecate's native,
+	// approval-gated browser interaction tool. Static evidence does not imply
+	// interaction, and interaction does not imply static evidence.
+	BrowserInteractionsAllowed bool
+	BrowserAllowedOrigins      []string
+	ApprovalPolicy             string
+	ProjectMemoryPolicy        string
+	ContextSourcePolicy        string
+	SkillIDs                   []string
+	ExternalAgentKind          string
+	ExternalAgentOptions       map[string]string
+	BuiltIn                    bool
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 // SupportsSurface reports whether a saved Agent Preset can be selected by the
@@ -245,7 +249,7 @@ func validateProfile(profile Profile) error {
 	if !oneOf(profile.ContextSourcePolicy, ContextInherit, ContextIncludeEnabled, ContextVisibleOnly, ContextExclude) {
 		return ErrInvalid
 	}
-	if profile.BrowserAllowed {
+	if profile.BrowserAllowed || profile.BrowserInteractionsAllowed {
 		if !profile.ToolsEnabled {
 			return ErrInvalid
 		}

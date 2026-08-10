@@ -132,8 +132,8 @@ export type ConfiguredAuditEventRecord = {
   detail?: string;
 };
 
-// Host-safe readiness for the optional native browser evidence runtime. The
-// API intentionally omits executable paths and diagnostic details.
+// Host-safe readiness for the optional native browser evidence and interaction
+// runtime. The API intentionally omits executable paths and diagnostic details.
 export type BrowserEvidenceRuntimeReadiness = {
   available: boolean;
   status: "ready" | "not_configured" | "local_only" | "unavailable" | string;

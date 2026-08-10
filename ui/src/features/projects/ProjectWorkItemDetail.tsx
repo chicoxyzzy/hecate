@@ -1604,8 +1604,23 @@ function AssignmentLaunchReadinessPreview({
   const statusLabel = readiness?.status || (readiness?.ready ? "ready" : "not checked");
   const firstBlocker = readiness?.blockers?.[0];
   const firstWarning = readiness?.warnings?.[0];
+  const statusAnnouncement =
+    state.status === "loading"
+      ? "Checking assignment launch readiness."
+      : state.status === "error"
+        ? `Assignment launch readiness failed. ${state.detail}`
+        : readiness
+          ? `Assignment launch readiness: ${statusLabel}. ${firstBlocker || firstWarning || readiness.detail || "No blockers or warnings."}`
+          : "Assignment launch readiness has not been checked.";
   return (
-    <section aria-label="Assignment launch readiness" style={launchReadinessPreviewStyle}>
+    <section
+      aria-busy={loading}
+      aria-label="Assignment launch readiness"
+      style={launchReadinessPreviewStyle}
+    >
+      <div aria-atomic="true" aria-live="polite" className="sr-only" role="status">
+        {statusAnnouncement}
+      </div>
       <div style={launchReadinessPreviewHeaderStyle}>
         <div style={sectionLabelStyle}>Launch readiness</div>
         <span
@@ -2375,6 +2390,10 @@ function assignmentLaunchPostureRows(
   if (browserEvidence) {
     rows.push({ label: "Browser evidence", value: browserEvidence });
   }
+  const browserInteraction = assignmentLaunchBrowserInteractionPosture(readiness);
+  if (browserInteraction) {
+    rows.push({ label: "Browser interaction", value: browserInteraction });
+  }
   if (
     readiness.driver_kind === "external_agent" ||
     readiness.external_agent ||
@@ -2438,10 +2457,35 @@ function assignmentLaunchBrowserEvidencePosture(
   ) {
     return "Not available for External Agent assignments";
   }
-  const enabled = posture.browser_evidence_status === "enabled" || posture.browser_allowed === true;
+  if (posture.browser_evidence_status === "unavailable") {
+    return "Unavailable on this runtime";
+  }
+  const enabled = posture.browser_evidence_status === "enabled";
   if (!enabled) return "Disabled";
   const origins = posture.browser_allowed_origins ?? [];
   return origins.length > 0 ? `Enabled · ${origins.join(", ")}` : "Enabled";
+}
+
+function assignmentLaunchBrowserInteractionPosture(
+  readiness: ProjectAssignmentLaunchReadinessRecord,
+): string {
+  const posture = readiness.profile_posture;
+  if (!posture) return "";
+  if (
+    posture.browser_interaction_status === "not_applicable" ||
+    readiness.driver_kind === "external_agent"
+  ) {
+    return "Not available for External Agent assignments";
+  }
+  if (posture.browser_interaction_status === "unavailable") {
+    return "Unavailable on this runtime";
+  }
+  const enabled = posture.browser_interaction_status === "enabled";
+  if (!enabled) return "Disabled";
+  const origins = posture.browser_allowed_origins ?? [];
+  return origins.length > 0
+    ? `Enabled · approval-gated · up to six exact accessible-role/name click or wait actions · ${origins.join(", ")}`
+    : "Enabled · approval-gated · up to six exact accessible-role/name click or wait actions";
 }
 
 function assignmentLaunchReadinessNotice(

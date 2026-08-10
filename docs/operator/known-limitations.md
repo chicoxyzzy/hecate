@@ -137,42 +137,61 @@ storage, and operational behavior can still evolve across stable `v0.x.y` releas
   capture. `git_status` / `git_diff` report Git evidence unavailable in QA v0
   rather than invoking Git. A separate constrained test runner would need
   its own explicit permission model.
-- QA v0 blocks browser inspection. The public QA Task surface does not yet
-  select a browser-evidence assignment posture, so QA does not claim a
-  conditional browser capability that operators cannot launch. It has no
-  browser, URL-check endpoint, or interactive browser controls.
-- Native browser evidence is a deliberately narrow alpha capability, not
-  browser automation. It is available only to a local native project-assignment
-  task whose Work policy snapshots an exact-origin allowlist and only when the
-  operator configured a local Chromium-compatible executable. Every call needs
-  approval and creates a fresh script-disabled browser profile; Hecate does not import host
-  cookies, reuse logins, keep profile state, allow downloads, or retain
-  screenshots. The artifact is bounded text evidence only. Hecate Chat,
-  External Agent sessions, legacy/manual tasks, and remote runtime do not get
-  this tool.
+- QA v0 blocks both `browser_inspect` and `browser_flow`. The public QA Task
+  surface does not select either browser grant, so QA does not claim a
+  conditional capability that operators cannot launch. It has no general
+  URL-check endpoint or interactive browser controls.
+- Native browser capability remains a narrow alpha surface. It is available
+  only to a local native project-assignment Task whose Work policy snapshots an
+  exact-origin allowlist and only when the operator configured a local
+  Chromium-compatible executable. `browser_allowed` independently grants
+  script-disabled static evidence; `browser_interactions_allowed` grants one
+  fully declared approval-bound accessibility flow. Enabling either does not
+  enable the other. Hecate Chat, External Agent sessions, QA, legacy/manual
+  Tasks, and remote runtime receive neither tool.
+- Every `browser_flow` contains 1–6 exact accessibility `click` / `wait_for`
+  actions and stays on the query-free start URL's exact origin. It supports no
+  typing, secret entry, selectors, coordinates, arbitrary JavaScript, uploads,
+  downloads, screenshots, or retained session. Page scripts are enabled, and
+  same-origin `GET`/`HEAD` requests plus approved clicks may change the
+  application. Approval is authorization for the complete ordered flow, not a
+  promise that it is read-only.
+- Each browser call launches a fresh owned process tree/profile and emits only
+  bounded plain-text evidence. Hecate removes the profile after teardown; a
+  removal failure fails the tool and gives path-free stale-profile cleanup
+  guidance rather than claiming that no state remains. A known network,
+  FUSE, or unknown temporary filesystem is rejected before browser data is
+  written; physical local-device failures remain an OS boundary. A failed flow can still have
+  completed an earlier click; Hecate preserves partial-action evidence and
+  warns about that possible application change instead of claiming rollback.
 - A fresh Hecate browser profile does not prevent machine or enterprise
   Chromium policy from supplying integrated authentication or a client
   certificate outside profile storage. For identity-sensitive sites, use a
   dedicated unmanaged browser/container with the required OS/network controls.
-- Browser evidence permits only selected-origin `GET`/`HEAD` URL-loader
-  requests with page scripts and service workers disabled; it exposes no
-  WebSocket/WebTransport/WebRTC, click/type/upload/device-control primitive.
-  Capture has one timeout across preflight, startup, and page load, and
-  cancels after CDP observes 4 MiB of aggregate streamed response data
-  (including unknown-length streams). Browser/socket buffering can overshoot
-  before Chromium receives that cancellation. That prevents ordinary browser writes, but it cannot make an
-  application-specific `GET` endpoint side-effect-free. Private-IP rejection is an initial application-level
-  preflight (with an explicit opt-in), and hostname origins are pinned to that
-  selected address for one inspection. Neither is an OS/network firewall, VM,
-  or complete browser-process sandbox. Treat an approval as permission to load
-  the requested page and rely on host/network controls for stronger isolation.
+- Browser traffic permits only selected-origin `GET`/`HEAD` URL-loader
+  requests. Static inspection also disables scripts and service workers; an
+  interaction flow enables scripts but blocks workers, popups, realtime
+  transports, file choosers, and downloads. One timeout covers preflight,
+  startup, and the complete capture or flow. Hecate cancels after CDP observes
+  4 MiB of aggregate streamed response data, including unknown-length streams;
+  browser/socket buffering can overshoot before cancellation reaches Chromium.
+  A loopback relay also rejects individual inbound DevTools messages over
+  4 MiB and stops the call after 32 MiB of aggregate browser-to-Hecate protocol
+  payload. Flow origin storage is quota-limited to 8 MiB and browser audio is
+  muted, but Chromium's own transient bookkeeping can exceed those values.
+  Hecate launches Chromium with Breakpad crash reporting disabled; host or
+  enterprise browser policy remains outside Hecate's temporary-profile control.
+  Private-IP rejection is initial application-level preflight with an explicit
+  opt-in, and hostname origins are pinned to one selected address. None of
+  these controls is an OS/network firewall, VM, or complete browser-process
+  sandbox.
 - Hecate has a registry-only plugin metadata slice for native manifests. It can
   validate and show plugin-declared MCP server mount candidates, but it does not
   execute plugin code, start plugin-declared MCP servers, mount plugin tools,
-  grant plugin secrets, or call connector APIs yet. Interactive browser
-  automation, WASM plugins, arbitrary plugin hooks, and broad tool
-  marketplaces remain out of scope for the current alpha. Design notes live in
-  `docs/design/proposals/plugin-architecture.md`.
+  grant plugin secrets, or call connector APIs yet. General-purpose or
+  plugin-provided browser automation, WASM plugins, arbitrary plugin hooks, and
+  broad tool marketplaces remain out of scope for the current alpha. Design
+  notes live in `docs/design/proposals/plugin-architecture.md`.
 
 ## Hecate Chat
 
@@ -230,7 +249,7 @@ storage, and operational behavior can still evolve across stable `v0.x.y` releas
   preset when the session is created and freezes its narrow runtime snapshot.
   That Chat slice applies provider/model hints, instructions, execution profile,
   and tool/write/network posture, but deliberately does not inherit project
-  memory/source policy, skills, browser evidence, MCP selection, approval
+  memory/source policy, skills, browser capabilities, MCP selection, approval
   defaults, or External Agent options. Native project assignments can include
   bounded project memory and portable `AGENTS.md` workspace-instruction bodies
   when the resolved Work policy explicitly asks for inclusion. Broader

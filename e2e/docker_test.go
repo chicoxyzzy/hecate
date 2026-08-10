@@ -176,7 +176,16 @@ func requireDocker(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker CLI not on PATH — skipping smoke test")
 	}
-	out, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	// Docker Desktop can leave the CLI installed while its daemon socket is
+	// wedged. Bound the readiness probe independently so a developer machine
+	// cannot consume the package-wide 10-minute timeout before the smoke test
+	// has created a container.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	if ctx.Err() != nil {
+		t.Skip("docker daemon readiness probe timed out — skipping smoke test")
+	}
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		t.Skipf("docker daemon not reachable — skipping (output: %s)", string(out))
 	}

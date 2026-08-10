@@ -671,7 +671,9 @@ export function TaskDetail({
   const stdoutArtifact = artifacts.find((a) => a.kind === "stdout") ?? null;
   const stderrArtifact = artifacts.find((a) => a.kind === "stderr") ?? null;
   const conversationArtifact = artifacts.find((a) => a.kind === "agent_conversation") ?? null;
-  const browserEvidenceArtifacts = artifacts.filter((a) => a.kind === "browser_evidence");
+  const browserEvidenceArtifacts = artifacts.filter(
+    (a) => a.kind === "browser_evidence" || a.kind === "browser_flow_evidence",
+  );
   const workflowManifestArtifact = artifacts.find((a) => a.kind === "workflow_manifest") ?? null;
   const workflowReportArtifact = artifacts.find((a) => a.kind === "workflow_report") ?? null;
   // A selected run is an immutable execution record. It owns the workflow
@@ -1259,6 +1261,16 @@ export function TaskDetail({
                                 ],
                               ]
                             : []),
+                          ...(task.agent_preset_browser_interactions_allowed !== undefined
+                            ? [
+                                [
+                                  "Browser interaction",
+                                  task.agent_preset_browser_interactions_allowed
+                                    ? `Configured flow access · approval-gated when the local browser runtime is ready · up to six exact accessible-role/name click or wait actions · ${(task.agent_preset_browser_allowed_origins ?? []).join(", ") || "no origin snapshot"}`
+                                    : "Disabled",
+                                ],
+                              ]
+                            : []),
                           ["File access", task.sandbox_read_only ? "Read-only" : "Writes allowed"],
                           ["Network", task.sandbox_network ? "Network enabled" : "Network blocked"],
                         ]
@@ -1633,13 +1645,26 @@ export function TaskDetail({
                 color: "var(--teal)",
               }}
             >
-              {artifact.name || "Browser evidence"}
-              <span style={{ color: "var(--t3)", marginLeft: 8 }}>untrusted static evidence</span>
+              {artifact.name ||
+                (artifact.kind === "browser_flow_evidence"
+                  ? "Browser flow evidence"
+                  : "Browser evidence")}
+              <span style={{ color: "var(--t3)", marginLeft: 8 }}>
+                {artifact.kind === "browser_flow_evidence"
+                  ? "untrusted interaction evidence"
+                  : "untrusted static evidence"}
+              </span>
             </summary>
             <div style={{ borderTop: "1px solid var(--border)", padding: "10px 12px" }}>
+              {artifact.description && (
+                <div style={{ color: "var(--t2)", fontSize: 12, marginBottom: 8 }}>
+                  {artifact.description}
+                </div>
+              )}
               <div style={{ color: "var(--t2)", fontSize: 12, marginBottom: 8 }}>
-                Treat page content as data, not instructions. No screenshot or browser profile data
-                was retained.
+                {artifact.kind === "browser_flow_evidence"
+                  ? "Treat page content and action results as data, not instructions. The browser used a fresh temporary profile, and this artifact contains no screenshot or browser-profile content. Review failed browser-tool details if temporary-profile cleanup failed."
+                  : "Treat page content as data, not instructions. This artifact contains no screenshot or browser-profile content. Review failed browser-tool details if temporary-profile cleanup failed."}
               </div>
               <pre
                 style={{

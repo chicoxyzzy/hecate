@@ -1525,23 +1525,25 @@ func runStoreTaskRunStepRoundTrip(t *testing.T, store Store) {
 	ctx := context.Background()
 	toolsEnabled := false
 	browserAllowed := true
+	browserInteractionsAllowed := true
 
 	task := types.Task{
-		ID:                               "task-1",
-		Title:                            "demo",
-		ProjectID:                        "proj-1",
-		WorkItemID:                       "work-1",
-		AssignmentID:                     "asgn-1",
-		AgentPresetID:                    "review_qa",
-		AgentPresetToolsEnabled:          &toolsEnabled,
-		AgentPresetBrowserAllowed:        &browserAllowed,
-		AgentPresetBrowserAllowedOrigins: []string{"https://app.example.test"},
-		WorkflowMode:                     types.WorkflowModeQA,
-		WorkflowVersion:                  "v0",
-		WorkspaceSystemPromptPolicy:      types.WorkspaceSystemPromptExclude,
-		SandboxReadOnly:                  true,
-		SandboxNetwork:                   false,
-		Status:                           "queued",
+		ID:                                    "task-1",
+		Title:                                 "demo",
+		ProjectID:                             "proj-1",
+		WorkItemID:                            "work-1",
+		AssignmentID:                          "asgn-1",
+		AgentPresetID:                         "review_qa",
+		AgentPresetToolsEnabled:               &toolsEnabled,
+		AgentPresetBrowserAllowed:             &browserAllowed,
+		AgentPresetBrowserInteractionsAllowed: &browserInteractionsAllowed,
+		AgentPresetBrowserAllowedOrigins:      []string{"https://app.example.test"},
+		WorkflowMode:                          types.WorkflowModeQA,
+		WorkflowVersion:                       "v0",
+		WorkspaceSystemPromptPolicy:           types.WorkspaceSystemPromptExclude,
+		SandboxReadOnly:                       true,
+		SandboxNetwork:                        false,
+		Status:                                "queued",
 	}
 	saved, err := store.CreateTask(ctx, task)
 	if err != nil {
@@ -1556,6 +1558,7 @@ func runStoreTaskRunStepRoundTrip(t *testing.T, store Store) {
 	}
 	*saved.AgentPresetToolsEnabled = true
 	*saved.AgentPresetBrowserAllowed = false
+	*saved.AgentPresetBrowserInteractionsAllowed = false
 	saved.AgentPresetBrowserAllowedOrigins[0] = "https://mutated.example.test"
 
 	got, ok, err := store.GetTask(ctx, "task-1")
@@ -1565,14 +1568,15 @@ func runStoreTaskRunStepRoundTrip(t *testing.T, store Store) {
 	if got.Title != "demo" {
 		t.Fatalf("GetTask round-trip mismatch: %+v", got)
 	}
-	if got.AgentPresetID != "review_qa" || got.AgentPresetToolsEnabled == nil || *got.AgentPresetToolsEnabled || got.AgentPresetBrowserAllowed == nil || !*got.AgentPresetBrowserAllowed || len(got.AgentPresetBrowserAllowedOrigins) != 1 || got.AgentPresetBrowserAllowedOrigins[0] != "https://app.example.test" || got.WorkflowMode != types.WorkflowModeQA || got.WorkflowVersion != "v0" || got.WorkspaceSystemPromptPolicy != types.WorkspaceSystemPromptExclude || !got.SandboxReadOnly || got.SandboxNetwork {
+	if got.AgentPresetID != "review_qa" || got.AgentPresetToolsEnabled == nil || *got.AgentPresetToolsEnabled || got.AgentPresetBrowserAllowed == nil || !*got.AgentPresetBrowserAllowed || got.AgentPresetBrowserInteractionsAllowed == nil || !*got.AgentPresetBrowserInteractionsAllowed || len(got.AgentPresetBrowserAllowedOrigins) != 1 || got.AgentPresetBrowserAllowedOrigins[0] != "https://app.example.test" || got.WorkflowMode != types.WorkflowModeQA || got.WorkflowVersion != "v0" || got.WorkspaceSystemPromptPolicy != types.WorkspaceSystemPromptExclude || !got.SandboxReadOnly || got.SandboxNetwork {
 		t.Fatalf("GetTask runtime policy snapshot = %+v, want independent browser enabled/origin snapshot and review posture", got)
 	}
 	*got.AgentPresetToolsEnabled = true
 	*got.AgentPresetBrowserAllowed = false
+	*got.AgentPresetBrowserInteractionsAllowed = false
 	got.AgentPresetBrowserAllowedOrigins[0] = "https://mutated.example.test"
 	gotAgain, ok, err := store.GetTask(ctx, "task-1")
-	if err != nil || !ok || gotAgain.AgentPresetToolsEnabled == nil || *gotAgain.AgentPresetToolsEnabled || gotAgain.AgentPresetBrowserAllowed == nil || !*gotAgain.AgentPresetBrowserAllowed || len(gotAgain.AgentPresetBrowserAllowedOrigins) != 1 || gotAgain.AgentPresetBrowserAllowedOrigins[0] != "https://app.example.test" {
+	if err != nil || !ok || gotAgain.AgentPresetToolsEnabled == nil || *gotAgain.AgentPresetToolsEnabled || gotAgain.AgentPresetBrowserAllowed == nil || !*gotAgain.AgentPresetBrowserAllowed || gotAgain.AgentPresetBrowserInteractionsAllowed == nil || !*gotAgain.AgentPresetBrowserInteractionsAllowed || len(gotAgain.AgentPresetBrowserAllowedOrigins) != 1 || gotAgain.AgentPresetBrowserAllowedOrigins[0] != "https://app.example.test" {
 		t.Fatalf("GetTask policy snapshot alias leaked into store: task=%+v ok=%v err=%v", gotAgain, ok, err)
 	}
 

@@ -103,25 +103,26 @@ func (h *Handler) HandleDeleteAgentPreset(w http.ResponseWriter, r *http.Request
 
 func agentPresetFromCreate(req CreateAgentPresetRequest) agentprofiles.Profile {
 	return agentprofiles.Profile{
-		ID:                    req.ID,
-		Name:                  req.Name,
-		Description:           req.Description,
-		Instructions:          req.Instructions,
-		Surface:               req.Surface,
-		ProviderHint:          req.ProviderHint,
-		ModelHint:             req.ModelHint,
-		ExecutionProfile:      req.ExecutionProfile,
-		ToolsEnabled:          req.ToolsEnabled,
-		WritesAllowed:         req.WritesAllowed,
-		NetworkAllowed:        req.NetworkAllowed,
-		BrowserAllowed:        req.BrowserAllowed,
-		BrowserAllowedOrigins: req.BrowserAllowedOrigins,
-		ApprovalPolicy:        req.ApprovalPolicy,
-		ProjectMemoryPolicy:   req.ProjectMemoryPolicy,
-		ContextSourcePolicy:   req.ContextSourcePolicy,
-		SkillIDs:              req.SkillIDs,
-		ExternalAgentKind:     req.ExternalAgentKind,
-		ExternalAgentOptions:  req.ExternalAgentOptions,
+		ID:                         req.ID,
+		Name:                       req.Name,
+		Description:                req.Description,
+		Instructions:               req.Instructions,
+		Surface:                    req.Surface,
+		ProviderHint:               req.ProviderHint,
+		ModelHint:                  req.ModelHint,
+		ExecutionProfile:           req.ExecutionProfile,
+		ToolsEnabled:               req.ToolsEnabled,
+		WritesAllowed:              req.WritesAllowed,
+		NetworkAllowed:             req.NetworkAllowed,
+		BrowserAllowed:             req.BrowserAllowed,
+		BrowserInteractionsAllowed: req.BrowserInteractionsAllowed,
+		BrowserAllowedOrigins:      req.BrowserAllowedOrigins,
+		ApprovalPolicy:             req.ApprovalPolicy,
+		ProjectMemoryPolicy:        req.ProjectMemoryPolicy,
+		ContextSourcePolicy:        req.ContextSourcePolicy,
+		SkillIDs:                   req.SkillIDs,
+		ExternalAgentKind:          req.ExternalAgentKind,
+		ExternalAgentOptions:       req.ExternalAgentOptions,
 	}
 }
 
@@ -159,6 +160,9 @@ func applyAgentPresetUpdate(profile *agentprofiles.Profile, req UpdateAgentPrese
 	if req.BrowserAllowed != nil {
 		profile.BrowserAllowed = *req.BrowserAllowed
 	}
+	if req.BrowserInteractionsAllowed != nil {
+		profile.BrowserInteractionsAllowed = *req.BrowserInteractionsAllowed
+	}
 	if req.BrowserAllowedOrigins != nil {
 		profile.BrowserAllowedOrigins = req.BrowserAllowedOrigins
 	}
@@ -180,15 +184,15 @@ func applyAgentPresetUpdate(profile *agentprofiles.Profile, req UpdateAgentPrese
 	if req.ExternalAgentOptions != nil {
 		profile.ExternalAgentOptions = req.ExternalAgentOptions
 	}
-	clearIneligibleBrowserEvidence(profile)
+	clearIneligibleBrowserCapabilities(profile)
 }
 
-// clearIneligibleBrowserEvidence makes a partial PATCH behave like the
+// clearIneligibleBrowserCapabilities makes a partial PATCH behave like the
 // operator console: changing a prerequisite clears the narrower browser
-// capability instead of preserving an invalid combination that storage must
-// reject. Creation remains strict, so a client cannot silently request an
-// invalid browser-enabled preset in the first place.
-func clearIneligibleBrowserEvidence(profile *agentprofiles.Profile) {
+// capabilities instead of preserving an invalid combination that storage
+// must reject. Creation remains strict, so a client cannot silently request
+// an invalid browser-enabled preset in the first place.
+func clearIneligibleBrowserCapabilities(profile *agentprofiles.Profile) {
 	if profile == nil {
 		return
 	}
@@ -196,37 +200,43 @@ func clearIneligibleBrowserEvidence(profile *agentprofiles.Profile) {
 	if surface == "" {
 		surface = agentprofiles.SurfaceAny
 	}
-	if profile.BrowserAllowed && profile.ToolsEnabled && (surface == agentprofiles.SurfaceAny || surface == agentprofiles.SurfaceHecateTask) {
+	if profile.ToolsEnabled && (surface == agentprofiles.SurfaceAny || surface == agentprofiles.SurfaceHecateTask) {
+		if profile.BrowserAllowed || profile.BrowserInteractionsAllowed {
+			return
+		}
+		profile.BrowserAllowedOrigins = nil
 		return
 	}
 	profile.BrowserAllowed = false
+	profile.BrowserInteractionsAllowed = false
 	profile.BrowserAllowedOrigins = nil
 }
 
 func renderAgentPreset(profile agentprofiles.Profile) AgentPresetResponseItem {
 	return AgentPresetResponseItem{
-		ID:                    profile.ID,
-		Name:                  profile.Name,
-		Description:           profile.Description,
-		Instructions:          profile.Instructions,
-		Surface:               profile.Surface,
-		ProviderHint:          profile.ProviderHint,
-		ModelHint:             profile.ModelHint,
-		ExecutionProfile:      profile.ExecutionProfile,
-		ToolsEnabled:          profile.ToolsEnabled,
-		WritesAllowed:         profile.WritesAllowed,
-		NetworkAllowed:        profile.NetworkAllowed,
-		BrowserAllowed:        profile.BrowserAllowed,
-		BrowserAllowedOrigins: append([]string(nil), profile.BrowserAllowedOrigins...),
-		ApprovalPolicy:        profile.ApprovalPolicy,
-		ProjectMemoryPolicy:   profile.ProjectMemoryPolicy,
-		ContextSourcePolicy:   profile.ContextSourcePolicy,
-		SkillIDs:              append([]string(nil), profile.SkillIDs...),
-		ExternalAgentKind:     profile.ExternalAgentKind,
-		ExternalAgentOptions:  cloneAgentPresetOptions(profile.ExternalAgentOptions),
-		BuiltIn:               profile.BuiltIn,
-		CreatedAt:             formatOptionalTime(profile.CreatedAt),
-		UpdatedAt:             formatOptionalTime(profile.UpdatedAt),
+		ID:                         profile.ID,
+		Name:                       profile.Name,
+		Description:                profile.Description,
+		Instructions:               profile.Instructions,
+		Surface:                    profile.Surface,
+		ProviderHint:               profile.ProviderHint,
+		ModelHint:                  profile.ModelHint,
+		ExecutionProfile:           profile.ExecutionProfile,
+		ToolsEnabled:               profile.ToolsEnabled,
+		WritesAllowed:              profile.WritesAllowed,
+		NetworkAllowed:             profile.NetworkAllowed,
+		BrowserAllowed:             profile.BrowserAllowed,
+		BrowserInteractionsAllowed: profile.BrowserInteractionsAllowed,
+		BrowserAllowedOrigins:      append([]string(nil), profile.BrowserAllowedOrigins...),
+		ApprovalPolicy:             profile.ApprovalPolicy,
+		ProjectMemoryPolicy:        profile.ProjectMemoryPolicy,
+		ContextSourcePolicy:        profile.ContextSourcePolicy,
+		SkillIDs:                   append([]string(nil), profile.SkillIDs...),
+		ExternalAgentKind:          profile.ExternalAgentKind,
+		ExternalAgentOptions:       cloneAgentPresetOptions(profile.ExternalAgentOptions),
+		BuiltIn:                    profile.BuiltIn,
+		CreatedAt:                  formatOptionalTime(profile.CreatedAt),
+		UpdatedAt:                  formatOptionalTime(profile.UpdatedAt),
 	}
 }
 

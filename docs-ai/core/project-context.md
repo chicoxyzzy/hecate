@@ -69,7 +69,7 @@ and before the operator's per-chat instructions; a tools-disabled snapshot
 must keep the chat on the direct-model path. A permitted tools-on turn maps the
 same frozen posture to the backing native Task. Do not re-resolve the preset
 later or borrow project-assignment behavior: Chat presets do not activate
-project-memory/context-source policy, skills, browser evidence, MCP servers,
+project-memory/context-source policy, skills, browser capabilities, MCP servers,
 approval-policy defaults, or External Agent options. This is Hecate execution
 state, not Cairnline coordination; it must not create or mutate portable
 Projects, roles, assignments, or handoffs.
@@ -105,12 +105,13 @@ copied files instead. It writes a path/prompt-free
 `workflow_manifest` at Run start and a `workflow_report` only after an agent
 final response exists. The report must keep `agent_reported` prose distinct
 from `hecate_observed` posture/evidence; never describe agent text as proof
-that tests or browser checks ran. Existing
-`browser_inspect` remains separately available only to an eligible native
-project assignment with its snapshotted Agent Preset grant and per-call
-approval. QA v0 blocks it entirely; a later QA contract needs an explicit
-Hecate-owned assignment-launch selection before it can claim constrained
-browser evidence.
+that tests or browser checks ran. Existing `browser_inspect` and `browser_flow`
+remain separately available only to eligible native project assignments with
+their independently snapshotted Agent Preset grants and per-call approval. QA
+v0 blocks both entirely; a later QA contract needs an explicit Hecate-owned
+assignment-launch selection before it can claim a constrained browser
+capability.
+
 Assignment launch and preflight therefore combine Cairnline coordination state
 with Hecate runtime policy. The shared launch-plan seam validates preset surface
 compatibility; native assignment tasks snapshot the preset id and tools posture
@@ -121,23 +122,28 @@ dispatch. Preset-backed native
 HTTP/search tools fail closed when that snapshot disables network access;
 read-only tasks omit and reject broad shell, Git, file-write, and interactive
 terminal surfaces while retaining structured inspection and proposal-only
-edits. Browser evidence is separate from generic network: a native-task preset
-may opt into it only with exact origins, and the launch task snapshots both the
-boolean and normalized origin list. It is never inferred from
-`sandbox_network`, later preset edits, or a legacy/manual task; every allowed
-call requires operator approval, shows the safe approved page path, and uses a
-fresh script-disabled local browser profile to produce bounded static text-only
-evidence. One timeout spans preflight, startup, and capture; Hecate cancels
-after observing 4 MiB of aggregate response data, including unknown-length
-streams, though browser/socket buffering can overshoot before cancellation. Do
-not expose it to Hecate Chat or External Agents, and do not treat
-private-IP preflight as an OS/network sandbox. Legacy/
-manual tasks without a tools snapshot keep their prior tool behavior, and tasks
-without a preset snapshot keep their prior native network-tool behavior, so do
-not infer policy from an absent snapshot or a zero-valued sandbox flag. Persist
-task/run or chat-session references in the Hecate project-runtime overlay,
-while assignment lifecycle state remains in Cairnline. Linked External Agent
-reconciliation follows the same split.
+edits. Browser capability is separate from generic network: a native-task
+preset independently grants script-disabled `browser_inspect` and
+approval-bound `browser_flow`, and either grant requires their shared exact
+origin list. Assignment launch snapshots both booleans and the normalized
+origins. Neither is inferred from `sandbox_network`, later preset edits, or a
+legacy/manual Task. Every call uses one query-free URL at one exact origin,
+requires approval, starts a fresh local browser process/profile, and returns
+bounded plain-text evidence. A flow runs 1–6 fully declared exact accessibility
+click/wait actions with scripts enabled; same-origin `GET`/`HEAD` requests and
+clicks may change the application, and a failure retains partial action audit.
+There is no typing, upload, download, screenshot, authentication import,
+retained state, Hecate Chat, External Agent, QA, or remote-runtime surface. One
+timeout spans preflight, startup, and the call; Hecate cancels after observing
+4 MiB of aggregate response data, including unknown-length streams, though
+browser/socket buffering can overshoot before cancellation. Do not treat
+private-IP preflight as an OS/network sandbox. Legacy/manual tasks without a
+tools snapshot keep their prior tool behavior, and tasks without a preset
+snapshot keep their prior native network-tool behavior, so do not infer policy
+from an absent snapshot or a zero-valued sandbox flag. Persist task/run or
+chat-session references in the Hecate project-runtime overlay, while assignment
+lifecycle state remains in Cairnline. Linked External Agent reconciliation
+follows the same split.
 
 Hecate Chat attachments are Hecate runtime state, not Projects
 coordination. Keep session-scoped binary bodies in `internal/chatattachments`
@@ -221,8 +227,9 @@ internal/taskschedule/     Task Schedule validation, CRUD, occurrence claims,
                              claim renewal, and due-dispatch loop
 internal/taskworkflow/     small built-in Task workflow contracts; no scheduler,
                              Project coordination, or durable workflow store
-internal/browserrunner/    narrow local Chromium inspection seam for native,
-                             approval-gated, script-disabled text evidence
+internal/browserrunner/    narrow local Chromium seam for native static evidence
+                             and approved accessibility flows; fresh process/profile,
+                             exact origin, bounded text evidence
 internal/codeintel/        native read-only code intelligence: fixed allowlisted
                              LSP/ast-grep processes, bounded protocol/results,
                              workspace-confined normalization and cleanup
