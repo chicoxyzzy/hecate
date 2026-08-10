@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	dogfoodScorecardSchemaVersion    = "hecate.code-intelligence-dogfood.v1"
+	dogfoodScorecardSchemaVersion    = "hecate.code-intelligence-dogfood.v2"
 	dogfoodProcessCleanupNotMeasured = "not_measured"
 )
 
@@ -96,6 +96,12 @@ type dogfoodScenarioObservation struct {
 	GrepResultCount               int           `json:"grep_result_count"`
 	SemanticProviderFailureCall   int           `json:"semantic_provider_failure_model_call"`
 	StructuralProviderFailureCall int           `json:"structural_provider_failure_model_call"`
+	SemanticProviderFailureStep   int           `json:"semantic_provider_failure_step"`
+	StructuralProviderFailureStep int           `json:"structural_provider_failure_step"`
+	SemanticCompletedModelCall    int           `json:"semantic_completed_model_call"`
+	StructuralCompletedModelCall  int           `json:"structural_completed_model_call"`
+	SemanticCompletedStep         int           `json:"semantic_completed_step"`
+	StructuralCompletedStep       int           `json:"structural_completed_step"`
 	GrepResultModelCall           int           `json:"grep_result_model_call"`
 	StructuralResultModelCall     int           `json:"structural_result_model_call"`
 	QueryLatencyMillis            int64         `json:"query_latency_ms"`
@@ -135,42 +141,45 @@ type dogfoodScenarioChecks struct {
 }
 
 type dogfoodScenarioResult struct {
-	ID                      string                     `json:"id"`
-	Language                string                     `json:"language"`
-	Intent                  string                     `json:"intent"`
-	ExpectedRoute           string                     `json:"expected_route"`
-	Posture                 dogfoodScenarioPosture     `json:"posture"`
-	PreferredOperations     []string                   `json:"preferred_operations"`
-	ExpectedProvider        string                     `json:"expected_provider"`
-	ExpectedVersion         string                     `json:"expected_version,omitempty"`
-	PreferredRouteAvailable bool                       `json:"preferred_route_available"`
-	FallbackApplicable      bool                       `json:"fallback_applicable"`
-	PolicyRepresentable     bool                       `json:"policy_representable"`
-	ProviderQueryFailed     bool                       `json:"provider_query_failed"`
-	Observed                dogfoodScenarioObservation `json:"observed"`
-	Checks                  dogfoodScenarioChecks      `json:"checks"`
-	Verdict                 string                     `json:"verdict"`
-	ReasonCodes             []string                   `json:"reason_codes"`
+	ID                          string                     `json:"id"`
+	Language                    string                     `json:"language"`
+	Intent                      string                     `json:"intent"`
+	ExpectedRoute               string                     `json:"expected_route"`
+	Posture                     dogfoodScenarioPosture     `json:"posture"`
+	PreferredOperations         []string                   `json:"preferred_operations"`
+	ExpectedProvider            string                     `json:"expected_provider"`
+	ExpectedVersion             string                     `json:"expected_version,omitempty"`
+	CapabilityAwarenessMeasured bool                       `json:"capability_awareness_measured"`
+	PreferredRouteAdvertised    bool                       `json:"preferred_route_advertised"`
+	PreferredRouteAvailable     bool                       `json:"preferred_route_available"`
+	FallbackApplicable          bool                       `json:"fallback_applicable"`
+	PolicyRepresentable         bool                       `json:"policy_representable"`
+	ProviderQueryFailed         bool                       `json:"provider_query_failed"`
+	Observed                    dogfoodScenarioObservation `json:"observed"`
+	Checks                      dogfoodScenarioChecks      `json:"checks"`
+	Verdict                     string                     `json:"verdict"`
+	ReasonCodes                 []string                   `json:"reason_codes"`
 }
 
 type dogfoodSummary struct {
-	ScenarioCount           int     `json:"scenario_count"`
-	Pass                    int     `json:"pass"`
-	Fail                    int     `json:"fail"`
-	Inconclusive            int     `json:"inconclusive"`
-	Skipped                 int     `json:"skipped"`
-	CapabilityAwarenessRate float64 `json:"capability_awareness_rate"`
-	PreferredToolRate       float64 `json:"preferred_tool_rate"`
-	PreferredResultRate     float64 `json:"preferred_result_rate"`
-	PreferredToolMeasured   int     `json:"preferred_tool_measured"`
-	FallbackCorrectnessRate float64 `json:"fallback_correctness_rate"`
-	FallbackMeasured        int     `json:"fallback_measured"`
-	UsefulResultRate        float64 `json:"useful_result_rate"`
-	TaskCompletionRate      float64 `json:"task_completion_rate"`
-	CleanupMeasured         int     `json:"cleanup_measured"`
-	CleanupRate             float64 `json:"cleanup_rate"`
-	QueryLatencyMedianMS    int64   `json:"query_latency_median_ms"`
-	QueryLatencyMaxMS       int64   `json:"query_latency_max_ms"`
+	ScenarioCount               int     `json:"scenario_count"`
+	Pass                        int     `json:"pass"`
+	Fail                        int     `json:"fail"`
+	Inconclusive                int     `json:"inconclusive"`
+	Skipped                     int     `json:"skipped"`
+	CapabilityAwarenessRate     float64 `json:"capability_awareness_rate"`
+	CapabilityAwarenessMeasured int     `json:"capability_awareness_measured"`
+	PreferredToolRate           float64 `json:"preferred_tool_rate"`
+	PreferredResultRate         float64 `json:"preferred_result_rate"`
+	PreferredToolMeasured       int     `json:"preferred_tool_measured"`
+	FallbackCorrectnessRate     float64 `json:"fallback_correctness_rate"`
+	FallbackMeasured            int     `json:"fallback_measured"`
+	UsefulResultRate            float64 `json:"useful_result_rate"`
+	RunCompletionRate           float64 `json:"run_completion_rate"`
+	CleanupMeasured             int     `json:"cleanup_measured"`
+	CleanupRate                 float64 `json:"cleanup_rate"`
+	QueryLatencyMedianMS        int64   `json:"query_latency_median_ms"`
+	QueryLatencyMaxMS           int64   `json:"query_latency_max_ms"`
 }
 
 func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed dogfoodScenarioObservation) dogfoodScenarioResult {
@@ -180,18 +189,25 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	providerFailureModelCall := 0
 	switch expected.ExpectedRoute {
 	case "semantic":
-		if observed.SemanticResultCount == 0 {
-			providerFailureModelCall = observed.SemanticProviderFailureCall
-		}
+		providerFailureModelCall = dogfoodProviderFailureBeforeCompletedQuery(
+			observed.SemanticProviderFailureCall,
+			observed.SemanticProviderFailureStep,
+			observed.SemanticCompletedModelCall,
+			observed.SemanticCompletedStep,
+		)
 	case "structural":
-		if observed.StructuralResultCount == 0 {
-			providerFailureModelCall = observed.StructuralProviderFailureCall
-		}
+		providerFailureModelCall = dogfoodProviderFailureBeforeCompletedQuery(
+			observed.StructuralProviderFailureCall,
+			observed.StructuralProviderFailureStep,
+			observed.StructuralCompletedModelCall,
+			observed.StructuralCompletedStep,
+		)
 	}
 	providerQueryFailed := expected.ProviderAvailable && providerFailureModelCall > 0
 	preferredRouteAdvertised := (expected.ExpectedRoute == "semantic" && expected.ProviderAvailable && expected.SemanticPermitted) ||
 		(expected.ExpectedRoute == "structural" && expected.ProviderAvailable)
 	preferredRouteAvailable := preferredRouteAdvertised && !providerQueryFailed
+	capabilityAwarenessMeasured := dogfoodInspectionQueryAttempted(observed.ToolRoute)
 	preferredToolSelected := (expected.ExpectedRoute == "semantic" && observed.SemanticCalls > 0) ||
 		(expected.ExpectedRoute == "structural" && observed.StructuralCalls > 0)
 	preferredToolProducedResult := (expected.ExpectedRoute == "semantic" && observed.SemanticResultCount > 0) ||
@@ -257,7 +273,9 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	if !checks.NoUnexpectedTools {
 		reasons = append(reasons, "unexpected_tool_proposed")
 	}
-	if !checks.CapabilitiesBeforeQuery {
+	if !capabilityAwarenessMeasured {
+		reasons = append(reasons, "inspection_query_not_attempted")
+	} else if !checks.CapabilitiesBeforeQuery {
 		reasons = append(reasons, "capabilities_not_consumed_before_query")
 	}
 	if !checks.CapabilitiesFirst && dogfoodRouteContains(observed.ToolRoute, "code_intelligence:capabilities") {
@@ -328,23 +346,78 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	}
 	reasons = dogfoodUniqueSorted(reasons)
 	return dogfoodScenarioResult{
-		ID:                      expected.ID,
-		Language:                expected.Language,
-		Intent:                  expected.Intent,
-		ExpectedRoute:           expected.ExpectedRoute,
-		Posture:                 expected.Posture,
-		PreferredOperations:     append([]string(nil), expected.PreferredOperations...),
-		ExpectedProvider:        expected.Provider,
-		ExpectedVersion:         expected.ProviderVersion,
-		PreferredRouteAvailable: preferredRouteAvailable,
-		FallbackApplicable:      fallbackApplicable,
-		PolicyRepresentable:     expected.PolicyRepresentable,
-		ProviderQueryFailed:     providerQueryFailed,
-		Observed:                observed,
-		Checks:                  checks,
-		Verdict:                 verdict,
-		ReasonCodes:             reasons,
+		ID:                          expected.ID,
+		Language:                    expected.Language,
+		Intent:                      expected.Intent,
+		ExpectedRoute:               expected.ExpectedRoute,
+		Posture:                     expected.Posture,
+		PreferredOperations:         append([]string(nil), expected.PreferredOperations...),
+		ExpectedProvider:            expected.Provider,
+		ExpectedVersion:             expected.ProviderVersion,
+		CapabilityAwarenessMeasured: capabilityAwarenessMeasured,
+		PreferredRouteAdvertised:    preferredRouteAdvertised,
+		PreferredRouteAvailable:     preferredRouteAvailable,
+		FallbackApplicable:          fallbackApplicable,
+		PolicyRepresentable:         expected.PolicyRepresentable,
+		ProviderQueryFailed:         providerQueryFailed,
+		Observed:                    observed,
+		Checks:                      checks,
+		Verdict:                     verdict,
+		ReasonCodes:                 reasons,
 	}
+}
+
+func dogfoodProviderFailureBeforeCompletedQuery(providerFailureModelCall, providerFailureStep, completedModelCall, completedStep int) int {
+	if providerFailureModelCall <= 0 {
+		return 0
+	}
+	// Once the provider has completed a query, even with zero items, a later
+	// failure is evidence about that later call rather than retroactive evidence
+	// that the advertised route was unavailable.
+	if dogfoodQueryPositionBefore(completedModelCall, completedStep, providerFailureModelCall, providerFailureStep) {
+		return 0
+	}
+	return providerFailureModelCall
+}
+
+func dogfoodInspectionQueryAttempted(routes []string) bool {
+	for _, route := range routes {
+		if dogfoodSourceInspectionRoute(route) {
+			return true
+		}
+	}
+	return false
+}
+
+func dogfoodSourceInspectionRoute(route string) bool {
+	switch route {
+	case "code_intelligence:definition",
+		"code_intelligence:references",
+		"code_intelligence:hover",
+		"code_intelligence:document_symbols",
+		"code_intelligence:workspace_symbols",
+		"code_intelligence:diagnostics",
+		"code_intelligence:structural_search",
+		"code_intelligence:unknown",
+		"grep",
+		"glob",
+		"list_dir",
+		"read_file",
+		"standalone_structural_search":
+		return true
+	default:
+		return false
+	}
+}
+
+func dogfoodQueryPositionBefore(leftModelCall, leftStep, rightModelCall, rightStep int) bool {
+	if leftModelCall <= 0 || rightModelCall <= 0 {
+		return false
+	}
+	if leftModelCall != rightModelCall {
+		return leftModelCall < rightModelCall
+	}
+	return leftStep > 0 && rightStep > 0 && leftStep < rightStep
 }
 
 func dogfoodFallbackProducedResults(observed dogfoodScenarioObservation) bool {
@@ -390,6 +463,9 @@ func dogfoodFallbackFailureReason(expected dogfoodScenarioExpectation, observed 
 func dogfoodPreferredRouteFirst(expectedRoute string, routes []string) bool {
 	for _, route := range routes {
 		if route == "code_intelligence:capabilities" {
+			continue
+		}
+		if !dogfoodSourceInspectionRoute(route) {
 			continue
 		}
 		return dogfoodRouteMatchesPreferred(expectedRoute, route)
@@ -485,10 +561,13 @@ func finalizeDogfoodScorecard(card dogfoodScorecard) dogfoodScorecard {
 		case "skipped":
 			summary.Skipped++
 		}
-		if scenario.Checks.CapabilitiesBeforeQuery {
-			summary.CapabilityAwarenessRate++
+		if scenario.CapabilityAwarenessMeasured {
+			summary.CapabilityAwarenessMeasured++
+			if scenario.Checks.CapabilitiesBeforeQuery {
+				summary.CapabilityAwarenessRate++
+			}
 		}
-		if scenario.PreferredRouteAvailable {
+		if scenario.PreferredRouteAdvertised {
 			summary.PreferredToolMeasured++
 			if scenario.Checks.PreferredToolSelected {
 				summary.PreferredToolRate++
@@ -501,7 +580,7 @@ func finalizeDogfoodScorecard(card dogfoodScorecard) dogfoodScorecard {
 			summary.UsefulResultRate++
 		}
 		if scenario.Checks.Completed {
-			summary.TaskCompletionRate++
+			summary.RunCompletionRate++
 		}
 		if scenario.FallbackApplicable {
 			summary.FallbackMeasured++
@@ -521,9 +600,11 @@ func finalizeDogfoodScorecard(card dogfoodScorecard) dogfoodScorecard {
 	}
 	denominator := float64(len(card.Scenarios))
 	if denominator > 0 {
-		summary.CapabilityAwarenessRate /= denominator
 		summary.UsefulResultRate /= denominator
-		summary.TaskCompletionRate /= denominator
+		summary.RunCompletionRate /= denominator
+	}
+	if summary.CapabilityAwarenessMeasured > 0 {
+		summary.CapabilityAwarenessRate /= float64(summary.CapabilityAwarenessMeasured)
 	}
 	if summary.PreferredToolMeasured > 0 {
 		summary.PreferredToolRate /= float64(summary.PreferredToolMeasured)
@@ -659,12 +740,25 @@ func renderDogfoodScorecardMarkdown(card dogfoodScorecard) string {
 	builder.WriteString("\n## Aggregate metrics\n\n")
 	builder.WriteString("| Metric | Value |\n| --- | ---: |\n")
 	fmt.Fprintf(&builder, "| Pass / fail / inconclusive / skipped | %d / %d / %d / %d |\n", card.Summary.Pass, card.Summary.Fail, card.Summary.Inconclusive, card.Summary.Skipped)
-	fmt.Fprintf(&builder, "| Capability awareness | %.0f%% |\n", card.Summary.CapabilityAwarenessRate*100)
-	fmt.Fprintf(&builder, "| Preferred tool selection | %.0f%% (%d measured) |\n", card.Summary.PreferredToolRate*100, card.Summary.PreferredToolMeasured)
-	fmt.Fprintf(&builder, "| Preferred tool produced results | %.0f%% (%d measured) |\n", card.Summary.PreferredResultRate*100, card.Summary.PreferredToolMeasured)
-	fmt.Fprintf(&builder, "| Structured fallback success | %.0f%% (%d measured) |\n", card.Summary.FallbackCorrectnessRate*100, card.Summary.FallbackMeasured)
+	if card.Summary.CapabilityAwarenessMeasured == 0 {
+		builder.WriteString("| Capability awareness | not measured (0 measured) |\n")
+	} else {
+		fmt.Fprintf(&builder, "| Capability awareness | %.0f%% (%d measured) |\n", card.Summary.CapabilityAwarenessRate*100, card.Summary.CapabilityAwarenessMeasured)
+	}
+	if card.Summary.PreferredToolMeasured == 0 {
+		builder.WriteString("| Preferred tool selection | not measured (0 measured) |\n")
+		builder.WriteString("| Preferred tool produced results | not measured (0 measured) |\n")
+	} else {
+		fmt.Fprintf(&builder, "| Preferred tool selection | %.0f%% (%d measured) |\n", card.Summary.PreferredToolRate*100, card.Summary.PreferredToolMeasured)
+		fmt.Fprintf(&builder, "| Preferred tool produced results | %.0f%% (%d measured) |\n", card.Summary.PreferredResultRate*100, card.Summary.PreferredToolMeasured)
+	}
+	if card.Summary.FallbackMeasured == 0 {
+		builder.WriteString("| Qualifying fallback success | not measured (0 measured) |\n")
+	} else {
+		fmt.Fprintf(&builder, "| Qualifying fallback success | %.0f%% (%d measured) |\n", card.Summary.FallbackCorrectnessRate*100, card.Summary.FallbackMeasured)
+	}
 	fmt.Fprintf(&builder, "| Useful result | %.0f%% |\n", card.Summary.UsefulResultRate*100)
-	fmt.Fprintf(&builder, "| Task completion | %.0f%% |\n", card.Summary.TaskCompletionRate*100)
+	fmt.Fprintf(&builder, "| Run completion | %.0f%% |\n", card.Summary.RunCompletionRate*100)
 	fmt.Fprintf(&builder, "| Query latency median / max | %d / %d ms |\n", card.Summary.QueryLatencyMedianMS, card.Summary.QueryLatencyMaxMS)
 	if card.Summary.CleanupMeasured == 0 {
 		builder.WriteString("| Process cleanup | not measured |\n")
@@ -673,7 +767,7 @@ func renderDogfoodScorecardMarkdown(card dogfoodScorecard) string {
 	}
 
 	builder.WriteString("\n## Scenarios\n\n")
-	builder.WriteString("| Scenario | Language | Posture | Expected | Observed route | Useful | Complete | Query ms | Cleanup | Verdict |\n")
+	builder.WriteString("| Scenario | Language | Posture | Expected | Observed route | Useful | Run complete | Query ms | Cleanup | Verdict |\n")
 	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |\n")
 	for _, scenario := range card.Scenarios {
 		posture := fmt.Sprintf("tools=%t writes=%t network=%t", scenario.Posture.ToolsEnabled, scenario.Posture.WritesAllowed, scenario.Posture.NetworkAllowed)
@@ -736,7 +830,7 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	baseObserved := dogfoodScenarioObservation{
 		RunRef: dogfoodRunRef{TaskID: "task_1", RunID: "run_1"}, RunStatus: "completed",
 		ToolRoute: []string{"code_intelligence:capabilities", "code_intelligence:document_symbols"}, ToolRouteModelCalls: []int{1, 2}, FirstInspectionTool: "code_intelligence:capabilities",
-		ModelCalls: 3, CodeIntelligenceCalls: 2, SemanticCalls: 1, Provider: "gopls", ProviderVersion: "0.20.0", ResultCount: 1, SemanticResultCount: 1,
+		ModelCalls: 3, CodeIntelligenceCalls: 2, SemanticCalls: 1, Provider: "gopls", ProviderVersion: "0.20.0", ResultCount: 1, SemanticResultCount: 1, SemanticCompletedModelCall: 2, SemanticCompletedStep: 2,
 		QueryLatencyMillis: 120, RunLatencyMillis: 800, ProcessCleanup: dogfoodProcessCleanupNotMeasured, WorkspaceChangeCount: 0,
 		CapabilitiesBeforeQuery: true, ProviderVersionObserved: true, Completed: true, UsefulResult: true,
 	}
@@ -748,6 +842,8 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	queryFirstObserved.ToolRouteModelCalls = []int{1}
 	queryFirstObserved.FirstInspectionTool = "code_intelligence:workspace_symbols"
 	queryFirstObserved.CodeIntelligenceCalls = 1
+	queryFirstObserved.SemanticCompletedModelCall = 1
+	queryFirstObserved.SemanticCompletedStep = 1
 	queryFirstObserved.CapabilitiesBeforeQuery = false
 	queryFirstObserved.ProviderVersion = ""
 	queryFirstObserved.ProviderVersionObserved = false
@@ -768,6 +864,8 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	invalidRequestObserved.Provider = ""
 	invalidRequestObserved.ResultCount = 0
 	invalidRequestObserved.SemanticResultCount = 0
+	invalidRequestObserved.SemanticCompletedModelCall = 0
+	invalidRequestObserved.SemanticCompletedStep = 0
 	invalidRequestObserved.ErrorKinds = []string{"invalid_request"}
 	invalidRequestObserved.InvalidRequestReasons = []string{"path_required"}
 	invalidRequestResult := buildDogfoodScenarioResult(baseExpected, invalidRequestObserved)
@@ -803,6 +901,13 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	if result := buildDogfoodScenarioResult(baseExpected, genericFirstObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "generic_browse_before_preferred_query") {
 		t.Fatalf("generic-first verdict = %q reasons=%v, want preferred-route ordering failure", result.Verdict, result.ReasonCodes)
 	}
+	effectfulBeforePreferredObserved := baseObserved
+	effectfulBeforePreferredObserved.ToolRoute = []string{"code_intelligence:capabilities", "effectful_builtin", "code_intelligence:document_symbols"}
+	effectfulBeforePreferredObserved.ToolRouteModelCalls = []int{1, 2, 3}
+	effectfulBeforePreferredObserved.UnexpectedToolCalls = 1
+	if result := buildDogfoodScenarioResult(baseExpected, effectfulBeforePreferredObserved); !result.Checks.PreferredRouteFirst || dogfoodContains(result.ReasonCodes, "generic_browse_before_preferred_query") {
+		t.Fatalf("effectful-before-preferred checks=%+v reasons=%v, want unrelated proposal excluded from source-inspection ordering", result.Checks, result.ReasonCodes)
+	}
 	capabilitiesOnlyObserved := baseObserved
 	capabilitiesOnlyObserved.ToolRoute = []string{"code_intelligence:capabilities"}
 	capabilitiesOnlyObserved.ToolRouteModelCalls = []int{1}
@@ -810,13 +915,47 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	capabilitiesOnlyObserved.SemanticCalls = 0
 	capabilitiesOnlyObserved.ResultCount = 0
 	capabilitiesOnlyObserved.SemanticResultCount = 0
+	capabilitiesOnlyObserved.SemanticCompletedModelCall = 0
+	capabilitiesOnlyObserved.SemanticCompletedStep = 0
 	capabilitiesOnlyObserved.Provider = ""
 	capabilitiesOnlyResult := buildDogfoodScenarioResult(baseExpected, capabilitiesOnlyObserved)
-	if capabilitiesOnlyResult.Checks.PreferredToolSelected || !capabilitiesOnlyResult.Checks.PreferredRouteFirst {
+	if capabilitiesOnlyResult.CapabilityAwarenessMeasured || capabilitiesOnlyResult.Checks.PreferredToolSelected || !capabilitiesOnlyResult.Checks.PreferredRouteFirst {
 		t.Fatalf("capabilities-only checks=%+v, want missing selection without an ordering failure", capabilitiesOnlyResult.Checks)
 	}
-	if dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "generic_browse_before_preferred_query") || !dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "preferred_code_intelligence_not_used") {
-		t.Fatalf("capabilities-only reasons=%v, want missing preferred query without generic-browse label", capabilitiesOnlyResult.ReasonCodes)
+	if dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "capabilities_not_consumed_before_query") ||
+		dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "generic_browse_before_preferred_query") ||
+		!dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "inspection_query_not_attempted") ||
+		!dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "preferred_code_intelligence_not_used") {
+		t.Fatalf("capabilities-only reasons=%v, want an unmeasured missing inspection without capability-consumption or generic-browse labels", capabilitiesOnlyResult.ReasonCodes)
+	}
+	capabilityCard := finalizeDogfoodScorecard(dogfoodScorecard{Scenarios: []dogfoodScenarioResult{
+		buildDogfoodScenarioResult(baseExpected, baseObserved),
+		capabilitiesOnlyResult,
+	}})
+	if capabilityCard.Summary.CapabilityAwarenessMeasured != 1 || capabilityCard.Summary.CapabilityAwarenessRate != 1 {
+		t.Fatalf("capability-awareness summary = %+v, want one measured successful inspection", capabilityCard.Summary)
+	}
+	if markdown := renderDogfoodScorecardMarkdown(capabilityCard); !strings.Contains(markdown, "| Capability awareness | 100% (1 measured) |") {
+		t.Fatalf("capability-awareness markdown omitted denominator: %s", markdown)
+	}
+	unmeasuredCapabilityCard := finalizeDogfoodScorecard(dogfoodScorecard{Scenarios: []dogfoodScenarioResult{capabilitiesOnlyResult}})
+	if markdown := renderDogfoodScorecardMarkdown(unmeasuredCapabilityCard); !strings.Contains(markdown, "| Capability awareness | not measured (0 measured) |") || strings.Contains(markdown, "| Capability awareness | 0%") {
+		t.Fatalf("unmeasured capability-awareness markdown was ambiguous: %s", markdown)
+	}
+	zeroMeasuredMarkdown := renderDogfoodScorecardMarkdown(finalizeDogfoodScorecard(dogfoodScorecard{}))
+	for _, metric := range []string{"Capability awareness", "Preferred tool selection", "Preferred tool produced results", "Qualifying fallback success"} {
+		if !strings.Contains(zeroMeasuredMarkdown, "| "+metric+" | not measured (0 measured) |") {
+			t.Fatalf("zero-denominator %s metric was ambiguous: %s", metric, zeroMeasuredMarkdown)
+		}
+	}
+	effectfulOnlyObserved := capabilitiesOnlyObserved
+	effectfulOnlyObserved.ToolRoute = []string{"code_intelligence:capabilities", "effectful_builtin"}
+	effectfulOnlyObserved.ToolRouteModelCalls = []int{1, 2}
+	effectfulOnlyObserved.CapabilitiesBeforeQuery = false
+	effectfulOnlyObserved.UnexpectedToolCalls = 1
+	effectfulOnlyResult := buildDogfoodScenarioResult(baseExpected, effectfulOnlyObserved)
+	if effectfulOnlyResult.CapabilityAwarenessMeasured || dogfoodContains(effectfulOnlyResult.ReasonCodes, "capabilities_not_consumed_before_query") || !dogfoodContains(effectfulOnlyResult.ReasonCodes, "inspection_query_not_attempted") {
+		t.Fatalf("effectful-only capability scoring = measured=%t reasons=%v, want no source-inspection measurement", effectfulOnlyResult.CapabilityAwarenessMeasured, effectfulOnlyResult.ReasonCodes)
 	}
 	readAfterPreferredObserved := baseObserved
 	readAfterPreferredObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:document_symbols", "read_file"}
@@ -838,17 +977,33 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	providerFailureObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:document_symbols", "grep"}
 	providerFailureObserved.ToolRouteModelCalls = []int{1, 2, 3}
 	providerFailureObserved.SemanticResultCount = 0
+	providerFailureObserved.SemanticCompletedModelCall = 0
+	providerFailureObserved.SemanticCompletedStep = 0
 	providerFailureObserved.ResultCount = 0
 	providerFailureObserved.Provider = ""
 	providerFailureObserved.GrepCalls = 1
 	providerFailureObserved.GrepSuccessfulCalls = 1
 	providerFailureObserved.GrepResultCount = 1
 	providerFailureObserved.SemanticProviderFailureCall = 2
+	providerFailureObserved.SemanticProviderFailureStep = 2
 	providerFailureObserved.GrepResultModelCall = 3
 	providerFailureObserved.ErrorKinds = []string{"provider_protocol"}
 	providerFailureResult := buildDogfoodScenarioResult(baseExpected, providerFailureObserved)
 	if providerFailureResult.Verdict != "inconclusive" || !providerFailureResult.Checks.CorrectFallback || !dogfoodContains(providerFailureResult.ReasonCodes, "preferred_provider_query_failed") {
 		t.Fatalf("query-failure verdict = %q checks=%+v reasons=%v, want inconclusive fallback", providerFailureResult.Verdict, providerFailureResult.Checks, providerFailureResult.ReasonCodes)
+	}
+	if !providerFailureResult.PreferredRouteAdvertised || providerFailureResult.PreferredRouteAvailable {
+		t.Fatalf("query-failure route posture = advertised=%t available=%t, want advertised baseline with runtime failure", providerFailureResult.PreferredRouteAdvertised, providerFailureResult.PreferredRouteAvailable)
+	}
+	queryFailureCard := finalizeDogfoodScorecard(dogfoodScorecard{Scenarios: []dogfoodScenarioResult{providerFailureResult}})
+	if queryFailureCard.Summary.PreferredToolMeasured != 1 || queryFailureCard.Summary.PreferredToolRate != 1 || queryFailureCard.Summary.PreferredResultRate != 0 {
+		t.Fatalf("query-failure preferred summary = %+v, want selected query included in advertised-route denominator", queryFailureCard.Summary)
+	}
+	firstFailureThenCompletionObserved := providerFailureObserved
+	firstFailureThenCompletionObserved.SemanticCompletedModelCall = 4
+	firstFailureThenCompletionObserved.SemanticCompletedStep = 4
+	if result := buildDogfoodScenarioResult(baseExpected, firstFailureThenCompletionObserved); !result.ProviderQueryFailed || result.Verdict != "inconclusive" {
+		t.Fatalf("first-failure-then-completion result = provider_query_failed=%t verdict=%q reasons=%v, want first failure to retain fallback semantics", result.ProviderQueryFailed, result.Verdict, result.ReasonCodes)
 	}
 	providerFailureObserved.GrepResultModelCall = 2
 	providerFailureObserved.ToolRouteModelCalls = []int{1, 2, 2}
@@ -881,7 +1036,10 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	structuralFailureObserved.SemanticCalls = 0
 	structuralFailureObserved.SemanticProviderFailureCall = 0
 	structuralFailureObserved.StructuralCalls = 1
+	structuralFailureObserved.StructuralCompletedModelCall = 0
+	structuralFailureObserved.StructuralCompletedStep = 0
 	structuralFailureObserved.StructuralProviderFailureCall = 2
+	structuralFailureObserved.StructuralProviderFailureStep = 2
 	structuralFailureObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:structural_search"}
 	structuralFailureResult := buildDogfoodScenarioResult(structuralFailureExpected, structuralFailureObserved)
 	if !dogfoodContains(structuralFailureResult.ReasonCodes, "provider_failure_fallback_not_used") || dogfoodContains(structuralFailureResult.ReasonCodes, "provider_failure_fallback_no_results") {
@@ -1050,6 +1208,23 @@ func TestDogfoodScorecardWriteProducesBoundedArtifacts(t *testing.T) {
 			t.Fatalf("scorecard %s permissions = %o, want 600", filepath.Base(path), info.Mode().Perm())
 		}
 	}
+	jsonContent, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read scorecard JSON schema: %v", err)
+	}
+	if !strings.Contains(string(jsonContent), `"schema_version": "hecate.code-intelligence-dogfood.v2"`) ||
+		!strings.Contains(string(jsonContent), `"run_completion_rate"`) ||
+		strings.Contains(string(jsonContent), `"task_completion_rate"`) {
+		t.Fatalf("scorecard JSON did not use the v2 Run-completion schema: %s", jsonContent)
+	}
+	markdownContent, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("read scorecard Markdown schema: %v", err)
+	}
+	if !strings.Contains(string(markdownContent), "| Run completion |") || strings.Contains(string(markdownContent), "| Task completion |") ||
+		!strings.Contains(string(markdownContent), "| Qualifying fallback success |") || strings.Contains(string(markdownContent), "| Structured fallback success |") {
+		t.Fatalf("scorecard Markdown did not use v2 metric terminology: %s", markdownContent)
+	}
 }
 
 func TestDogfoodReportDirectoryDefaultIsUnique(t *testing.T) {
@@ -1081,6 +1256,35 @@ func TestDogfoodReportDirectoryDefaultIsUnique(t *testing.T) {
 	}
 	if override != filepath.Join(repositoryRoot, "custom-report") {
 		t.Fatalf("scorecard override = %q, want repository-relative path", override)
+	}
+}
+
+func TestDogfoodSourceInspectionRoutePredicateIsClosed(t *testing.T) {
+	for _, route := range []string{
+		"code_intelligence:definition",
+		"code_intelligence:unknown",
+		"grep",
+		"glob",
+		"list_dir",
+		"read_file",
+		"standalone_structural_search",
+	} {
+		if !dogfoodSourceInspectionRoute(route) {
+			t.Errorf("source-inspection route %q was not measured", route)
+		}
+	}
+	for _, route := range []string{
+		"code_intelligence:capabilities",
+		"code_intelligence:invented",
+		"effectful_builtin",
+		"unknown_tool",
+		"artifact_read",
+		"git_status",
+		"git_diff",
+	} {
+		if dogfoodSourceInspectionRoute(route) {
+			t.Errorf("non-source route %q was measured", route)
+		}
 	}
 }
 
