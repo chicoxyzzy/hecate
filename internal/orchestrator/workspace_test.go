@@ -12,11 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hecatehq/hecate/internal/gitrunner"
 	"github.com/hecatehq/hecate/internal/taskworkflow"
 	"github.com/hecatehq/hecate/pkg/types"
 )
 
-func TestIsGitRepositoryDetectsDotGitDir(t *testing.T) {
+func TestIsGitRepositoryDetectsGitMetadata(t *testing.T) {
 	dir := t.TempDir()
 
 	if isGitRepository(dir) {
@@ -31,16 +32,25 @@ func TestIsGitRepositoryDetectsDotGitDir(t *testing.T) {
 		t.Error("temp dir with .git/ not detected as git repo")
 	}
 
-	// .git as a file (e.g. submodule pointer) is intentionally not treated as
-	// a repo by isGitRepository — it requires .git to be a directory so the
-	// orchestrator can `git clone --no-hardlinks` from it.
+	// Linked worktrees and submodules use a regular .git pointer. They must take
+	// the independent clone path instead of copying metadata that can point back
+	// into the source repository. Invalid pointers then fail closed at clone.
 	plainDir := t.TempDir()
 	gitFile := filepath.Join(plainDir, ".git")
 	if err := os.WriteFile(gitFile, []byte("gitdir: ../foo"), 0o644); err != nil {
 		t.Fatalf("write .git file: %v", err)
 	}
-	if isGitRepository(plainDir) {
-		t.Error(".git regular file should not be treated as a repository")
+	if !isGitRepository(plainDir) {
+		t.Error(".git regular file not detected as Git metadata")
+	}
+
+	symlinkDir := t.TempDir()
+	if err := os.Symlink(gitDir, filepath.Join(symlinkDir, ".git")); err == nil {
+		if !isGitRepository(symlinkDir) {
+			t.Error(".git symlink not detected as Git metadata")
+		}
+	} else {
+		t.Logf("symlink unavailable: %v", err)
 	}
 }
 
@@ -265,6 +275,154 @@ func TestWorkspaceManager_DefaultModeStillClones(t *testing.T) {
 	// And the marker copied across.
 	if _, err := os.Stat(filepath.Join(want, "marker.txt")); err != nil {
 		t.Errorf("marker not copied to clone: %v", err)
+	}
+}
+
+func TestWorkspaceManager_LinkedWorktreeUsesIndependentGitClone(t *testing.T) {
+	repository := t.TempDir()
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.email", "test@example.com")
+	runGit(t, repository, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repository, ".gitignore"), []byte(".cache/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "tracked.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", ".gitignore", "tracked.txt")
+	runGit(t, repository, "commit", "-m", "initial")
+
+	linkedWorktree := filepath.Join(t.TempDir(), "linked-worktree")
+	runGit(t, repository, "worktree", "add", "-b", "source-linked", linkedWorktree)
+	if err := os.WriteFile(filepath.Join(linkedWorktree, "tracked.txt"), []byte("source wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linkedWorktree, "untracked.txt"), []byte("source only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(linkedWorktree, ".cache"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linkedWorktree, ".cache", "private.env"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewWorkspaceManager(t.TempDir())
+	task := types.Task{ID: "task-linked-clone", WorkingDirectory: linkedWorktree, WorkspaceMode: "persistent"}
+	plan, err := manager.planProvision(task, types.TaskRun{ID: "run-linked-clone"})
+	if err != nil {
+		t.Fatalf("planProvision(linked worktree): %v", err)
+	}
+	if plan.source.kind != "git" {
+		t.Fatalf("linked-worktree source kind = %q, want git", plan.source.kind)
+	}
+	workspace, err := manager.provisionPlanned(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("provisionPlanned(linked worktree): %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(workspace, "tracked.txt")); err != nil || string(body) != "committed\n" {
+		t.Fatalf("managed tracked content = %q, err=%v, want committed content", body, err)
+	}
+	for _, path := range []string{"untracked.txt", filepath.Join(".cache", "private.env")} {
+		if _, err := os.Lstat(filepath.Join(workspace, path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("managed clone retained source-only path %q: %v", path, err)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("managed clone .git = %v, err=%v, want independent directory", info, err)
+	}
+
+	runGit(t, workspace, "checkout", "-b", "managed-only")
+	result, err := gitrunner.NewLocalRunner().Run(t.Context(), linkedWorktree, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("inspect source linked-worktree branch: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "source-linked" {
+		t.Fatalf("source linked-worktree branch = %q, want source-linked", got)
+	}
+	if body, err := os.ReadFile(filepath.Join(linkedWorktree, "tracked.txt")); err != nil || string(body) != "source wip\n" {
+		t.Fatalf("source WIP after managed Git mutation = %q, err=%v", body, err)
+	}
+}
+
+func TestWorkspaceManager_SymlinkedGitMetadataUsesIndependentClone(t *testing.T) {
+	source := t.TempDir()
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(source, ".gitignore"), []byte(".cache/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "add", ".gitignore", "tracked.txt")
+	runGit(t, source, "commit", "-m", "initial")
+
+	externalGitDir := filepath.Join(t.TempDir(), "git-metadata")
+	if err := os.Rename(filepath.Join(source, ".git"), externalGitDir); err != nil {
+		t.Fatalf("move Git metadata outside source: %v", err)
+	}
+	if err := os.Symlink(externalGitDir, filepath.Join(source, ".git")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("source wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, ".cache"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".cache", "private.env"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewWorkspaceManager(t.TempDir())
+	workspace, err := manager.Provision(t.Context(), types.Task{
+		ID:               "task-symlinked-git-metadata",
+		WorkingDirectory: source,
+		WorkspaceMode:    "persistent",
+	}, types.TaskRun{ID: "run-symlinked-git-metadata"})
+	if err != nil {
+		t.Fatalf("Provision(symlinked Git metadata): %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(workspace, "tracked.txt")); err != nil || string(body) != "committed\n" {
+		t.Fatalf("managed tracked content = %q, err=%v, want committed content", body, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".cache", "private.env")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed clone retained ignored source path: %v", err)
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("managed clone .git = %v, err=%v, want independent directory", info, err)
+	}
+}
+
+func TestWorkspaceManager_InvalidGitMetadataFileFailsClosed(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, ".git"), []byte("gitdir: ../missing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "private.txt"), []byte("do not copy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	manager := NewWorkspaceManager(root)
+	workspace, err := manager.Provision(t.Context(), types.Task{
+		ID:               "task-invalid-git-metadata",
+		WorkingDirectory: source,
+		WorkspaceMode:    "persistent",
+	}, types.TaskRun{ID: "run-invalid-git-metadata"})
+	if err == nil {
+		t.Fatalf("Provision(invalid Git metadata) = %q, want clone failure", workspace)
+	}
+	if !strings.Contains(err.Error(), "clone workspace") {
+		t.Fatalf("Provision(invalid Git metadata) error = %q, want clone failure", err)
+	}
+	if workspace != "" {
+		t.Fatalf("failed provisioning returned workspace %q", workspace)
+	}
+	if _, statErr := os.Lstat(filepath.Join(root, "task-invalid-git-metadata", "run-invalid-git-metadata")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid Git source published a managed workspace: %v", statErr)
 	}
 }
 

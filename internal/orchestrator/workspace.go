@@ -486,12 +486,18 @@ func provisionDirectoryWorkspace(ctx context.Context, sourcePath string, destina
 }
 
 func isGitRepository(path string) bool {
-	gitDir, err := safeJoinWithinRoot(path, ".git")
+	root, err := os.OpenRoot(path)
 	if err != nil {
 		return false
 	}
-	info, err := os.Stat(gitDir)
-	return err == nil && info.IsDir()
+	defer root.Close()
+	// Linked worktrees and submodules use a regular .git pointer, and Git also
+	// accepts symlinked metadata. Treat any local .git entry as a Git source so
+	// managed provisioning clones committed state into independent metadata
+	// instead of copying a pointer back into the source repository. Invalid or
+	// special entries then fail closed when clone validates the source.
+	_, err = root.Lstat(".git")
+	return err == nil
 }
 
 func copyDirectory(sourcePath, destinationPath string) error {
