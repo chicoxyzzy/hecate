@@ -23,6 +23,13 @@ the same repeated matrix with a stronger tool-capable model. If request-shape
 and fallback failures reproduce with that model, then evaluate
 operation-specific tools or a provider-compatible conditional schema.
 
+That gate was subsequently exercised in the
+[strong-model follow-up](code-intelligence-strong-model-dogfood-2026-08-10.md).
+The stronger model completed every task without request-shape failures, but the
+exact-path prompts made direct file reads the rational route. The follow-up
+therefore moves the next gate to less-confounded navigation-fit scenarios
+before any production schema change.
+
 ## Setup
 
 | Setting                      | Value                                                                                                                                                                                 |
@@ -151,14 +158,16 @@ second-model graduation gate.
   is required for a fully self-contained reproducible scorecard.
 - The scorecard does not measure provider process cleanup; deterministic tests
   own that assertion.
-- A stronger tool-capable model is not configured in this local environment,
-  so the cross-model gate remains open.
+- This run itself used only the local model. The later
+  [strong-model follow-up](code-intelligence-strong-model-dogfood-2026-08-10.md)
+  records the cross-model result and its proxy-route limitations.
 
 ## Decision
 
 Keep the current LSP + ast-grep + bounded-grep architecture. Do not add direct
-Tree-sitter or more semantic providers from this evidence. Next, run the same
-three-repeat matrix with at least one stronger tool-capable model. If that model
-still produces frequent closed request-shape errors or fails structured
-fallbacks, prototype operation-specific tool schemas and compare them with the
-current single-tool contract before changing production dispatch.
+Tree-sitter or more semantic providers from this evidence. The then-next action
+was the same three-repeat matrix with a stronger tool-capable model. That gate
+is now recorded in the
+[strong-model follow-up](code-intelligence-strong-model-dogfood-2026-08-10.md),
+whose less-confounded scenario-design decision supersedes this historical next
+step.
