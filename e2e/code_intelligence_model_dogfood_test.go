@@ -572,9 +572,32 @@ func codeIntelligenceDogfoodProviderEnvPrefix(t *testing.T, provider string) str
 	return strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
 }
 
+func TestCodeIntelligenceDogfoodGatewayEnvOwnsRuntimeTemp(t *testing.T) {
+	env := codeIntelligenceDogfoodGatewayEnv(t, codeIntelligenceDogfoodConfig{Provider: "ollama", Model: "fixture-model"})
+	values := make(map[string]string)
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	runtimeTemp := values["TMPDIR"]
+	if runtimeTemp == "" || !filepath.IsAbs(runtimeTemp) {
+		t.Fatalf("TMPDIR = %q, want an absolute test-owned directory", runtimeTemp)
+	}
+	if values["TMP"] != runtimeTemp || values["TEMP"] != runtimeTemp {
+		t.Fatalf("runtime temp env = TMPDIR %q TMP %q TEMP %q, want one cleanup root", runtimeTemp, values["TMP"], values["TEMP"])
+	}
+	info, err := os.Stat(runtimeTemp)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("inspect test-owned runtime temp %q: info=%v err=%v", runtimeTemp, info, err)
+	}
+}
+
 func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfoodConfig, extra ...string) []string {
 	t.Helper()
 	prefix := codeIntelligenceDogfoodProviderEnvPrefix(t, cfg.Provider)
+	runtimeTemp := t.TempDir()
 	// gatewayServer's generic provider scanner splits names at the first
 	// underscore. Put the model catalog in the inherited environment so a
 	// provider such as together_ai cannot accidentally enable together.
@@ -583,6 +606,12 @@ func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfood
 		"HECATE_BACKEND=sqlite",
 		"HECATE_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write",
 		"GOCACHE=" + t.TempDir(),
+		// Managed workspaces default to os.TempDir(). Keep every child-runtime
+		// temporary tree under this test's cleanup boundary; repeated dogfood
+		// runs must not accumulate persistent clones in the host temp root.
+		"TMPDIR=" + runtimeTemp,
+		"TMP=" + runtimeTemp,
+		"TEMP=" + runtimeTemp,
 		fmt.Sprintf("HECATE_TASK_AGENT_LOOP_MAX_MODEL_CALLS=%d", dogfoodMaxModelCalls),
 		"PROVIDER_" + prefix + "_PRECONFIGURED=1",
 	}
