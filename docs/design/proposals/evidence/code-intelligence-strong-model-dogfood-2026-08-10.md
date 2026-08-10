@@ -117,12 +117,13 @@ comparison is directional rather than a controlled model benchmark.
 | Workspace unchanged              |   18 / 18 |                   18 / 18 |
 | Unexpected-tool scenarios        |    2 / 18 |                    0 / 18 |
 
-Kimi eliminated the eight closed request-shape observations recorded in the
-local-model baseline and turned every scenario into a useful completed answer.
-Its lower preferred-route selection cannot be read as a simple regression: the
-same exact-path questions reward direct reads, and Kimi solved all of them that
-way. Query latency is also not comparable because the Kimi run made only five
-measured non-capability code-intelligence calls, versus 17 in the baseline.
+The Kimi follow-up did not reproduce any of the eight closed request-shape
+observations in the local-model baseline, and all its scenarios produced useful
+completed answers. Its lower preferred-route selection cannot be read as a
+simple regression: the same exact-path questions reward direct reads, and Kimi
+solved all of them that way. Query latency is also not comparable because the
+Kimi run made only five measured non-capability code-intelligence calls, versus
+17 in the baseline.
 
 ## Publication boundary and limitations
 
