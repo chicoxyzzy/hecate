@@ -114,6 +114,12 @@ type codeIntelligenceDogfoodCapture struct {
 	GrepResultCount               int
 	SemanticProviderFailureCall   int
 	StructuralProviderFailureCall int
+	SemanticProviderFailureStep   int
+	StructuralProviderFailureStep int
+	SemanticCompletedModelCall    int
+	StructuralCompletedModelCall  int
+	SemanticCompletedStep         int
+	StructuralCompletedStep       int
 	GrepResultModelCall           int
 	StructuralResultModelCall     int
 	QueryLatencyMillis            int64
@@ -330,6 +336,12 @@ func codeIntelligenceDogfoodObservation(capture codeIntelligenceDogfoodCapture, 
 		GrepResultCount:               capture.GrepResultCount,
 		SemanticProviderFailureCall:   capture.SemanticProviderFailureCall,
 		StructuralProviderFailureCall: capture.StructuralProviderFailureCall,
+		SemanticProviderFailureStep:   capture.SemanticProviderFailureStep,
+		StructuralProviderFailureStep: capture.StructuralProviderFailureStep,
+		SemanticCompletedModelCall:    capture.SemanticCompletedModelCall,
+		StructuralCompletedModelCall:  capture.StructuralCompletedModelCall,
+		SemanticCompletedStep:         capture.SemanticCompletedStep,
+		StructuralCompletedStep:       capture.StructuralCompletedStep,
 		GrepResultModelCall:           capture.GrepResultModelCall,
 		StructuralResultModelCall:     capture.StructuralResultModelCall,
 		QueryLatencyMillis:            capture.QueryLatencyMillis,
@@ -931,26 +943,53 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 				modelCall := codeIntelligenceDogfoodModelCall(step.Input["model_call_index"])
 				switch {
 				case codeIntelligenceDogfoodSemanticOperation(operation):
-					capture.SemanticProviderFailureCall = codeIntelligenceDogfoodFirstPositive(capture.SemanticProviderFailureCall, modelCall)
+					capture.SemanticProviderFailureCall, capture.SemanticProviderFailureStep = codeIntelligenceDogfoodFirstQueryPosition(
+						capture.SemanticProviderFailureCall,
+						capture.SemanticProviderFailureStep,
+						modelCall,
+						step.Index,
+					)
 				case operation == string(codeintel.OpStructuralSearch):
-					capture.StructuralProviderFailureCall = codeIntelligenceDogfoodFirstPositive(capture.StructuralProviderFailureCall, modelCall)
+					capture.StructuralProviderFailureCall, capture.StructuralProviderFailureStep = codeIntelligenceDogfoodFirstQueryPosition(
+						capture.StructuralProviderFailureCall,
+						capture.StructuralProviderFailureStep,
+						modelCall,
+						step.Index,
+					)
 				}
 			}
 		}
 		if operation == "" || operation == string(codeintel.OpCapabilities) {
 			continue
 		}
+		modelCall := codeIntelligenceDogfoodModelCall(step.Input["model_call_index"])
 		if capture.QueryLatencyMillis == 0 {
 			capture.QueryLatencyMillis = codeIntelligenceDogfoodDurationMillis(step.StartedAt, step.FinishedAt)
 		}
 		items := codeIntelligenceDogfoodNumber(step.OutputSummary["items"])
 		capture.ResultCount += items
 		if operation == string(codeintel.OpStructuralSearch) {
+			if step.Status == "completed" {
+				capture.StructuralCompletedModelCall, capture.StructuralCompletedStep = codeIntelligenceDogfoodFirstQueryPosition(
+					capture.StructuralCompletedModelCall,
+					capture.StructuralCompletedStep,
+					modelCall,
+					step.Index,
+				)
+			}
 			capture.StructuralResultCount += items
 			if items > 0 {
-				capture.StructuralResultModelCall = max(capture.StructuralResultModelCall, codeIntelligenceDogfoodModelCall(step.Input["model_call_index"]))
+				capture.StructuralResultModelCall = max(capture.StructuralResultModelCall, modelCall)
 			}
 		} else if codeIntelligenceDogfoodSemanticOperation(operation) {
+			if step.Status == "completed" {
+				capture.SemanticCompletedModelCall, capture.SemanticCompletedStep = codeIntelligenceDogfoodFirstQueryPosition(
+					capture.SemanticCompletedModelCall,
+					capture.SemanticCompletedStep,
+					modelCall,
+					step.Index,
+				)
+			}
 			capture.SemanticResultCount += items
 		}
 		observedProvider := strings.TrimSpace(fmt.Sprint(step.OutputSummary["provider"]))
@@ -987,53 +1026,55 @@ func codeIntelligenceDogfoodToolRoutes(events []e2eEventEnvelope) ([]string, []i
 			continue
 		}
 		toolName := strings.TrimSpace(fmt.Sprint(event.Data["tool_name"]))
-		if toolName == "code_intelligence" {
-			input, _ := event.Data["input"].(map[string]any)
-			operation := codeIntelligenceDogfoodOperation(fmt.Sprint(input["operation"]))
-			if operation == "" {
-				operation = "unknown"
-			}
-			routes = append(routes, "code_intelligence:"+operation)
-			modelCalls = append(modelCalls, codeIntelligenceDogfoodModelCall(event.Data["model_call_index"]))
-			continue
-		}
-		switch toolName {
-		case "grep", "glob", "list_dir", "read_file", "artifact_read", "git_status", "git_diff":
-			routes = append(routes, toolName)
-		case "structural_search":
-			routes = append(routes, "standalone_structural_search")
-		case "shell_exec", "terminal_open", "terminal_write", "terminal_read", "terminal_wait", "terminal_kill", "git_exec", "file_write", "file_edit", "apply_patch", "http_request", "web_search", "browser_inspect", "draft_project_proposal":
-			routes = append(routes, "effectful_builtin")
-		default:
-			routes = append(routes, "unknown_tool")
-		}
+		input, _ := event.Data["input"].(map[string]any)
+		routes = append(routes, codeIntelligenceDogfoodToolRoute(toolName, input))
 		modelCalls = append(modelCalls, codeIntelligenceDogfoodModelCall(event.Data["model_call_index"]))
 	}
 	return routes, modelCalls
 }
 
+func codeIntelligenceDogfoodToolRoute(toolName string, input map[string]any) string {
+	if toolName == "code_intelligence" {
+		operation := codeIntelligenceDogfoodOperation(fmt.Sprint(input["operation"]))
+		if operation == "" {
+			operation = "unknown"
+		}
+		return "code_intelligence:" + operation
+	}
+	switch toolName {
+	case "grep", "glob", "list_dir", "read_file", "artifact_read", "git_status", "git_diff":
+		return toolName
+	case "structural_search":
+		return "standalone_structural_search"
+	case "shell_exec", "terminal_open", "terminal_write", "terminal_read", "terminal_wait", "terminal_kill", "git_exec", "file_write", "file_edit", "apply_patch", "http_request", "web_search", "browser_inspect", "draft_project_proposal":
+		return "effectful_builtin"
+	default:
+		return "unknown_tool"
+	}
+}
+
 func codeIntelligenceDogfoodCapabilitiesBeforeQuery(events []e2eEventEnvelope) bool {
 	capabilityModelCall := 0
-	decisionModelCall := 0
+	inspectionModelCall := 0
 	for _, event := range events {
 		if event.Type != "assistant.tool_call_proposed" {
 			continue
 		}
 		toolName := strings.TrimSpace(fmt.Sprint(event.Data["tool_name"]))
 		input, _ := event.Data["input"].(map[string]any)
-		operation := codeIntelligenceDogfoodOperation(fmt.Sprint(input["operation"]))
+		route := codeIntelligenceDogfoodToolRoute(toolName, input)
 		modelCall := codeIntelligenceDogfoodModelCall(event.Data["model_call_index"])
-		if toolName == "code_intelligence" && operation == string(codeintel.OpCapabilities) {
+		if route == "code_intelligence:capabilities" {
 			if capabilityModelCall == 0 {
 				capabilityModelCall = modelCall
 			}
 			continue
 		}
-		if decisionModelCall == 0 {
-			decisionModelCall = modelCall
+		if dogfoodSourceInspectionRoute(route) && inspectionModelCall == 0 {
+			inspectionModelCall = modelCall
 		}
 	}
-	return capabilityModelCall > 0 && decisionModelCall > capabilityModelCall
+	return capabilityModelCall > 0 && inspectionModelCall > capabilityModelCall
 }
 
 func codeIntelligenceDogfoodOperation(value string) string {
@@ -1066,8 +1107,10 @@ func codeIntelligenceDogfoodSemanticOperation(operation string) bool {
 }
 
 func codeIntelligenceDogfoodFirstInspectionTool(routes []string) string {
-	if len(routes) > 0 {
-		return routes[0]
+	for _, route := range routes {
+		if route == "code_intelligence:capabilities" || dogfoodSourceInspectionRoute(route) {
+			return route
+		}
 	}
 	return "none"
 }
@@ -1372,11 +1415,15 @@ func codeIntelligenceDogfoodProviderQueryFailure(category string) bool {
 	}
 }
 
-func codeIntelligenceDogfoodFirstPositive(current, candidate int) int {
-	if candidate <= 0 || (current > 0 && current <= candidate) {
-		return current
+func codeIntelligenceDogfoodFirstQueryPosition(currentModelCall, currentStep, candidateModelCall, candidateStep int) (int, int) {
+	if candidateModelCall <= 0 {
+		return currentModelCall, currentStep
 	}
-	return candidate
+	if currentModelCall <= 0 || candidateModelCall < currentModelCall ||
+		(candidateModelCall == currentModelCall && candidateStep > 0 && currentStep > 0 && candidateStep < currentStep) {
+		return candidateModelCall, candidateStep
+	}
+	return currentModelCall, currentStep
 }
 
 func codeIntelligenceDogfoodSafeRunStatus(value string) string {
@@ -1423,9 +1470,50 @@ func TestCodeIntelligenceDogfoodCapabilitiesRequireLaterModelCall(t *testing.T) 
 	if codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, readFile}) {
 		t.Fatal("parallel capabilities and generic browsing counted as capability-informed")
 	}
+	effectful := e2eEventEnvelope{Type: "assistant.tool_call_proposed", Data: map[string]any{
+		"model_call_index": float64(2),
+		"tool_name":        "shell_exec",
+		"input":            map[string]any{"command": "true"},
+	}}
+	if codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, effectful}) {
+		t.Fatal("effectful-only proposal counted as a capability-informed source inspection")
+	}
+	artifactRead := e2eEventEnvelope{Type: "assistant.tool_call_proposed", Data: map[string]any{
+		"model_call_index": float64(2),
+		"tool_name":        "artifact_read",
+		"input":            map[string]any{},
+	}}
+	if codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, artifactRead}) {
+		t.Fatal("artifact read counted as a capability-informed source inspection")
+	}
 	semantic.Data["model_call_index"] = float64(2)
 	if !codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, semantic}) {
 		t.Fatal("later semantic proposal did not count as capability-informed")
+	}
+	unknownCodeIntelligence := e2eEventEnvelope{Type: "assistant.tool_call_proposed", Data: map[string]any{
+		"model_call_index": float64(2),
+		"tool_name":        "code_intelligence",
+		"input":            map[string]any{"operation": "invented"},
+	}}
+	if !codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, unknownCodeIntelligence}) {
+		t.Fatal("unknown code-intelligence operation did not count as an attempted source inspection")
+	}
+}
+
+func TestCodeIntelligenceDogfoodFirstInspectionSkipsUnrelatedProposals(t *testing.T) {
+	routes := []string{
+		"effectful_builtin",
+		"unknown_tool",
+		"artifact_read",
+		"git_status",
+		"code_intelligence:capabilities",
+		"code_intelligence:document_symbols",
+	}
+	if got := codeIntelligenceDogfoodFirstInspectionTool(routes); got != "code_intelligence:capabilities" {
+		t.Fatalf("first source inspection = %q, want capabilities after unrelated proposals", got)
+	}
+	if got := codeIntelligenceDogfoodFirstInspectionTool([]string{"effectful_builtin", "unknown_tool"}); got != "none" {
+		t.Fatalf("unrelated-only first source inspection = %q, want none", got)
 	}
 }
 
@@ -1527,6 +1615,143 @@ func TestCodeIntelligenceDogfoodFallbackRequiresLaterModelCall(t *testing.T) {
 	}
 }
 
+func TestCodeIntelligenceDogfoodCompletedQueryPrecedesLaterProviderFailure(t *testing.T) {
+	run := e2eTaskRun{
+		ID: "run_completed_then_failure", Status: "completed", ModelCallCount: 4,
+		StartedAt: "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:01Z",
+	}
+	steps := []e2eTaskStep{
+		{
+			Index: 2, ToolName: "code_intelligence", Status: "completed",
+			Input:         map[string]any{"operation": "document_symbols", "model_call_index": float64(2)},
+			OutputSummary: map[string]any{"provider": "gopls", "items": float64(0)},
+			StartedAt:     "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:00.100Z",
+		},
+		{
+			Index: 3, ToolName: "grep", Status: "completed",
+			Input:      map[string]any{"matches": float64(1), "model_call_index": float64(3)},
+			StartedAt:  "2026-08-08T10:00:00.100Z",
+			FinishedAt: "2026-08-08T10:00:00.200Z",
+		},
+		{
+			Index: 4, ToolName: "code_intelligence", Status: "failed", ErrorKind: "provider_protocol",
+			Input:         map[string]any{"operation": "document_symbols", "model_call_index": float64(4)},
+			OutputSummary: map[string]any{"error_category": "provider_protocol"},
+			StartedAt:     "2026-08-08T10:00:00.200Z", FinishedAt: "2026-08-08T10:00:00.300Z",
+		},
+	}
+	events := []e2eEventEnvelope{
+		{Sequence: 1, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(1), "tool_name": "code_intelligence", "input": map[string]any{"operation": "capabilities"}}},
+		{Sequence: 2, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(2), "tool_name": "code_intelligence", "input": map[string]any{"operation": "document_symbols"}}},
+		{Sequence: 3, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(3), "tool_name": "grep", "input": map[string]any{}}},
+		{Sequence: 4, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(4), "tool_name": "code_intelligence", "input": map[string]any{"operation": "document_symbols"}}},
+		{Sequence: 5, Type: "assistant.final_answer", Data: map[string]any{"summary": "expected_marker"}},
+	}
+	expected := dogfoodScenarioExpectation{
+		ID: "completed-then-failure-r1", Language: "go", Intent: "semantic_symbol_lookup", ExpectedRoute: "semantic",
+		Posture: dogfoodScenarioPosture{ToolsEnabled: true, WritesAllowed: true}, Provider: "gopls", ProviderAvailable: true, SemanticPermitted: true,
+	}
+	capture := captureCodeIntelligenceDogfoodRun(run, "task_completed_then_failure", steps, events, nil, "expected_marker", "go", "gopls", "gopls", "", 0)
+	if capture.SemanticCompletedModelCall != 2 || capture.SemanticCompletedStep != 2 ||
+		capture.SemanticProviderFailureCall != 4 || capture.SemanticProviderFailureStep != 4 || capture.SemanticResultCount != 0 {
+		t.Fatalf("completed-then-failure capture = %+v, want zero-result completion at call 2 before failure at call 4", capture)
+	}
+	result := buildDogfoodScenarioResult(expected, codeIntelligenceDogfoodObservation(capture, ""))
+	if result.ProviderQueryFailed || !result.PreferredRouteAdvertised || !result.PreferredRouteAvailable || result.FallbackApplicable {
+		t.Fatalf("completed-then-failure route = provider_query_failed=%t advertised=%t available=%t fallback=%t, want completed advertised route", result.ProviderQueryFailed, result.PreferredRouteAdvertised, result.PreferredRouteAvailable, result.FallbackApplicable)
+	}
+	if result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "preferred_code_intelligence_no_results") ||
+		dogfoodContains(result.ReasonCodes, "preferred_provider_query_failed") ||
+		dogfoodContains(result.ReasonCodes, "fallback_not_conditioned_on_preferred_result") {
+		t.Fatalf("completed-then-failure verdict = %q reasons=%v, want only the zero-result route deficiency", result.Verdict, result.ReasonCodes)
+	}
+}
+
+func TestCodeIntelligenceDogfoodEqualModelCallQueryOrdering(t *testing.T) {
+	run := e2eTaskRun{
+		ID: "run_equal_call_order", Status: "completed", ModelCallCount: 3,
+		StartedAt: "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:01Z",
+	}
+	expected := dogfoodScenarioExpectation{
+		ID: "equal-call-order-r1", Language: "go", Intent: "semantic_symbol_lookup", ExpectedRoute: "semantic",
+		Posture: dogfoodScenarioPosture{ToolsEnabled: true, WritesAllowed: true}, Provider: "gopls", ProviderAvailable: true, SemanticPermitted: true,
+	}
+	events := []e2eEventEnvelope{
+		{Sequence: 1, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(1), "tool_name": "code_intelligence", "input": map[string]any{"operation": "capabilities"}}},
+		{Sequence: 2, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(2), "tool_name": "code_intelligence", "input": map[string]any{"operation": "document_symbols"}}},
+		{Sequence: 3, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(2), "tool_name": "code_intelligence", "input": map[string]any{"operation": "document_symbols"}}},
+		{Sequence: 4, Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(3), "tool_name": "grep", "input": map[string]any{}}},
+		{Sequence: 5, Type: "assistant.final_answer", Data: map[string]any{"summary": "expected_marker"}},
+	}
+	queryStep := func(index int, status string) e2eTaskStep {
+		step := e2eTaskStep{
+			Index: index, ToolName: "code_intelligence", Status: status,
+			Input:     map[string]any{"operation": "document_symbols", "model_call_index": float64(2)},
+			StartedAt: "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:00.100Z",
+		}
+		if status == "completed" {
+			step.OutputSummary = map[string]any{"provider": "gopls", "items": float64(0)}
+		} else {
+			step.ErrorKind = "provider_protocol"
+			step.OutputSummary = map[string]any{"error_category": "provider_protocol"}
+		}
+		return step
+	}
+	grepStep := e2eTaskStep{
+		Index: 4, ToolName: "grep", Status: "completed",
+		Input:      map[string]any{"matches": float64(1), "model_call_index": float64(3)},
+		StartedAt:  "2026-08-08T10:00:00.100Z",
+		FinishedAt: "2026-08-08T10:00:00.200Z",
+	}
+	tests := []struct {
+		name                    string
+		steps                   []e2eTaskStep
+		completedStep           int
+		failureStep             int
+		wantProviderQueryFailed bool
+		wantVerdict             string
+	}{
+		{
+			name: "completion before failure",
+			steps: []e2eTaskStep{
+				queryStep(2, "completed"),
+				queryStep(3, "failed"),
+				grepStep,
+			},
+			completedStep: 2, failureStep: 3, wantVerdict: "fail",
+		},
+		{
+			name: "failure before completion",
+			steps: []e2eTaskStep{
+				queryStep(2, "failed"),
+				queryStep(3, "completed"),
+				grepStep,
+			},
+			completedStep: 3, failureStep: 2, wantProviderQueryFailed: true, wantVerdict: "inconclusive",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := captureCodeIntelligenceDogfoodRun(run, "task_equal_call_order", test.steps, events, nil, "expected_marker", "go", "gopls", "gopls", "", 0)
+			if capture.SemanticCompletedModelCall != 2 || capture.SemanticCompletedStep != test.completedStep ||
+				capture.SemanticProviderFailureCall != 2 || capture.SemanticProviderFailureStep != test.failureStep {
+				t.Fatalf("equal-call capture = %+v, want completion step %d and failure step %d", capture, test.completedStep, test.failureStep)
+			}
+			result := buildDogfoodScenarioResult(expected, codeIntelligenceDogfoodObservation(capture, ""))
+			if result.ProviderQueryFailed != test.wantProviderQueryFailed || result.Verdict != test.wantVerdict {
+				t.Fatalf("equal-call result = provider_query_failed=%t verdict=%q checks=%+v reasons=%v", result.ProviderQueryFailed, result.Verdict, result.Checks, result.ReasonCodes)
+			}
+			if test.wantProviderQueryFailed {
+				if !result.Checks.CorrectFallback || !dogfoodContains(result.ReasonCodes, "preferred_provider_query_failed") {
+					t.Fatalf("failure-first result lost fallback semantics: checks=%+v reasons=%v", result.Checks, result.ReasonCodes)
+				}
+			} else if !result.PreferredRouteAvailable || !dogfoodContains(result.ReasonCodes, "preferred_code_intelligence_no_results") || dogfoodContains(result.ReasonCodes, "preferred_provider_query_failed") {
+				t.Fatalf("completion-first result was retroactively failed: available=%t reasons=%v", result.PreferredRouteAvailable, result.ReasonCodes)
+			}
+		})
+	}
+}
+
 func TestCodeIntelligenceDogfoodProviderEvidenceIsOperationScoped(t *testing.T) {
 	run := e2eTaskRun{
 		ID: "run_provider_scope", Status: "completed",
@@ -1547,7 +1772,7 @@ func TestCodeIntelligenceDogfoodProviderEvidenceIsOperationScoped(t *testing.T) 
 	if capture.Provider != "" {
 		t.Fatalf("preferred provider evidence = %q, must not copy structural fallback provider", capture.Provider)
 	}
-	if capture.StructuralResultCount != 0 || len(capture.InvalidRequestReasons) != 1 || capture.InvalidRequestReasons[0] != "query_required" {
+	if capture.StructuralCompletedModelCall != 3 || capture.StructuralCompletedStep != 3 || capture.StructuralResultCount != 0 || len(capture.InvalidRequestReasons) != 1 || capture.InvalidRequestReasons[0] != "query_required" {
 		t.Fatalf("provider-scoped capture = %+v, want bounded fallback and invalid-request evidence", capture)
 	}
 }
