@@ -94,48 +94,51 @@ type codeIntelligenceDogfoodCapabilityProbe struct {
 // codeIntelligenceDogfoodCapture is deliberately narrower than the Task API.
 // It is the only live-runtime shape allowed to feed a persisted scorecard.
 type codeIntelligenceDogfoodCapture struct {
-	TaskID                        string
-	RunID                         string
-	TraceID                       string
-	RunStatus                     string
-	ToolRoute                     []string
-	ToolRouteModelCalls           []int
-	FirstInspectionTool           string
-	ModelCalls                    int
-	CodeIntelligenceCalls         int
-	SemanticCalls                 int
-	StructuralCalls               int
-	GrepCalls                     int
-	GrepSuccessfulCalls           int
-	Provider                      string
-	ResultCount                   int
-	SemanticResultCount           int
-	StructuralResultCount         int
-	GrepResultCount               int
-	SemanticProviderFailureCall   int
-	StructuralProviderFailureCall int
-	SemanticProviderFailureStep   int
-	StructuralProviderFailureStep int
-	SemanticCompletedModelCall    int
-	StructuralCompletedModelCall  int
-	SemanticCompletedStep         int
-	StructuralCompletedStep       int
-	GrepResultModelCall           int
-	StructuralResultModelCall     int
-	QueryLatencyMillis            int64
-	RunLatencyMillis              int64
-	CostMicrosUSD                 int64
-	WorkspaceChangeCount          int
-	CapabilitiesBeforeQuery       bool
-	ProviderVersionObserved       bool
-	ProviderUnavailableObserved   bool
-	SemanticPolicyBlocked         bool
-	Completed                     bool
-	UsefulResult                  bool
-	ProcessCleanup                string
-	UnexpectedToolCalls           int
-	CodeIntelligenceErrorKind     []string
-	InvalidRequestReasons         []string
+	TaskID                         string
+	RunID                          string
+	TraceID                        string
+	RunStatus                      string
+	ToolRoute                      []string
+	ToolRouteModelCalls            []int
+	FirstInspectionTool            string
+	ModelCalls                     int
+	CodeIntelligenceCalls          int
+	SemanticCalls                  int
+	StructuralCalls                int
+	GrepCalls                      int
+	GrepSuccessfulCalls            int
+	Provider                       string
+	ResultCount                    int
+	SemanticResultCount            int
+	StructuralResultCount          int
+	GrepResultCount                int
+	SemanticProviderFailureCall    int
+	StructuralProviderFailureCall  int
+	SemanticProviderFailureStep    int
+	StructuralProviderFailureStep  int
+	SemanticCompletedModelCall     int
+	StructuralCompletedModelCall   int
+	SemanticCompletedStep          int
+	StructuralCompletedStep        int
+	SemanticFirstResultModelCall   int
+	StructuralFirstResultModelCall int
+	GrepResultModelCall            int
+	StructuralResultModelCall      int
+	QueryLatencyMeasured           bool
+	QueryLatencyMillis             int64
+	RunLatencyMillis               int64
+	CostMicrosUSD                  int64
+	WorkspaceChangeCount           int
+	CapabilitiesBeforeQuery        bool
+	ProviderVersionObserved        bool
+	ProviderUnavailableObserved    bool
+	SemanticPolicyBlocked          bool
+	Completed                      bool
+	UsefulResult                   bool
+	ProcessCleanup                 string
+	UnexpectedToolCalls            int
+	CodeIntelligenceErrorKind      []string
+	InvalidRequestReasons          []string
 }
 
 type codeIntelligenceDogfoodArtifactsResponse struct {
@@ -183,9 +186,16 @@ func TestCodeIntelligenceModelDogfood(t *testing.T) {
 	}
 	sourceRevision := sourceSnapshot.Revision
 	expectedIgnoredPathsDigest := codeIntelligenceDogfoodEmptyIgnoredPathsDigest()
-	capabilities := probeCodeIntelligenceDogfoodCapabilities(t, repositoryRoot)
+	primaryGatewayEnv := codeIntelligenceDogfoodGatewayEnv(t, cfg)
+	capabilityWorkspace := codeIntelligenceDogfoodCapabilityProbeWorkspace(
+		t,
+		repositoryRoot,
+		codeIntelligenceDogfoodGatewayTemp(t, primaryGatewayEnv),
+		sourceRevision,
+	)
+	capabilities := probeCodeIntelligenceDogfoodCapabilities(t, capabilityWorkspace)
 
-	baseURL := gatewayServer(t, codeIntelligenceDogfoodGatewayEnv(t, cfg)...)
+	baseURL := gatewayServer(t, primaryGatewayEnv...)
 	health := getJSON[codeIntelligenceDogfoodHealth](t, baseURL+"/healthz")
 	sandboxKind := codeIntelligenceDogfoodSandboxKind(health.Sandbox.OSIsolation.Kind)
 	if sandboxKind == "unknown" {
@@ -318,46 +328,49 @@ func codeIntelligenceDogfoodObservation(capture codeIntelligenceDogfoodCapture, 
 			RunID:   capture.RunID,
 			TraceID: capture.TraceID,
 		},
-		RunStatus:                     capture.RunStatus,
-		ToolRoute:                     append([]string(nil), capture.ToolRoute...),
-		ToolRouteModelCalls:           append([]int(nil), capture.ToolRouteModelCalls...),
-		FirstInspectionTool:           capture.FirstInspectionTool,
-		ModelCalls:                    capture.ModelCalls,
-		CodeIntelligenceCalls:         capture.CodeIntelligenceCalls,
-		SemanticCalls:                 capture.SemanticCalls,
-		StructuralCalls:               capture.StructuralCalls,
-		GrepCalls:                     capture.GrepCalls,
-		GrepSuccessfulCalls:           capture.GrepSuccessfulCalls,
-		Provider:                      capture.Provider,
-		ProviderVersion:               observedProviderVersion,
-		ResultCount:                   capture.ResultCount,
-		SemanticResultCount:           capture.SemanticResultCount,
-		StructuralResultCount:         capture.StructuralResultCount,
-		GrepResultCount:               capture.GrepResultCount,
-		SemanticProviderFailureCall:   capture.SemanticProviderFailureCall,
-		StructuralProviderFailureCall: capture.StructuralProviderFailureCall,
-		SemanticProviderFailureStep:   capture.SemanticProviderFailureStep,
-		StructuralProviderFailureStep: capture.StructuralProviderFailureStep,
-		SemanticCompletedModelCall:    capture.SemanticCompletedModelCall,
-		StructuralCompletedModelCall:  capture.StructuralCompletedModelCall,
-		SemanticCompletedStep:         capture.SemanticCompletedStep,
-		StructuralCompletedStep:       capture.StructuralCompletedStep,
-		GrepResultModelCall:           capture.GrepResultModelCall,
-		StructuralResultModelCall:     capture.StructuralResultModelCall,
-		QueryLatencyMillis:            capture.QueryLatencyMillis,
-		RunLatencyMillis:              capture.RunLatencyMillis,
-		CostMicrosUSD:                 capture.CostMicrosUSD,
-		ProcessCleanup:                capture.ProcessCleanup,
-		WorkspaceChangeCount:          capture.WorkspaceChangeCount,
-		CapabilitiesBeforeQuery:       capture.CapabilitiesBeforeQuery,
-		ProviderVersionObserved:       capture.ProviderVersionObserved,
-		ProviderUnavailableObserved:   capture.ProviderUnavailableObserved,
-		SemanticPolicyBlocked:         capture.SemanticPolicyBlocked,
-		Completed:                     capture.Completed,
-		UsefulResult:                  capture.UsefulResult,
-		UnexpectedToolCalls:           capture.UnexpectedToolCalls,
-		ErrorKinds:                    append([]string(nil), capture.CodeIntelligenceErrorKind...),
-		InvalidRequestReasons:         append([]string(nil), capture.InvalidRequestReasons...),
+		RunStatus:                      capture.RunStatus,
+		ToolRoute:                      append([]string(nil), capture.ToolRoute...),
+		ToolRouteModelCalls:            append([]int(nil), capture.ToolRouteModelCalls...),
+		FirstInspectionTool:            capture.FirstInspectionTool,
+		ModelCalls:                     capture.ModelCalls,
+		CodeIntelligenceCalls:          capture.CodeIntelligenceCalls,
+		SemanticCalls:                  capture.SemanticCalls,
+		StructuralCalls:                capture.StructuralCalls,
+		GrepCalls:                      capture.GrepCalls,
+		GrepSuccessfulCalls:            capture.GrepSuccessfulCalls,
+		Provider:                       capture.Provider,
+		ProviderVersion:                observedProviderVersion,
+		ResultCount:                    capture.ResultCount,
+		SemanticResultCount:            capture.SemanticResultCount,
+		StructuralResultCount:          capture.StructuralResultCount,
+		GrepResultCount:                capture.GrepResultCount,
+		SemanticProviderFailureCall:    capture.SemanticProviderFailureCall,
+		StructuralProviderFailureCall:  capture.StructuralProviderFailureCall,
+		SemanticProviderFailureStep:    capture.SemanticProviderFailureStep,
+		StructuralProviderFailureStep:  capture.StructuralProviderFailureStep,
+		SemanticCompletedModelCall:     capture.SemanticCompletedModelCall,
+		StructuralCompletedModelCall:   capture.StructuralCompletedModelCall,
+		SemanticCompletedStep:          capture.SemanticCompletedStep,
+		StructuralCompletedStep:        capture.StructuralCompletedStep,
+		SemanticFirstResultModelCall:   capture.SemanticFirstResultModelCall,
+		StructuralFirstResultModelCall: capture.StructuralFirstResultModelCall,
+		GrepResultModelCall:            capture.GrepResultModelCall,
+		StructuralResultModelCall:      capture.StructuralResultModelCall,
+		QueryLatencyMeasured:           capture.QueryLatencyMeasured,
+		QueryLatencyMillis:             capture.QueryLatencyMillis,
+		RunLatencyMillis:               capture.RunLatencyMillis,
+		CostMicrosUSD:                  capture.CostMicrosUSD,
+		ProcessCleanup:                 capture.ProcessCleanup,
+		WorkspaceChangeCount:           capture.WorkspaceChangeCount,
+		CapabilitiesBeforeQuery:        capture.CapabilitiesBeforeQuery,
+		ProviderVersionObserved:        capture.ProviderVersionObserved,
+		ProviderUnavailableObserved:    capture.ProviderUnavailableObserved,
+		SemanticPolicyBlocked:          capture.SemanticPolicyBlocked,
+		Completed:                      capture.Completed,
+		UsefulResult:                   capture.UsefulResult,
+		UnexpectedToolCalls:            capture.UnexpectedToolCalls,
+		ErrorKinds:                     append([]string(nil), capture.CodeIntelligenceErrorKind...),
+		InvalidRequestReasons:          append([]string(nil), capture.InvalidRequestReasons...),
 	}
 }
 
@@ -419,9 +432,9 @@ func readCodeIntelligenceDogfoodConfig(t *testing.T) codeIntelligenceDogfoodConf
 	}
 }
 
-func probeCodeIntelligenceDogfoodCapabilities(t *testing.T, repositoryRoot string) []codeIntelligenceDogfoodCapabilityProbe {
+func probeCodeIntelligenceDogfoodCapabilities(t *testing.T, workspaceRoot string) []codeIntelligenceDogfoodCapabilityProbe {
 	t.Helper()
-	result, err := codeintel.NewService().Query(context.Background(), repositoryRoot, codeintel.Request{Operation: codeintel.OpCapabilities})
+	result, err := codeintel.NewService().Query(context.Background(), workspaceRoot, codeintel.Request{Operation: codeintel.OpCapabilities})
 	if err != nil {
 		t.Fatalf("probe code intelligence capabilities: %v", err)
 	}
@@ -586,10 +599,60 @@ func codeIntelligenceDogfoodProviderEnvPrefix(t *testing.T, provider string) str
 
 func TestCodeIntelligenceDogfoodGatewayEnvOwnsRuntimeTemp(t *testing.T) {
 	env := codeIntelligenceDogfoodGatewayEnv(t, codeIntelligenceDogfoodConfig{Provider: "ollama", Model: "fixture-model"})
+	runtimeTemp := codeIntelligenceDogfoodGatewayTemp(t, env)
+	info, err := os.Stat(runtimeTemp)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("inspect test-owned runtime temp %q: info=%v err=%v", runtimeTemp, info, err)
+	}
+}
+
+func TestCodeIntelligenceDogfoodCapabilityProbeUsesManagedWorkspaceRoot(t *testing.T) {
+	sourceRoot := codeIntelligenceDogfoodGitFixture(t)
+	ignoredPath := filepath.Join(sourceRoot, ".dogfood", "source-cache")
+	if err := os.MkdirAll(filepath.Dir(ignoredPath), 0o700); err != nil {
+		t.Fatalf("create ignored source directory: %v", err)
+	}
+	if err := os.WriteFile(ignoredPath, []byte("ignored\n"), 0o600); err != nil {
+		t.Fatalf("write ignored source fixture: %v", err)
+	}
+	runtimeTemp := t.TempDir()
+	revision := codeIntelligenceDogfoodRevisionAt(t, sourceRoot)
+	workspace := codeIntelligenceDogfoodCapabilityProbeWorkspace(t, sourceRoot, runtimeTemp, revision)
+
+	managedRoot := filepath.Join(runtimeTemp, "hecate-workspaces")
+	relative, err := filepath.Rel(managedRoot, workspace)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("capability-probe workspace %q is outside managed root %q", workspace, managedRoot)
+	}
+	gitInfo, err := os.Stat(filepath.Join(workspace, ".git"))
+	if err != nil || !gitInfo.IsDir() {
+		t.Fatalf("capability-probe Git metadata is not independent: info=%v err=%v", gitInfo, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".dogfood")); !os.IsNotExist(err) {
+		t.Fatalf("capability-probe clone retained ignored source state: %v", err)
+	}
+}
+
+func TestCodeIntelligenceDogfoodGatewayEnvDoesNotEnablePrefixProvider(t *testing.T) {
+	t.Setenv("PROVIDER_OPENAI_PRECONFIGURED", "")
+	env := codeIntelligenceDogfoodGatewayEnv(t, codeIntelligenceDogfoodConfig{Provider: "openai_compat", Model: "fixture-model"})
+	if generated := autoPreconfiguredEnv(env); len(generated) != 0 {
+		t.Fatalf("dogfood gateway env generated prefix-provider gates: %v", generated)
+	}
+	if got := os.Getenv("PROVIDER_OPENAI_COMPAT_PRECONFIGURED"); got != "1" {
+		t.Fatalf("exact provider gate = %q, want 1", got)
+	}
+	if got := os.Getenv("PROVIDER_OPENAI_PRECONFIGURED"); got != "" {
+		t.Fatalf("prefix provider gate = %q, want disabled", got)
+	}
+}
+
+func codeIntelligenceDogfoodGatewayTemp(t *testing.T, env []string) string {
+	t.Helper()
 	values := make(map[string]string)
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
-		if ok {
+		if ok && (key == "TMPDIR" || key == "TMP" || key == "TEMP") {
 			values[key] = value
 		}
 	}
@@ -604,6 +667,26 @@ func TestCodeIntelligenceDogfoodGatewayEnvOwnsRuntimeTemp(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Fatalf("inspect test-owned runtime temp %q: info=%v err=%v", runtimeTemp, info, err)
 	}
+	return runtimeTemp
+}
+
+func codeIntelligenceDogfoodCapabilityProbeWorkspace(t *testing.T, sourceRoot, runtimeTemp, sourceRevision string) string {
+	t.Helper()
+	workspace := filepath.Join(runtimeTemp, "hecate-workspaces", "capability-probe")
+	if _, err := gitrunner.NewLocalRunner().Clone(context.Background(), sourceRoot, workspace); err != nil {
+		t.Fatalf("clone representative capability-probe workspace: %v", err)
+	}
+	if codeIntelligenceDogfoodRevisionAt(t, workspace) != sourceRevision {
+		t.Fatal("capability-probe workspace revision does not match the source revision")
+	}
+	status, err := gitrunner.NewLocalRunner().StatusPorcelain(context.Background(), workspace, 64*1024)
+	if err != nil {
+		t.Fatalf("inspect capability-probe workspace status: %v", err)
+	}
+	if strings.TrimSpace(status) != "" || codeIntelligenceDogfoodIgnoredPathsDigest(t, workspace) != codeIntelligenceDogfoodEmptyIgnoredPathsDigest() {
+		t.Fatal("capability-probe workspace is not a clean committed clone")
+	}
+	return workspace
 }
 
 func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfoodConfig, extra ...string) []string {
@@ -614,6 +697,7 @@ func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfood
 	// underscore. Put the model catalog in the inherited environment so a
 	// provider such as together_ai cannot accidentally enable together.
 	t.Setenv("PROVIDER_"+prefix+"_MODELS", cfg.Model)
+	t.Setenv("PROVIDER_"+prefix+"_PRECONFIGURED", "1")
 	env := []string{
 		"HECATE_BACKEND=sqlite",
 		"HECATE_TASK_APPROVAL_POLICIES=shell_exec,git_exec,file_write",
@@ -625,7 +709,6 @@ func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfood
 		"TMP=" + runtimeTemp,
 		"TEMP=" + runtimeTemp,
 		fmt.Sprintf("HECATE_TASK_AGENT_LOOP_MAX_MODEL_CALLS=%d", dogfoodMaxModelCalls),
-		"PROVIDER_" + prefix + "_PRECONFIGURED=1",
 	}
 	return append(env, extra...)
 }
@@ -963,8 +1046,9 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 			continue
 		}
 		modelCall := codeIntelligenceDogfoodModelCall(step.Input["model_call_index"])
-		if capture.QueryLatencyMillis == 0 {
+		if !capture.QueryLatencyMeasured {
 			capture.QueryLatencyMillis = codeIntelligenceDogfoodDurationMillis(step.StartedAt, step.FinishedAt)
+			capture.QueryLatencyMeasured = true
 		}
 		items := codeIntelligenceDogfoodNumber(step.OutputSummary["items"])
 		capture.ResultCount += items
@@ -979,6 +1063,7 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 			}
 			capture.StructuralResultCount += items
 			if items > 0 {
+				capture.StructuralFirstResultModelCall = codeIntelligenceDogfoodEarliestModelCall(capture.StructuralFirstResultModelCall, modelCall)
 				capture.StructuralResultModelCall = max(capture.StructuralResultModelCall, modelCall)
 			}
 		} else if codeIntelligenceDogfoodSemanticOperation(operation) {
@@ -991,6 +1076,9 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 				)
 			}
 			capture.SemanticResultCount += items
+			if items > 0 {
+				capture.SemanticFirstResultModelCall = codeIntelligenceDogfoodEarliestModelCall(capture.SemanticFirstResultModelCall, modelCall)
+			}
 		}
 		observedProvider := strings.TrimSpace(fmt.Sprint(step.OutputSummary["provider"]))
 		if observedProvider != "" && codeIntelligenceDogfoodOperationMatchesProviderLanguage(operation, providerLanguage) {
@@ -1426,6 +1514,13 @@ func codeIntelligenceDogfoodFirstQueryPosition(currentModelCall, currentStep, ca
 	return currentModelCall, currentStep
 }
 
+func codeIntelligenceDogfoodEarliestModelCall(current, candidate int) int {
+	if candidate <= 0 || (current > 0 && current <= candidate) {
+		return current
+	}
+	return candidate
+}
+
 func codeIntelligenceDogfoodSafeRunStatus(value string) string {
 	switch strings.TrimSpace(value) {
 	case "completed", "failed", "cancelled":
@@ -1777,6 +1872,31 @@ func TestCodeIntelligenceDogfoodProviderEvidenceIsOperationScoped(t *testing.T) 
 	}
 }
 
+func TestCodeIntelligenceDogfoodCaptureKeepsFirstZeroMillisecondLatency(t *testing.T) {
+	run := e2eTaskRun{ID: "run_zero_latency", Status: "completed"}
+	steps := []e2eTaskStep{
+		{
+			Index: 2, ToolName: "code_intelligence", Status: "completed",
+			Input:         map[string]any{"operation": "document_symbols", "model_call_index": float64(2)},
+			OutputSummary: map[string]any{"provider": "gopls", "items": float64(0)},
+			StartedAt:     "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:00.000500Z",
+		},
+		{
+			Index: 3, ToolName: "code_intelligence", Status: "completed",
+			Input:         map[string]any{"operation": "document_symbols", "model_call_index": float64(3)},
+			OutputSummary: map[string]any{"provider": "gopls", "items": float64(1)},
+			StartedAt:     "2026-08-08T10:00:00.001Z", FinishedAt: "2026-08-08T10:00:00.101Z",
+		},
+	}
+	capture := captureCodeIntelligenceDogfoodRun(run, "task_zero_latency", steps, nil, nil, "expected_marker", "go", "gopls", "gopls", "", 0)
+	if !capture.QueryLatencyMeasured || capture.QueryLatencyMillis != 0 {
+		t.Fatalf("first query latency = measured %t value %d, want measured zero milliseconds", capture.QueryLatencyMeasured, capture.QueryLatencyMillis)
+	}
+	if capture.SemanticFirstResultModelCall != 3 {
+		t.Fatalf("first semantic result model call = %d, want 3", capture.SemanticFirstResultModelCall)
+	}
+}
+
 func TestCodeIntelligenceDogfoodCaptureDoesNotRetainRawEvidence(t *testing.T) {
 	const secret = "DOGFOOD_PRIVATE_SENTINEL"
 	run := e2eTaskRun{
@@ -1792,7 +1912,7 @@ func TestCodeIntelligenceDogfoodCaptureDoesNotRetainRawEvidence(t *testing.T) {
 		Index:         2,
 		ToolName:      "code_intelligence",
 		Status:        "completed",
-		Input:         map[string]any{"operation": "document_symbols", "path": secret, "query": secret},
+		Input:         map[string]any{"operation": "document_symbols", "path": secret, "query": secret, "model_call_index": float64(2)},
 		OutputSummary: map[string]any{"provider": "gopls.exe", "items": float64(1)},
 		Error:         secret,
 		StartedAt:     "2026-08-08T10:00:00Z",

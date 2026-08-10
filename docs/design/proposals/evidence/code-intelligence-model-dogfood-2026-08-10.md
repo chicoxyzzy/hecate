@@ -59,7 +59,7 @@ succeeded. Real scenario queries provide the stronger runtime evidence.
 | Restricted-policy block observed                                      |                        3 / 3 |
 | Forced provider unavailability observed                               |                        3 / 3 |
 | Scenario with an unexpected tool proposal                             |                       2 / 18 |
-| First non-capability code-intelligence step latency, median / maximum |                  56 / 714 ms |
+| First non-capability code-intelligence step latency, median / maximum |    55 / 714 ms (17 measured) |
 | Provider process cleanup                                              | not measured by this harness |
 
 The harness rejects effectful proposals, and no scenario changed its workspace.
@@ -146,8 +146,9 @@ second-model graduation gate.
   scenario observations: a capabilities-only Run is not counted as a failed
   capability-use measurement, and a later provider failure does not
   retroactively invalidate an earlier completed query. The v1 artifact did not
-  persist the new completed-query model-call and step positions, so a new v2
-  run is required for a fully self-contained reproducible scorecard.
+  persist the new completed-query model-call and step positions or distinguish
+  a measured zero-millisecond query from an absent measurement, so a new v2 run
+  is required for a fully self-contained reproducible scorecard.
 - The scorecard does not measure provider process cleanup; deterministic tests
   own that assertion.
 - A stronger tool-capable model is not configured in this local environment,
