@@ -32,28 +32,29 @@ write-side operations from this result.
 
 ## Setup
 
-| Setting                      | Value                                                                                                                                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime source               | `278da6bb3f30a213b37546d17fcd443b23a0093a`                                                                                                                                            |
-| Model route                  | Fireworks Kimi K2.7 Code through a local Hecate-compatible proxy                                                                                                                      |
-| Scorecard route label        | `hecateapp` / `accounts/fireworks/models/kimi-k2p7-code`                                                                                                                              |
-| Proxy runtime                | installed Hecate 0.6.0, loopback only                                                                                                                                                 |
-| Repeats                      | 3                                                                                                                                                                                     |
-| Scenarios per repeat         | 6                                                                                                                                                                                     |
-| Platform                     | macOS arm64, `sandbox-exec`                                                                                                                                                           |
-| Go semantic provider         | gopls 0.23.0, `installed_unverified` baseline                                                                                                                                         |
-| TypeScript semantic provider | tsc 7.0.2, `installed_unverified` baseline                                                                                                                                            |
-| Structural provider          | ast-grep 0.45.0, `installed_unverified` baseline                                                                                                                                      |
-| Score semantics              | native v2 scorecard                                                                                                                                                                   |
-| Task posture                 | tools enabled; 15 write-capable and 3 read-only restricted scenarios; effectful proposals approval-gated and rejected; network, browser, Project memory, and context sources disabled |
-| Workspace posture            | isolated, revision-pinned, test-owned temporary clones                                                                                                                                |
+| Setting                          | Value                                                                                                                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime source                   | `278da6bb3f30a213b37546d17fcd443b23a0093a`                                                                                                                                            |
+| Model route, operator-observed   | Fireworks Kimi K2.7 Code through a local Hecate-compatible proxy                                                                                                                      |
+| Scorecard route label            | `hecateapp` / `accounts/fireworks/models/kimi-k2p7-code`                                                                                                                              |
+| Proxy runtime, operator-observed | installed Hecate 0.6.0, loopback only                                                                                                                                                 |
+| Repeats                          | 3                                                                                                                                                                                     |
+| Scenarios per repeat             | 6                                                                                                                                                                                     |
+| Platform                         | macOS arm64, `sandbox-exec`                                                                                                                                                           |
+| Go semantic provider             | gopls 0.23.0, `installed_unverified` baseline                                                                                                                                         |
+| TypeScript semantic provider     | tsc 7.0.2, `installed_unverified` baseline                                                                                                                                            |
+| Structural provider              | ast-grep 0.45.0, `installed_unverified` baseline                                                                                                                                      |
+| Score semantics                  | native v2 scorecard                                                                                                                                                                   |
+| Task posture                     | tools enabled; 15 write-capable and 3 read-only restricted scenarios; effectful proposals approval-gated and rejected; network, browser, Project memory, and context sources disabled |
+| Workspace posture                | isolated, revision-pinned, test-owned temporary clones                                                                                                                                |
 
 The loopback proxy let the isolated scorecard gateway use the desktop app's
 configured Fireworks route without extracting the credential or forwarding it
 to the scorecard gateway.
-The selected model resolved uniquely to Fireworks at run time. The scorecard
-therefore measures model behavior through two Hecate gateways; it is not direct
-Fireworks-provider or cost evidence.
+A read-only operator-side catalog check immediately before the run returned the
+selected model only under Fireworks; that inner route is not captured by the
+sanitized scorecard. The scorecard therefore measures model behavior through
+two Hecate gateways; it is not direct Fireworks-provider or cost evidence.
 
 ## Aggregate result
 
