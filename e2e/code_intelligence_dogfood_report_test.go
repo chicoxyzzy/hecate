@@ -111,6 +111,7 @@ type dogfoodScenarioObservation struct {
 	UsefulResult                  bool          `json:"useful_result"`
 	UnexpectedToolCalls           int           `json:"unexpected_tool_calls"`
 	ErrorKinds                    []string      `json:"error_kinds,omitempty"`
+	InvalidRequestReasons         []string      `json:"invalid_request_reasons,omitempty"`
 }
 
 type dogfoodScenarioChecks struct {
@@ -393,7 +394,10 @@ func dogfoodPreferredRouteFirst(expectedRoute string, routes []string) bool {
 		}
 		return dogfoodRouteMatchesPreferred(expectedRoute, route)
 	}
-	return false
+	// A capabilities-only route did not browse generically. Selection is scored
+	// separately, so absence of a preferred query must not be mislabeled as an
+	// ordering failure.
+	return true
 }
 
 func dogfoodFallbackOnlyAfterPreferred(expectedRoute string, observed dogfoodScenarioObservation, providerFailureModelCall int) bool {
@@ -684,6 +688,9 @@ func renderDogfoodScorecardMarkdown(card dogfoodScorecard) string {
 		if len(scenario.ReasonCodes) > 0 {
 			fmt.Fprintf(&builder, "- `%s`: %s.\n", dogfoodMarkdownCell(scenario.ID), dogfoodMarkdownCell(strings.Join(scenario.ReasonCodes, ", ")))
 		}
+		if len(scenario.Observed.InvalidRequestReasons) > 0 {
+			fmt.Fprintf(&builder, "- `%s` invalid request reasons: %s.\n", dogfoodMarkdownCell(scenario.ID), dogfoodMarkdownCell(strings.Join(scenario.Observed.InvalidRequestReasons, ", ")))
+		}
 	}
 	builder.WriteString("- Process cleanup is intentionally not inferred from host process listings; deterministic provider-supervision tests own that assertion.\n")
 	builder.WriteString("- The scorecard stores no task prompt, final model answer, source result text, query, path, raw provider error, or process argv.\n")
@@ -762,12 +769,16 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	invalidRequestObserved.ResultCount = 0
 	invalidRequestObserved.SemanticResultCount = 0
 	invalidRequestObserved.ErrorKinds = []string{"invalid_request"}
+	invalidRequestObserved.InvalidRequestReasons = []string{"path_required"}
 	invalidRequestResult := buildDogfoodScenarioResult(baseExpected, invalidRequestObserved)
 	if invalidRequestResult.Verdict != "fail" || !invalidRequestResult.Checks.PreferredToolSelected || invalidRequestResult.Checks.PreferredToolProducedResult || !dogfoodContains(invalidRequestResult.ReasonCodes, "preferred_code_intelligence_no_results") {
 		t.Fatalf("invalid-request result = verdict=%q checks=%+v reasons=%v, want selected query without results", invalidRequestResult.Verdict, invalidRequestResult.Checks, invalidRequestResult.ReasonCodes)
 	}
 	if dogfoodContains(invalidRequestResult.ReasonCodes, "provider_mismatch") || dogfoodContains(invalidRequestResult.ReasonCodes, "provider_not_observed") {
 		t.Fatalf("invalid-request reasons=%v, must not infer provider evidence without a result", invalidRequestResult.ReasonCodes)
+	}
+	if got := renderDogfoodScorecardMarkdown(finalizeDogfoodScorecard(dogfoodScorecard{Scenarios: []dogfoodScenarioResult{invalidRequestResult}})); !strings.Contains(got, "invalid request reasons: path_required") {
+		t.Fatalf("invalid-request markdown omitted the closed diagnostic: %s", got)
 	}
 	wrongZeroResultProviderObserved := invalidRequestObserved
 	wrongZeroResultProviderObserved.Provider = "tsc"
@@ -791,6 +802,21 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	genericFirstObserved.ToolRouteModelCalls = []int{1, 2, 3}
 	if result := buildDogfoodScenarioResult(baseExpected, genericFirstObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "generic_browse_before_preferred_query") {
 		t.Fatalf("generic-first verdict = %q reasons=%v, want preferred-route ordering failure", result.Verdict, result.ReasonCodes)
+	}
+	capabilitiesOnlyObserved := baseObserved
+	capabilitiesOnlyObserved.ToolRoute = []string{"code_intelligence:capabilities"}
+	capabilitiesOnlyObserved.ToolRouteModelCalls = []int{1}
+	capabilitiesOnlyObserved.CodeIntelligenceCalls = 1
+	capabilitiesOnlyObserved.SemanticCalls = 0
+	capabilitiesOnlyObserved.ResultCount = 0
+	capabilitiesOnlyObserved.SemanticResultCount = 0
+	capabilitiesOnlyObserved.Provider = ""
+	capabilitiesOnlyResult := buildDogfoodScenarioResult(baseExpected, capabilitiesOnlyObserved)
+	if capabilitiesOnlyResult.Checks.PreferredToolSelected || !capabilitiesOnlyResult.Checks.PreferredRouteFirst {
+		t.Fatalf("capabilities-only checks=%+v, want missing selection without an ordering failure", capabilitiesOnlyResult.Checks)
+	}
+	if dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "generic_browse_before_preferred_query") || !dogfoodContains(capabilitiesOnlyResult.ReasonCodes, "preferred_code_intelligence_not_used") {
+		t.Fatalf("capabilities-only reasons=%v, want missing preferred query without generic-browse label", capabilitiesOnlyResult.ReasonCodes)
 	}
 	readAfterPreferredObserved := baseObserved
 	readAfterPreferredObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:document_symbols", "read_file"}

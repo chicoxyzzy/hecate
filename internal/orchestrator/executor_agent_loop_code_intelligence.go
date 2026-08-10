@@ -25,11 +25,37 @@ type codeIntelligenceArgs struct {
 	MaxResults int    `json:"max_results,omitempty"`
 }
 
+type codeIntelligenceInvalidRequestReason string
+
 const (
 	codeIntelligenceStepStringBytes = 64
 	codeIntelligenceDefaultResults  = 50
 	codeIntelligenceMaximumResults  = 200
 	semanticCodeIntelligenceRepair  = "use `grep` or `code_intelligence` with `operation=structural_search`, or run semantic intelligence with a compatible OS sandbox/network-enabled preset"
+
+	codeIntelligenceInvalidReasonUnknown                      codeIntelligenceInvalidRequestReason = "unknown"
+	codeIntelligenceInvalidReasonOperationTooLong             codeIntelligenceInvalidRequestReason = "operation_too_long"
+	codeIntelligenceInvalidReasonPathTooLong                  codeIntelligenceInvalidRequestReason = "path_too_long"
+	codeIntelligenceInvalidReasonLanguageTooLong              codeIntelligenceInvalidRequestReason = "language_too_long"
+	codeIntelligenceInvalidReasonQueryTooLong                 codeIntelligenceInvalidRequestReason = "query_too_long"
+	codeIntelligenceInvalidReasonSelectorTooLong              codeIntelligenceInvalidRequestReason = "selector_too_long"
+	codeIntelligenceInvalidReasonUnsupportedOperation         codeIntelligenceInvalidRequestReason = "unsupported_operation"
+	codeIntelligenceInvalidReasonQueryRequired                codeIntelligenceInvalidRequestReason = "query_required"
+	codeIntelligenceInvalidReasonSelectorNotAllowed           codeIntelligenceInvalidRequestReason = "selector_not_allowed"
+	codeIntelligenceInvalidReasonSelectorInvalid              codeIntelligenceInvalidRequestReason = "selector_invalid"
+	codeIntelligenceInvalidReasonPathRequired                 codeIntelligenceInvalidRequestReason = "path_required"
+	codeIntelligenceInvalidReasonPositionRequired             codeIntelligenceInvalidRequestReason = "position_required"
+	codeIntelligenceInvalidReasonPositionInvalid              codeIntelligenceInvalidRequestReason = "position_invalid"
+	codeIntelligenceInvalidReasonWorkspaceFileUnavailable     codeIntelligenceInvalidRequestReason = "workspace_file_unavailable"
+	codeIntelligenceInvalidReasonWorkspaceFileNotRegular      codeIntelligenceInvalidRequestReason = "workspace_file_not_regular"
+	codeIntelligenceInvalidReasonWorkspaceFileTooLarge        codeIntelligenceInvalidRequestReason = "workspace_file_too_large"
+	codeIntelligenceInvalidReasonWorkspaceFileChanged         codeIntelligenceInvalidRequestReason = "workspace_file_changed"
+	codeIntelligenceInvalidReasonWorkspaceFileInvalidEncoding codeIntelligenceInvalidRequestReason = "workspace_file_invalid_encoding"
+	codeIntelligenceInvalidReasonWorkspaceFileInvalid         codeIntelligenceInvalidRequestReason = "workspace_file_invalid"
+	codeIntelligenceInvalidReasonStructuralPathInvalid        codeIntelligenceInvalidRequestReason = "structural_path_invalid"
+	codeIntelligenceInvalidReasonLanguageRequired             codeIntelligenceInvalidRequestReason = "language_required"
+	codeIntelligenceInvalidReasonLanguageUnsupported          codeIntelligenceInvalidRequestReason = "language_unsupported"
+	codeIntelligenceInvalidReasonLanguagePathMismatch         codeIntelligenceInvalidRequestReason = "language_path_mismatch"
 )
 
 func agentSandboxBlocksCodeIntelligence(task types.Task, call types.ToolCall) (bool, string) {
@@ -126,13 +152,13 @@ func effectiveCodeIntelligenceGuidance(task types.Task, gate agentLoopApprovalGa
 func (d *agentLoopToolDispatcher) codeIntelligenceTool(ctx context.Context, spec ExecutionSpec, args codeIntelligenceArgs, stepIndex int, startedAt time.Time, toolName string) (string, *types.TaskStep, []types.TaskArtifact, error) {
 	if d == nil || d.codeIntelligence == nil {
 		text := "code_intelligence: service is not configured"
-		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, "not_configured")
+		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, "not_configured", "")
 		return text, &step, nil, nil
 	}
 	root, errMsg := workspaceRoot(spec)
 	if errMsg != "" {
 		text := "code_intelligence: " + errMsg
-		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, "invalid_workspace")
+		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, "invalid_workspace", "")
 		return text, &step, nil, nil
 	}
 	operation := codeintel.Operation(strings.TrimSpace(args.Operation))
@@ -148,7 +174,8 @@ func (d *agentLoopToolDispatcher) codeIntelligenceTool(ctx context.Context, spec
 		MaxResults: maxResults,
 	})
 	if err != nil {
-		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, codeIntelligenceErrorCategory(err))
+		category := codeIntelligenceErrorCategory(err)
+		step := codeIntelligenceFailureStep(spec, args, stepIndex, startedAt, toolName, category, codeIntelligenceInvalidRequestReasonForError(err))
 		return fmt.Sprintf("code_intelligence: %v", err), &step, nil, nil
 	}
 	semanticPolicyBlocked, semanticPolicyReason := semanticCodeIntelligencePolicyBlock(spec.Task)
@@ -181,9 +208,16 @@ func (d *agentLoopToolDispatcher) codeIntelligenceTool(ctx context.Context, spec
 	return result.Text, &step, nil, nil
 }
 
-func codeIntelligenceFailureStep(spec ExecutionSpec, args codeIntelligenceArgs, stepIndex int, startedAt time.Time, toolName, category string) types.TaskStep {
+func codeIntelligenceFailureStep(spec ExecutionSpec, args codeIntelligenceArgs, stepIndex int, startedAt time.Time, toolName, category string, invalidRequestReason codeIntelligenceInvalidRequestReason) types.TaskStep {
 	finishedAt := time.Now().UTC()
 	category = firstNonEmpty(strings.TrimSpace(category), "provider_error")
+	outputSummary := map[string]any{
+		"error_category": category,
+		"duration_ms":    finishedAt.Sub(startedAt).Milliseconds(),
+	}
+	if category == "invalid_request" {
+		outputSummary["invalid_request_reason"] = boundedCodeIntelligenceInvalidRequestReason(invalidRequestReason)
+	}
 	return types.TaskStep{
 		ID:       spec.NewID("step"),
 		TaskID:   spec.Task.ID,
@@ -204,16 +238,43 @@ func codeIntelligenceFailureStep(spec ExecutionSpec, args codeIntelligenceArgs, 
 			"max_results": effectiveCodeIntelligenceMaxResults(args.MaxResults),
 			"query_bytes": len(args.Query),
 		},
-		OutputSummary: map[string]any{
-			"error_category": category,
-			"duration_ms":    finishedAt.Sub(startedAt).Milliseconds(),
-		},
-		Error:      "code intelligence query failed",
-		ErrorKind:  category,
-		StartedAt:  startedAt,
-		FinishedAt: finishedAt,
-		RequestID:  spec.RequestID,
-		TraceID:    spec.TraceID,
+		OutputSummary: outputSummary,
+		Error:         "code intelligence query failed",
+		ErrorKind:     category,
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
+		RequestID:     spec.RequestID,
+		TraceID:       spec.TraceID,
+	}
+}
+
+func boundedCodeIntelligenceInvalidRequestReason(reason codeIntelligenceInvalidRequestReason) string {
+	switch reason {
+	case codeIntelligenceInvalidReasonOperationTooLong,
+		codeIntelligenceInvalidReasonPathTooLong,
+		codeIntelligenceInvalidReasonLanguageTooLong,
+		codeIntelligenceInvalidReasonQueryTooLong,
+		codeIntelligenceInvalidReasonSelectorTooLong,
+		codeIntelligenceInvalidReasonUnsupportedOperation,
+		codeIntelligenceInvalidReasonQueryRequired,
+		codeIntelligenceInvalidReasonSelectorNotAllowed,
+		codeIntelligenceInvalidReasonSelectorInvalid,
+		codeIntelligenceInvalidReasonPathRequired,
+		codeIntelligenceInvalidReasonPositionRequired,
+		codeIntelligenceInvalidReasonPositionInvalid,
+		codeIntelligenceInvalidReasonWorkspaceFileUnavailable,
+		codeIntelligenceInvalidReasonWorkspaceFileNotRegular,
+		codeIntelligenceInvalidReasonWorkspaceFileTooLarge,
+		codeIntelligenceInvalidReasonWorkspaceFileChanged,
+		codeIntelligenceInvalidReasonWorkspaceFileInvalidEncoding,
+		codeIntelligenceInvalidReasonWorkspaceFileInvalid,
+		codeIntelligenceInvalidReasonStructuralPathInvalid,
+		codeIntelligenceInvalidReasonLanguageRequired,
+		codeIntelligenceInvalidReasonLanguageUnsupported,
+		codeIntelligenceInvalidReasonLanguagePathMismatch:
+		return string(reason)
+	default:
+		return string(codeIntelligenceInvalidReasonUnknown)
 	}
 }
 
@@ -257,36 +318,65 @@ func codeIntelligenceErrorCategory(err error) string {
 }
 
 func isCodeIntelligenceInvalidRequestMessage(message string) bool {
-	for _, prefix := range []string{
-		"code intelligence operation exceeds ",
-		"code intelligence path exceeds ",
-		"code intelligence language exceeds ",
-		"code intelligence query exceeds ",
-		"code intelligence selector exceeds ",
-		"unsupported code intelligence operation ",
-		"query is required ",
-		"selector is only supported ",
-		"structural selector ",
-		"path is required ",
-		"line and column are required ",
-		"line and column must be ",
-		"file path is required",
-		"open workspace file ",
-		"read workspace file ",
-		"inspect workspace file ",
-		"workspace path ",
-		"workspace file ",
-		"resolve structural search path ",
-		"no allowlisted ",
-		"language is required ",
-		"language \"",
-		"structural-search language ",
-		"column ",
-		"line ",
-	} {
-		if strings.HasPrefix(message, prefix) {
-			return true
-		}
+	return codeIntelligenceInvalidRequestReasonForMessage(message) != codeIntelligenceInvalidReasonUnknown
+}
+
+func codeIntelligenceInvalidRequestReasonForError(err error) codeIntelligenceInvalidRequestReason {
+	if err == nil {
+		return codeIntelligenceInvalidReasonUnknown
 	}
-	return false
+	return codeIntelligenceInvalidRequestReasonForMessage(err.Error())
+}
+
+func codeIntelligenceInvalidRequestReasonForMessage(message string) codeIntelligenceInvalidRequestReason {
+	message = strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.HasPrefix(message, "code intelligence operation exceeds "):
+		return codeIntelligenceInvalidReasonOperationTooLong
+	case strings.HasPrefix(message, "code intelligence path exceeds "):
+		return codeIntelligenceInvalidReasonPathTooLong
+	case strings.HasPrefix(message, "code intelligence language exceeds "):
+		return codeIntelligenceInvalidReasonLanguageTooLong
+	case strings.HasPrefix(message, "code intelligence query exceeds "):
+		return codeIntelligenceInvalidReasonQueryTooLong
+	case strings.HasPrefix(message, "code intelligence selector exceeds "):
+		return codeIntelligenceInvalidReasonSelectorTooLong
+	case strings.HasPrefix(message, "unsupported code intelligence operation "):
+		return codeIntelligenceInvalidReasonUnsupportedOperation
+	case strings.HasPrefix(message, "query is required "):
+		return codeIntelligenceInvalidReasonQueryRequired
+	case strings.HasPrefix(message, "selector is only supported "):
+		return codeIntelligenceInvalidReasonSelectorNotAllowed
+	case strings.HasPrefix(message, "structural selector "):
+		return codeIntelligenceInvalidReasonSelectorInvalid
+	case strings.HasPrefix(message, "path is required "), strings.HasPrefix(message, "file path is required"):
+		return codeIntelligenceInvalidReasonPathRequired
+	case strings.HasPrefix(message, "line and column are required "):
+		return codeIntelligenceInvalidReasonPositionRequired
+	case strings.HasPrefix(message, "line and column must be "), strings.HasPrefix(message, "column "), strings.HasPrefix(message, "line "):
+		return codeIntelligenceInvalidReasonPositionInvalid
+	case strings.HasPrefix(message, "open workspace file "), strings.HasPrefix(message, "read workspace file "), strings.HasPrefix(message, "inspect workspace file "):
+		return codeIntelligenceInvalidReasonWorkspaceFileUnavailable
+	case strings.HasPrefix(message, "workspace path "):
+		return codeIntelligenceInvalidReasonWorkspaceFileNotRegular
+	case strings.HasPrefix(message, "workspace file ") && strings.Contains(message, " exceeds the "):
+		return codeIntelligenceInvalidReasonWorkspaceFileTooLarge
+	case strings.HasPrefix(message, "workspace file ") && strings.Contains(message, " changed while "):
+		return codeIntelligenceInvalidReasonWorkspaceFileChanged
+	case strings.HasPrefix(message, "workspace file ") && strings.Contains(message, " is not valid utf-8"):
+		return codeIntelligenceInvalidReasonWorkspaceFileInvalidEncoding
+	case strings.HasPrefix(message, "workspace file "):
+		return codeIntelligenceInvalidReasonWorkspaceFileInvalid
+	case strings.HasPrefix(message, "resolve structural search path "), strings.HasPrefix(message, "structural search path "):
+		return codeIntelligenceInvalidReasonStructuralPathInvalid
+	case strings.HasPrefix(message, "language is required "):
+		return codeIntelligenceInvalidReasonLanguageRequired
+	case strings.HasPrefix(message, "language \"") && strings.Contains(message, " does not match path "),
+		strings.HasPrefix(message, "structural-search language ") && strings.Contains(message, " does not match path "):
+		return codeIntelligenceInvalidReasonLanguagePathMismatch
+	case strings.HasPrefix(message, "no allowlisted "), strings.HasPrefix(message, "language \""), strings.HasPrefix(message, "structural-search language "):
+		return codeIntelligenceInvalidReasonLanguageUnsupported
+	default:
+		return codeIntelligenceInvalidReasonUnknown
+	}
 }

@@ -136,6 +136,8 @@ The report allowlist is deliberately narrow. It may contain:
   names and bounded capability version and availability status;
 - opaque Project task, Run, and trace identifiers;
 - fixed scenario, language, route, posture, verdict, and reason-code values;
+- closed Hecate-generated invalid-request reason codes, never raw validation
+  messages or rejected values;
 - tool names, code-intelligence operation names, counts, durations, cost in
   micro-USD, and workspace-change counts.
 
