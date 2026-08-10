@@ -129,6 +129,7 @@ type codeIntelligenceDogfoodCapture struct {
 	ProcessCleanup                string
 	UnexpectedToolCalls           int
 	CodeIntelligenceErrorKind     []string
+	InvalidRequestReasons         []string
 }
 
 type codeIntelligenceDogfoodArtifactsResponse struct {
@@ -344,6 +345,7 @@ func codeIntelligenceDogfoodObservation(capture codeIntelligenceDogfoodCapture, 
 		UsefulResult:                  capture.UsefulResult,
 		UnexpectedToolCalls:           capture.UnexpectedToolCalls,
 		ErrorKinds:                    append([]string(nil), capture.CodeIntelligenceErrorKind...),
+		InvalidRequestReasons:         append([]string(nil), capture.InvalidRequestReasons...),
 	}
 }
 
@@ -891,6 +893,11 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 		operation := codeIntelligenceDogfoodOperation(fmt.Sprint(step.Input["operation"]))
 		if category := codeIntelligenceDogfoodErrorCategory(step); category != "" {
 			capture.CodeIntelligenceErrorKind = append(capture.CodeIntelligenceErrorKind, category)
+			if category == "invalid_request" {
+				if reason := codeIntelligenceDogfoodInvalidRequestReason(step.OutputSummary["invalid_request_reason"]); reason != "" {
+					capture.InvalidRequestReasons = append(capture.InvalidRequestReasons, reason)
+				}
+			}
 			if codeIntelligenceDogfoodProviderQueryFailure(category) {
 				modelCall := codeIntelligenceDogfoodModelCall(step.Input["model_call_index"])
 				switch {
@@ -928,6 +935,8 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 	}
 	sort.Strings(capture.CodeIntelligenceErrorKind)
 	capture.CodeIntelligenceErrorKind = codeIntelligenceDogfoodUniqueStrings(capture.CodeIntelligenceErrorKind)
+	sort.Strings(capture.InvalidRequestReasons)
+	capture.InvalidRequestReasons = codeIntelligenceDogfoodUniqueStrings(capture.InvalidRequestReasons)
 	capture.UsefulResult = codeIntelligenceDogfoodFinalContains(events, answerMarker)
 	capture.ProviderVersionObserved = codeIntelligenceDogfoodConversationObservedVersion(artifacts, providerLanguage, providerToken, providerVersion)
 	capture.ProviderUnavailableObserved = codeIntelligenceDogfoodConversationObservedUnavailable(artifacts, providerLanguage, providerToken)
@@ -1304,6 +1313,20 @@ func codeIntelligenceDogfoodErrorCategory(step e2eTaskStep) string {
 	}
 }
 
+func codeIntelligenceDogfoodInvalidRequestReason(value any) string {
+	reason := strings.TrimSpace(fmt.Sprint(value))
+	switch reason {
+	case "operation_too_long", "path_too_long", "language_too_long", "query_too_long", "selector_too_long",
+		"unsupported_operation", "query_required", "selector_not_allowed", "selector_invalid", "path_required",
+		"position_required", "position_invalid", "workspace_file_unavailable", "workspace_file_not_regular",
+		"workspace_file_too_large", "workspace_file_changed", "workspace_file_invalid_encoding", "workspace_file_invalid",
+		"structural_path_invalid", "language_required", "language_unsupported", "language_path_mismatch", "unknown":
+		return reason
+	default:
+		return ""
+	}
+}
+
 func codeIntelligenceDogfoodProviderQueryFailure(category string) bool {
 	switch category {
 	case "diagnostics_incomplete", "not_configured", "provider_error", "provider_protocol", "provider_unavailable", "timeout":
@@ -1489,7 +1512,21 @@ func TestCodeIntelligenceDogfoodCaptureDoesNotRetainRawEvidence(t *testing.T) {
 		StartedAt:     "2026-08-08T10:00:00Z",
 		FinishedAt:    "2026-08-08T10:00:00.100Z",
 	}, {
-		Index:      3,
+		Index:     3,
+		ToolName:  "code_intelligence",
+		Status:    "failed",
+		ErrorKind: "invalid_request",
+		Input:     map[string]any{"operation": "definition", "path": secret, "model_call_index": float64(2)},
+		OutputSummary: map[string]any{
+			"error_category":         "invalid_request",
+			"invalid_request_reason": "path_required",
+			"unsafe_detail":          secret,
+		},
+		Error:      secret,
+		StartedAt:  "2026-08-08T10:00:00.100Z",
+		FinishedAt: "2026-08-08T10:00:00.150Z",
+	}, {
+		Index:      4,
 		ToolName:   "grep",
 		Status:     "completed",
 		Input:      map[string]any{"pattern": secret, "path": secret, "matches": float64(1)},
@@ -1514,6 +1551,12 @@ func TestCodeIntelligenceDogfoodCaptureDoesNotRetainRawEvidence(t *testing.T) {
 	}
 	if !capture.UsefulResult || capture.Provider != "gopls" || capture.ResultCount != 1 || capture.GrepResultCount != 1 || capture.UnexpectedToolCalls != 1 {
 		t.Fatalf("safe capture = %+v, want useful gopls result", capture)
+	}
+	if len(capture.InvalidRequestReasons) != 1 || capture.InvalidRequestReasons[0] != "path_required" {
+		t.Fatalf("safe invalid-request reasons = %v, want [path_required]", capture.InvalidRequestReasons)
+	}
+	if got := codeIntelligenceDogfoodInvalidRequestReason(secret); got != "" {
+		t.Fatalf("unrecognized invalid-request reason = %q, want dropped", got)
 	}
 
 	card := finalizeDogfoodScorecard(dogfoodScorecard{

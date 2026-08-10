@@ -2,10 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hecatehq/hecate/internal/codeintel"
 	"github.com/hecatehq/hecate/internal/sandbox"
@@ -283,6 +285,69 @@ func TestAgentLoopCodeIntelligenceToolFailuresRemainToolErrors(t *testing.T) {
 	}
 }
 
+func TestAgentLoopCodeIntelligenceInvalidRequestSummaryUsesPrivacySafeReason(t *testing.T) {
+	const (
+		secretPath  = "private/customer-alpha.go"
+		secretQuery = "customer-secret-query"
+		secretError = "permission denied for customer-alpha"
+	)
+	fake := &fakeCodeIntelligenceService{err: errors.New(`open workspace file "` + secretPath + `": ` + secretError)}
+	dispatcher := &agentLoopToolDispatcher{codeIntelligence: fake}
+	spec := newAgentLoopSpec(t)
+	spec.Task.WorkingDirectory = t.TempDir()
+	spec.Task.SandboxNetwork = true
+
+	result, err := dispatcher.Dispatch(context.Background(), spec, agentLoopToolCall(
+		"code-private",
+		AgentToolCodeIntelligence,
+		`{"operation":"definition","path":"`+secretPath+`","query":"`+secretQuery+`","line":1,"column":1}`,
+	), 1, nil, nil)
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if result.Step == nil || result.Step.ErrorKind != "invalid_request" {
+		t.Fatalf("Dispatch() step = %+v, want invalid_request", result.Step)
+	}
+	if got := result.Step.OutputSummary["invalid_request_reason"]; got != string(codeIntelligenceInvalidReasonWorkspaceFileUnavailable) {
+		t.Fatalf("invalid request reason = %v, want %q", got, codeIntelligenceInvalidReasonWorkspaceFileUnavailable)
+	}
+	encoded, err := json.Marshal(result.Step.OutputSummary)
+	if err != nil {
+		t.Fatalf("Marshal(OutputSummary) error = %v", err)
+	}
+	for _, secret := range []string{secretPath, secretQuery, secretError} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("OutputSummary leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestCodeIntelligenceInvalidRequestSummaryUsesClosedUnknownFallback(t *testing.T) {
+	const untrustedReason = codeIntelligenceInvalidRequestReason("future validation leaked private/customer-beta.go")
+	spec := newAgentLoopSpec(t)
+	step := codeIntelligenceFailureStep(spec, codeIntelligenceArgs{
+		Operation: "definition",
+		Path:      "private/customer-beta.go",
+		Query:     "customer-beta-secret",
+	}, 1, time.Now().UTC(), AgentToolCodeIntelligence, "invalid_request", untrustedReason)
+
+	if got := step.OutputSummary["invalid_request_reason"]; got != string(codeIntelligenceInvalidReasonUnknown) {
+		t.Fatalf("invalid request reason = %v, want %q", got, codeIntelligenceInvalidReasonUnknown)
+	}
+	encoded, err := json.Marshal(step.OutputSummary)
+	if err != nil {
+		t.Fatalf("Marshal(OutputSummary) error = %v", err)
+	}
+	for _, secret := range []string{string(untrustedReason), "private/customer-beta.go", "customer-beta-secret"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("OutputSummary leaked %q: %s", secret, encoded)
+		}
+	}
+	if got := codeIntelligenceInvalidRequestReasonForError(errors.New("future validation leaked private/customer-beta.go")); got != codeIntelligenceInvalidReasonUnknown {
+		t.Fatalf("unknown validation reason = %q, want %q", got, codeIntelligenceInvalidReasonUnknown)
+	}
+}
+
 func TestAgentLoopCodeIntelligenceSemanticQueriesFailClosedWithoutRequiredIsolation(t *testing.T) {
 	reset := sandbox.SetWrapperForTesting(sandbox.WrapperNone)
 	defer reset()
@@ -432,6 +497,44 @@ func TestCodeIntelligenceErrorCategorySeparatesInputFromProviderFailures(t *test
 		t.Run(test.name, func(t *testing.T) {
 			if got := codeIntelligenceErrorCategory(test.err); got != test.want {
 				t.Fatalf("category = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCodeIntelligenceInvalidRequestReasonMatchesValidationMessages(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want codeIntelligenceInvalidRequestReason
+	}{
+		{name: "operation byte limit", err: errors.New("code intelligence operation exceeds the 64-byte limit"), want: codeIntelligenceInvalidReasonOperationTooLong},
+		{name: "path byte limit", err: errors.New("code intelligence path exceeds the 4096-byte limit"), want: codeIntelligenceInvalidReasonPathTooLong},
+		{name: "language byte limit", err: errors.New("code intelligence language exceeds the 64-byte limit"), want: codeIntelligenceInvalidReasonLanguageTooLong},
+		{name: "query byte limit", err: errors.New("code intelligence query exceeds the 16384-byte limit"), want: codeIntelligenceInvalidReasonQueryTooLong},
+		{name: "selector byte limit", err: errors.New("code intelligence selector exceeds the 128-byte limit"), want: codeIntelligenceInvalidReasonSelectorTooLong},
+		{name: "operation", err: errors.New(`unsupported code intelligence operation "private"`), want: codeIntelligenceInvalidReasonUnsupportedOperation},
+		{name: "query required", err: errors.New("query is required for workspace_symbols"), want: codeIntelligenceInvalidReasonQueryRequired},
+		{name: "selector operation", err: errors.New("selector is only supported for structural_search"), want: codeIntelligenceInvalidReasonSelectorNotAllowed},
+		{name: "selector shape", err: errors.New("structural selector must be a single ASCII tree-sitter node-kind token"), want: codeIntelligenceInvalidReasonSelectorInvalid},
+		{name: "path required", err: errors.New("path is required for hover"), want: codeIntelligenceInvalidReasonPathRequired},
+		{name: "position required", err: errors.New("line and column are required positive 1-based values for definition"), want: codeIntelligenceInvalidReasonPositionRequired},
+		{name: "position invalid", err: errors.New("column 10 is past line 2"), want: codeIntelligenceInvalidReasonPositionInvalid},
+		{name: "file unavailable", err: errors.New(`open workspace file "private.go": file does not exist`), want: codeIntelligenceInvalidReasonWorkspaceFileUnavailable},
+		{name: "file not regular", err: errors.New(`workspace path "private" is not a regular file`), want: codeIntelligenceInvalidReasonWorkspaceFileNotRegular},
+		{name: "file too large", err: errors.New(`workspace file "private.go" exceeds the 524288-byte code-intelligence limit`), want: codeIntelligenceInvalidReasonWorkspaceFileTooLarge},
+		{name: "file changed", err: errors.New(`workspace file "private.go" changed while it was being read`), want: codeIntelligenceInvalidReasonWorkspaceFileChanged},
+		{name: "file encoding", err: errors.New(`workspace file "private.go" is not valid UTF-8`), want: codeIntelligenceInvalidReasonWorkspaceFileInvalidEncoding},
+		{name: "structural path", err: errors.New(`structural search path "private" must be a regular file or directory`), want: codeIntelligenceInvalidReasonStructuralPathInvalid},
+		{name: "language required", err: errors.New("language is required when structural_search targets a directory"), want: codeIntelligenceInvalidReasonLanguageRequired},
+		{name: "language unsupported", err: errors.New(`structural-search language "private" is not allowlisted`), want: codeIntelligenceInvalidReasonLanguageUnsupported},
+		{name: "language path mismatch", err: errors.New(`language "go" does not match path "private.ts"`), want: codeIntelligenceInvalidReasonLanguagePathMismatch},
+		{name: "unknown", err: errors.New("future validation includes private input"), want: codeIntelligenceInvalidReasonUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := codeIntelligenceInvalidRequestReasonForError(test.err); got != test.want {
+				t.Fatalf("reason = %q, want %q", got, test.want)
 			}
 		})
 	}
