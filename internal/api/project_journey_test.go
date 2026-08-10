@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hecatehq/hecate/internal/agentadapters"
 	"github.com/hecatehq/hecate/internal/agentprofiles"
@@ -395,7 +396,11 @@ func TestProjectJourneyAPI_CairnlineReplacementModeStartsTaskWithRuntimeDefaults
 	assertNoNativeProjectWorkAssignmentForJourney(t, handler, projectID, "work_replacement", "asgn_replacement")
 
 	started := mustRequestJSONStatus[ProjectWorkAssignmentEnvelope](client, http.StatusOK, http.MethodPost, "/hecate/v1/projects/"+projectID+"/work-items/work_replacement/assignments/asgn_replacement/start", `{}`)
-	<-modelStarted
+	select {
+	case <-modelStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for replacement-mode task model dispatch")
+	}
 	if started.Data.ExecutionRef.TaskID == "" || started.Data.ExecutionRef.RunID == "" {
 		t.Fatalf("started assignment = %+v, want Hecate task/run from runtime defaults overlay", started.Data)
 	}
