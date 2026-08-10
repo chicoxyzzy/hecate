@@ -867,7 +867,7 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 			}
 		case route == "grep":
 			capture.GrepCalls++
-		case route == "other", route == "git_status", route == "git_diff":
+		case route == "standalone_structural_search", route == "effectful_builtin", route == "unknown_tool", route == "artifact_read", route == "git_status", route == "git_diff":
 			capture.UnexpectedToolCalls++
 		}
 	}
@@ -953,10 +953,14 @@ func codeIntelligenceDogfoodToolRoutes(events []e2eEventEnvelope) ([]string, []i
 			continue
 		}
 		switch toolName {
-		case "grep", "glob", "list_dir", "read_file", "git_status", "git_diff":
+		case "grep", "glob", "list_dir", "read_file", "artifact_read", "git_status", "git_diff":
 			routes = append(routes, toolName)
+		case "structural_search":
+			routes = append(routes, "standalone_structural_search")
+		case "shell_exec", "terminal_open", "terminal_write", "terminal_read", "terminal_wait", "terminal_kill", "git_exec", "file_write", "file_edit", "apply_patch", "http_request", "web_search", "browser_inspect", "draft_project_proposal":
+			routes = append(routes, "effectful_builtin")
 		default:
-			routes = append(routes, "other")
+			routes = append(routes, "unknown_tool")
 		}
 		modelCalls = append(modelCalls, codeIntelligenceDogfoodModelCall(event.Data["model_call_index"]))
 	}
@@ -1016,15 +1020,9 @@ func codeIntelligenceDogfoodSemanticOperation(operation string) bool {
 	}
 }
 
-func codeIntelligenceDogfoodInspectionRoute(route string) bool {
-	return strings.HasPrefix(route, "code_intelligence:") || route == "grep" || route == "glob" || route == "list_dir" || route == "read_file" || route == "git_status" || route == "git_diff"
-}
-
 func codeIntelligenceDogfoodFirstInspectionTool(routes []string) string {
-	for _, route := range routes {
-		if codeIntelligenceDogfoodInspectionRoute(route) {
-			return route
-		}
+	if len(routes) > 0 {
+		return routes[0]
 	}
 	return "none"
 }
@@ -1369,6 +1367,24 @@ func TestCodeIntelligenceDogfoodCapabilitiesRequireLaterModelCall(t *testing.T) 
 	semantic.Data["model_call_index"] = float64(2)
 	if !codeIntelligenceDogfoodCapabilitiesBeforeQuery([]e2eEventEnvelope{capabilities, semantic}) {
 		t.Fatal("later semantic proposal did not count as capability-informed")
+	}
+}
+
+func TestCodeIntelligenceDogfoodToolRoutesUseClosedCategories(t *testing.T) {
+	const arbitraryTool = "DOGFOOD_PRIVATE_TOOL_SENTINEL"
+	events := []e2eEventEnvelope{
+		{Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(1), "tool_name": "structural_search", "input": map[string]any{}}},
+		{Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(2), "tool_name": "shell_exec", "input": map[string]any{"command": "private"}}},
+		{Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(3), "tool_name": arbitraryTool, "input": map[string]any{}}},
+		{Type: "assistant.tool_call_proposed", Data: map[string]any{"model_call_index": float64(4), "tool_name": "code_intelligence", "input": map[string]any{"operation": "invented"}}},
+	}
+	routes, modelCalls := codeIntelligenceDogfoodToolRoutes(events)
+	wantRoutes := []string{"standalone_structural_search", "effectful_builtin", "unknown_tool", "code_intelligence:unknown"}
+	if fmt.Sprint(routes) != fmt.Sprint(wantRoutes) || fmt.Sprint(modelCalls) != "[1 2 3 4]" {
+		t.Fatalf("safe routes=%v calls=%v, want routes=%v calls=[1 2 3 4]", routes, modelCalls, wantRoutes)
+	}
+	if strings.Contains(strings.Join(routes, ","), arbitraryTool) {
+		t.Fatal("safe route categories retained a model-controlled tool name")
 	}
 }
 

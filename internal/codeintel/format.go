@@ -21,14 +21,22 @@ func formatResult(result Result) string {
 				fmt.Fprintf(&builder, " version=%s", capability.Version)
 			}
 			fmt.Fprintf(&builder, " [%s]", capability.Status)
-			if len(capability.Operations) > 0 {
+			if capability.Available && len(capability.Operations) > 0 {
 				operations := make([]string, 0, len(capability.Operations))
 				for _, operation := range capability.Operations {
 					operations = append(operations, string(operation))
 				}
 				fmt.Fprintf(&builder, " operations=%s", strings.Join(operations, ","))
 			}
-			fmt.Fprintf(&builder, " (%s)\n", capability.Detail)
+			fmt.Fprintf(&builder, " (%s)", capability.Detail)
+			if !capability.Available {
+				if capability.Language == "structural" {
+					builder.WriteString(" Do not call `code_intelligence` with `operation=structural_search`; use `grep`.")
+				} else {
+					builder.WriteString(" Do not call semantic operations for this language; use `code_intelligence` with `operation=structural_search` when available, otherwise use `grep`.")
+				}
+			}
+			builder.WriteByte('\n')
 		}
 		return truncateResultText(strings.TrimSpace(builder.String()))
 	}

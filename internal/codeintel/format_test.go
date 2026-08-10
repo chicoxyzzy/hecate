@@ -53,3 +53,42 @@ func TestFormatCapabilitiesIncludesVersionOperationsAndVerificationStage(t *test
 		}
 	}
 }
+
+func TestFormatCapabilitiesMakesUnavailableProvidersNonActionable(t *testing.T) {
+	text := formatResult(Result{
+		Operation: OpCapabilities,
+		Capabilities: []Capability{
+			{
+				Language:   "go",
+				Provider:   "gopls",
+				Available:  false,
+				Status:     "unavailable",
+				Operations: []Operation{OpDefinition, OpReferences},
+				Detail:     "not found on a trusted global PATH",
+			},
+			{
+				Language:   "structural",
+				Provider:   "ast-grep",
+				Available:  false,
+				Status:     "unavailable",
+				Operations: []Operation{OpStructuralSearch},
+				Detail:     "not found on a trusted global PATH",
+			},
+		},
+	})
+	for _, forbidden := range []string{"operations=definition", "operations=structural_search"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("unavailable capability output = %q, must omit actionable %q", text, forbidden)
+		}
+	}
+	for _, want := range []string{
+		"go: unavailable via gopls [unavailable]",
+		"Do not call semantic operations for this language",
+		"structural: unavailable via ast-grep [unavailable]",
+		"Do not call `code_intelligence` with `operation=structural_search`; use `grep`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("unavailable capability output = %q, want %q", text, want)
+		}
+	}
+}
