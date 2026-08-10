@@ -2,11 +2,13 @@
 
 > **Status:** first read-only slice implemented.
 > **Current source of truth:** [Agent runtime](../../runtime/agent-runtime.md).
-> **Next action:** run the opt-in
+> **Evidence:** [three-repeat local-model dogfood](../proposals/evidence/code-intelligence-model-dogfood-2026-08-10.md).
+> **Next action:** repeat the same
 > [model dogfood scorecard](../../contributor/code-intelligence-dogfood.md)
-> repeatedly to measure effective guidance, provider-version reporting,
-> latency, and result quality before adding a friendly persisted readiness
-> view, per-run language-server pooling, or write-capable refactoring.
+> with a stronger tool-capable model. If closed request-shape and fallback
+> failures reproduce with that model, compare operation-specific schemas
+> with the current single-tool contract before adding readiness UI, per-run
+> language-server pooling, more providers, or write-capable refactoring.
 
 Hecate's native agent loop already had bounded file reads, regular-expression
 search, and shell access. Those tools are enough to inspect a repository, but
