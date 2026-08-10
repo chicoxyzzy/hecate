@@ -2,13 +2,16 @@
 
 > **Status:** first read-only slice implemented.
 > **Current source of truth:** [Agent runtime](../../runtime/agent-runtime.md).
-> **Evidence:** [three-repeat local-model dogfood](../proposals/evidence/code-intelligence-model-dogfood-2026-08-10.md).
-> **Next action:** repeat the same
-> [model dogfood scorecard](../../contributor/code-intelligence-dogfood.md)
-> with a stronger tool-capable model. If closed request-shape and fallback
-> failures reproduce with that model, compare operation-specific schemas
-> with the current single-tool contract before adding readiness UI, per-run
-> language-server pooling, more providers, or write-capable refactoring.
+> **Evidence:** [three-repeat local-model dogfood](../proposals/evidence/code-intelligence-model-dogfood-2026-08-10.md)
+> and [strong-model follow-up](../proposals/evidence/code-intelligence-strong-model-dogfood-2026-08-10.md).
+> **Next action:** add paired navigation-fit scenarios and an exact-path
+> direct-read control to the
+> [model dogfood scorecard](../../contributor/code-intelligence-dogfood.md),
+> then repeat the three-run stronger-model matrix. Only A/B operation-specific
+> schemas if the stronger model still bypasses code intelligence when semantic
+> or structural navigation has a real advantage. Keep readiness UI, per-run
+> language-server pooling, more providers, and write-capable refactoring behind
+> that gate.
 
 Hecate's native agent loop already had bounded file reads, regular-expression
 search, and shell access. Those tools are enough to inspect a repository, but
