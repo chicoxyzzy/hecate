@@ -43,6 +43,7 @@ var browserNonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("3fff::/20"),
 	netip.MustParsePrefix("5f00::/16"),
+	netip.MustParsePrefix("fec0::/10"),
 }
 
 const DefaultTimeout = 20 * time.Second

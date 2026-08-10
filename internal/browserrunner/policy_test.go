@@ -48,6 +48,7 @@ func TestIsPublicBrowserIP(t *testing.T) {
 		{ip: "240.0.0.1", want: false},
 		{ip: "::1", want: false},
 		{ip: "fc00::1", want: false},
+		{ip: "fec0::1", want: false},
 		{ip: "64:ff9b::7f00:1", want: false},
 		{ip: "2001:db8::1", want: false},
 	} {
@@ -252,6 +253,24 @@ func TestRequestPolicyPreflightHostMappingsRejectsPrivateAnswers(t *testing.T) {
 	}
 }
 
+func TestRequestPolicyPreflightHostMappingsRejectsDeprecatedIPv6SiteLocalAnswer(t *testing.T) {
+	t.Parallel()
+	policy := requestPolicy{allowed: map[string]struct{}{"https://app.example.test": {}}}
+	lookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("fec0::1")}}, nil
+	}
+	if _, err := policy.preflightHostMappings(context.Background(), false, lookup); !errors.Is(err, ErrPrivateNetwork) {
+		t.Fatalf("preflightHostMappings() error = %v, want ErrPrivateNetwork", err)
+	}
+	mappings, err := policy.preflightHostMappings(context.Background(), true, lookup)
+	if err != nil {
+		t.Fatalf("private opt-in preflightHostMappings() error = %v", err)
+	}
+	if want := []browserHostMapping{{Hostname: "app.example.test", Address: "fec0::1"}}; !reflect.DeepEqual(mappings, want) {
+		t.Fatalf("private opt-in mappings = %#v, want %#v", mappings, want)
+	}
+}
+
 func TestRequestPolicyPreflightHostMappingsRejectsPrivateLiteral(t *testing.T) {
 	t.Parallel()
 	policy := requestPolicy{allowed: map[string]struct{}{"http://127.0.0.1": {}}}
@@ -267,6 +286,25 @@ func TestRequestPolicyPreflightHostMappingsRejectsPrivateLiteral(t *testing.T) {
 		t.Fatalf("private literal opt-in preflightHostMappings() error = %v", err)
 	}
 	if want := []browserHostMapping{{Hostname: "127.0.0.1", Address: "127.0.0.1"}}; !reflect.DeepEqual(mappings, want) {
+		t.Fatalf("private literal mappings = %#v, want %#v", mappings, want)
+	}
+}
+
+func TestRequestPolicyPreflightHostMappingsRejectsDeprecatedIPv6SiteLocalLiteral(t *testing.T) {
+	t.Parallel()
+	policy := requestPolicy{allowed: map[string]struct{}{"https://[fec0::1]": {}}}
+	lookup := func(context.Context, string) ([]net.IPAddr, error) {
+		t.Fatal("literal IP must not be resolved")
+		return nil, nil
+	}
+	if _, err := policy.preflightHostMappings(context.Background(), false, lookup); !errors.Is(err, ErrPrivateNetwork) {
+		t.Fatalf("preflightHostMappings() error = %v, want ErrPrivateNetwork", err)
+	}
+	mappings, err := policy.preflightHostMappings(context.Background(), true, lookup)
+	if err != nil {
+		t.Fatalf("private literal opt-in preflightHostMappings() error = %v", err)
+	}
+	if want := []browserHostMapping{{Hostname: "fec0::1", Address: "fec0::1"}}; !reflect.DeepEqual(mappings, want) {
 		t.Fatalf("private literal mappings = %#v, want %#v", mappings, want)
 	}
 }
