@@ -53,14 +53,15 @@ type codeIntelligenceDogfoodHealth struct {
 }
 
 type codeIntelligenceDogfoodProject struct {
-	BaseURL          string
-	ProjectID        string
-	PermissiveRoleID string
-	RestrictedRoleID string
-	Provider         string
-	Model            string
-	SourceRevision   string
-	SourcePath       string
+	BaseURL                    string
+	ProjectID                  string
+	PermissiveRoleID           string
+	RestrictedRoleID           string
+	Provider                   string
+	Model                      string
+	SourceRevision             string
+	SourcePath                 string
+	ExpectedIgnoredPathsDigest string
 }
 
 type codeIntelligenceDogfoodSourceSnapshot struct {
@@ -174,6 +175,7 @@ func TestCodeIntelligenceModelDogfood(t *testing.T) {
 		t.Fatalf("%s requires a clean committed worktree so managed Project workspaces match the tested source revision", dogfoodGateEnv)
 	}
 	sourceRevision := sourceSnapshot.Revision
+	expectedIgnoredPathsDigest := codeIntelligenceDogfoodEmptyIgnoredPathsDigest()
 	capabilities := probeCodeIntelligenceDogfoodCapabilities(t, repositoryRoot)
 
 	baseURL := gatewayServer(t, codeIntelligenceDogfoodGatewayEnv(t, cfg)...)
@@ -200,7 +202,7 @@ func TestCodeIntelligenceModelDogfood(t *testing.T) {
 		},
 	}
 
-	project := createCodeIntelligenceDogfoodProject(t, baseURL, cfg, generatedAt.Format("20060102T150405"), sourceRevision)
+	project := createCodeIntelligenceDogfoodProject(t, baseURL, cfg, generatedAt.Format("20060102T150405"), sourceRevision, expectedIgnoredPathsDigest)
 	scenarios := codeIntelligenceDogfoodScenarios()
 	for repeat := 1; repeat <= cfg.Repeats; repeat++ {
 		for _, scenario := range scenarios {
@@ -218,7 +220,7 @@ func TestCodeIntelligenceModelDogfood(t *testing.T) {
 
 	missingProviderPath := filepath.Join(t.TempDir(), "missing-gopls")
 	missingBaseURL := gatewayServer(t, codeIntelligenceDogfoodGatewayEnv(t, cfg, "HECATE_CODEINTEL_GOPLS_PATH="+missingProviderPath)...)
-	missingProject := createCodeIntelligenceDogfoodProject(t, missingBaseURL, cfg, generatedAt.Format("20060102T150405")+" missing", sourceRevision)
+	missingProject := createCodeIntelligenceDogfoodProject(t, missingBaseURL, cfg, generatedAt.Format("20060102T150405")+" missing", sourceRevision, expectedIgnoredPathsDigest)
 	for repeat := 1; repeat <= cfg.Repeats; repeat++ {
 		for _, scenario := range scenarios {
 			if !scenario.ForcedMissing {
@@ -464,24 +466,34 @@ func codeIntelligenceDogfoodSourceState(t *testing.T, repositoryRoot string) cod
 	if err != nil {
 		t.Fatalf("inspect source status: %v", err)
 	}
-	view, err := runner.NewReadOnlyView(context.Background(), repositoryRoot)
+	return codeIntelligenceDogfoodSourceSnapshot{
+		Revision:           revision,
+		Dirty:              status != "",
+		IgnoredPathsDigest: codeIntelligenceDogfoodIgnoredPathsDigest(t, repositoryRoot),
+	}
+}
+
+func codeIntelligenceDogfoodEmptyIgnoredPathsDigest() string {
+	digest := sha256.Sum256(nil)
+	return fmt.Sprintf("sha256:%x", digest[:])
+}
+
+func codeIntelligenceDogfoodIgnoredPathsDigest(t *testing.T, workspace string) string {
+	t.Helper()
+	view, err := gitrunner.NewLocalRunner().NewReadOnlyView(context.Background(), workspace)
 	if err != nil {
-		t.Fatalf("create passive ignored-path source view: %v", err)
+		t.Fatalf("create passive ignored-path view: %v", err)
 	}
 	defer view.Close()
 	ignored, err := view.RunLimited(context.Background(), dogfoodIgnoredSnapshotMaxBytes, "--no-pager", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", ".")
 	if err != nil {
-		t.Fatalf("inspect source ignored paths: %v", err)
+		t.Fatalf("inspect ignored paths: %v", err)
 	}
 	if ignored.StdoutTruncated {
-		t.Fatal("source ignored-path snapshot exceeded its bound")
+		t.Fatal("ignored-path snapshot exceeded its bound")
 	}
 	digest := sha256.Sum256([]byte(ignored.Stdout))
-	return codeIntelligenceDogfoodSourceSnapshot{
-		Revision:           revision,
-		Dirty:              status != "",
-		IgnoredPathsDigest: fmt.Sprintf("sha256:%x", digest[:]),
-	}
+	return fmt.Sprintf("sha256:%x", digest[:])
 }
 
 func codeIntelligenceDogfoodRevisionAt(t *testing.T, repositoryRoot string) string {
@@ -575,7 +587,7 @@ func codeIntelligenceDogfoodGatewayEnv(t *testing.T, cfg codeIntelligenceDogfood
 	return append(env, extra...)
 }
 
-func createCodeIntelligenceDogfoodProject(t *testing.T, baseURL string, cfg codeIntelligenceDogfoodConfig, suffix, sourceRevision string) codeIntelligenceDogfoodProject {
+func createCodeIntelligenceDogfoodProject(t *testing.T, baseURL string, cfg codeIntelligenceDogfoodConfig, suffix, sourceRevision, expectedIgnoredPathsDigest string) codeIntelligenceDogfoodProject {
 	t.Helper()
 	repositoryRoot, err := filepath.EvalSymlinks(moduleRootDir())
 	if err != nil {
@@ -644,14 +656,15 @@ func createCodeIntelligenceDogfoodProject(t *testing.T, baseURL string, cfg code
 	}
 
 	return codeIntelligenceDogfoodProject{
-		BaseURL:          baseURL,
-		ProjectID:        project.Data.ID,
-		PermissiveRoleID: roles[0].ID,
-		RestrictedRoleID: roles[1].ID,
-		Provider:         cfg.Provider,
-		Model:            cfg.Model,
-		SourceRevision:   sourceRevision,
-		SourcePath:       repositoryRoot,
+		BaseURL:                    baseURL,
+		ProjectID:                  project.Data.ID,
+		PermissiveRoleID:           roles[0].ID,
+		RestrictedRoleID:           roles[1].ID,
+		Provider:                   cfg.Provider,
+		Model:                      cfg.Model,
+		SourceRevision:             sourceRevision,
+		SourcePath:                 repositoryRoot,
+		ExpectedIgnoredPathsDigest: expectedIgnoredPathsDigest,
 	}
 }
 
@@ -788,7 +801,7 @@ func launchCodeIntelligenceDogfoodScenario(t *testing.T, project codeIntelligenc
 	if codeIntelligenceDogfoodRevisionAt(t, run.WorkspacePath) != project.SourceRevision {
 		t.Fatal("dogfood managed workspace revision does not match the recorded source revision")
 	}
-	workspaceChanges := codeIntelligenceDogfoodWorkspaceChangeCount(t, run.WorkspacePath)
+	workspaceChanges := codeIntelligenceDogfoodWorkspaceChangeCount(t, run.WorkspacePath, project.ExpectedIgnoredPathsDigest)
 	return captureCodeIntelligenceDogfoodRun(run, ref.TaskID, steps.Data, events.Data, artifacts.Data, scenario.AnswerMarker, providerLanguage, providerToken, provider, providerVersion, workspaceChanges)
 }
 
@@ -1127,7 +1140,8 @@ func codeIntelligenceDogfoodStatusCount(status string) int {
 
 func TestCodeIntelligenceDogfoodWorkspaceChangeCountIncludesIgnoredFiles(t *testing.T) {
 	workspace := codeIntelligenceDogfoodGitFixture(t)
-	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace); got != 0 {
+	baseline := codeIntelligenceDogfoodIgnoredPathsDigest(t, workspace)
+	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace, baseline); got != 0 {
 		t.Fatalf("clean dogfood workspace change count = %d, want 0", got)
 	}
 	ignoredDir := filepath.Join(workspace, ".dogfood")
@@ -1137,8 +1151,32 @@ func TestCodeIntelligenceDogfoodWorkspaceChangeCountIncludesIgnoredFiles(t *test
 	if err := os.WriteFile(filepath.Join(ignoredDir, "evidence.json"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write ignored fixture file: %v", err)
 	}
-	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace); got != 1 {
+	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace, baseline); got != 1 {
 		t.Fatalf("ignored dogfood workspace change count = %d, want 1", got)
+	}
+}
+
+func TestCodeIntelligenceDogfoodWorkspaceChangeCountAcceptsLargeIgnoredBaseline(t *testing.T) {
+	workspace := codeIntelligenceDogfoodGitFixture(t)
+	ignoredDir := filepath.Join(workspace, ".dogfood")
+	if err := os.MkdirAll(ignoredDir, 0o700); err != nil {
+		t.Fatalf("create large ignored baseline directory: %v", err)
+	}
+	for index := range 2_000 {
+		name := fmt.Sprintf("cache-entry-%04d-with-a-long-baseline-name.json", index)
+		if err := os.WriteFile(filepath.Join(ignoredDir, name), []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write large ignored baseline fixture: %v", err)
+		}
+	}
+	baseline := codeIntelligenceDogfoodIgnoredPathsDigest(t, workspace)
+	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace, baseline); got != 0 {
+		t.Fatalf("large ignored baseline workspace change count = %d, want 0", got)
+	}
+	if err := os.WriteFile(filepath.Join(ignoredDir, "new-after-baseline.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write ignored post-baseline fixture: %v", err)
+	}
+	if got := codeIntelligenceDogfoodWorkspaceChangeCount(t, workspace, baseline); got != 1 {
+		t.Fatalf("changed large ignored baseline workspace change count = %d, want 1", got)
 	}
 }
 
@@ -1184,7 +1222,7 @@ func codeIntelligenceDogfoodGitFixture(t *testing.T) string {
 	return workspace
 }
 
-func codeIntelligenceDogfoodWorkspaceChangeCount(t *testing.T, workspace string) int {
+func codeIntelligenceDogfoodWorkspaceChangeCount(t *testing.T, workspace, expectedIgnoredPathsDigest string) int {
 	t.Helper()
 	ctx := context.Background()
 	runner := gitrunner.NewLocalRunner()
@@ -1192,19 +1230,11 @@ func codeIntelligenceDogfoodWorkspaceChangeCount(t *testing.T, workspace string)
 	if err != nil {
 		t.Fatalf("measure dogfood workspace changes: %v", err)
 	}
-	view, err := runner.NewReadOnlyView(ctx, workspace)
-	if err != nil {
-		t.Fatalf("create dogfood ignored-file view: %v", err)
+	changes := codeIntelligenceDogfoodStatusCount(status)
+	if codeIntelligenceDogfoodIgnoredPathsDigest(t, workspace) != expectedIgnoredPathsDigest {
+		changes++
 	}
-	defer view.Close()
-	ignored, err := view.RunLimited(ctx, 64*1024, "--no-pager", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", ".")
-	if err != nil {
-		t.Fatalf("measure dogfood ignored workspace changes: %v", err)
-	}
-	if ignored.StdoutTruncated {
-		t.Fatal("dogfood ignored workspace change snapshot exceeded its bound")
-	}
-	return codeIntelligenceDogfoodStatusCount(status) + codeIntelligenceDogfoodStatusCount(ignored.Stdout)
+	return changes
 }
 
 func codeIntelligenceDogfoodNumber(value any) int {

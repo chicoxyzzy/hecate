@@ -7,13 +7,15 @@ Python and Rust structural search, restricted-policy behavior, and a deliberatel
 unavailable Go language server. Existing bounded text search remains the
 expected fallback when a more precise route is unavailable or forbidden.
 
-The run uses isolated Hecate-managed workspaces below a temporary gateway data
-directory. It never asks the model to edit files or run commands. Network tools
-are disabled, while shell, terminal, broad Git, and write tools remain
-approval-gated even in the write-capable preset needed for semantic LSP on some
-hosts. The harness rejects any such approval and scores the proposal as a
-failure; the model's prompt is not treated as a security boundary. The report
-records only whether a workspace changed, not changed paths or patch content.
+The run uses isolated Hecate-managed workspaces below Hecate's system-temporary
+workspace root and keeps gateway state in a separate temporary data directory.
+Persistent workspaces can remain after the test for local inspection. It never
+asks the model to edit files or run commands. Network tools are disabled, while
+shell, terminal, broad Git, and write tools remain approval-gated even in the
+write-capable preset needed for semantic LSP on some hosts. The harness rejects
+any such approval and scores the proposal as a failure; the model's prompt is
+not treated as a security boundary. The report records only a bounded aggregate
+workspace-change count, not changed paths or patch content.
 The test still sends fixed code-navigation questions, tool results, and the
 managed workspace's absolute path from the agent-loop prelude to the configured
 model provider, so use only a provider and repository you are allowed to test.
@@ -105,6 +107,13 @@ fields for human review. Each scenario is classified as `pass`, `fail`,
 aggregate rate: a useful final answer does not erase generic browsing before
 capability discovery, an avoidable failed semantic call, a forbidden route, or
 an unexpected workspace change.
+
+For this Git-backed harness, managed Project workspaces begin as clean,
+independent clones, including when the source is a linked worktree. Workspace
+change measurement compares ordinary Git status with an empty ignored-path
+baseline. The numeric count includes ordinary status entries plus one bounded
+signal when that ignored path set changes; it is not a count of retained ignored
+filenames, and those filenames are never added to the report.
 
 Capability discovery reports providers as `installed_unverified` until a real
 query starts them. If that query exposes a provider startup or protocol failure
