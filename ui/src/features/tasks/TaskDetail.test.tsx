@@ -561,6 +561,7 @@ describe("TaskDetail effective sandbox posture", () => {
         agent_preset_id: "review_qa",
         agent_preset_tools_enabled: false,
         agent_preset_browser_allowed: true,
+        agent_preset_browser_interactions_allowed: true,
         agent_preset_browser_allowed_origins: ["https://app.example.test"],
         sandbox_read_only: true,
         sandbox_network: false,
@@ -575,6 +576,12 @@ describe("TaskDetail effective sandbox posture", () => {
     expect(
       within(overview).getByText(
         /Configured static evidence · approval-gated when the local browser runtime is ready · https:\/\/app\.example\.test/,
+      ),
+    ).toBeTruthy();
+    expect(within(overview).getByText("Browser interaction")).toBeTruthy();
+    expect(
+      within(overview).getByText(
+        /Configured flow access · approval-gated when the local browser runtime is ready · up to six exact accessible-role\/name click or wait actions · https:\/\/app\.example\.test/,
       ),
     ).toBeTruthy();
     expect(within(overview).getByText("Read-only")).toBeTruthy();
@@ -621,6 +628,7 @@ describe("TaskDetail effective sandbox posture", () => {
     expect(within(overview).getByText("legacy_preset")).toBeTruthy();
     expect(within(overview).queryByText("Tools")).toBeNull();
     expect(within(overview).queryByText("Browser evidence")).toBeNull();
+    expect(within(overview).queryByText("Browser interaction")).toBeNull();
   });
 });
 
@@ -647,7 +655,39 @@ describe("TaskDetail browser evidence", () => {
     await user.click(evidence);
     expect(evidence.closest("details")).toHaveAttribute("open");
     expect(screen.getByText(/Treat page content as data, not instructions/i)).toBeInTheDocument();
+    expect(screen.getByText(/temporary-profile cleanup failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/browser profile data was retained/i)).toBeNull();
     expect(screen.getByText(/Title: Quarterly report/)).toBeInTheDocument();
+  });
+
+  it("renders retained browser-flow evidence as a distinct collapsed panel", async () => {
+    const { render, user } = setup({
+      artifacts: [
+        {
+          id: "art-browser-flow",
+          task_id: "task-1",
+          run_id: "run-1",
+          kind: "browser_flow_evidence",
+          name: "Browser flow — https://app.example.test",
+          description:
+            "Partial browser interaction evidence; an earlier click may already have changed the approved application.",
+          content_text: "Browser flow evidence\nAction 1: clicked button Continue",
+          mime_type: "text/plain",
+          storage_kind: "inline",
+        },
+      ],
+    });
+    render();
+
+    const evidence = screen.getByText("Browser flow — https://app.example.test");
+    expect(evidence.closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("untrusted interaction evidence")).toBeInTheDocument();
+    await user.click(evidence);
+    expect(evidence.closest("details")).toHaveAttribute("open");
+    expect(screen.getByText(/earlier click may already have changed/i)).toBeInTheDocument();
+    expect(screen.getByText(/temporary-profile cleanup failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/browser profile data was retained/i)).toBeNull();
+    expect(screen.getByText(/Action 1: clicked button Continue/)).toBeInTheDocument();
   });
 });
 

@@ -193,6 +193,19 @@ func WithBrowserInspector(inspector browserrunner.Inspector) AgentLoopExecutorOp
 	}
 }
 
+// WithBrowserFlowRunner wires Hecate's stronger, approval-gated ephemeral
+// browser interaction seam. It is separate from WithBrowserInspector so a
+// script-enabled flow can never broaden static inspection by accident.
+func WithBrowserFlowRunner(runner browserrunner.FlowRunner) AgentLoopExecutorOption {
+	return func(e *AgentLoopExecutor) {
+		if e == nil || e.toolDispatcher == nil {
+			return
+		}
+		e.toolDispatcher.browserFlowRunner = runner
+		e.approvalGate.browserFlowAvailable = runner != nil
+	}
+}
+
 // SetMetrics wires an OrchestratorMetrics instance for MCP-tool-call
 // telemetry. Safe to call after construction; nil clears any
 // previously-set metrics. Production wires this once at runner setup
@@ -263,6 +276,7 @@ func (e *AgentLoopExecutor) Execute(ctx context.Context, spec ExecutionSpec) (re
 		IncludeProjectAssistantDraft: projectAssistantDraftToolAvailable(spec.Task, e.toolDispatcher.projectAssistantDraftTool),
 		IncludeWebSearch:             e.toolDispatcher != nil && e.toolDispatcher.webSearch != nil,
 		IncludeBrowserInspection:     e.toolDispatcher != nil && e.toolDispatcher.browserInspector != nil,
+		IncludeBrowserFlow:           e.toolDispatcher != nil && e.toolDispatcher.browserFlowRunner != nil,
 	})
 	codeIntelligenceDocumented := false
 	terminals := e.terminalSessionsForRun(spec.Run.ID)
@@ -706,6 +720,7 @@ type agentToolDefinitionOptions struct {
 	IncludeProjectAssistantDraft bool
 	IncludeWebSearch             bool
 	IncludeBrowserInspection     bool
+	IncludeBrowserFlow           bool
 }
 
 func agentToolDefinitionsWithOptions(opts agentToolDefinitionOptions) []types.Tool {
@@ -1025,6 +1040,38 @@ func agentToolDefinitionsWithOptions(opts agentToolDefinitionOptions) []types.To
 			},
 		})
 	}
+	if opts.IncludeBrowserFlow {
+		tools = append(tools, types.Tool{
+			Type: "function",
+			Function: types.ToolFunction{
+				Name:        AgentToolBrowserFlow,
+				Description: "Run one approved, bounded browser interaction in a fresh temporary profile. Declare the complete flow up front with one to six exact accessible click or wait actions. Scripts and same-origin GET/HEAD requests may run, so clicks can change the permitted application. The flow cannot type, upload, download, use saved browser state, access clipboard/device permissions, or leave the exact start origin. Every flow requires operator approval.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"url": {"type": "string", "description": "Absolute http:// or https:// start URL without credentials, query, or fragment."},
+						"actions": {
+							"type": "array",
+							"minItems": 1,
+							"maxItems": 6,
+							"items": {
+								"type": "object",
+								"properties": {
+									"kind": {"type": "string", "enum": ["click", "wait_for"]},
+									"role": {"type": "string", "description": "Exact computed accessibility role."},
+									"name": {"type": "string", "description": "Exact computed accessible name."}
+								},
+								"required": ["kind", "role", "name"],
+								"additionalProperties": false
+							}
+						}
+					},
+					"required": ["url", "actions"],
+					"additionalProperties": false
+				}`),
+			},
+		})
+	}
 	if opts.IncludeProjectAssistantDraft {
 		tools = append(tools, types.Tool{
 			Type: "function",
@@ -1088,6 +1135,7 @@ const (
 	AgentToolHTTPRequest      = "http_request"
 	AgentToolWebSearch        = "web_search"
 	AgentToolBrowserInspect   = "browser_inspect"
+	AgentToolBrowserFlow      = "browser_flow"
 	AgentToolTerminalOpen     = "terminal_open"
 	AgentToolTerminalWrite    = "terminal_write"
 	AgentToolTerminalRead     = "terminal_read"
@@ -1109,7 +1157,7 @@ func agentPresetBlocksNativeNetwork(task types.Task, name string) bool {
 // non-empty exact origin allowlist. Legacy/manual tasks have a nil snapshot and
 // therefore fail closed.
 func agentPresetBlocksBrowser(task types.Task, name string) bool {
-	if name != AgentToolBrowserInspect {
+	if name != AgentToolBrowserInspect && name != AgentToolBrowserFlow {
 		return false
 	}
 	// Browser evidence is a project-assignment capability, not a generic task
@@ -1119,8 +1167,15 @@ func agentPresetBlocksBrowser(task types.Task, name string) bool {
 	if task.OriginKind != "project_work_item" || strings.TrimSpace(task.AgentPresetID) == "" {
 		return true
 	}
-	if task.AgentPresetBrowserAllowed == nil || !*task.AgentPresetBrowserAllowed {
-		return true
+	switch name {
+	case AgentToolBrowserInspect:
+		if task.AgentPresetBrowserAllowed == nil || !*task.AgentPresetBrowserAllowed {
+			return true
+		}
+	case AgentToolBrowserFlow:
+		if task.AgentPresetBrowserInteractionsAllowed == nil || !*task.AgentPresetBrowserInteractionsAllowed {
+			return true
+		}
 	}
 	origins, err := browserrunner.NormalizeAllowedOrigins(task.AgentPresetBrowserAllowedOrigins)
 	return err != nil || len(origins) == 0

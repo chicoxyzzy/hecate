@@ -2,6 +2,8 @@ package browserrunner
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/accessibility"
@@ -24,14 +27,20 @@ import (
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/hecatehq/hecate/internal/localfs"
 	"github.com/hecatehq/hecate/internal/safetext"
 )
 
 const (
-	maxAccessibilityNodes = 1
+	maxAccessibilityNodes = 64
 	maxConsoleMessages    = 16
 	maxEvidenceTextBytes  = 1 << 10
+	// Page-controlled strings are clipped before UTF-8 repair and sanitization,
+	// so a hostile accessibility name cannot make evidence processing scan an
+	// otherwise unbounded JavaScript-generated value.
+	maxEvidenceInputBytes = 4 * maxEvidenceTextBytes
 	maxPausedRequests     = 256
+	maxObservedRequests   = 256
 	// browserResponseCancellationThresholdBytes is the amount of response data
 	// CDP may observe before Hecate cancels the capture. It is not a hard wire
 	// byte cap: browser, socket, and peer buffers can already contain more data
@@ -48,6 +57,18 @@ type ChromiumInspector struct {
 	timeout         time.Duration
 	allowPrivateIPs bool
 	lookupIPAddrs   lookupIPAddrs
+	// profileRoot is empty in production (the OS-private temp root). Tests set
+	// it to assert that cancellation removes every ephemeral profile.
+	profileRoot string
+	// removeProfile is a deterministic failure seam. Production uses
+	// os.RemoveAll with a small bounded retry after Chromium has stopped.
+	removeProfile func(string) error
+	// protocolError is a test-only diagnostic seam. Production never reflects
+	// raw relay errors because they can encode browser/runtime details.
+	protocolError func(error)
+	// beforeFinalClickHitTest is a test-only race seam used to prove that the
+	// final geometry/ancestry check follows the last semantic target query.
+	beforeFinalClickHitTest func(context.Context) error
 }
 
 // New validates the explicit local browser runtime. The caller is expected to
@@ -81,7 +102,7 @@ func New(cfg Config) (*ChromiumInspector, error) {
 // Inspect loads a single allowed page in a temporary profile, returns bounded
 // text evidence, and removes the profile before returning. It does not expose
 // click, typing, upload, download, clipboard, or arbitrary JavaScript actions.
-func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (InspectResult, error) {
+func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (result InspectResult, retErr error) {
 	if i == nil || i.executablePath == "" {
 		return InspectResult{}, ErrUnavailable
 	}
@@ -95,15 +116,15 @@ func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (In
 		return InspectResult{}, err
 	}
 
-	profileDir, err := os.MkdirTemp("", "hecate-browser-")
+	profileDir, err := i.createProfileDir("hecate-browser-")
 	if err != nil {
 		return InspectResult{}, ErrInspectionFailed
 	}
-	if err := os.Chmod(profileDir, 0o700); err != nil {
-		_ = os.RemoveAll(profileDir)
-		return InspectResult{}, ErrInspectionFailed
-	}
-	defer os.RemoveAll(profileDir)
+	defer func() {
+		if err := i.removeProfileDir(profileDir); err != nil {
+			retErr = errors.Join(retErr, ErrProfileCleanupFailed)
+		}
+	}()
 
 	lookup := i.lookupIPAddrs
 	if lookup == nil {
@@ -129,7 +150,15 @@ func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (In
 	defer cancelBrowserRoot()
 
 	startupTimeout := browserStartupTimeout(remaining)
-	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(browserRootCtx, chromiumAllocatorOptions(i.executablePath, profileDir, startupTimeout, resolverRules)...)
+	browserProcess, err := startBoundedChromiumProcess(browserRootCtx, i.executablePath, profileDir, startupTimeout, resolverRules, i.protocolError)
+	if err != nil {
+		return InspectResult{}, ErrInspectionFailed
+	}
+	defer browserProcess.stop()
+	allocatorCtx, cancelAllocator, err := boundedBrowserAllocator(browserRootCtx, browserProcess)
+	if err != nil {
+		return InspectResult{}, ErrInspectionFailed
+	}
 	defer cancelAllocator()
 	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx,
 		chromedp.WithBrowserOption(chromedp.WithDialTimeout(startupTimeout)),
@@ -141,20 +170,29 @@ func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (In
 
 	inspectionCtx, cancelInspection := context.WithCancel(browserCtx)
 	defer cancelInspection()
+	// Stop the owned browser process tree before chromedp detaches its target.
+	// Detaching first can resume a Fetch-paused request for a brief window and
+	// let forbidden page traffic escape before the later process teardown.
+	defer browserProcess.stop()
 	browserState := chromedp.FromContext(inspectionCtx)
 	if browserState == nil || browserState.Target == nil || browserState.Browser == nil {
 		return InspectResult{}, ErrInspectionFailed
 	}
-	childTargets := newChildTargetGuard(browserState.Target.TargetID)
-	childTargets.start(inspectionCtx, cancelInspection)
-
 	monitor := newEventMonitor(policy)
-	monitor.start(inspectionCtx, cancelInspection)
+	listenerDrain := newListenerDrain()
+	hardAbortInspection := func() {
+		browserProcess.stop()
+		cancelInspection()
+	}
+	monitor.startWithDrain(inspectionCtx, hardAbortInspection, listenerDrain)
+	childTargets := newChildTargetGuard(browserState.Target.TargetID)
+	childTargets.startWithDrain(inspectionCtx, func() {
+		monitor.failClosed(hardAbortInspection)
+	}, listenerDrain)
 
 	var (
 		currentIndex int64
 		entries      []*page.NavigationEntry
-		nodes        []*accessibility.Node
 	)
 	err = chromedp.Run(inspectionCtx,
 		chromedp.ActionFunc(func(actionCtx context.Context) error {
@@ -209,20 +247,18 @@ func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (In
 			currentIndex, entries, historyErr = page.GetNavigationHistory().Do(actionCtx)
 			return historyErr
 		}),
-		chromedp.ActionFunc(func(actionCtx context.Context) error {
-			root, treeErr := accessibility.GetRootAXNode().Do(actionCtx)
-			if treeErr != nil {
-				return treeErr
-			}
-			if root != nil {
-				nodes = []*accessibility.Node{root}
-			}
-			return nil
-		}),
 	)
+	var accessibilityEvidence []AccessibilityNode
+	var accessibilityTruncated bool
+	if err == nil {
+		accessibilityEvidence, accessibilityTruncated, err = collectFlowAccessibility(inspectionCtx, maxAccessibilityNodes)
+	}
+	listenerDrain.stop()
+	browserProcess.stop()
 	cancelInspection()
+	listenerDrain.wait()
 	monitor.wait()
-	if err != nil {
+	if err != nil || monitor.failureWasObserved() || browserProcess.terminalFailureWasObserved() {
 		return InspectResult{}, ErrInspectionFailed
 	}
 
@@ -231,13 +267,77 @@ func (i *ChromiumInspector) Inspect(ctx context.Context, req InspectRequest) (In
 		return InspectResult{}, ErrOriginNotAllowed
 	}
 	return InspectResult{
-		FinalURL:      RedactURL(finalURL),
-		FinalOrigin:   originFromRawURL(finalURL),
-		Title:         SanitizeEvidenceText(title),
-		Accessibility: summarizeAccessibility(nodes),
-		Console:       monitor.consoleMessages(),
-		Network:       monitor.networkSummary(),
+		FinalURL:               RedactURL(finalURL),
+		FinalOrigin:            originFromRawURL(finalURL),
+		Title:                  SanitizeEvidenceText(title),
+		Accessibility:          accessibilityEvidence,
+		AccessibilityTruncated: accessibilityTruncated,
+		Console:                monitor.consoleMessages(),
+		Network:                monitor.networkSummary(),
 	}, nil
+}
+
+func (i *ChromiumInspector) removeProfileDir(path string) error {
+	remove := os.RemoveAll
+	if i != nil && i.removeProfile != nil {
+		remove = i.removeProfile
+	}
+	const attempts = 3
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err = remove(path); err == nil {
+			return nil
+		}
+		if attempt+1 < attempts {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	return err
+}
+
+func (i *ChromiumInspector) createProfileDir(prefix string) (string, error) {
+	base := ""
+	if i != nil {
+		base = i.profileRoot
+	}
+	if strings.TrimSpace(base) == "" {
+		base = os.TempDir()
+	}
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", ErrInspectionFailed
+	}
+	absBase = filepath.Clean(absBase)
+	inspector, err := localfs.NewInspector()
+	if err != nil || inspector.EnsurePath(absBase) != nil {
+		return "", ErrInspectionFailed
+	}
+	resolvedBase, err := filepath.EvalSymlinks(absBase)
+	if err != nil || inspector.EnsurePath(resolvedBase) != nil {
+		return "", ErrInspectionFailed
+	}
+	profileDir, err := os.MkdirTemp(resolvedBase, prefix)
+	if err != nil {
+		return "", ErrInspectionFailed
+	}
+	cleanup := func() (string, error) {
+		_ = os.RemoveAll(profileDir)
+		return "", ErrInspectionFailed
+	}
+	if err := os.Chmod(profileDir, 0o700); err != nil {
+		return cleanup()
+	}
+	handle, err := os.Open(profileDir)
+	if err != nil {
+		return cleanup()
+	}
+	info, statErr := handle.Stat()
+	filesystemErr := localfs.EnsureBoundedFile(handle)
+	closeErr := handle.Close()
+	if statErr != nil || filesystemErr != nil || closeErr != nil || info == nil || !info.IsDir() {
+		return cleanup()
+	}
+	return profileDir, nil
 }
 
 // browserNetworkBlockPatterns provides a second browser-level origin gate in
@@ -279,13 +379,21 @@ func newChildTargetGuard(primary target.ID) *childTargetGuard {
 }
 
 func (g *childTargetGuard) start(ctx context.Context, abort func()) {
-	chromedp.ListenBrowser(ctx, func(event any) {
+	g.startWithDrain(ctx, abort, nil)
+}
+
+func (g *childTargetGuard) startWithDrain(ctx context.Context, abort func(), drain *listenerDrain) {
+	listener := func(event any) {
 		if g.observe(event) {
 			// Browser listeners run on Chromium's event path. Cancellation is
 			// non-blocking and keeps the paused child from receiving any CDP work.
 			g.once.Do(abort)
 		}
-	})
+	}
+	if drain != nil {
+		listener = drain.wrap(listener)
+	}
+	chromedp.ListenBrowser(ctx, listener)
 }
 
 func (g *childTargetGuard) observe(event any) bool {
@@ -299,34 +407,6 @@ func autoAttachRelatedTargets(ctx context.Context, primary target.ID) error {
 		return ErrInspectionFailed
 	}
 	return target.AutoAttachRelated(primary, true).Do(cdp.WithExecutor(ctx, browserState.Browser))
-}
-
-func chromiumAllocatorOptions(executablePath, profileDir string, startupTimeout time.Duration, resolverRules string) []chromedp.ExecAllocatorOption {
-	// Do not add --no-sandbox. Hecate's local runtime must preserve Chromium's
-	// normal process sandbox when the host platform supports it.
-	options := []chromedp.ExecAllocatorOption{
-		chromedp.ExecPath(executablePath),
-		chromedp.UserDataDir(profileDir),
-		chromedp.WSURLReadTimeout(startupTimeout),
-		chromedp.Flag("headless", true),
-		chromedp.Flag("no-first-run", true),
-		chromedp.Flag("no-default-browser-check", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-component-update", true),
-		chromedp.Flag("deny-permission-prompts", true),
-		chromedp.Flag("no-proxy-server", true),
-		// chromedp otherwise adds --no-sandbox automatically when its host
-		// process is root. Suppress that fallback explicitly; the runtime must
-		// not weaken Chromium's normal sandbox.
-		chromedp.Flag("no-sandbox", false),
-		chromedp.Flag("use-mock-keychain", true),
-	}
-	if resolverRules != "" {
-		options = append(options, chromedp.Flag("host-resolver-rules", resolverRules))
-	}
-	return options
 }
 
 func browserStartupTimeout(timeout time.Duration) time.Duration {
@@ -361,42 +441,38 @@ func originFromRawURL(raw string) string {
 	return origin
 }
 
-func summarizeAccessibility(nodes []*accessibility.Node) []AccessibilityNode {
-	out := make([]AccessibilityNode, 0, min(len(nodes), maxAccessibilityNodes))
-	for _, node := range nodes {
-		if node == nil || node.Ignored || len(out) >= maxAccessibilityNodes {
-			continue
-		}
-		item := AccessibilityNode{
-			Role:        accessibilityValue(node.Role),
-			Name:        SanitizeEvidenceText(accessibilityValue(node.Name)),
-			Description: SanitizeEvidenceText(accessibilityValue(node.Description)),
-			Value:       SanitizeEvidenceText(accessibilityValue(node.Value)),
-		}
-		if item.Role == "" && item.Name == "" && item.Description == "" && item.Value == "" {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
 func accessibilityValue(value *accessibility.Value) string {
 	if value == nil {
 		return ""
 	}
-	return value.Value.String()
+	var decoded any
+	if err := json.Unmarshal([]byte(value.Value), &decoded); err != nil {
+		return ""
+	}
+	switch value := decoded.(type) {
+	case string:
+		return value
+	case bool:
+		return strconv.FormatBool(value)
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	default:
+		return ""
+	}
 }
 
 // SanitizeEvidenceText makes page-controlled text safe for bounded task
 // evidence. It removes common credential-bearing URL fragments and oversized
 // binary-looking payloads before they reach a model, artifact, or trace.
 func SanitizeEvidenceText(value string) string {
-	value = strings.TrimSpace(strings.ToValidUTF8(value, "�"))
+	if len(value) > maxEvidenceInputBytes {
+		value = value[:maxEvidenceInputBytes]
+	}
+	value = normalizeEvidenceLine(strings.ToValidUTF8(value, "�"))
 	if value == "" {
 		return ""
 	}
-	value = safetext.SanitizeErrorMessage(value)
+	value = normalizeEvidenceLine(safetext.SanitizeErrorMessage(value))
 	if len(value) <= maxEvidenceTextBytes {
 		return value
 	}
@@ -406,6 +482,73 @@ func SanitizeEvidenceText(value string) string {
 		value = value[:len(value)-1]
 	}
 	return value + ellipsis
+}
+
+// normalizeEvidenceLine removes terminal/HTML direction controls and other
+// format/control code points from page-owned text. Whitespace, including line
+// breaks, is collapsed to one ASCII space so a title or accessibility label
+// cannot forge a new evidence record when rendered as plain text.
+func normalizeEvidenceLine(value string) string {
+	var out strings.Builder
+	out.Grow(len(value))
+	pendingSpace := false
+	for _, r := range value {
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			// Drop bidi and other invisible format controls rather than retaining
+			// page-selected display direction in operator/model evidence.
+			continue
+		case unicode.IsSpace(r):
+			pendingSpace = out.Len() > 0
+			continue
+		case unicode.IsControl(r):
+			continue
+		}
+		if pendingSpace {
+			out.WriteByte(' ')
+			pendingSpace = false
+		}
+		out.WriteRune(r)
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// listenerDrain makes the terminal security decision ordered after every
+// flow listener that was admitted before teardown. stop closes admission
+// under the same mutex used by wrap; callers then cancel Chromium contexts,
+// wait, and only afterwards read policy/failure state.
+type listenerDrain struct {
+	mu        sync.Mutex
+	accepting bool
+	wg        sync.WaitGroup
+}
+
+func newListenerDrain() *listenerDrain {
+	return &listenerDrain{accepting: true}
+}
+
+func (d *listenerDrain) wrap(listener func(any)) func(any) {
+	return func(event any) {
+		d.mu.Lock()
+		if !d.accepting {
+			d.mu.Unlock()
+			return
+		}
+		d.wg.Add(1)
+		d.mu.Unlock()
+		defer d.wg.Done()
+		listener(event)
+	}
+}
+
+func (d *listenerDrain) stop() {
+	d.mu.Lock()
+	d.accepting = false
+	d.mu.Unlock()
+}
+
+func (d *listenerDrain) wait() {
+	d.wg.Wait()
 }
 
 type pausedRequest struct {
@@ -419,18 +562,33 @@ type eventMonitor struct {
 	mu     sync.Mutex
 	wg     sync.WaitGroup
 	abort  sync.Once
+	// abortOnBlocked is enabled only for interactive flows. Static inspection
+	// may report blocked passive subresources, while a flow must stop as soon as
+	// page behavior attempts an unapproved origin or method.
+	abortOnBlocked bool
 
 	network               NetworkSummary
 	console               []ConsoleMessage
 	responseBytes         int64
 	responseLimitExceeded bool
+	policyViolated        bool
+	failureObserved       bool
+	blockedRequestIDs     map[network.RequestID]struct{}
 }
 
 func newEventMonitor(policy requestPolicy) *eventMonitor {
-	return &eventMonitor{policy: policy, paused: make(chan pausedRequest, maxPausedRequests)}
+	return &eventMonitor{policy: policy, paused: make(chan pausedRequest, maxPausedRequests), blockedRequestIDs: make(map[network.RequestID]struct{})}
+}
+
+func newFlowEventMonitor(policy requestPolicy) *eventMonitor {
+	return &eventMonitor{policy: policy, paused: make(chan pausedRequest, maxPausedRequests), abortOnBlocked: true, blockedRequestIDs: make(map[network.RequestID]struct{})}
 }
 
 func (m *eventMonitor) start(ctx context.Context, abort func()) {
+	m.startWithDrain(ctx, abort, nil)
+}
+
+func (m *eventMonitor) startWithDrain(ctx context.Context, abort func(), drain *listenerDrain) {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -454,9 +612,13 @@ func (m *eventMonitor) start(ctx context.Context, abort func()) {
 			}
 		}
 	}()
-	chromedp.ListenTarget(ctx, func(event any) {
+	listener := func(event any) {
 		m.observeEvent(ctx, event, abort)
-	})
+	}
+	if drain != nil {
+		listener = drain.wrap(listener)
+	}
+	chromedp.ListenTarget(ctx, listener)
 }
 
 func (m *eventMonitor) wait() {
@@ -466,9 +628,11 @@ func (m *eventMonitor) wait() {
 func (m *eventMonitor) observeEvent(ctx context.Context, event any, abort func()) {
 	switch event := event.(type) {
 	case *fetch.EventRequestPaused:
-		m.onRequestPaused(ctx, event)
+		m.onRequestPaused(ctx, event, abort)
 	case *network.EventRequestWillBeSent:
-		m.onRequestWillBeSent(event)
+		if m.onRequestWillBeSent(event) {
+			m.failClosed(abort)
+		}
 	case *network.EventDataReceived:
 		if m.onDataReceived(event) {
 			m.failClosed(abort)
@@ -476,29 +640,79 @@ func (m *eventMonitor) observeEvent(ctx context.Context, event any, abort func()
 	case *network.EventResponseReceived:
 		if m.onResponseReceived(event) {
 			m.failClosed(abort)
+		} else if m.onDownloadResponse(event) {
+			m.failClosed(abort)
+		}
+	case *network.EventLoadingFailed:
+		if m.onLoadingFailed(event) {
+			m.failClosed(abort)
 		}
 	case *cdpruntime.EventConsoleAPICalled:
 		m.onConsole(event)
 	}
 }
 
+func (m *eventMonitor) onDownloadResponse(event *network.EventResponseReceived) bool {
+	if event == nil || event.Response == nil || !m.abortOnBlocked || !responseDeclaresDownload(event.Response.Headers) {
+		return false
+	}
+	m.mu.Lock()
+	m.policyViolated = true
+	m.mu.Unlock()
+	return true
+}
+
+func responseDeclaresDownload(headers network.Headers) bool {
+	for name, raw := range headers {
+		if !strings.EqualFold(name, "Content-Disposition") {
+			continue
+		}
+		var value string
+		switch raw := raw.(type) {
+		case string:
+			value = raw
+		case []string:
+			value = strings.Join(raw, ",")
+		default:
+			value = fmt.Sprint(raw)
+		}
+		return strings.Contains(strings.ToLower(value), "attachment")
+	}
+	return false
+}
+
 func (m *eventMonitor) failClosed(abort func()) {
+	m.mu.Lock()
+	m.failureObserved = true
+	m.mu.Unlock()
 	if abort == nil {
 		return
 	}
 	m.abort.Do(abort)
 }
 
-func (m *eventMonitor) onRequestPaused(ctx context.Context, event *fetch.EventRequestPaused) {
+func (m *eventMonitor) onRequestPaused(ctx context.Context, event *fetch.EventRequestPaused, abort func()) {
 	if event == nil || event.Request == nil {
 		return
 	}
 	allow := m.policy.allowsRequest(event.Request.URL, event.Request.Method)
 	m.mu.Lock()
 	if !allow {
-		m.network.BlockedRequests++
+		if event.NetworkID == "" {
+			m.network.BlockedRequests++
+		} else if _, seen := m.blockedRequestIDs[event.NetworkID]; !seen {
+			m.blockedRequestIDs[event.NetworkID] = struct{}{}
+			m.network.BlockedRequests++
+		}
+		if m.abortOnBlocked {
+			m.policyViolated = true
+		}
 	}
+	abortOnBlocked := !allow && m.abortOnBlocked
 	m.mu.Unlock()
+	if abortOnBlocked {
+		m.failClosed(abort)
+	}
 	// chromedp dispatches listeners synchronously. Queue the reply for one
 	// bounded worker rather than blocking the CDP event loop or spawning an
 	// unbounded goroutine for hostile pages. A full queue intentionally leaves
@@ -513,9 +727,26 @@ func (m *eventMonitor) onRequestPaused(ctx context.Context, event *fetch.EventRe
 	}
 }
 
-func (m *eventMonitor) onRequestWillBeSent(event *network.EventRequestWillBeSent) {
+func (m *eventMonitor) onLoadingFailed(event *network.EventLoadingFailed) bool {
+	if event == nil || event.BlockedReason != network.BlockedReasonInspector {
+		return false
+	}
+	m.mu.Lock()
+	if _, seen := m.blockedRequestIDs[event.RequestID]; !seen {
+		m.blockedRequestIDs[event.RequestID] = struct{}{}
+		m.network.BlockedRequests++
+	}
+	if m.abortOnBlocked {
+		m.policyViolated = true
+	}
+	abort := m.abortOnBlocked
+	m.mu.Unlock()
+	return abort
+}
+
+func (m *eventMonitor) onRequestWillBeSent(event *network.EventRequestWillBeSent) bool {
 	if event == nil {
-		return
+		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -523,6 +754,7 @@ func (m *eventMonitor) onRequestWillBeSent(event *network.EventRequestWillBeSent
 	if event.Type == network.ResourceTypeDocument {
 		m.network.Navigations++
 	}
+	return m.network.Requests > maxObservedRequests
 }
 
 // onDataReceived accounts every response chunk instead of trusting a
@@ -649,4 +881,22 @@ func (m *eventMonitor) consoleMessages() []ConsoleMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]ConsoleMessage(nil), m.console...)
+}
+
+func (m *eventMonitor) markPolicyViolation() {
+	m.mu.Lock()
+	m.policyViolated = true
+	m.mu.Unlock()
+}
+
+func (m *eventMonitor) policyWasViolated() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.policyViolated
+}
+
+func (m *eventMonitor) failureWasObserved() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failureObserved
 }

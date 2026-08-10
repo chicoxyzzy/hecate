@@ -25,6 +25,7 @@ function preset(overrides: Partial<AgentPresetRecord> = {}): AgentPresetRecord {
     tools_enabled: true,
     writes_allowed: false,
     network_allowed: false,
+    browser_interactions_allowed: false,
     approval_policy: "inherit",
     project_memory_policy: "inherit",
     context_source_policy: "inherit",
@@ -141,7 +142,7 @@ describe("AgentPresetsModal", () => {
     );
   });
 
-  it("requires exact origins before saving browser evidence and clears them when disabled", async () => {
+  it("shares exact origins between browser grants and clears them after the last grant", async () => {
     const onCreate = vi.fn(async (form) => preset({ id: form.id, name: form.name }));
 
     render(
@@ -161,7 +162,7 @@ describe("AgentPresetsModal", () => {
 
     await userEvent.type(screen.getByLabelText("Policy ID"), "browser-review");
     await userEvent.type(screen.getByLabelText("Name"), "Browser review");
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow static browser evidence"));
 
     expect(screen.getByLabelText("Allowed browser origins")).toBeInTheDocument();
     expect(screen.getByText(/Add at least one exact origin/i)).toHaveAttribute("role", "alert");
@@ -171,9 +172,14 @@ describe("AgentPresetsModal", () => {
       screen.getByLabelText("Allowed browser origins"),
       "https://app.example.test",
     );
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
+    await userEvent.click(screen.getByLabelText("Allow static browser evidence"));
+    expect(screen.getByLabelText("Allowed browser origins")).toHaveValue(
+      "https://app.example.test",
+    );
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
     expect(screen.queryByLabelText("Allowed browser origins")).toBeNull();
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
     expect(screen.getByLabelText("Allowed browser origins")).toHaveValue("");
     await userEvent.type(
       screen.getByLabelText("Allowed browser origins"),
@@ -183,7 +189,8 @@ describe("AgentPresetsModal", () => {
 
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        browserAllowed: true,
+        browserAllowed: false,
+        browserInteractionsAllowed: true,
         browserAllowedOrigins: "https://app.example.test",
       }),
     );
@@ -213,7 +220,7 @@ describe("AgentPresetsModal", () => {
 
     await userEvent.type(screen.getByLabelText("Policy ID"), "browser-review");
     await userEvent.type(screen.getByLabelText("Name"), "Browser review");
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
     await userEvent.type(
       screen.getByLabelText("Allowed browser origins"),
       "https://app.example.test/",
@@ -243,7 +250,7 @@ describe("AgentPresetsModal", () => {
 
     await userEvent.type(screen.getByLabelText("Policy ID"), "browser-review");
     await userEvent.type(screen.getByLabelText("Name"), "Browser review");
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow static browser evidence"));
     const origins = screen.getByLabelText("Allowed browser origins");
     await userEvent.type(origins, "https://operator:secret@app.example.test/path?token=secret");
 
@@ -256,7 +263,7 @@ describe("AgentPresetsModal", () => {
     expect(screen.getByRole("button", { name: "Create policy" })).toBeEnabled();
   });
 
-  it("keeps browser evidence unavailable for an external-agent-only preset", async () => {
+  it("clears browser capabilities for an external-agent-only preset", async () => {
     render(
       <AgentPresetsModal
         error=""
@@ -272,14 +279,24 @@ describe("AgentPresetsModal", () => {
       />,
     );
 
+    await userEvent.click(screen.getByLabelText("Allow static browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
+    await userEvent.type(
+      screen.getByLabelText("Allowed browser origins"),
+      "https://app.example.test",
+    );
     await userEvent.selectOptions(screen.getByLabelText("Applies to"), "external_agent");
-    expect(screen.getByLabelText("Allow browser evidence")).toBeDisabled();
+    expect(screen.getByLabelText("Allow static browser evidence")).toBeDisabled();
+    expect(screen.getByLabelText("Allow static browser evidence")).not.toBeChecked();
+    expect(screen.getByLabelText("Allow browser interaction")).toBeDisabled();
+    expect(screen.getByLabelText("Allow browser interaction")).not.toBeChecked();
+    expect(screen.queryByLabelText("Allowed browser origins")).toBeNull();
     expect(
-      screen.getByText(/External Agents and Hecate Chat do not receive browser evidence/i),
+      screen.getByText(/External Agents and Hecate Chat do not receive either browser capability/i),
     ).toBeInTheDocument();
   });
 
-  it("clears browser evidence when tools are disabled", async () => {
+  it("clears both browser grants when tools are disabled", async () => {
     render(
       <AgentPresetsModal
         error=""
@@ -295,16 +312,20 @@ describe("AgentPresetsModal", () => {
       />,
     );
 
-    await userEvent.click(screen.getByLabelText("Allow browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow static browser evidence"));
+    await userEvent.click(screen.getByLabelText("Allow browser interaction"));
     await userEvent.type(
       screen.getByLabelText("Allowed browser origins"),
       "https://app.example.test",
     );
     await userEvent.click(screen.getByLabelText("Allow tools"));
 
-    expect(screen.getByLabelText("Allow browser evidence")).toBeDisabled();
+    expect(screen.getByLabelText("Allow static browser evidence")).toBeDisabled();
+    expect(screen.getByLabelText("Allow browser interaction")).toBeDisabled();
     expect(screen.queryByLabelText("Allowed browser origins")).toBeNull();
-    expect(screen.getByText(/Enable Tools to configure browser evidence/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Select Allow tools to configure browser capabilities/i),
+    ).toBeInTheDocument();
   });
 
   it("shows built-in presets as read-only", () => {

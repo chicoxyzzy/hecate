@@ -28,9 +28,14 @@ const (
 	projectAssignmentLaunchReadinessStatusReady   = "ready"
 	projectAssignmentLaunchReadinessStatusBlocked = "blocked"
 
-	projectAssignmentBrowserEvidenceStatusEnabled       = "enabled"
-	projectAssignmentBrowserEvidenceStatusDisabled      = "disabled"
-	projectAssignmentBrowserEvidenceStatusNotApplicable = "not_applicable"
+	projectAssignmentBrowserEvidenceStatusEnabled          = "enabled"
+	projectAssignmentBrowserEvidenceStatusDisabled         = "disabled"
+	projectAssignmentBrowserEvidenceStatusUnavailable      = "unavailable"
+	projectAssignmentBrowserEvidenceStatusNotApplicable    = "not_applicable"
+	projectAssignmentBrowserInteractionStatusEnabled       = "enabled"
+	projectAssignmentBrowserInteractionStatusDisabled      = "disabled"
+	projectAssignmentBrowserInteractionStatusUnavailable   = "unavailable"
+	projectAssignmentBrowserInteractionStatusNotApplicable = "not_applicable"
 )
 
 type ProjectAssignmentLaunchReadinessEnvelope struct {
@@ -72,15 +77,18 @@ type ProjectAssignmentLaunchProfilePostureResponseItem struct {
 	ToolsEnabled   bool   `json:"tools_enabled"`
 	WritesAllowed  bool   `json:"writes_allowed"`
 	NetworkAllowed bool   `json:"network_allowed"`
-	// Browser evidence is Hecate-native task-only. External Agent readiness
-	// deliberately reports not_applicable rather than exposing an Agent Preset
-	// capability that its adapter will never receive.
-	BrowserEvidenceStatus string   `json:"browser_evidence_status"`
-	BrowserAllowed        bool     `json:"browser_allowed"`
-	BrowserAllowedOrigins []string `json:"browser_allowed_origins,omitempty"`
-	ApprovalPolicy        string   `json:"approval_policy,omitempty"`
-	ProjectMemoryPolicy   string   `json:"project_memory_policy,omitempty"`
-	ContextSourcePolicy   string   `json:"context_source_policy,omitempty"`
+	// Browser capabilities are Hecate-native task-only. External Agent
+	// readiness deliberately reports not_applicable rather than exposing
+	// Agent Preset capabilities that its adapter will never receive.
+	BrowserEvidenceStatus      string                                   `json:"browser_evidence_status"`
+	BrowserAllowed             bool                                     `json:"browser_allowed"`
+	BrowserInteractionStatus   string                                   `json:"browser_interaction_status"`
+	BrowserInteractionsAllowed bool                                     `json:"browser_interactions_allowed"`
+	BrowserAllowedOrigins      []string                                 `json:"browser_allowed_origins,omitempty"`
+	BrowserRuntimeReadiness    *BrowserEvidenceRuntimeReadinessResponse `json:"browser_runtime_readiness,omitempty"`
+	ApprovalPolicy             string                                   `json:"approval_policy,omitempty"`
+	ProjectMemoryPolicy        string                                   `json:"project_memory_policy,omitempty"`
+	ContextSourcePolicy        string                                   `json:"context_source_policy,omitempty"`
 }
 
 func (h *Handler) HandleProjectWorkAssignmentLaunchReadiness(w http.ResponseWriter, r *http.Request) {
@@ -509,8 +517,11 @@ func (h *Handler) populateTaskAssignmentLaunchReadiness(ctx context.Context, pro
 	readiness.Provider = plan.RequestedProvider
 	readiness.Model = plan.RequestedModel
 	readiness.ExecutionProfile = plan.ExecutionProfile
-	readiness.ProfilePosture = renderProjectAssignmentLaunchProfilePosture(plan.Profile, projectwork.AssignmentDriverHecateTask)
+	readiness.ProfilePosture = renderProjectAssignmentLaunchProfilePosture(plan.Profile, projectwork.AssignmentDriverHecateTask, h.browserEvidenceReadiness)
 	readiness.Warnings = append(readiness.Warnings, projectAssignmentLaunchPlanWarnings(plan.Profile, plan.ResolvedSkills)...)
+	if warning := projectAssignmentBrowserRuntimeWarning(plan.Profile, h.browserEvidenceReadiness); warning != "" {
+		readiness.Warnings = append(readiness.Warnings, warning)
+	}
 	if h.service == nil {
 		return nil
 	}
@@ -536,7 +547,7 @@ func (h *Handler) populateExternalAgentAssignmentLaunchReadiness(ctx context.Con
 	readiness.RootID = plan.Root.ID
 	readiness.RootPath = plan.Root.Path
 	readiness.ExecutionProfile = plan.ExecutionProfile
-	readiness.ProfilePosture = renderProjectAssignmentLaunchProfilePosture(plan.Profile, projectwork.AssignmentDriverExternalAgent)
+	readiness.ProfilePosture = renderProjectAssignmentLaunchProfilePosture(plan.Profile, projectwork.AssignmentDriverExternalAgent, BrowserEvidenceRuntimeReadinessResponse{})
 	readiness.ExternalAgentID = plan.AdapterID
 	readiness.ExternalAgent = firstNonEmptyString(plan.Adapter.Name, plan.AdapterID)
 	readiness.SessionTitle = plan.SessionTitle
@@ -546,31 +557,83 @@ func (h *Handler) populateExternalAgentAssignmentLaunchReadiness(ctx context.Con
 	return nil
 }
 
-func renderProjectAssignmentLaunchProfilePosture(profile projectworkapp.ResolvedAgentProfile, driverKind string) *ProjectAssignmentLaunchProfilePostureResponseItem {
+func renderProjectAssignmentLaunchProfilePosture(profile projectworkapp.ResolvedAgentProfile, driverKind string, browserRuntime BrowserEvidenceRuntimeReadinessResponse) *ProjectAssignmentLaunchProfilePostureResponseItem {
 	item := &ProjectAssignmentLaunchProfilePostureResponseItem{
-		ID:                    profile.ID,
-		Name:                  profile.Name,
-		Source:                profile.Source,
-		Missing:               profile.Missing,
-		ToolsEnabled:          profile.ToolsEnabled,
-		WritesAllowed:         profile.WritesAllowed,
-		NetworkAllowed:        profile.NetworkAllowed,
-		BrowserEvidenceStatus: projectAssignmentBrowserEvidenceStatusNotApplicable,
-		ApprovalPolicy:        profile.ApprovalPolicy,
-		ProjectMemoryPolicy:   profile.ProjectMemoryPolicy,
-		ContextSourcePolicy:   profile.ContextSourcePolicy,
+		ID:                       profile.ID,
+		Name:                     profile.Name,
+		Source:                   profile.Source,
+		Missing:                  profile.Missing,
+		ToolsEnabled:             profile.ToolsEnabled,
+		WritesAllowed:            profile.WritesAllowed,
+		NetworkAllowed:           profile.NetworkAllowed,
+		BrowserEvidenceStatus:    projectAssignmentBrowserEvidenceStatusNotApplicable,
+		BrowserInteractionStatus: projectAssignmentBrowserInteractionStatusNotApplicable,
+		ApprovalPolicy:           profile.ApprovalPolicy,
+		ProjectMemoryPolicy:      profile.ProjectMemoryPolicy,
+		ContextSourcePolicy:      profile.ContextSourcePolicy,
 	}
 	if driverKind != projectwork.AssignmentDriverHecateTask {
 		return item
 	}
 	item.BrowserEvidenceStatus = projectAssignmentBrowserEvidenceStatusDisabled
-	if !profile.BrowserAllowed {
-		return item
+	item.BrowserInteractionStatus = projectAssignmentBrowserInteractionStatusDisabled
+	item.BrowserAllowed = profile.BrowserAllowed
+	item.BrowserInteractionsAllowed = profile.BrowserInteractionsAllowed
+	if profile.BrowserAllowed || profile.BrowserInteractionsAllowed {
+		item.BrowserAllowedOrigins = append([]string(nil), profile.BrowserAllowedOrigins...)
+		runtimeReadiness := normalizedProjectAssignmentBrowserRuntimeReadiness(browserRuntime)
+		item.BrowserRuntimeReadiness = &runtimeReadiness
 	}
-	item.BrowserEvidenceStatus = projectAssignmentBrowserEvidenceStatusEnabled
-	item.BrowserAllowed = true
-	item.BrowserAllowedOrigins = append([]string(nil), profile.BrowserAllowedOrigins...)
+	if profile.BrowserAllowed {
+		item.BrowserEvidenceStatus = projectAssignmentBrowserEvidenceStatusUnavailable
+		if browserRuntime.Available {
+			item.BrowserEvidenceStatus = projectAssignmentBrowserEvidenceStatusEnabled
+		}
+	}
+	if profile.BrowserInteractionsAllowed {
+		item.BrowserInteractionStatus = projectAssignmentBrowserInteractionStatusUnavailable
+		if browserRuntime.Available {
+			item.BrowserInteractionStatus = projectAssignmentBrowserInteractionStatusEnabled
+		}
+	}
 	return item
+}
+
+func normalizedProjectAssignmentBrowserRuntimeReadiness(readiness BrowserEvidenceRuntimeReadinessResponse) BrowserEvidenceRuntimeReadinessResponse {
+	if readiness.Available {
+		readiness.Status = firstNonEmptyString(strings.TrimSpace(readiness.Status), "ready")
+		readiness.Message = firstNonEmptyString(strings.TrimSpace(readiness.Message), "The native browser runtime is ready on this local runtime.")
+		return readiness
+	}
+	readiness.Status = firstNonEmptyString(strings.TrimSpace(readiness.Status), "unavailable")
+	readiness.Message = firstNonEmptyString(strings.TrimSpace(readiness.Message), "The native browser runtime is unavailable on this runtime.")
+	return readiness
+}
+
+func projectAssignmentBrowserRuntimeWarning(profile projectworkapp.ResolvedAgentProfile, runtimeReadiness BrowserEvidenceRuntimeReadinessResponse) string {
+	if runtimeReadiness.Available {
+		return ""
+	}
+	tools := make([]string, 0, 2)
+	if profile.BrowserAllowed {
+		tools = append(tools, "browser_inspect")
+	}
+	if profile.BrowserInteractionsAllowed {
+		tools = append(tools, "browser_flow")
+	}
+	if len(tools) == 0 {
+		return ""
+	}
+	readiness := normalizedProjectAssignmentBrowserRuntimeReadiness(runtimeReadiness)
+	verb := "is"
+	if len(tools) > 1 {
+		verb = "are"
+	}
+	warning := strings.Join(tools, " and ") + " " + verb + " enabled by the resolved Agent Preset but will be omitted on this runtime. " + readiness.Message
+	if action := strings.TrimSpace(readiness.OperatorAction); action != "" {
+		warning += " " + action
+	}
+	return warning
 }
 
 func projectAssignmentLaunchPlanBlocker(err error) string {

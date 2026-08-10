@@ -15,6 +15,7 @@ import (
 type agentLoopApprovalGate struct {
 	gatedTools                 map[string]struct{}
 	browserInspectionAvailable bool
+	browserFlowAvailable       bool
 }
 
 type agentLoopApprovalPause struct {
@@ -87,6 +88,9 @@ func (g agentLoopApprovalGate) isGated(call types.ToolCall, spec ExecutionSpec) 
 	if toolName == AgentToolBrowserInspect {
 		return g.browserInspectionAvailable && browserInspectionCallAllowed(task, call)
 	}
+	if toolName == AgentToolBrowserFlow {
+		return g.browserFlowAvailable && browserFlowCallAllowed(task, call)
+	}
 	if g.requiresExplicitApproval(toolName) {
 		return true
 	}
@@ -122,6 +126,18 @@ func browserInspectionCallAllowed(task types.Task, call types.ToolCall) bool {
 	return false
 }
 
+func browserFlowCallAllowed(task types.Task, call types.ToolCall) bool {
+	if agentPresetBlocksBrowser(task, AgentToolBrowserFlow) {
+		return false
+	}
+	args, _, err := decodeBrowserFlowArgs(call.Function.Arguments)
+	if err != nil {
+		return false
+	}
+	origin, err := browserrunner.InspectionOriginForURL(args.URL)
+	return err == nil && browserFlowOriginAllowed(task, origin)
+}
+
 func browserApprovalDetail(calls []types.ToolCall, task types.Task) string {
 	targets := make(map[string]struct{})
 	inspections := 0
@@ -136,19 +152,29 @@ func browserApprovalDetail(calls []types.ToolCall, task types.Task) string {
 		inspections++
 		targets[browserInspectionApprovalTarget(args)] = struct{}{}
 	}
-	if inspections == 0 {
-		return ""
+	details := make([]string, 0, 2)
+	if inspections > 0 {
+		values := make([]string, 0, len(targets))
+		for target := range targets {
+			values = append(values, target)
+		}
+		sort.Strings(values)
+		pageNoun := "page"
+		if inspections != 1 {
+			pageNoun = "pages"
+		}
+		details = append(details, fmt.Sprintf("Browser evidence is read-only static inspection and will inspect %d requested %s in fresh temporary browser profiles: %s; page scripts and service workers are disabled, and it cannot click, type, upload, download, use saved browser state, or access clipboard/device permissions. A temporary profile is not a hard identity or network boundary: OS or enterprise browser policy can still provide authentication or client certificates", inspections, pageNoun, strings.Join(values, ", ")))
 	}
-	values := make([]string, 0, len(targets))
-	for target := range targets {
-		values = append(values, target)
+	for _, call := range calls {
+		if call.Function.Name != AgentToolBrowserFlow || !browserFlowCallAllowed(task, call) {
+			continue
+		}
+		args, _, err := decodeBrowserFlowArgs(call.Function.Arguments)
+		if err == nil {
+			details = append(details, browserFlowApprovalDetail(args))
+		}
 	}
-	sort.Strings(values)
-	pageNoun := "page"
-	if inspections != 1 {
-		pageNoun = "pages"
-	}
-	return fmt.Sprintf("Browser evidence is read-only static inspection and will inspect %d requested %s in fresh temporary browser profiles: %s; page scripts and service workers are disabled, and it cannot click, type, upload, download, use saved browser state, or access clipboard/device permissions. A temporary profile is not a hard identity or network boundary: OS or enterprise browser policy can still provide authentication or client certificates", inspections, pageNoun, strings.Join(values, ", "))
+	return strings.Join(details, ". ")
 }
 
 func mcpServerPolicy(toolName string, task types.Task) string {

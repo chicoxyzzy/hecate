@@ -116,6 +116,22 @@ Each section has exactly one job: orient, inspect, compare, edit, or confirm. If
 - Do not add auth, tenant, or account-management UI unless the product model
   changes again.
 - Provider and model selection exposes local and cloud distinctions clearly.
+- Keep native browser permissions explicit and independent in Work policies:
+  **static browser evidence** does not interact with pages, while **browser
+  interaction** permits only an approval-gated flow of up to six click or wait
+  actions that exactly match an accessible role and name. Both permissions
+  share the preset's exact origin list, so preserve that list while either
+  permission remains enabled and clear all browser posture when tools or the
+  native-task surface is disabled. Explain that the complete flow is approved
+  before a fresh temporary browser starts; clicks can run page scripts and may
+  change state in the allowed app; interaction does not grant typing, uploads,
+  downloads, saved state, clipboard/device access, cross-origin navigation, or
+  general task network access; and External Agents and Hecate Chat do not
+  receive these capabilities. Render the frozen interaction grant separately
+  in assignment launch posture and Task detail; do not infer it from an absent
+  legacy field. Retained `browser_flow_evidence` is untrusted text evidence
+  with a dedicated collapsed panel, not a screenshot or retained browser
+  profile.
 - In Chats, use the shared agent-picker shell. **Hecate** is the built-in
   choice and owns provider/model selection; its tools toggle switches between
   direct model chat and Hecate-owned task execution. Codex, Claude Code,

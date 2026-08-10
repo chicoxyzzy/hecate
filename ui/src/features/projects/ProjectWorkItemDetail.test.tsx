@@ -227,7 +227,15 @@ function launchReadiness(
       network_allowed: false,
       browser_evidence_status: "enabled",
       browser_allowed: true,
+      browser_interaction_status: "enabled",
+      browser_interactions_allowed: true,
       browser_allowed_origins: ["https://qa.example.test"],
+      browser_runtime_readiness: {
+        available: true,
+        status: "ready",
+        message:
+          "The native browser runtime is ready on this local runtime for static evidence and approved interaction.",
+      },
       approval_policy: "require",
       project_memory_policy: "include",
       context_source_policy: "include_enabled",
@@ -1272,13 +1280,103 @@ describe("ProjectWorkItemDetail", () => {
       "assign_1",
     );
     expect(await within(readiness).findByText("ready")).toBeTruthy();
+    expect(readiness).toHaveAttribute("aria-busy", "false");
+    expect(within(readiness).getByRole("status")).toHaveTextContent(
+      "Assignment launch readiness: ready. Launch checks are clear.",
+    );
     expect(within(readiness).getByText("Hecate task")).toBeTruthy();
     expect(within(readiness).getByText("/workspace/hecate")).toBeTruthy();
     expect(within(readiness).getByText("openai / gpt-5")).toBeTruthy();
     expect(within(readiness).getByText("implementation")).toBeTruthy();
     expect(within(readiness).getByText("tools on · writes on · network off")).toBeTruthy();
     expect(within(readiness).getByText("Enabled · https://qa.example.test")).toBeTruthy();
+    expect(
+      within(readiness).getByText(
+        "Enabled · approval-gated · up to six exact accessible-role/name click or wait actions · https://qa.example.test",
+      ),
+    ).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("announces launch-readiness loading and the first returned warning", async () => {
+    let resolveReadiness!: (
+      value: Awaited<ReturnType<typeof getProjectAssignmentLaunchReadiness>>,
+    ) => void;
+    getProjectAssignmentLaunchReadinessMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveReadiness = resolve;
+      }),
+    );
+    renderDetail();
+
+    await userEvent.click(screen.getByText("Execution details"));
+    const readiness = screen.getByRole("region", {
+      name: "Assignment launch readiness",
+    });
+    await userEvent.click(within(readiness).getByRole("button", { name: "Check readiness" }));
+
+    expect(readiness).toHaveAttribute("aria-busy", "true");
+    expect(within(readiness).getByRole("status")).toHaveTextContent(
+      "Checking assignment launch readiness.",
+    );
+
+    await act(async () => {
+      resolveReadiness({
+        object: "project_assignment_launch_readiness",
+        data: launchReadiness({ warnings: ["Browser interaction will be omitted."] }),
+      });
+    });
+
+    expect(await within(readiness).findByText("ready")).toBeTruthy();
+    expect(readiness).toHaveAttribute("aria-busy", "false");
+    expect(within(readiness).getByRole("status")).toHaveTextContent(
+      "Assignment launch readiness: ready. Browser interaction will be omitted.",
+    );
+  });
+
+  it("shows granted browser tools as unavailable when the runtime omits them", async () => {
+    const warning =
+      "browser_inspect and browser_flow are enabled by the resolved Agent Preset but will be omitted on this runtime. The native browser runtime is not configured on this runtime. Set HECATE_TASK_BROWSER_EXECUTABLE, then restart Hecate.";
+    getProjectAssignmentLaunchReadinessMock.mockResolvedValueOnce({
+      object: "project_assignment_launch_readiness",
+      data: launchReadiness({
+        profile_posture: {
+          id: "implementation",
+          name: "Implementation",
+          source: "role_default",
+          tools_enabled: true,
+          writes_allowed: true,
+          network_allowed: false,
+          browser_evidence_status: "unavailable",
+          browser_allowed: true,
+          browser_interaction_status: "unavailable",
+          browser_interactions_allowed: true,
+          browser_allowed_origins: ["https://qa.example.test"],
+          browser_runtime_readiness: {
+            available: false,
+            status: "not_configured",
+            message: "The native browser runtime is not configured on this runtime.",
+            operator_action: "Set HECATE_TASK_BROWSER_EXECUTABLE, then restart Hecate.",
+          },
+          approval_policy: "require",
+          project_memory_policy: "include",
+          context_source_policy: "include_enabled",
+        },
+        warnings: [warning],
+      }),
+    });
+    renderDetail();
+
+    await userEvent.click(screen.getByText("Execution details"));
+    const readiness = screen.getByRole("region", {
+      name: "Assignment launch readiness",
+    });
+    await userEvent.click(within(readiness).getByRole("button", { name: "Check readiness" }));
+
+    expect(await within(readiness).findByText("ready")).toBeTruthy();
+    expect(within(readiness).getAllByText("Unavailable on this runtime")).toHaveLength(2);
+    expect(within(readiness).getByText(warning)).toBeTruthy();
+    expect(within(readiness).queryByText("Enabled · https://qa.example.test")).toBeNull();
   });
 
   it("marks missing launch presets in the posture preview", async () => {
@@ -1294,6 +1392,10 @@ describe("ProjectWorkItemDetail", () => {
           tools_enabled: false,
           writes_allowed: false,
           network_allowed: false,
+          browser_evidence_status: "disabled",
+          browser_allowed: false,
+          browser_interaction_status: "disabled",
+          browser_interactions_allowed: false,
         },
         warnings: [
           'Referenced agent preset "missing_profile" was not found; using stored preset id as execution_profile hint.',
@@ -1310,6 +1412,9 @@ describe("ProjectWorkItemDetail", () => {
 
     expect(await within(readiness).findByText("missing_profile (preset missing)")).toBeTruthy();
     expect(within(readiness).getByText("tools off · writes off · network off")).toBeTruthy();
+    expect(within(readiness).getByText("Browser evidence")).toBeTruthy();
+    expect(within(readiness).getByText("Browser interaction")).toBeTruthy();
+    expect(within(readiness).getAllByText("Disabled")).toHaveLength(2);
   });
 
   it("shows External Agent launch posture before preparing chat", async () => {
@@ -1328,6 +1433,8 @@ describe("ProjectWorkItemDetail", () => {
           network_allowed: false,
           browser_evidence_status: "not_applicable",
           browser_allowed: false,
+          browser_interaction_status: "not_applicable",
+          browser_interactions_allowed: false,
           browser_allowed_origins: [],
         },
         external_agent: "Codex",
@@ -1359,7 +1466,9 @@ describe("ProjectWorkItemDetail", () => {
     expect(within(posture).getByText("Codex (codex)")).toBeTruthy();
     expect(within(posture).getByText("Implementation follow-up")).toBeTruthy();
     expect(within(posture).getByText("tools on · writes on · network off")).toBeTruthy();
-    expect(within(posture).getByText("Not available for External Agent assignments")).toBeTruthy();
+    expect(
+      within(posture).getAllByText("Not available for External Agent assignments"),
+    ).toHaveLength(2);
     expect(
       within(preflight).getByRole("status", {
         name: "Launch readiness warnings",

@@ -221,6 +221,16 @@ jobs:
       - name: Test
         run: go test -race -timeout 10m ./...
 
+      - name: Test native browser security boundary with real Chromium
+        shell: bash
+        run: |
+          browser="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium-browser || command -v chromium || true)"
+          if [[ -z "$browser" ]]; then
+            echo "::error::The Linux runner has no Chromium-compatible executable for the required browser smoke matrix"
+            exit 1
+          fi
+          HECATE_BROWSER_SMOKE=1 HECATE_TASK_BROWSER_EXECUTABLE="$browser" go test -count=1 -timeout 10m ./internal/browserrunner
+
   test-go-windows-bootstrap:
     name: Go tests (Windows)
     needs: changes
@@ -246,6 +256,9 @@ jobs:
       - name: Test native workspace and Git confinement
         run: go test ./internal/localfs ./internal/gitrunner ./internal/workspacefs
 
+      - name: Test native browser process and protocol confinement
+        run: go test ./internal/browserrunner
+
   test-go-macos-bootstrap:
     name: Go tests (macOS bootstrap)
     needs: changes
@@ -267,6 +280,9 @@ jobs:
 
       - name: Test native workspace and Git confinement
         run: go test ./internal/localfs ./internal/gitrunner ./internal/workspacefs
+
+      - name: Test native browser process and protocol confinement
+        run: go test ./internal/browserrunner
 
   build-hecate:
     name: Build hecate

@@ -1032,10 +1032,12 @@ func appendResolvedAgentProfile(packet *chat.ContextPacket, profile projectworka
 	}
 	if driverKind != projectwork.AssignmentDriverHecateTask {
 		body = append(body, "Browser evidence: not available for External Agent assignments")
+		body = append(body, "Browser interaction: not available for External Agent assignments")
 	} else {
 		body = append(body, "Browser evidence allowed: "+boolLabel(profile.BrowserAllowed))
-		if profile.BrowserAllowed && len(profile.BrowserAllowedOrigins) > 0 {
-			body = append(body, "Browser evidence origins: "+strings.Join(profile.BrowserAllowedOrigins, ", "))
+		body = append(body, "Browser interaction allowed: "+boolLabel(profile.BrowserInteractionsAllowed))
+		if (profile.BrowserAllowed || profile.BrowserInteractionsAllowed) && len(profile.BrowserAllowedOrigins) > 0 {
+			body = append(body, "Browser allowed origins: "+strings.Join(profile.BrowserAllowedOrigins, ", "))
 		}
 	}
 	if instructions := strings.TrimSpace(profile.Instructions); instructions != "" && !profile.Missing {

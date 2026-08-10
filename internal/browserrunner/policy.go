@@ -1,7 +1,7 @@
 // Package browserrunner provides Hecate's deliberately narrow native browser
-// inspection capability. It does not expose browser interaction primitives to
-// an agent: a caller can ask it to load one URL and receive bounded,
-// text-only evidence from a fresh browser profile.
+// capabilities: script-disabled static inspection and separately granted,
+// fully declared accessible click/wait flows. Every call uses a fresh browser
+// profile and returns bounded text-only evidence.
 package browserrunner
 
 import (
@@ -62,6 +62,10 @@ var (
 	// ErrInspectionFailed is intentionally generic. Browser diagnostics can
 	// contain operator data and must not be surfaced to models or persisted.
 	ErrInspectionFailed = errors.New("browser inspection failed")
+	// ErrProfileCleanupFailed is path-free but distinct because an ephemeral
+	// profile may retain page state until the operator removes stale Hecate
+	// browser directories from the operating-system temporary directory.
+	ErrProfileCleanupFailed = errors.New("browser profile cleanup failed")
 )
 
 // Inspector is the runtime seam used by the orchestration loop. Production
@@ -83,19 +87,23 @@ type InspectRequest struct {
 // InspectResult is intentionally text-only. It contains no screenshots,
 // cookies, downloaded content, raw CDP messages, or browser profile state.
 type InspectResult struct {
-	FinalURL      string
-	FinalOrigin   string
-	Title         string
-	Accessibility []AccessibilityNode
-	Console       []ConsoleMessage
-	Network       NetworkSummary
+	FinalURL               string
+	FinalOrigin            string
+	Title                  string
+	Accessibility          []AccessibilityNode
+	AccessibilityTruncated bool
+	Console                []ConsoleMessage
+	Network                NetworkSummary
 }
 
 type AccessibilityNode struct {
 	Role        string
 	Name        string
 	Description string
-	Value       string
+	// Value remains in the internal seam for compatibility with deterministic
+	// inspectors, but production capture and artifact formatters intentionally
+	// omit it because form values can contain credentials or other secrets.
+	Value string
 }
 
 type ConsoleMessage struct {
@@ -162,6 +170,9 @@ func (p requestPolicy) preflightHostMappings(ctx context.Context, allowPrivateIP
 			if !allowPrivateIPs && !isPublicBrowserIP(literal) {
 				return nil, ErrPrivateNetwork
 			}
+			// Pin literals to themselves so the final deny-all resolver rule does
+			// not also reject the explicitly approved IP origin.
+			mappings = append(mappings, browserHostMapping{Hostname: hostname, Address: literal.String()})
 			continue
 		}
 		if !safeHostResolverHostname(hostname) {
@@ -206,10 +217,7 @@ func safeHostResolverHostname(hostname string) bool {
 }
 
 func hostResolverRules(mappings []browserHostMapping) (string, error) {
-	if len(mappings) == 0 {
-		return "", nil
-	}
-	rules := make([]string, 0, len(mappings))
+	rules := make([]string, 0, len(mappings)+1)
 	for _, mapping := range mappings {
 		if !safeHostResolverHostname(mapping.Hostname) {
 			return "", ErrInspectionFailed
@@ -224,6 +232,11 @@ func hostResolverRules(mappings []browserHostMapping) (string, error) {
 		}
 		rules = append(rules, "MAP "+mapping.Hostname+" "+address)
 	}
+	// Fetch and Network interception govern browser requests, while this final
+	// resolver rule closes speculative DNS work such as preconnect and
+	// dns-prefetch that may occur before a request exists. Specific approved
+	// mappings must remain first because Chromium applies the first match.
+	rules = append(rules, "MAP * ~NOTFOUND")
 	return strings.Join(rules, ", "), nil
 }
 

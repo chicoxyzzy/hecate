@@ -34,6 +34,7 @@ func TestAgentPresetsAPI_CRUD(t *testing.T) {
 		"writes_allowed":true,
 		"network_allowed":false,
 		"browser_allowed":true,
+		"browser_interactions_allowed":true,
 		"browser_allowed_origins":["https://app.example.test/"],
 		"approval_policy":"require",
 		"project_memory_policy":"visible_only",
@@ -58,7 +59,7 @@ func TestAgentPresetsAPI_CRUD(t *testing.T) {
 	if !created.Data.ToolsEnabled || !created.Data.WritesAllowed || created.Data.NetworkAllowed {
 		t.Fatalf("posture = tools=%v writes=%v network=%v, want true/true/false", created.Data.ToolsEnabled, created.Data.WritesAllowed, created.Data.NetworkAllowed)
 	}
-	if !created.Data.BrowserAllowed || len(created.Data.BrowserAllowedOrigins) != 1 || created.Data.BrowserAllowedOrigins[0] != "https://app.example.test" {
+	if !created.Data.BrowserAllowed || !created.Data.BrowserInteractionsAllowed || len(created.Data.BrowserAllowedOrigins) != 1 || created.Data.BrowserAllowedOrigins[0] != "https://app.example.test" {
 		t.Fatalf("browser posture = %+v, want enabled exact normalized origin", created.Data)
 	}
 
@@ -76,7 +77,7 @@ func TestAgentPresetsAPI_CRUD(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("decode patch response: %v", err)
 	}
-	if updated.Data.Name != "Backend reviewer" || updated.Data.WritesAllowed || updated.Data.ApprovalPolicy != "block" || !updated.Data.BrowserAllowed || len(updated.Data.BrowserAllowedOrigins) != 1 || updated.Data.BrowserAllowedOrigins[0] != "https://console.example.test" {
+	if updated.Data.Name != "Backend reviewer" || updated.Data.WritesAllowed || updated.Data.ApprovalPolicy != "block" || !updated.Data.BrowserAllowed || !updated.Data.BrowserInteractionsAllowed || len(updated.Data.BrowserAllowedOrigins) != 1 || updated.Data.BrowserAllowedOrigins[0] != "https://console.example.test" {
 		t.Fatalf("updated = %+v, want patched preset", updated.Data)
 	}
 
@@ -100,49 +101,69 @@ func TestAgentPresetsAPI_CRUD(t *testing.T) {
 	}
 }
 
-func TestAgentPresetsAPI_PatchClearsIneligibleBrowserPosture(t *testing.T) {
+func TestAgentPresetsAPI_CreatesInteractionOnlyPreset(t *testing.T) {
+	t.Parallel()
+	server := newAgentPresetsTestServer()
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/hecate/v1/agent-presets", bytes.NewReader([]byte(`{
+		"id":"prof_browser_interaction",
+		"name":"Browser interaction",
+		"surface":"hecate_task",
+		"tools_enabled":true,
+		"browser_interactions_allowed":true,
+		"browser_allowed_origins":["https://app.example.test/"]
+	}`))))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", rec.Code, rec.Body.String())
+	}
+	var created AgentPresetResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Data.BrowserAllowed || !created.Data.BrowserInteractionsAllowed || len(created.Data.BrowserAllowedOrigins) != 1 || created.Data.BrowserAllowedOrigins[0] != "https://app.example.test" {
+		t.Fatalf("browser posture = %+v, want independent interaction-only grant", created.Data)
+	}
+}
+
+func TestAgentPresetsAPI_PatchPreservesIndependentBrowserGrantsAndClearsIneligiblePosture(t *testing.T) {
 	t.Parallel()
 	server := newAgentPresetsTestServer()
 	tests := []struct {
-		name   string
-		patch  string
-		assert func(t *testing.T, profile AgentPresetResponseItem)
+		name             string
+		patch            string
+		wantEvidence     bool
+		wantInteractions bool
+		wantOrigins      bool
 	}{
 		{
-			name:  "browser disabled",
-			patch: `{"browser_allowed":false}`,
-			assert: func(t *testing.T, profile AgentPresetResponseItem) {
-				t.Helper()
-				if profile.BrowserAllowed {
-					t.Fatalf("browser_allowed = true, want false")
-				}
-			},
+			name:             "static evidence disabled preserves interaction",
+			patch:            `{"browser_allowed":false}`,
+			wantInteractions: true,
+			wantOrigins:      true,
+		},
+		{
+			name:         "interaction disabled preserves static evidence",
+			patch:        `{"browser_interactions_allowed":false}`,
+			wantEvidence: true,
+			wantOrigins:  true,
+		},
+		{
+			name:  "both browser grants disabled",
+			patch: `{"browser_allowed":false,"browser_interactions_allowed":false}`,
 		},
 		{
 			name:  "tools disabled",
 			patch: `{"tools_enabled":false}`,
-			assert: func(t *testing.T, profile AgentPresetResponseItem) {
-				t.Helper()
-				if profile.ToolsEnabled {
-					t.Fatalf("tools_enabled = true, want false")
-				}
-			},
 		},
 		{
 			name:  "surface changed",
 			patch: `{"surface":"hecate_chat"}`,
-			assert: func(t *testing.T, profile AgentPresetResponseItem) {
-				t.Helper()
-				if profile.Surface != "hecate_chat" {
-					t.Fatalf("surface = %q, want hecate_chat", profile.Surface)
-				}
-			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			id := "prof_browser_patch_" + strings.ReplaceAll(test.name, " ", "_")
-			create := `{"id":"` + id + `","name":"Browser preset","surface":"hecate_task","tools_enabled":true,"browser_allowed":true,"browser_allowed_origins":["https://app.example.test"]}`
+			create := `{"id":"` + id + `","name":"Browser preset","surface":"hecate_task","tools_enabled":true,"browser_allowed":true,"browser_interactions_allowed":true,"browser_allowed_origins":["https://app.example.test"]}`
 			rec := httptest.NewRecorder()
 			server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/hecate/v1/agent-presets", bytes.NewReader([]byte(create))))
 			if rec.Code != http.StatusCreated {
@@ -158,9 +179,17 @@ func TestAgentPresetsAPI_PatchClearsIneligibleBrowserPosture(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
 				t.Fatalf("decode patch response: %v", err)
 			}
-			test.assert(t, updated.Data)
-			if updated.Data.BrowserAllowed || len(updated.Data.BrowserAllowedOrigins) != 0 {
-				t.Fatalf("browser posture = %+v, want disabled with no stale origins", updated.Data)
+			if updated.Data.BrowserAllowed != test.wantEvidence || updated.Data.BrowserInteractionsAllowed != test.wantInteractions {
+				t.Fatalf("browser grants = evidence %v interactions %v, want %v/%v", updated.Data.BrowserAllowed, updated.Data.BrowserInteractionsAllowed, test.wantEvidence, test.wantInteractions)
+			}
+			if gotOrigins := len(updated.Data.BrowserAllowedOrigins) != 0; gotOrigins != test.wantOrigins {
+				t.Fatalf("browser origins = %v, want present %v", updated.Data.BrowserAllowedOrigins, test.wantOrigins)
+			}
+			if test.name == "tools disabled" && updated.Data.ToolsEnabled {
+				t.Fatal("tools_enabled = true, want false")
+			}
+			if test.name == "surface changed" && updated.Data.Surface != "hecate_chat" {
+				t.Fatalf("surface = %q, want hecate_chat", updated.Data.Surface)
 			}
 		})
 	}

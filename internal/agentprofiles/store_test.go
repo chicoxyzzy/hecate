@@ -12,18 +12,19 @@ func TestMemoryStore_ProfileRoundTrip(t *testing.T) {
 	store := NewMemoryStore()
 
 	created, err := store.Create(ctx, Profile{
-		ID:               "prof_backend",
-		Name:             "Backend reviewer",
-		Description:      "Reviews backend changes",
-		Instructions:     "Prefer small, tested changes.",
-		Surface:          SurfaceHecateTask,
-		ProviderHint:     "anthropic",
-		ModelHint:        "claude-sonnet-4",
-		ExecutionProfile: "review",
-		ToolsEnabled:     true,
-		WritesAllowed:    false,
-		NetworkAllowed:   false,
-		BrowserAllowed:   true,
+		ID:                         "prof_backend",
+		Name:                       "Backend reviewer",
+		Description:                "Reviews backend changes",
+		Instructions:               "Prefer small, tested changes.",
+		Surface:                    SurfaceHecateTask,
+		ProviderHint:               "anthropic",
+		ModelHint:                  "claude-sonnet-4",
+		ExecutionProfile:           "review",
+		ToolsEnabled:               true,
+		WritesAllowed:              false,
+		NetworkAllowed:             false,
+		BrowserAllowed:             true,
+		BrowserInteractionsAllowed: true,
 		BrowserAllowedOrigins: []string{
 			"https://app.example.test/",
 			"https://app.example.test",
@@ -54,7 +55,7 @@ func TestMemoryStore_ProfileRoundTrip(t *testing.T) {
 	if got.Name != "Backend reviewer" || got.ExecutionProfile != "review" || !got.ToolsEnabled {
 		t.Fatalf("profile = %+v, want persisted fields", got)
 	}
-	if !got.BrowserAllowed || len(got.BrowserAllowedOrigins) != 1 || got.BrowserAllowedOrigins[0] != "https://app.example.test" {
+	if !got.BrowserAllowed || !got.BrowserInteractionsAllowed || len(got.BrowserAllowedOrigins) != 1 || got.BrowserAllowedOrigins[0] != "https://app.example.test" {
 		t.Fatalf("browser profile posture = %+v, want normalized exact origin", got)
 	}
 	got.BrowserAllowedOrigins[0] = "https://mutated.example.test"
@@ -150,6 +151,9 @@ func TestMemoryStore_Validation(t *testing.T) {
 	if _, err := store.Create(ctx, Profile{ID: "prof_browser_without_origin", Name: "Bad", BrowserAllowed: true}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create browser without origin error = %v, want ErrInvalid", err)
 	}
+	if _, err := store.Create(ctx, Profile{ID: "prof_browser_interaction_without_origin", Name: "Bad", ToolsEnabled: true, BrowserInteractionsAllowed: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create browser interaction without origin error = %v, want ErrInvalid", err)
+	}
 	if _, err := store.Create(ctx, Profile{ID: "prof_browser_path", Name: "Bad", BrowserAllowed: true, BrowserAllowedOrigins: []string{"https://example.test/path"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create browser path origin error = %v, want ErrInvalid", err)
 	}
@@ -159,8 +163,21 @@ func TestMemoryStore_Validation(t *testing.T) {
 	if _, err := store.Create(ctx, Profile{ID: "prof_browser_external", Name: "Bad", Surface: SurfaceExternalAgent, BrowserAllowed: true, BrowserAllowedOrigins: []string{"https://example.test"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create browser on external surface error = %v, want ErrInvalid", err)
 	}
+	if _, err := store.Create(ctx, Profile{ID: "prof_browser_interaction_external", Name: "Bad", Surface: SurfaceExternalAgent, ToolsEnabled: true, BrowserInteractionsAllowed: true, BrowserAllowedOrigins: []string{"https://example.test"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create browser interaction on external surface error = %v, want ErrInvalid", err)
+	}
 	if _, err := store.Create(ctx, Profile{ID: "prof_browser_tools_disabled", Name: "Bad", Surface: SurfaceHecateTask, BrowserAllowed: true, BrowserAllowedOrigins: []string{"https://example.test"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create browser with tools disabled error = %v, want ErrInvalid", err)
+	}
+	if _, err := store.Create(ctx, Profile{ID: "prof_browser_interaction_tools_disabled", Name: "Bad", Surface: SurfaceHecateTask, BrowserInteractionsAllowed: true, BrowserAllowedOrigins: []string{"https://example.test"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create browser interaction with tools disabled error = %v, want ErrInvalid", err)
+	}
+	interactionOnly, err := store.Create(ctx, Profile{ID: "prof_browser_interaction_only", Name: "Interaction only", Surface: SurfaceHecateTask, ToolsEnabled: true, BrowserInteractionsAllowed: true, BrowserAllowedOrigins: []string{"https://example.test/"}})
+	if err != nil {
+		t.Fatalf("Create interaction-only profile: %v", err)
+	}
+	if interactionOnly.BrowserAllowed || !interactionOnly.BrowserInteractionsAllowed || len(interactionOnly.BrowserAllowedOrigins) != 1 || interactionOnly.BrowserAllowedOrigins[0] != "https://example.test" {
+		t.Fatalf("interaction-only profile = %+v, want independent normalized interaction grant", interactionOnly)
 	}
 }
 

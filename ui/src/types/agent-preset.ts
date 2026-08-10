@@ -12,9 +12,10 @@ export type AgentPresetRecord = {
   tools_enabled: boolean;
   writes_allowed: boolean;
   network_allowed: boolean;
-  // Native Hecate task browser evidence only. External Agents do not receive
-  // this capability. Optional preserves compatibility with older runtimes.
+  // Native Hecate task browser capabilities only. External Agents do not
+  // receive these capabilities.
   browser_allowed?: boolean;
+  browser_interactions_allowed: boolean;
   browser_allowed_origins?: string[];
   approval_policy: "inherit" | "require" | "block" | "allow" | string;
   project_memory_policy: "inherit" | "include" | "visible_only" | "exclude" | string;
@@ -50,6 +51,7 @@ export type CreateAgentPresetPayload = {
   writes_allowed?: boolean;
   network_allowed?: boolean;
   browser_allowed?: boolean;
+  browser_interactions_allowed?: boolean;
   browser_allowed_origins?: string[];
   approval_policy?: string;
   project_memory_policy?: string;

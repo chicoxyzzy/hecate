@@ -21,3 +21,11 @@ test-acp-real-embedded adapters='codex,claude_code': _go-cache
 # Smoke test authenticated direct ACP vendor CLIs.
 test-acp-real-direct adapters='cursor_agent,grok_build': _go-cache
 	HECATE_ACP_REAL_CLI_SMOKE=1 HECATE_ACP_REAL_ADAPTERS='{{adapters}}' {{go_env}} go test -tags real_cli -count=1 -run TestRealACPCLIsSmoke -timeout 10m ./internal/agentadapters
+
+# Run the real Chromium transport, isolation, and accessibility-action matrix.
+# This is opt-in because ordinary contributors may not have a compatible local
+# browser. CI discovers its installed browser and sets the executable explicitly.
+# Smoke test the native browser security boundary with a real Chromium runtime.
+test-browser-smoke: _go-cache
+	@test -n "${HECATE_TASK_BROWSER_EXECUTABLE:-}" || { echo "HECATE_TASK_BROWSER_EXECUTABLE must name an absolute Chromium-compatible executable" >&2; exit 2; }
+	HECATE_BROWSER_SMOKE=1 {{go_env}} go test -count=1 -timeout 10m ./internal/browserrunner

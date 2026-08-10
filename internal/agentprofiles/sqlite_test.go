@@ -33,16 +33,17 @@ func TestSQLiteStore_ProfileRoundTrip(t *testing.T) {
 	store := newSQLiteProfileTestStore(t)
 
 	created, err := store.Create(ctx, Profile{
-		ID:               "prof_reviewer",
-		Name:             "Reviewer",
-		Description:      "Production-risk review",
-		Instructions:     "Call out risk first.",
-		Surface:          SurfaceHecateTask,
-		ProviderHint:     "openai",
-		ModelHint:        "gpt-4.1",
-		ExecutionProfile: "review",
-		ToolsEnabled:     true,
-		BrowserAllowed:   true,
+		ID:                         "prof_reviewer",
+		Name:                       "Reviewer",
+		Description:                "Production-risk review",
+		Instructions:               "Call out risk first.",
+		Surface:                    SurfaceHecateTask,
+		ProviderHint:               "openai",
+		ModelHint:                  "gpt-4.1",
+		ExecutionProfile:           "review",
+		ToolsEnabled:               true,
+		BrowserAllowed:             true,
+		BrowserInteractionsAllowed: true,
 		BrowserAllowedOrigins: []string{
 			"https://app.example.test/",
 		},
@@ -69,7 +70,7 @@ func TestSQLiteStore_ProfileRoundTrip(t *testing.T) {
 	if got.Name != "Reviewer" || got.ExternalAgentOptions["permission_mode"] != "plan" {
 		t.Fatalf("profile = %+v, want persisted profile", got)
 	}
-	if !got.BrowserAllowed || len(got.BrowserAllowedOrigins) != 1 || got.BrowserAllowedOrigins[0] != "https://app.example.test" {
+	if !got.BrowserAllowed || !got.BrowserInteractionsAllowed || len(got.BrowserAllowedOrigins) != 1 || got.BrowserAllowedOrigins[0] != "https://app.example.test" {
 		t.Fatalf("browser profile = %+v, want persisted normalized browser posture", got)
 	}
 
@@ -141,7 +142,7 @@ func TestSQLiteStore_BuiltInProfiles(t *testing.T) {
 	}
 }
 
-func TestSQLiteStore_MigratesBrowserEvidenceColumns(t *testing.T) {
+func TestSQLiteStore_MigratesBrowserCapabilityColumns(t *testing.T) {
 	ctx := context.Background()
 	client, err := storage.NewSQLiteClient(ctx, storage.SQLiteConfig{
 		Path:        filepath.Join(t.TempDir(), "profiles.db"),
@@ -182,17 +183,17 @@ CREATE TABLE `+client.QualifiedTable("agent_profiles")+` (
 		t.Fatalf("NewSQLiteStore migration: %v", err)
 	}
 	created, err := store.Create(ctx, Profile{
-		ID:                    "prof_browser_migration",
-		Name:                  "Browser migration",
-		Surface:               SurfaceHecateTask,
-		ToolsEnabled:          true,
-		BrowserAllowed:        true,
-		BrowserAllowedOrigins: []string{"https://app.example.test"},
+		ID:                         "prof_browser_migration",
+		Name:                       "Browser migration",
+		Surface:                    SurfaceHecateTask,
+		ToolsEnabled:               true,
+		BrowserInteractionsAllowed: true,
+		BrowserAllowedOrigins:      []string{"https://app.example.test"},
 	})
 	if err != nil {
 		t.Fatalf("Create after migration: %v", err)
 	}
-	if !created.BrowserAllowed || len(created.BrowserAllowedOrigins) != 1 {
+	if created.BrowserAllowed || !created.BrowserInteractionsAllowed || len(created.BrowserAllowedOrigins) != 1 {
 		t.Fatalf("created browser posture = %+v", created)
 	}
 }
@@ -203,12 +204,13 @@ func TestSQLiteStoreUpdate_SerializesBrowserGrantAndPrerequisiteRevocation(t *te
 	store := newSQLiteProfileTestStore(t)
 	const profileID = "prof_browser_concurrency"
 	if _, err := store.Create(ctx, Profile{
-		ID:                    profileID,
-		Name:                  "Browser concurrency",
-		Surface:               SurfaceHecateTask,
-		ToolsEnabled:          true,
-		BrowserAllowed:        true,
-		BrowserAllowedOrigins: []string{"https://before.example.test"},
+		ID:                         profileID,
+		Name:                       "Browser concurrency",
+		Surface:                    SurfaceHecateTask,
+		ToolsEnabled:               true,
+		BrowserAllowed:             true,
+		BrowserInteractionsAllowed: true,
+		BrowserAllowedOrigins:      []string{"https://before.example.test"},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -237,6 +239,7 @@ func TestSQLiteStoreUpdate_SerializesBrowserGrantAndPrerequisiteRevocation(t *te
 			close(revocationRead)
 			profile.ToolsEnabled = false
 			profile.BrowserAllowed = false
+			profile.BrowserInteractionsAllowed = false
 			profile.BrowserAllowedOrigins = nil
 		})
 		revocationDone <- err
@@ -278,7 +281,7 @@ func TestSQLiteStoreUpdate_SerializesBrowserGrantAndPrerequisiteRevocation(t *te
 	if err != nil || !ok {
 		t.Fatalf("Get after concurrent updates ok=%v err=%v", ok, err)
 	}
-	if profile.ToolsEnabled || profile.BrowserAllowed || len(profile.BrowserAllowedOrigins) != 0 {
+	if profile.ToolsEnabled || profile.BrowserAllowed || profile.BrowserInteractionsAllowed || len(profile.BrowserAllowedOrigins) != 0 {
 		t.Fatalf("profile restored browser access after revocation: %+v", profile)
 	}
 }

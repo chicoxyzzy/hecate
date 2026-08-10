@@ -312,71 +312,74 @@ type AgentPresetsResponse struct {
 }
 
 type AgentPresetResponseItem struct {
-	ID                    string            `json:"id"`
-	Name                  string            `json:"name"`
-	Description           string            `json:"description,omitempty"`
-	Instructions          string            `json:"instructions,omitempty"`
-	Surface               string            `json:"surface"`
-	ProviderHint          string            `json:"provider_hint,omitempty"`
-	ModelHint             string            `json:"model_hint,omitempty"`
-	ExecutionProfile      string            `json:"execution_profile,omitempty"`
-	ToolsEnabled          bool              `json:"tools_enabled"`
-	WritesAllowed         bool              `json:"writes_allowed"`
-	NetworkAllowed        bool              `json:"network_allowed"`
-	BrowserAllowed        bool              `json:"browser_allowed"`
-	BrowserAllowedOrigins []string          `json:"browser_allowed_origins,omitempty"`
-	ApprovalPolicy        string            `json:"approval_policy"`
-	ProjectMemoryPolicy   string            `json:"project_memory_policy"`
-	ContextSourcePolicy   string            `json:"context_source_policy"`
-	SkillIDs              []string          `json:"skill_ids,omitempty"`
-	ExternalAgentKind     string            `json:"external_agent_kind,omitempty"`
-	ExternalAgentOptions  map[string]string `json:"external_agent_options,omitempty"`
-	BuiltIn               bool              `json:"built_in"`
-	CreatedAt             string            `json:"created_at,omitempty"`
-	UpdatedAt             string            `json:"updated_at,omitempty"`
+	ID                         string            `json:"id"`
+	Name                       string            `json:"name"`
+	Description                string            `json:"description,omitempty"`
+	Instructions               string            `json:"instructions,omitempty"`
+	Surface                    string            `json:"surface"`
+	ProviderHint               string            `json:"provider_hint,omitempty"`
+	ModelHint                  string            `json:"model_hint,omitempty"`
+	ExecutionProfile           string            `json:"execution_profile,omitempty"`
+	ToolsEnabled               bool              `json:"tools_enabled"`
+	WritesAllowed              bool              `json:"writes_allowed"`
+	NetworkAllowed             bool              `json:"network_allowed"`
+	BrowserAllowed             bool              `json:"browser_allowed"`
+	BrowserInteractionsAllowed bool              `json:"browser_interactions_allowed"`
+	BrowserAllowedOrigins      []string          `json:"browser_allowed_origins,omitempty"`
+	ApprovalPolicy             string            `json:"approval_policy"`
+	ProjectMemoryPolicy        string            `json:"project_memory_policy"`
+	ContextSourcePolicy        string            `json:"context_source_policy"`
+	SkillIDs                   []string          `json:"skill_ids,omitempty"`
+	ExternalAgentKind          string            `json:"external_agent_kind,omitempty"`
+	ExternalAgentOptions       map[string]string `json:"external_agent_options,omitempty"`
+	BuiltIn                    bool              `json:"built_in"`
+	CreatedAt                  string            `json:"created_at,omitempty"`
+	UpdatedAt                  string            `json:"updated_at,omitempty"`
 }
 
 type CreateAgentPresetRequest struct {
-	ID                    string            `json:"id,omitempty"`
-	Name                  string            `json:"name"`
-	Description           string            `json:"description,omitempty"`
-	Instructions          string            `json:"instructions,omitempty"`
-	Surface               string            `json:"surface,omitempty"`
-	ProviderHint          string            `json:"provider_hint,omitempty"`
-	ModelHint             string            `json:"model_hint,omitempty"`
-	ExecutionProfile      string            `json:"execution_profile,omitempty"`
-	ToolsEnabled          bool              `json:"tools_enabled,omitempty"`
-	WritesAllowed         bool              `json:"writes_allowed,omitempty"`
-	NetworkAllowed        bool              `json:"network_allowed,omitempty"`
-	BrowserAllowed        bool              `json:"browser_allowed,omitempty"`
-	BrowserAllowedOrigins []string          `json:"browser_allowed_origins,omitempty"`
-	ApprovalPolicy        string            `json:"approval_policy,omitempty"`
-	ProjectMemoryPolicy   string            `json:"project_memory_policy,omitempty"`
-	ContextSourcePolicy   string            `json:"context_source_policy,omitempty"`
-	SkillIDs              []string          `json:"skill_ids,omitempty"`
-	ExternalAgentKind     string            `json:"external_agent_kind,omitempty"`
-	ExternalAgentOptions  map[string]string `json:"external_agent_options,omitempty"`
+	ID                         string            `json:"id,omitempty"`
+	Name                       string            `json:"name"`
+	Description                string            `json:"description,omitempty"`
+	Instructions               string            `json:"instructions,omitempty"`
+	Surface                    string            `json:"surface,omitempty"`
+	ProviderHint               string            `json:"provider_hint,omitempty"`
+	ModelHint                  string            `json:"model_hint,omitempty"`
+	ExecutionProfile           string            `json:"execution_profile,omitempty"`
+	ToolsEnabled               bool              `json:"tools_enabled,omitempty"`
+	WritesAllowed              bool              `json:"writes_allowed,omitempty"`
+	NetworkAllowed             bool              `json:"network_allowed,omitempty"`
+	BrowserAllowed             bool              `json:"browser_allowed,omitempty"`
+	BrowserInteractionsAllowed bool              `json:"browser_interactions_allowed,omitempty"`
+	BrowserAllowedOrigins      []string          `json:"browser_allowed_origins,omitempty"`
+	ApprovalPolicy             string            `json:"approval_policy,omitempty"`
+	ProjectMemoryPolicy        string            `json:"project_memory_policy,omitempty"`
+	ContextSourcePolicy        string            `json:"context_source_policy,omitempty"`
+	SkillIDs                   []string          `json:"skill_ids,omitempty"`
+	ExternalAgentKind          string            `json:"external_agent_kind,omitempty"`
+	ExternalAgentOptions       map[string]string `json:"external_agent_options,omitempty"`
 }
 
 type UpdateAgentPresetRequest struct {
-	Name                  *string           `json:"name,omitempty"`
-	Description           *string           `json:"description,omitempty"`
-	Instructions          *string           `json:"instructions,omitempty"`
-	Surface               *string           `json:"surface,omitempty"`
-	ProviderHint          *string           `json:"provider_hint,omitempty"`
-	ModelHint             *string           `json:"model_hint,omitempty"`
-	ExecutionProfile      *string           `json:"execution_profile,omitempty"`
-	ToolsEnabled          *bool             `json:"tools_enabled,omitempty"`
-	WritesAllowed         *bool             `json:"writes_allowed,omitempty"`
-	NetworkAllowed        *bool             `json:"network_allowed,omitempty"`
-	BrowserAllowed        *bool             `json:"browser_allowed,omitempty"`
-	BrowserAllowedOrigins []string          `json:"browser_allowed_origins,omitempty"`
-	ApprovalPolicy        *string           `json:"approval_policy,omitempty"`
-	ProjectMemoryPolicy   *string           `json:"project_memory_policy,omitempty"`
-	ContextSourcePolicy   *string           `json:"context_source_policy,omitempty"`
-	SkillIDs              []string          `json:"skill_ids,omitempty"`
-	ExternalAgentKind     *string           `json:"external_agent_kind,omitempty"`
-	ExternalAgentOptions  map[string]string `json:"external_agent_options,omitempty"`
+	Name                       *string           `json:"name,omitempty"`
+	Description                *string           `json:"description,omitempty"`
+	Instructions               *string           `json:"instructions,omitempty"`
+	Surface                    *string           `json:"surface,omitempty"`
+	ProviderHint               *string           `json:"provider_hint,omitempty"`
+	ModelHint                  *string           `json:"model_hint,omitempty"`
+	ExecutionProfile           *string           `json:"execution_profile,omitempty"`
+	ToolsEnabled               *bool             `json:"tools_enabled,omitempty"`
+	WritesAllowed              *bool             `json:"writes_allowed,omitempty"`
+	NetworkAllowed             *bool             `json:"network_allowed,omitempty"`
+	BrowserAllowed             *bool             `json:"browser_allowed,omitempty"`
+	BrowserInteractionsAllowed *bool             `json:"browser_interactions_allowed,omitempty"`
+	BrowserAllowedOrigins      []string          `json:"browser_allowed_origins,omitempty"`
+	ApprovalPolicy             *string           `json:"approval_policy,omitempty"`
+	ProjectMemoryPolicy        *string           `json:"project_memory_policy,omitempty"`
+	ContextSourcePolicy        *string           `json:"context_source_policy,omitempty"`
+	SkillIDs                   []string          `json:"skill_ids,omitempty"`
+	ExternalAgentKind          *string           `json:"external_agent_kind,omitempty"`
+	ExternalAgentOptions       map[string]string `json:"external_agent_options,omitempty"`
 }
 
 type ProjectResponseItem struct {
@@ -1585,8 +1588,9 @@ type SettingsResponseItem struct {
 }
 
 // BrowserEvidenceRuntimeReadinessResponse reports whether this gateway can
-// currently offer the optional native browser evidence tool. It intentionally
-// contains no executable path, probe diagnostics, or other host details.
+// currently offer its optional native browser evidence and interaction tools.
+// It intentionally contains no executable path, probe diagnostics, or other
+// host details.
 type BrowserEvidenceRuntimeReadinessResponse struct {
 	Available      bool   `json:"available"`
 	Status         string `json:"status"`

@@ -26,6 +26,7 @@ type agentLoopToolDispatcher struct {
 	httpClient                *http.Client
 	webSearch                 websearch.Client
 	browserInspector          browserrunner.Inspector
+	browserFlowRunner         browserrunner.FlowRunner
 	projectAssistantDraftTool ProjectAssistantDraftTool
 	metrics                   *telemetry.OrchestratorMetrics
 }
@@ -318,6 +319,15 @@ func (d *agentLoopToolDispatcher) Dispatch(ctx context.Context, spec ExecutionSp
 			return agentLoopToolDispatchResult{Text: "invalid arguments for " + AgentToolBrowserInspect}, nil
 		}
 		return d.browserInspectTool(ctx, spec, args, stepIndex, startedAt, call.Function.Name)
+
+	case AgentToolBrowserFlow:
+		args, _, err := decodeBrowserFlowArgs(call.Function.Arguments)
+		if err != nil {
+			// Never echo browser arguments: rejected target names or URLs may
+			// contain private application data.
+			return agentLoopToolDispatchResult{Text: "invalid arguments for " + AgentToolBrowserFlow}, nil
+		}
+		return d.browserFlowTool(ctx, spec, args, stepIndex, startedAt, call.Function.Name)
 
 	case AgentToolDraftProjectProposal:
 		var args projectAssistantDraftArgs

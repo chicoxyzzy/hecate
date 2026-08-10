@@ -51,20 +51,23 @@ func (d *agentLoopToolDispatcher) browserInspectTool(ctx context.Context, spec E
 		AllowedOrigins: []string{origin},
 	})
 	if err != nil {
+		message := "browser_inspect: browser evidence could not be collected"
 		switch {
 		case errors.Is(err, browserrunner.ErrInvalidURL):
-			return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, "browser_inspect: url must be an absolute http(s) URL without credentials, a query, or a fragment"), nil
+			message = "browser_inspect: url must be an absolute http(s) URL without credentials, a query, or a fragment"
 		case errors.Is(err, browserrunner.ErrOriginNotAllowed):
-			return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, "browser_inspect: navigation left the enabled origins and was blocked"), nil
+			message = "browser_inspect: navigation left the enabled origins and was blocked"
 		case errors.Is(err, browserrunner.ErrPrivateNetwork):
-			return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, "browser_inspect: this runtime blocks private and loopback browser destinations"), nil
+			message = "browser_inspect: this runtime blocks private and loopback browser destinations"
 		case errors.Is(err, browserrunner.ErrUnavailable):
-			return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, "browser_inspect: native browser evidence is unavailable on this runtime"), nil
-		default:
-			// Do not persist browser diagnostics. They can contain local paths,
-			// credential-bearing URLs, or page-controlled content.
-			return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, "browser_inspect: browser evidence could not be collected"), nil
+			message = "browser_inspect: native browser evidence is unavailable on this runtime"
 		}
+		if errors.Is(err, browserrunner.ErrProfileCleanupFailed) {
+			message += "; temporary browser profile cleanup failed. Stop Hecate and remove stale hecate-browser-* directories from the operating-system temporary directory before retrying"
+		}
+		// Do not persist browser diagnostics. They can contain local paths,
+		// credential-bearing URLs, or page-controlled content.
+		return browserInspectionFailure(spec, stepIndex, startedAt, toolName, origin, message), nil
 	}
 
 	finalOrigin, finalOriginErr := browserrunner.OriginForURL(result.FinalURL)
@@ -111,7 +114,7 @@ func (d *agentLoopToolDispatcher) browserInspectTool(ctx context.Context, spec E
 		StepID:      step.ID,
 		Kind:        "browser_evidence",
 		Name:        "Browser evidence — " + finalOrigin,
-		Description: "Untrusted static browser evidence from a fresh temporary browser profile. Page scripts and service workers are disabled; no screenshot or browser profile data is retained.",
+		Description: "Untrusted static browser evidence from a fresh temporary browser profile. Page scripts and service workers are disabled; this artifact contains no screenshot or browser-profile content.",
 		MimeType:    "text/plain",
 		StorageKind: "inline",
 		ContentText: report,
@@ -303,24 +306,24 @@ func formatBrowserInspectionReport(result browserrunner.InspectResult, finalOrig
 				b.WriteString("- … (truncated)\n")
 				break
 			}
-			parts := make([]string, 0, 4)
+			parts := make([]string, 0, 3)
 			if value := browserrunner.SanitizeEvidenceText(node.Role); value != "" {
-				parts = append(parts, "role="+value)
+				parts = append(parts, fmt.Sprintf("role=%q", value))
 			}
 			if value := browserrunner.SanitizeEvidenceText(node.Name); value != "" {
-				parts = append(parts, "name="+value)
+				parts = append(parts, fmt.Sprintf("name=%q", value))
 			}
 			if value := browserrunner.SanitizeEvidenceText(node.Description); value != "" {
-				parts = append(parts, "description="+value)
-			}
-			if value := browserrunner.SanitizeEvidenceText(node.Value); value != "" {
-				parts = append(parts, "value="+value)
+				parts = append(parts, fmt.Sprintf("description=%q", value))
 			}
 			if len(parts) > 0 {
 				b.WriteString("- ")
 				b.WriteString(strings.Join(parts, "; "))
 				b.WriteByte('\n')
 			}
+		}
+		if result.AccessibilityTruncated {
+			b.WriteString("- … (truncated)\n")
 		}
 	}
 	if len(result.Console) > 0 {

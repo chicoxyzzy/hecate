@@ -367,14 +367,16 @@ the task's generic `origin_kind` / `origin_id` fields. The effective preset
 posture is snapshotted onto ordinary task fields (`sandbox_read_only`,
 `sandbox_network`, provider/model hints, execution profile, and system prompt)
 plus output-only optional `agent_preset_tools_enabled`,
-`agent_preset_browser_allowed`, and
+`agent_preset_browser_allowed`,
+`agent_preset_browser_interactions_allowed`, and
 `agent_preset_browser_allowed_origins` fields, so retries and resumes do not
-change when the preset is later edited or deleted. A browser snapshot is
-distinct from `sandbox_network`: it controls only Hecate's native,
-approval-gated, static browser evidence tool. An omitted tools or browser
-snapshot identifies a legacy/manual task; browser evidence is never inferred
-for those tasks, while explicit `agent_preset_tools_enabled=false` is an
-all-tools denial.
+change when the preset is later edited or deleted. The two browser grants are
+independent and share the snapshotted exact-origin list. They are distinct from
+`sandbox_network`: one controls static `browser_inspect`, and the other
+controls approval-bound `browser_flow`. An omitted tools or browser snapshot
+identifies a legacy/manual task; neither browser capability is inferred for
+those tasks, while explicit `agent_preset_tools_enabled=false` is an all-tools
+denial.
 For `origin_kind="chat"`, every run-creation endpoint and approval-resolution
 requeue validates that the owning chat still exists and participates in the
 chat deletion fence. Start, retry, resume, continue, retry-from-model-call, and
@@ -542,16 +544,17 @@ artifact inspection through `read_file`, `grep`, `glob`, `artifact_read`, and
 `list_dir`. The `git_status` and `git_diff` tool names return an explicit
 unavailable result in QA v0 without invoking Git because the source snapshot
 excludes Git metadata. QA blocks shell and terminal commands, workspace/Git
-writes, patch or proposal creation, external
-MCP tools, native HTTP requests, web search, and browser inspection. A tool call returned by a model that
-is outside that set is denied before approval or dispatch.
+writes, patch or proposal creation, external MCP tools, native HTTP requests,
+web search, static browser inspection, and browser interaction. A tool call
+returned by a model that is outside that set is denied before approval or
+dispatch.
 
-QA v0 blocks `browser_inspect`. Its public Task creation surface has no
-assignment-launch selector for browser evidence, so it does not claim a
-conditional capability operators cannot select. A future QA contract may add
-constrained browser evidence only with an explicit Hecate runtime selection;
-it would not add browser automation, a URL-check endpoint, or a shell test
-runner.
+QA v0 blocks `browser_inspect` and `browser_flow`. Its public Task creation
+surface has no assignment-launch selector for either browser grant, so it does
+not claim a conditional capability operators cannot select. A future QA
+contract may add constrained browser capability only with an explicit Hecate
+runtime selection; it would not add a general URL checker, retained browser
+state, or a shell test runner.
 
 At execution time Hecate accepts only the canonical `qa` / `v0` contract.
 Malformed, partial, unknown, or future persisted workflow values, or an
@@ -756,11 +759,14 @@ Approval resolution is owned by the task runtime so approval, run, task, step, a
 | `read_file`      | Gate each `agent_loop` `read_file` / `grep` / `glob` / `code_intelligence` / `artifact_read` call. Useful when operators want visibility into direct reads and search/intelligence calls, not just writes; a trusted language server may inspect multiple workspace/build files behind one approved call.                                                                                                                                                                                                             |
 | `all_tools`      | Gate every otherwise-permitted agent tool call (`shell_exec`, `git_exec`, `git_status`, `git_diff`, `file_write`, `file_edit`, `apply_patch`, `read_file`, `grep`, `glob`, `code_intelligence`, `artifact_read`, `list_dir`, `http_request`, `web_search`, `draft_project_proposal`) and every applicable pre-execution gate. QA v0 Git evidence remains unavailable without an approval. Tools-disabled Agent Preset snapshots remain non-approvable hard denials and skip the redundant network pre-execution gate. |
 
-`browser_inspect` is not an approval-policy value. Every otherwise-permitted
-browser-evidence call is approval-gated independently, including when this
-variable is empty or lacks `all_tools`. Unknown policy names are rejected at
-startup with a clear error. Empty value disables every listed gate (use only in
-trusted environments). For per-MCP-server gating in `agent_loop` runs, see
+`browser_inspect` and `browser_flow` are not approval-policy values. Every
+otherwise-permitted browser call is approval-gated independently, including
+when this variable is empty or lacks `all_tools`. A flow approval includes the
+complete ordered action list because scripts, same-origin `GET`/`HEAD`
+requests, and approved clicks may change the application. Unknown policy names
+are rejected at startup with a clear error. Empty value disables every listed
+gate (use only in trusted environments). For per-MCP-server gating in
+`agent_loop` runs, see
 `approval_policy` on `mcp_servers` entries in
 [`mcp.md#approval-policy`](mcp.md#approval-policy).
 
@@ -953,17 +959,18 @@ sequenceDiagram
 - `HECATE_TASK_MCP_CLIENT_CACHE_MAX_ENTRIES=<int>` (default `256`; soft cap on the gateway-wide MCP client cache; LRU-idle eviction kicks in at the cap, with fail-open when every entry is in use)
 - `HECATE_TASK_MCP_CLIENT_CACHE_PING_INTERVAL=<duration>` (default `60s`; how often the cache pings each idle cached upstream to detect wedged subprocesses; `0` disables the proactive health check, leaving only reactive eviction in `Pool.Call`)
 - `HECATE_TASK_MCP_CLIENT_CACHE_PING_TIMEOUT=<duration>` (default `5s`; per-ping deadline; failure or timeout evicts the entry)
-- `HECATE_TASK_BROWSER_EXECUTABLE=<absolute path>` enables the optional local,
-  native browser-evidence tool. The path must name an existing executable;
-  Hecate neither finds/downloads a browser nor allows it in remote-runtime mode.
+- `HECATE_TASK_BROWSER_EXECUTABLE=<absolute path>` enables the optional local
+  native browser runtime used by static evidence and separately granted
+  interaction. The path must name an existing executable; Hecate neither
+  finds/downloads a browser nor allows either tool in remote-runtime mode.
 - `HECATE_TASK_BROWSER_TIMEOUT=<duration>` (default `20s`; must be positive
-  when browser evidence is enabled; one deadline spans preflight, startup, and
-  capture)
+  when the browser runtime is enabled; one deadline spans preflight, startup,
+  and the complete capture or interaction flow)
 - `HECATE_TASK_BROWSER_ALLOW_PRIVATE_IPS=true|false` (default `false`; opts
   into local/private browser destinations after initial resolution preflight).
   Hecate pins hostname origins to their preflight-selected numeric address for
-  the inspection, but this is not an OS-level browser network sandbox or egress
-  firewall.
+  the browser call, but this is not an OS-level browser network sandbox or
+  egress firewall.
 
 When `HECATE_BACKEND=sqlite` or `postgres`, Tasks, Runs, Schedules, schedule
 occurrences, Steps, approvals, artifacts, and Run events are persisted and the
@@ -1377,9 +1384,11 @@ and Observability explains how a specific request moved through the candidates.
 
 ### `GET /hecate/v1/settings`
 
-The settings response includes path-free readiness for optional native browser
-evidence. `browser_evidence.available` says whether this gateway can currently
-offer the local browser tool; `status` is `ready`, `not_configured`,
+The settings response includes path-free readiness for the optional native
+browser runtime. The existing `browser_evidence` wire field covers both static
+evidence and separately granted interaction because one configured runtime
+backs both tools. `browser_evidence.available` says whether this gateway can
+currently offer that local runtime; `status` is `ready`, `not_configured`,
 `local_only`, or `unavailable`. `message` and optional `operator_action` are
 safe to display directly. The response never exposes the configured executable
 path, local probe diagnostics, or host filesystem details.
@@ -1391,7 +1400,7 @@ path, local probe diagnostics, or host filesystem details.
     "browser_evidence": {
       "available": false,
       "status": "not_configured",
-      "message": "Native browser evidence is not configured on this runtime.",
+      "message": "The native browser runtime is not configured on this runtime.",
       "operator_action": "Set HECATE_TASK_BROWSER_EXECUTABLE to an absolute path to a Chromium-compatible executable, then restart Hecate."
     }
   }
@@ -2252,7 +2261,7 @@ Work policies are reusable Hecate launch postures for project work, Hecate
 Chat, Chat-origin Task Runs, and External Agent launches. The stable API uses
 the `agent_presets` resource name, but operators use a work policy to select
 instructions, intended surface, provider/model hints, and the allowed tool,
-workspace-write, network, browser-evidence, approval, memory, context, skill,
+workspace-write, network, browser, approval, memory, context, skill,
 and External Agent posture. `skill_ids` resolve against the selected project's
 skills registry when project work starts. Hecate snapshots resolved/skipped
 skill metadata and warnings into the context packet, but it does not install
@@ -2308,6 +2317,7 @@ GET /hecate/v1/agent-presets
       "writes_allowed": true,
       "network_allowed": false,
       "browser_allowed": true,
+      "browser_interactions_allowed": true,
       "browser_allowed_origins": ["https://qa.example.test"],
       "approval_policy": "require",
       "project_memory_policy": "visible_only",
@@ -2374,47 +2384,72 @@ approval or dispatch. The runtime emits a denied policy step and
 finish from supplied context. Older tasks without this snapshot keep
 their prior catalog behavior.
 
-Browser evidence is separate from generic network posture. A preset may set
-`browser_allowed=true` only when it is usable by a native task
-(`surface="hecate_task"` or `"any"`) and tools are enabled. It must also set a
-non-empty `browser_allowed_origins` list of exact HTTP(S) origins. Hecate
-normalizes and deduplicates that list; it rejects credentials, paths, query
-strings, and fragments rather than broadening the scope. At native assignment
-launch, the result is copied to the task's output-only
-`agent_preset_browser_allowed` and
-`agent_preset_browser_allowed_origins` fields. A later preset edit cannot
-alter a queued, running, retried, or resumed task.
+Browser capabilities are separate from generic network posture. A preset may
+set `browser_allowed=true` for static `browser_inspect`,
+`browser_interactions_allowed=true` for `browser_flow`, either, or both. The
+grants are independent: static evidence never grants interaction and
+interaction never grants static evidence. Either grant is valid only when the
+preset is usable by a native task (`surface="hecate_task"` or `"any"`), tools
+are enabled, and `browser_allowed_origins` contains at least one exact HTTP(S)
+origin. Hecate normalizes and deduplicates the shared list; credentials, paths,
+query strings, and fragments are rejected rather than broadened.
 
-For partial preset updates, changing `browser_allowed` to `false`, disabling
-tools, or changing the surface away from `any`/`hecate_task` atomically clears
-the browser allowlist. This lets ordinary PATCH clients remove a prerequisite
-without having to send a redundant empty `browser_allowed_origins` field;
-creating a browser-enabled preset remains strict and still requires valid exact
-origins.
+At native project-assignment launch, Hecate copies the grants and shared list
+to the output-only `agent_preset_browser_allowed`,
+`agent_preset_browser_interactions_allowed`, and
+`agent_preset_browser_allowed_origins` Task fields. Later preset edits cannot
+alter a queued, running, retried, or resumed Task. Partial updates clear both
+grants and the list when tools are disabled or the surface stops being
+`any`/`hecate_task`. Disabling only one browser grant preserves the other grant
+and its origins; disabling the last grant clears the list. Creation remains
+strict and rejects either grant without valid exact origins.
 
-The snapshot can expose only Hecate's local, static `browser_inspect` tool
-when a local browser executable is configured. It does not grant
-`http_request`, `web_search`, sandbox network, or any capability to an
-External Agent. Hecate Chat, External Agent sessions, and legacy/manual tasks
-do not receive this tool. A preset can make multiple origins eligible, but each
-approved browser call passes only its selected origin to the inspector; another
-configured origin is not available as a cross-origin subresource destination.
-Every browser call creates a normal
-`agent_loop_tool_call` approval even when the global approval-policy list is
-empty. A successful call creates a bounded text-only `browser_evidence`
-artifact; it does not retain a screenshot, download, profile, cookies, or
-storage.
+The snapshots expose only Hecate's local browser tools when a local executable
+is configured. They do not grant `http_request`, `web_search`, sandbox network,
+or any capability to an External Agent. Hecate Chat, External Agent, QA,
+legacy/manual, and remote-runtime tasks receive neither tool. A preset may list
+multiple origins, but each approved call passes only its selected exact origin
+to the browser. Another configured origin is not available as a cross-origin
+subresource destination.
 
-The tool accepts a page path but rejects credentials, query strings, and
-fragments in the requested URL so those values cannot enter task conversation
-or evidence records. Each approval shows that safe origin-plus-path target;
-targets that cannot fit in full are rejected before persistence or approval.
-The local inspector disables page JavaScript, bypasses service workers, and
-permits only selected-origin `GET` and `HEAD` URL-loader traffic. It therefore does
-not offer scripts, workers, WebSockets, WebTransport, WebRTC, click, keyboard,
-upload, download, clipboard, or device primitives. This still cannot prove a
-particular `GET` endpoint has no application-specific side effect, so operators
-must review every approval.
+Both tools accept a page path but reject credentials, query strings, and
+fragments so those values cannot enter Task conversation or evidence records.
+Each call creates a normal `agent_loop_tool_call` approval even when the global
+approval-policy list is empty. `browser_inspect` disables scripts and service
+workers and emits a bounded `browser_evidence` plain-text artifact.
+`browser_flow` enables scripts only for one fully declared approval-bound flow
+of 1–6 exact accessibility actions:
+
+```json
+{
+  "url": "https://qa.example.test/review",
+  "actions": [
+    { "kind": "wait_for", "role": "button", "name": "Run checks" },
+    { "kind": "click", "role": "button", "name": "Run checks" },
+    { "kind": "wait_for", "role": "status", "name": "Checks complete" }
+  ]
+}
+```
+
+`kind` is `click` or `wait_for`; both match one exact computed accessibility
+`role` and accessible `name`. Click roles are limited to `button`, `link`,
+`checkbox`, `radio`, `tab`, `menuitem`, and `switch`. The entire URL and action
+sequence must validate before approval and before the browser starts. The agent
+loop accepts at most one `browser_flow` in a model tool-call batch. Scripts,
+same-origin `GET`/`HEAD` requests, and approved clicks may change the
+application, so the approval shows and authorizes the complete ordered flow.
+
+Each browser call starts a fresh process/profile, imports no profile-stored
+authentication, and retains no call state for reuse. The tools do not type,
+upload, download, capture screenshots, import saved logins, or expose
+cookies/storage/raw protocol/request or response bodies. Host-managed browser
+policy can still supply integrated authentication or client certificates
+outside profile storage; see the
+[operator security contract](../operator/security.md#native-browser-capability-boundary).
+A successful flow emits bounded `browser_flow_evidence` plain text with ordered action outcomes,
+initial/final accessibility snapshots, and network counters.
+If a later action fails after a click, Hecate retains bounded partial evidence
+with a warning that the approved application may already have changed.
 
 When `writes_allowed=false`, Hecate also omits `shell_exec`, `git_exec`,
 `file_write`, and all interactive terminal tools, and rejects an unexpected
@@ -4217,7 +4252,14 @@ The response envelope is:
       "network_allowed": false,
       "browser_evidence_status": "enabled",
       "browser_allowed": true,
+      "browser_interaction_status": "enabled",
+      "browser_interactions_allowed": true,
       "browser_allowed_origins": ["https://qa.example.test"],
+      "browser_runtime_readiness": {
+        "available": true,
+        "status": "ready",
+        "message": "The native browser runtime is ready on this local runtime for static evidence and approved interaction."
+      },
       "approval_policy": "require",
       "project_memory_policy": "include",
       "context_source_policy": "include_enabled"
@@ -4238,15 +4280,28 @@ reason and repair vocabulary as `metadata.readiness` on `/v1/models`. External
 Agent assignments include `external_agent_id`, `external_agent`, and
 `session_title` when the adapter/options resolve. Assignments with a resolved
 Agent Preset include `profile_posture`, a read-only summary of the selected
-preset's tools, writes, network, browser-evidence, approval, memory, and
-context-source posture. Native Hecate tasks report browser evidence as
-`enabled` or `disabled`; when enabled, `browser_allowed_origins` contains the
-exact origins that will be copied into the task snapshot. External Agent
-assignments always report `browser_evidence_status="not_applicable"` with no
-browser grant or origins, even if the reusable `any` preset also permits native
-task browser evidence. An incompatible preset surface is a launch blocker. For
-native Hecate tasks, the displayed write/network/browser values are also the
-values that will be snapshotted into the created task's runtime policy.
+preset's tools, writes, network, browser, approval, memory, and context-source
+posture. Native Hecate tasks report `browser_evidence_status` and
+`browser_interaction_status` independently as `enabled`, `disabled`, or
+`unavailable`. `unavailable` means the preset grants that tool but the current
+runtime will omit it because the local browser is unconfigured, invalid, or the
+gateway is running in remote-runtime mode. In that case,
+`browser_runtime_readiness` carries the same path-free `status`, `message`, and
+`operator_action` repair contract as Settings, and `warnings` names the omitted
+`browser_inspect` and/or `browser_flow` tool. Browser runtime unavailability is
+a warning rather than an assignment-launch blocker; the task may still start
+with the rest of its effective catalog.
+`browser_allowed` and `browser_interactions_allowed` expose the corresponding
+immutable preset grants even when the runtime will omit the tool. When either
+is granted, `browser_allowed_origins` contains the shared exact origins that
+will be copied into the Task snapshot. External Agent
+assignments always report both statuses as `not_applicable` with neither grant
+nor origins and omit `browser_runtime_readiness`, even if the reusable `any`
+preset permits native-task browser capabilities. An incompatible preset surface
+is a launch blocker. For native Hecate tasks, the displayed write/network
+values and browser grant/origin values are also the values that will be
+snapshotted into the created Task's runtime policy; the status fields describe
+whether this runtime can expose the corresponding tools.
 `ready=false` is the UI gate for **Start assignment** and **Prepare chat**;
 operators must still confirm the separate start mutation after reviewing
 preflight.

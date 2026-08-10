@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -120,8 +121,9 @@ func TestAgentLoopBrowserInspectionPersistsSafeTextEvidence(t *testing.T) {
 		FinalURL: "https://app.example.test/reports?token=secret#fragment",
 		Title:    "Quarterly report",
 		Accessibility: []browserrunner.AccessibilityNode{{
-			Role: "heading",
-			Name: "Revenue",
+			Role:  "heading",
+			Name:  "Revenue",
+			Value: "operator_token=secret",
 		}},
 		Console: []browserrunner.ConsoleMessage{{Level: "warning", Text: "slow endpoint"}},
 		Network: browserrunner.NetworkSummary{Requests: 3, Navigations: 1, BlockedRequests: 1},
@@ -161,6 +163,70 @@ func TestAgentLoopBrowserInspectionPersistsSafeTextEvidence(t *testing.T) {
 	}
 	if !strings.Contains(result.Text, "Untrusted browser evidence") || !strings.Contains(artifact.ContentText, "Revenue") {
 		t.Fatalf("tool evidence = %q artifact = %q", result.Text, artifact.ContentText)
+	}
+}
+
+func TestBrowserInspectionReportQuotesPageControlledAccessibilityFields(t *testing.T) {
+	t.Parallel()
+	report := formatBrowserInspectionReport(browserrunner.InspectResult{
+		FinalURL:    "https://app.example.test/reports",
+		FinalOrigin: "https://app.example.test",
+		Accessibility: []browserrunner.AccessibilityNode{{
+			Role: "button; name=fake",
+			Name: `Continue; description=fake "quoted" \\ path`,
+		}},
+	}, "https://app.example.test")
+	for _, want := range []string{`role="button; name=fake"`, `name="Continue; description=fake \"quoted\" \\\\ path"`} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("quoted inspection report missing %q: %q", want, report)
+		}
+	}
+}
+
+func TestAgentLoopBrowserInspectionSurfacesProfileCleanupAction(t *testing.T) {
+	t.Parallel()
+	allowed := true
+	inspector := &fakeBrowserInspector{err: browserrunner.ErrProfileCleanupFailed}
+	dispatcher := &agentLoopToolDispatcher{browserInspector: inspector}
+	spec := newAgentLoopSpec(t)
+	spec.Task.AgentPresetID = "prof_browser"
+	spec.Task.OriginKind = "project_work_item"
+	spec.Task.AgentPresetBrowserAllowed = &allowed
+	spec.Task.AgentPresetBrowserAllowedOrigins = []string{"https://app.example.test"}
+
+	result, err := dispatcher.Dispatch(context.Background(), spec, agentLoopToolCall("browser-1", AgentToolBrowserInspect, `{"url":"https://app.example.test/reports"}`), 3, nil, nil)
+	if err != nil || !result.ToolError || result.Step == nil {
+		t.Fatalf("Dispatch() = %+v, err=%v", result, err)
+	}
+	for _, want := range []string{"profile cleanup failed", "stale hecate-browser-*", "operating-system temporary directory"} {
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("cleanup guidance missing %q: %q", want, result.Text)
+		}
+	}
+	if strings.Contains(result.Text, "/tmp/") || strings.Contains(result.Text, `C:\\`) {
+		t.Fatalf("cleanup guidance exposed a concrete path: %q", result.Text)
+	}
+}
+
+func TestAgentLoopBrowserInspectionPreservesPolicyAndCleanupFailures(t *testing.T) {
+	t.Parallel()
+	allowed := true
+	inspector := &fakeBrowserInspector{err: errors.Join(browserrunner.ErrOriginNotAllowed, browserrunner.ErrProfileCleanupFailed)}
+	dispatcher := &agentLoopToolDispatcher{browserInspector: inspector}
+	spec := newAgentLoopSpec(t)
+	spec.Task.AgentPresetID = "prof_browser"
+	spec.Task.OriginKind = "project_work_item"
+	spec.Task.AgentPresetBrowserAllowed = &allowed
+	spec.Task.AgentPresetBrowserAllowedOrigins = []string{"https://app.example.test"}
+
+	result, err := dispatcher.Dispatch(context.Background(), spec, agentLoopToolCall("browser-1", AgentToolBrowserInspect, `{"url":"https://app.example.test/reports"}`), 3, nil, nil)
+	if err != nil || !result.ToolError || result.Step == nil {
+		t.Fatalf("Dispatch() = %+v, err=%v", result, err)
+	}
+	for _, want := range []string{"left the enabled origins", "was blocked", "profile cleanup failed"} {
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("combined failure guidance missing %q: %q", want, result.Text)
+		}
 	}
 }
 
