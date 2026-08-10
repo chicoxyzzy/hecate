@@ -925,7 +925,7 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 			capture.SemanticResultCount += items
 		}
 		observedProvider := strings.TrimSpace(fmt.Sprint(step.OutputSummary["provider"]))
-		if observedProvider != "" {
+		if observedProvider != "" && codeIntelligenceDogfoodOperationMatchesProviderLanguage(operation, providerLanguage) {
 			if providerToken != "" && strings.EqualFold(observedProvider, providerToken) {
 				capture.Provider = provider
 			} else if normalized := codeIntelligenceDogfoodProvider(observedProvider); normalized != "" && normalized != provider {
@@ -941,6 +941,13 @@ func captureCodeIntelligenceDogfoodRun(run e2eTaskRun, taskID string, steps []e2
 	capture.ProviderVersionObserved = codeIntelligenceDogfoodConversationObservedVersion(artifacts, providerLanguage, providerToken, providerVersion)
 	capture.ProviderUnavailableObserved = codeIntelligenceDogfoodConversationObservedUnavailable(artifacts, providerLanguage, providerToken)
 	return capture
+}
+
+func codeIntelligenceDogfoodOperationMatchesProviderLanguage(operation, providerLanguage string) bool {
+	if providerLanguage == "structural" {
+		return operation == string(codeintel.OpStructuralSearch)
+	}
+	return codeIntelligenceDogfoodSemanticOperation(operation)
 }
 
 func codeIntelligenceDogfoodToolRoutes(events []e2eEventEnvelope) ([]string, []int) {
@@ -1488,6 +1495,31 @@ func TestCodeIntelligenceDogfoodFallbackRequiresLaterModelCall(t *testing.T) {
 	laterResult := buildDogfoodScenarioResult(expected, codeIntelligenceDogfoodObservation(later, ""))
 	if laterResult.Verdict != "inconclusive" || !laterResult.Checks.CorrectFallback {
 		t.Fatalf("later fallback verdict = %q checks=%+v reasons=%v, want inconclusive recovery", laterResult.Verdict, laterResult.Checks, laterResult.ReasonCodes)
+	}
+}
+
+func TestCodeIntelligenceDogfoodProviderEvidenceIsOperationScoped(t *testing.T) {
+	run := e2eTaskRun{
+		ID: "run_provider_scope", Status: "completed",
+		StartedAt: "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:01Z",
+	}
+	steps := []e2eTaskStep{{
+		Index: 2, ToolName: "code_intelligence", Status: "failed", ErrorKind: "invalid_request",
+		Input:         map[string]any{"operation": "workspace_symbols", "model_call_index": float64(2)},
+		OutputSummary: map[string]any{"error_category": "invalid_request", "invalid_request_reason": "query_required"},
+		StartedAt:     "2026-08-08T10:00:00Z", FinishedAt: "2026-08-08T10:00:00.100Z",
+	}, {
+		Index: 3, ToolName: "code_intelligence", Status: "completed",
+		Input:         map[string]any{"operation": "structural_search", "model_call_index": float64(3)},
+		OutputSummary: map[string]any{"provider": "ast-grep", "items": float64(0)},
+		StartedAt:     "2026-08-08T10:00:00.100Z", FinishedAt: "2026-08-08T10:00:00.200Z",
+	}}
+	capture := captureCodeIntelligenceDogfoodRun(run, "task_provider_scope", steps, nil, nil, "expected_marker", "typescript", "tsc", "tsc", "", 0)
+	if capture.Provider != "" {
+		t.Fatalf("preferred provider evidence = %q, must not copy structural fallback provider", capture.Provider)
+	}
+	if capture.StructuralResultCount != 0 || len(capture.InvalidRequestReasons) != 1 || capture.InvalidRequestReasons[0] != "query_required" {
+		t.Fatalf("provider-scoped capture = %+v, want bounded fallback and invalid-request evidence", capture)
 	}
 }
 
