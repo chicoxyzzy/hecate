@@ -103,10 +103,13 @@ use mode `0700` and report files use mode `0600`. On Windows, filesystem ACLs
 and inherited permissions apply instead of POSIX mode bits. JSON is the
 machine-readable record; Markdown is a projection of the same allowlisted
 fields for human review. Each scenario is classified as `pass`, `fail`,
-`inconclusive`, or `skipped`. Review the individual reason codes alongside the
-aggregate rate: a useful final answer does not erase generic browsing before
-capability discovery, an avoidable failed semantic call, a forbidden route, or
-an unexpected workspace change.
+`inconclusive`, or `skipped`. The verdict deliberately measures strict routing
+and capability-discovery adherence, not only whether the final answer happened
+to be correct. A successful semantic query made before capability discovery can
+therefore retain a useful result while failing the documented route contract.
+Review the individual reason codes alongside the aggregate rates: preferred
+tool selection and successful preferred results are separate metrics, as are
+final-answer usefulness and route adherence.
 
 For this Git-backed harness, managed Project workspaces begin as clean,
 independent clones, including when the source is a linked worktree. Workspace
@@ -120,6 +123,10 @@ query starts them. If that query exposes a provider startup or protocol failure
 and the model then uses a successful bounded fallback, the scenario is
 `inconclusive` rather than charging the infrastructure failure to tool
 selection. A missing or unsuccessful fallback still fails the scenario.
+“Structured fallback success” specifically requires a successful bounded
+`grep` or structural-search result. A targeted `read_file` can still recover a
+useful answer and is reported by the useful-result metric, but it does not prove
+that the model followed the fallback routing contract being measured.
 
 The report allowlist is deliberately narrow. It may contain:
 

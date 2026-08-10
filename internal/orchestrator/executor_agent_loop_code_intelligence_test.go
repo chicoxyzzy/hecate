@@ -36,6 +36,15 @@ func TestAgentLoopCodeIntelligenceToolIsAdvertisedAndReadOnlySafe(t *testing.T) 
 			t.Errorf("tool schema omits operation %q", operation)
 		}
 	}
+	for _, routingRule := range []string{
+		"Choose capabilities first with no other arguments",
+		"structural_search is the only operation for Python, Rust",
+		"definition/references/hover are Go/TypeScript/JavaScript semantic operations requiring path, line, and column",
+	} {
+		if !strings.Contains(string(tool.Function.Parameters), routingRule) {
+			t.Errorf("tool schema omits routing rule %q", routingRule)
+		}
+	}
 	if !strings.Contains(string(tool.Function.Parameters), `"selector"`) || !strings.Contains(string(tool.Function.Parameters), `^[A-Za-z_][A-Za-z0-9_]*$`) {
 		t.Fatalf("tool schema omits the bounded structural selector: %s", tool.Function.Parameters)
 	}
@@ -70,10 +79,10 @@ func TestAgentLoopCodeIntelligenceSelfDocumentationMatchesEffectivePolicy(t *tes
 			task:              types.Task{SandboxReadOnly: true, SandboxNetwork: true},
 			serviceConfigured: true,
 			want: []string{
-				"capabilities and structural_search are permitted without an approval pause",
+				"calls to `code_intelligence` with `operation=capabilities` or `operation=structural_search` are permitted without an approval pause",
 				"semantic LSP operations are blocked: semantic language servers are disabled for read-only tasks",
 				semanticCodeIntelligenceRepair,
-				"grep is permitted without an approval pause",
+				"`grep` is permitted without an approval pause",
 			},
 		},
 		{
@@ -94,9 +103,9 @@ func TestAgentLoopCodeIntelligenceSelfDocumentationMatchesEffectivePolicy(t *tes
 			gatedTools:        []string{AgentToolCodeIntelligence, "grep"},
 			serviceConfigured: true,
 			want: []string{
-				"capabilities and structural_search require operator approval",
+				"calls to `code_intelligence` with `operation=capabilities` or `operation=structural_search` require operator approval",
 				"semantic LSP operations are approval-gated",
-				"grep requires operator approval",
+				"`grep` requires operator approval",
 			},
 		},
 		{

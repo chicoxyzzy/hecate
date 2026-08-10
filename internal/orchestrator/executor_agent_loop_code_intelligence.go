@@ -29,7 +29,7 @@ const (
 	codeIntelligenceStepStringBytes = 64
 	codeIntelligenceDefaultResults  = 50
 	codeIntelligenceMaximumResults  = 200
-	semanticCodeIntelligenceRepair  = "use grep or structural_search, or run semantic intelligence with a compatible OS sandbox/network-enabled preset"
+	semanticCodeIntelligenceRepair  = "use `grep` or `code_intelligence` with `operation=structural_search`, or run semantic intelligence with a compatible OS sandbox/network-enabled preset"
 )
 
 func agentSandboxBlocksCodeIntelligence(task types.Task, call types.ToolCall) (bool, string) {
@@ -71,14 +71,14 @@ func codeIntelligenceToolDefinition() types.Tool {
 		Type: "function",
 		Function: types.ToolFunction{
 			Name:        AgentToolCodeIntelligence,
-			Description: "Use read-only semantic or structural code intelligence inside the task workspace. Semantic LSP operations support Go through gopls and TypeScript/JavaScript through TypeScript 7+ native LSP. structural_search uses optional ast-grep for allowlisted Go, JavaScript/TypeScript, Python, Rust, Java, C/C++/C#, HTML/CSS, JSON/YAML, and Bash syntax, and accepts a safe tree-sitter node-kind selector for contextual patterns. Call capabilities to inspect trusted provider versions; installed_unverified means initialization or invocation is verified only by a real query. Fall back to grep when a provider is missing. Returned paths are workspace-confined.",
+			Description: "Use read-only semantic or structural code intelligence inside the task workspace. Routing rule: use semantic LSP operations only for Go through gopls and TypeScript/JavaScript through TypeScript 7+ native LSP; use `operation=structural_search` for Python, Rust, Java, C/C++/C#, HTML/CSS, JSON/YAML, Bash, or syntax patterns in any supported language. Never use semantic operations for those structural-only languages. Call `code_intelligence` with `operation=capabilities` first to inspect trusted provider availability and versions; installed_unverified means initialization or invocation is verified only by a real query. If the selected provider is unavailable, do not call its operations; use `operation=structural_search` when ast-grep is available or fall back to `grep`. Returned paths are workspace-confined.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"operation": {"type": "string", "enum": ["capabilities", "definition", "references", "hover", "document_symbols", "workspace_symbols", "diagnostics", "structural_search"]},
+					"operation": {"type": "string", "enum": ["capabilities", "definition", "references", "hover", "document_symbols", "workspace_symbols", "diagnostics", "structural_search"], "description": "Choose capabilities first with no other arguments. definition/references/hover are Go/TypeScript/JavaScript semantic operations requiring path, line, and column. document_symbols/diagnostics are semantic operations requiring path. workspace_symbols is semantic, requires query, and also requires path for TypeScript/JavaScript or language=go for Go. structural_search is the only operation for Python, Rust, Java, C/C++/C#, HTML/CSS, JSON/YAML, and Bash; it requires query and requires language when path is a directory."},
 					"path": {"type": "string", "maxLength": 4096, "description": "Workspace-relative source file, capped at 4096 UTF-8 bytes. Required for document-scoped LSP operations and TypeScript workspace_symbols; optional for Go workspace_symbols when language is supplied; optional structural_search scope defaults to '.'."},
 					"language": {"type": "string", "maxLength": 64, "description": "Optional language id capped at 64 UTF-8 bytes, usually inferred from path. Semantic LSP accepts Go and TypeScript/JavaScript. structural_search additionally accepts Python, Rust, Java, C/C++/C#, HTML/CSS, JSON/YAML, and Bash. Required for workspace_symbols without path and for directory-scoped structural_search."},
-					"query": {"type": "string", "maxLength": 16384, "description": "Required workspace-symbol query or ast-grep pattern for structural_search, capped at 16384 UTF-8 bytes."},
+					"query": {"type": "string", "maxLength": 16384, "description": "Required symbol-name query for workspace_symbols or ast-grep pattern for structural_search, capped at 16384 UTF-8 bytes. ast-grep metavariables use $NAME for one node and $$$ARGS or $$$BODY for multiple nodes."},
 					"selector": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Optional structural_search-only tree-sitter node kind used to select the match within a contextual pattern, for example call_expression. Must be one ASCII identifier token."},
 					"line": {"type": "integer", "minimum": 1, "description": "1-based source line. Required for definition, references, and hover."},
 					"column": {"type": "integer", "minimum": 1, "description": "1-based UTF-8 byte column. Required for definition, references, and hover."},
@@ -120,7 +120,7 @@ func effectiveCodeIntelligenceGuidance(task types.Task, gate agentLoopApprovalGa
 	} else if gate.requiresExplicitApproval(AgentToolCodeIntelligence) {
 		semanticAccess = "approval-gated; provider installation is not checked yet and LSP initialization is verified on query"
 	}
-	return "Effective access for this run: capabilities and structural_search " + toolAccess + "; semantic LSP operations are " + semanticAccess + ". grep " + grepAccess + " as the text fallback. Dispatch-time policy remains authoritative."
+	return "Effective access for this run: calls to `code_intelligence` with `operation=capabilities` or `operation=structural_search` " + toolAccess + "; semantic LSP operations are " + semanticAccess + ". `grep` " + grepAccess + " as the text fallback. Dispatch-time policy remains authoritative."
 }
 
 func (d *agentLoopToolDispatcher) codeIntelligenceTool(ctx context.Context, spec ExecutionSpec, args codeIntelligenceArgs, stepIndex int, startedAt time.Time, toolName string) (string, *types.TaskStep, []types.TaskArtifact, error) {

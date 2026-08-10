@@ -115,13 +115,15 @@ type dogfoodScenarioObservation struct {
 
 type dogfoodScenarioChecks struct {
 	CapabilitiesBeforeQuery     bool   `json:"capabilities_before_query"`
-	FirstInspectionPreferred    bool   `json:"first_inspection_preferred"`
+	CapabilitiesFirst           bool   `json:"capabilities_first"`
 	PreferredRouteFirst         bool   `json:"preferred_route_first"`
 	FallbackOnlyAfterPreferred  bool   `json:"fallback_only_after_preferred"`
+	ProviderObserved            bool   `json:"provider_observed"`
 	ProviderMatched             bool   `json:"provider_matched"`
 	ProviderVersionObserved     bool   `json:"provider_version_observed"`
 	ProviderUnavailableObserved bool   `json:"provider_unavailable_observed"`
 	PreferredToolSelected       bool   `json:"preferred_tool_selected"`
+	PreferredToolProducedResult bool   `json:"preferred_tool_produced_result"`
 	CorrectFallback             bool   `json:"correct_fallback"`
 	UsefulResult                bool   `json:"useful_result"`
 	Completed                   bool   `json:"completed"`
@@ -158,6 +160,7 @@ type dogfoodSummary struct {
 	Skipped                 int     `json:"skipped"`
 	CapabilityAwarenessRate float64 `json:"capability_awareness_rate"`
 	PreferredToolRate       float64 `json:"preferred_tool_rate"`
+	PreferredResultRate     float64 `json:"preferred_result_rate"`
 	PreferredToolMeasured   int     `json:"preferred_tool_measured"`
 	FallbackCorrectnessRate float64 `json:"fallback_correctness_rate"`
 	FallbackMeasured        int     `json:"fallback_measured"`
@@ -188,17 +191,24 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	preferredRouteAdvertised := (expected.ExpectedRoute == "semantic" && expected.ProviderAvailable && expected.SemanticPermitted) ||
 		(expected.ExpectedRoute == "structural" && expected.ProviderAvailable)
 	preferredRouteAvailable := preferredRouteAdvertised && !providerQueryFailed
+	preferredToolSelected := (expected.ExpectedRoute == "semantic" && observed.SemanticCalls > 0) ||
+		(expected.ExpectedRoute == "structural" && observed.StructuralCalls > 0)
+	preferredToolProducedResult := (expected.ExpectedRoute == "semantic" && observed.SemanticResultCount > 0) ||
+		(expected.ExpectedRoute == "structural" && observed.StructuralResultCount > 0)
 	fallbackApplicable := expected.ExpectedRoute == "fallback" ||
 		(expected.ExpectedRoute == "policy" && expected.PolicyRepresentable) || providerPrerequisiteMissing || semanticPolicyUnavailable || providerQueryFailed
 	requiresPolicyBlock := semanticPolicyUnavailable || (expected.ExpectedRoute == "policy" && expected.PolicyRepresentable)
 	checks := dogfoodScenarioChecks{
 		CapabilitiesBeforeQuery:     observed.CapabilitiesBeforeQuery,
-		FirstInspectionPreferred:    observed.FirstInspectionTool == "code_intelligence:capabilities",
+		CapabilitiesFirst:           observed.FirstInspectionTool == "code_intelligence:capabilities",
 		PreferredRouteFirst:         !preferredRouteAdvertised || dogfoodPreferredRouteFirst(expected.ExpectedRoute, observed.ToolRoute),
 		FallbackOnlyAfterPreferred:  !preferredRouteAdvertised || dogfoodFallbackOnlyAfterPreferred(expected.ExpectedRoute, observed, providerFailureModelCall),
-		ProviderMatched:             !preferredRouteAvailable || (expected.Provider != "" && observed.Provider == expected.Provider),
+		ProviderObserved:            !preferredToolProducedResult || observed.Provider != "",
+		ProviderMatched:             !preferredToolSelected || observed.Provider == "" || (expected.Provider != "" && observed.Provider == expected.Provider),
 		ProviderVersionObserved:     expected.ProviderVersion == "" || observed.ProviderVersionObserved,
 		ProviderUnavailableObserved: !expected.ForcedUnavailable || observed.ProviderUnavailableObserved,
+		PreferredToolSelected:       preferredToolSelected,
+		PreferredToolProducedResult: preferredToolProducedResult,
 		UsefulResult:                observed.UsefulResult,
 		Completed:                   observed.Completed,
 		NoWorkspaceWrites:           observed.WorkspaceChangeCount == 0,
@@ -212,22 +222,14 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	case "semantic":
 		if providerQueryFailed {
 			checks.CorrectFallback = observed.SemanticCalls > 0 && dogfoodFallbackProducedResultsAfter(observed, providerFailureModelCall)
-			checks.PreferredToolSelected = checks.CorrectFallback
 		} else if providerPrerequisiteMissing || semanticPolicyUnavailable {
 			checks.CorrectFallback = observed.SemanticCalls == 0 && dogfoodFallbackProducedResults(observed)
-			checks.PreferredToolSelected = checks.CorrectFallback
-		} else {
-			checks.PreferredToolSelected = observed.SemanticCalls > 0 && observed.SemanticResultCount > 0
 		}
 	case "structural":
 		if providerQueryFailed {
 			checks.CorrectFallback = observed.StructuralCalls > 0 && observed.GrepResultCount > 0 && observed.GrepResultModelCall > providerFailureModelCall
-			checks.PreferredToolSelected = checks.CorrectFallback
 		} else if providerPrerequisiteMissing {
 			checks.CorrectFallback = observed.StructuralCalls == 0 && observed.GrepResultCount > 0
-			checks.PreferredToolSelected = checks.CorrectFallback
-		} else {
-			checks.PreferredToolSelected = observed.StructuralCalls > 0 && observed.StructuralResultCount > 0
 		}
 	case "fallback", "policy":
 		if expected.ExpectedRoute == "policy" && !expected.PolicyRepresentable {
@@ -235,9 +237,8 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 		} else {
 			checks.CorrectFallback = observed.SemanticCalls == 0 && dogfoodFallbackProducedResults(observed)
 		}
-		checks.PreferredToolSelected = checks.CorrectFallback
 	default:
-		checks.PreferredToolSelected = false
+		checks.CorrectFallback = false
 	}
 
 	reasons := make([]string, 0)
@@ -258,8 +259,8 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	if !checks.CapabilitiesBeforeQuery {
 		reasons = append(reasons, "capabilities_not_consumed_before_query")
 	}
-	if !checks.FirstInspectionPreferred {
-		reasons = append(reasons, "generic_browse_before_capabilities")
+	if !checks.CapabilitiesFirst && dogfoodRouteContains(observed.ToolRoute, "code_intelligence:capabilities") {
+		reasons = append(reasons, "inspection_before_capabilities")
 	}
 	if !checks.PreferredRouteFirst {
 		reasons = append(reasons, "generic_browse_before_preferred_query")
@@ -270,7 +271,9 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	if !checks.ProviderVersionObserved {
 		reasons = append(reasons, "provider_version_not_observed")
 	}
-	if !checks.ProviderMatched {
+	if !checks.ProviderObserved {
+		reasons = append(reasons, "provider_not_observed")
+	} else if !checks.ProviderMatched {
 		reasons = append(reasons, "provider_mismatch")
 	}
 	if !checks.ProviderUnavailableObserved {
@@ -279,20 +282,17 @@ func buildDogfoodScenarioResult(expected dogfoodScenarioExpectation, observed do
 	if !checks.PolicyBlockObserved {
 		reasons = append(reasons, "semantic_policy_block_not_observed")
 	}
-	if !checks.PreferredToolSelected {
-		switch expected.ExpectedRoute {
-		case "semantic":
-			if semanticPolicyUnavailable {
-				reasons = append(reasons, "semantic_policy_fallback_not_used")
-			} else {
-				reasons = append(reasons, "preferred_code_intelligence_not_used")
-			}
-		case "fallback":
-			reasons = append(reasons, "missing_provider_fallback_not_used")
-		case "policy":
-			reasons = append(reasons, "policy_fallback_not_used")
-		default:
+	if preferredRouteAvailable {
+		if !checks.PreferredToolSelected {
 			reasons = append(reasons, "preferred_code_intelligence_not_used")
+		} else if !checks.PreferredToolProducedResult {
+			reasons = append(reasons, "preferred_code_intelligence_no_results")
+		}
+	}
+	if fallbackApplicable && !checks.CorrectFallback {
+		fallbackReason := dogfoodFallbackFailureReason(expected, observed)
+		if fallbackReason != "" {
+			reasons = append(reasons, fallbackReason)
 		}
 	}
 	if (expected.ExpectedRoute == "fallback" || (expected.ExpectedRoute == "policy" && expected.PolicyRepresentable)) && observed.SemanticCalls > 0 {
@@ -355,20 +355,45 @@ func dogfoodFallbackProducedResultsAfter(observed dogfoodScenarioObservation, mo
 		(observed.StructuralResultCount > 0 && observed.StructuralResultModelCall > modelCall)
 }
 
-func dogfoodPreferredRouteFirst(expectedRoute string, routes []string) bool {
-	first := "none"
-	seenCapabilities := false
-	for _, route := range routes {
-		if route == "code_intelligence:capabilities" {
-			seenCapabilities = true
-			continue
+func dogfoodFallbackFailureReason(expected dogfoodScenarioExpectation, observed dogfoodScenarioObservation) string {
+	prefix := "provider_failure"
+	switch expected.ExpectedRoute {
+	case "fallback":
+		prefix = "missing_provider"
+	case "policy":
+		prefix = "policy"
+	case "semantic":
+		if !expected.SemanticPermitted {
+			prefix = "semantic_policy"
+		} else if !expected.ProviderAvailable {
+			prefix = "provider_unavailable"
 		}
-		if seenCapabilities {
-			first = route
-			break
+	case "structural":
+		if !expected.ProviderAvailable {
+			prefix = "provider_unavailable"
 		}
 	}
-	return dogfoodRouteMatchesPreferred(expectedRoute, first)
+	fallbackAttempted := observed.GrepCalls > 0
+	if expected.ExpectedRoute != "structural" {
+		fallbackAttempted = fallbackAttempted || observed.StructuralCalls > 0
+	}
+	if !fallbackAttempted {
+		return prefix + "_fallback_not_used"
+	}
+	if !dogfoodFallbackProducedResults(observed) {
+		return prefix + "_fallback_no_results"
+	}
+	return ""
+}
+
+func dogfoodPreferredRouteFirst(expectedRoute string, routes []string) bool {
+	for _, route := range routes {
+		if route == "code_intelligence:capabilities" {
+			continue
+		}
+		return dogfoodRouteMatchesPreferred(expectedRoute, route)
+	}
+	return false
 }
 
 func dogfoodFallbackOnlyAfterPreferred(expectedRoute string, observed dogfoodScenarioObservation, providerFailureModelCall int) bool {
@@ -394,7 +419,10 @@ func dogfoodFallbackOnlyAfterPreferred(expectedRoute string, observed dogfoodSce
 			}
 			continue
 		}
-		if !dogfoodRouteIsFallback(expectedRoute, route) || preferredProducedResults {
+		if !dogfoodRouteIsFallback(expectedRoute, route) {
+			continue
+		}
+		if preferredProducedResults {
 			return false
 		}
 		threshold := preferredCall
@@ -406,6 +434,15 @@ func dogfoodFallbackOnlyAfterPreferred(expectedRoute string, observed dogfoodSce
 		}
 	}
 	return true
+}
+
+func dogfoodRouteContains(routes []string, target string) bool {
+	for _, route := range routes {
+		if route == target {
+			return true
+		}
+	}
+	return false
 }
 
 func dogfoodRouteMatchesPreferred(expectedRoute, route string) bool {
@@ -452,6 +489,9 @@ func finalizeDogfoodScorecard(card dogfoodScorecard) dogfoodScorecard {
 			if scenario.Checks.PreferredToolSelected {
 				summary.PreferredToolRate++
 			}
+			if scenario.Checks.PreferredToolProducedResult {
+				summary.PreferredResultRate++
+			}
 		}
 		if scenario.Checks.UsefulResult {
 			summary.UsefulResultRate++
@@ -483,6 +523,7 @@ func finalizeDogfoodScorecard(card dogfoodScorecard) dogfoodScorecard {
 	}
 	if summary.PreferredToolMeasured > 0 {
 		summary.PreferredToolRate /= float64(summary.PreferredToolMeasured)
+		summary.PreferredResultRate /= float64(summary.PreferredToolMeasured)
 	}
 	if summary.FallbackMeasured > 0 {
 		summary.FallbackCorrectnessRate /= float64(summary.FallbackMeasured)
@@ -616,7 +657,8 @@ func renderDogfoodScorecardMarkdown(card dogfoodScorecard) string {
 	fmt.Fprintf(&builder, "| Pass / fail / inconclusive / skipped | %d / %d / %d / %d |\n", card.Summary.Pass, card.Summary.Fail, card.Summary.Inconclusive, card.Summary.Skipped)
 	fmt.Fprintf(&builder, "| Capability awareness | %.0f%% |\n", card.Summary.CapabilityAwarenessRate*100)
 	fmt.Fprintf(&builder, "| Preferred tool selection | %.0f%% (%d measured) |\n", card.Summary.PreferredToolRate*100, card.Summary.PreferredToolMeasured)
-	fmt.Fprintf(&builder, "| Fallback correctness | %.0f%% (%d measured) |\n", card.Summary.FallbackCorrectnessRate*100, card.Summary.FallbackMeasured)
+	fmt.Fprintf(&builder, "| Preferred tool produced results | %.0f%% (%d measured) |\n", card.Summary.PreferredResultRate*100, card.Summary.PreferredToolMeasured)
+	fmt.Fprintf(&builder, "| Structured fallback success | %.0f%% (%d measured) |\n", card.Summary.FallbackCorrectnessRate*100, card.Summary.FallbackMeasured)
 	fmt.Fprintf(&builder, "| Useful result | %.0f%% |\n", card.Summary.UsefulResultRate*100)
 	fmt.Fprintf(&builder, "| Task completion | %.0f%% |\n", card.Summary.TaskCompletionRate*100)
 	fmt.Fprintf(&builder, "| Query latency median / max | %d / %d ms |\n", card.Summary.QueryLatencyMedianMS, card.Summary.QueryLatencyMaxMS)
@@ -694,6 +736,51 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	if result := buildDogfoodScenarioResult(baseExpected, baseObserved); result.Verdict != "pass" {
 		t.Fatalf("semantic verdict = %q reasons=%v, want pass", result.Verdict, result.ReasonCodes)
 	}
+	queryFirstObserved := baseObserved
+	queryFirstObserved.ToolRoute = []string{"code_intelligence:workspace_symbols"}
+	queryFirstObserved.ToolRouteModelCalls = []int{1}
+	queryFirstObserved.FirstInspectionTool = "code_intelligence:workspace_symbols"
+	queryFirstObserved.CodeIntelligenceCalls = 1
+	queryFirstObserved.CapabilitiesBeforeQuery = false
+	queryFirstObserved.ProviderVersion = ""
+	queryFirstObserved.ProviderVersionObserved = false
+	queryFirstResult := buildDogfoodScenarioResult(baseExpected, queryFirstObserved)
+	if queryFirstResult.Verdict != "fail" || !queryFirstResult.Checks.PreferredRouteFirst || !queryFirstResult.Checks.PreferredToolSelected || !queryFirstResult.Checks.PreferredToolProducedResult || !queryFirstResult.Checks.ProviderMatched {
+		t.Fatalf("query-first result = verdict=%q checks=%+v reasons=%v, want successful preferred route with strict capability-adherence failure", queryFirstResult.Verdict, queryFirstResult.Checks, queryFirstResult.ReasonCodes)
+	}
+	for _, misleading := range []string{"generic_browse_before_preferred_query", "inspection_before_capabilities", "provider_mismatch", "provider_not_observed", "preferred_code_intelligence_not_used"} {
+		if dogfoodContains(queryFirstResult.ReasonCodes, misleading) {
+			t.Fatalf("query-first reasons=%v, must not contain %q", queryFirstResult.ReasonCodes, misleading)
+		}
+	}
+	if !dogfoodContains(queryFirstResult.ReasonCodes, "capabilities_not_consumed_before_query") || !dogfoodContains(queryFirstResult.ReasonCodes, "provider_version_not_observed") {
+		t.Fatalf("query-first reasons=%v, want explicit capability-adherence reasons", queryFirstResult.ReasonCodes)
+	}
+
+	invalidRequestObserved := baseObserved
+	invalidRequestObserved.Provider = ""
+	invalidRequestObserved.ResultCount = 0
+	invalidRequestObserved.SemanticResultCount = 0
+	invalidRequestObserved.ErrorKinds = []string{"invalid_request"}
+	invalidRequestResult := buildDogfoodScenarioResult(baseExpected, invalidRequestObserved)
+	if invalidRequestResult.Verdict != "fail" || !invalidRequestResult.Checks.PreferredToolSelected || invalidRequestResult.Checks.PreferredToolProducedResult || !dogfoodContains(invalidRequestResult.ReasonCodes, "preferred_code_intelligence_no_results") {
+		t.Fatalf("invalid-request result = verdict=%q checks=%+v reasons=%v, want selected query without results", invalidRequestResult.Verdict, invalidRequestResult.Checks, invalidRequestResult.ReasonCodes)
+	}
+	if dogfoodContains(invalidRequestResult.ReasonCodes, "provider_mismatch") || dogfoodContains(invalidRequestResult.ReasonCodes, "provider_not_observed") {
+		t.Fatalf("invalid-request reasons=%v, must not infer provider evidence without a result", invalidRequestResult.ReasonCodes)
+	}
+	wrongZeroResultProviderObserved := invalidRequestObserved
+	wrongZeroResultProviderObserved.Provider = "tsc"
+	if result := buildDogfoodScenarioResult(baseExpected, wrongZeroResultProviderObserved); !dogfoodContains(result.ReasonCodes, "provider_mismatch") {
+		t.Fatalf("wrong zero-result provider reasons=%v, want observed mismatch", result.ReasonCodes)
+	}
+	missingResultProviderObserved := baseObserved
+	missingResultProviderObserved.Provider = ""
+	missingResultProviderResult := buildDogfoodScenarioResult(baseExpected, missingResultProviderObserved)
+	if !dogfoodContains(missingResultProviderResult.ReasonCodes, "provider_not_observed") || dogfoodContains(missingResultProviderResult.ReasonCodes, "provider_mismatch") {
+		t.Fatalf("missing-provider-summary reasons=%v, want provider_not_observed only", missingResultProviderResult.ReasonCodes)
+	}
+
 	wrongProviderObserved := baseObserved
 	wrongProviderObserved.Provider = "tsc"
 	if result := buildDogfoodScenarioResult(baseExpected, wrongProviderObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "provider_mismatch") {
@@ -704,6 +791,12 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	genericFirstObserved.ToolRouteModelCalls = []int{1, 2, 3}
 	if result := buildDogfoodScenarioResult(baseExpected, genericFirstObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "generic_browse_before_preferred_query") {
 		t.Fatalf("generic-first verdict = %q reasons=%v, want preferred-route ordering failure", result.Verdict, result.ReasonCodes)
+	}
+	readAfterPreferredObserved := baseObserved
+	readAfterPreferredObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:document_symbols", "read_file"}
+	readAfterPreferredObserved.ToolRouteModelCalls = []int{1, 2, 3}
+	if result := buildDogfoodScenarioResult(baseExpected, readAfterPreferredObserved); result.Verdict != "pass" || !result.Checks.FallbackOnlyAfterPreferred {
+		t.Fatalf("read-after-preferred verdict = %q checks=%+v reasons=%v, want ordered targeted read", result.Verdict, result.Checks, result.ReasonCodes)
 	}
 	unneededFallbackObserved := baseObserved
 	unneededFallbackObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:document_symbols", "grep"}
@@ -753,6 +846,21 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	if result := buildDogfoodScenarioResult(baseExpected, providerFailureObserved); result.Verdict != "fail" {
 		t.Fatalf("query failure without fallback verdict = %q reasons=%v, want fail", result.Verdict, result.ReasonCodes)
 	}
+	structuralFailureExpected := baseExpected
+	structuralFailureExpected.ID = "python-structural-provider-failure-r1"
+	structuralFailureExpected.Language = "python"
+	structuralFailureExpected.ExpectedRoute = "structural"
+	structuralFailureExpected.Provider = "ast-grep"
+	structuralFailureObserved := providerFailureObserved
+	structuralFailureObserved.SemanticCalls = 0
+	structuralFailureObserved.SemanticProviderFailureCall = 0
+	structuralFailureObserved.StructuralCalls = 1
+	structuralFailureObserved.StructuralProviderFailureCall = 2
+	structuralFailureObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:structural_search"}
+	structuralFailureResult := buildDogfoodScenarioResult(structuralFailureExpected, structuralFailureObserved)
+	if !dogfoodContains(structuralFailureResult.ReasonCodes, "provider_failure_fallback_not_used") || dogfoodContains(structuralFailureResult.ReasonCodes, "provider_failure_fallback_no_results") {
+		t.Fatalf("structural provider failure reasons=%v, want grep fallback not used", structuralFailureResult.ReasonCodes)
+	}
 
 	fallbackExpected := baseExpected
 	fallbackExpected.ID = "missing-go-provider-r1"
@@ -773,6 +881,11 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	fallbackObserved.ProviderUnavailableObserved = true
 	if result := buildDogfoodScenarioResult(fallbackExpected, fallbackObserved); result.Verdict != "pass" {
 		t.Fatalf("fallback verdict = %q reasons=%v, want pass", result.Verdict, result.ReasonCodes)
+	}
+	fallbackNoResultsObserved := fallbackObserved
+	fallbackNoResultsObserved.GrepResultCount = 0
+	if result := buildDogfoodScenarioResult(fallbackExpected, fallbackNoResultsObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "missing_provider_fallback_no_results") || dogfoodContains(result.ReasonCodes, "missing_provider_fallback_not_used") {
+		t.Fatalf("fallback-no-results verdict = %q reasons=%v, want attempted fallback without results", result.Verdict, result.ReasonCodes)
 	}
 	invalidFallbackObserved := fallbackObserved
 	invalidFallbackObserved.ToolRoute = []string{"code_intelligence:capabilities", "code_intelligence:unknown", "grep"}
@@ -860,6 +973,11 @@ func TestDogfoodScorecardScoring(t *testing.T) {
 	restrictedObserved.SemanticPolicyBlocked = false
 	if result := buildDogfoodScenarioResult(restrictedExpected, restrictedObserved); result.Verdict != "fail" || !dogfoodContains(result.ReasonCodes, "semantic_policy_block_not_observed") {
 		t.Fatalf("unobserved policy verdict = %q reasons=%v, want policy evidence failure", result.Verdict, result.ReasonCodes)
+	}
+
+	selectionCard := finalizeDogfoodScorecard(dogfoodScorecard{Scenarios: []dogfoodScenarioResult{invalidRequestResult}})
+	if selectionCard.Summary.PreferredToolRate != 1 || selectionCard.Summary.PreferredResultRate != 0 {
+		t.Fatalf("selection/result summary = %+v, want selected=100%% produced=0%%", selectionCard.Summary)
 	}
 }
 
