@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,6 +48,28 @@ func TestAgentLoopCodeIntelligenceToolIsAdvertisedAndReadOnlySafe(t *testing.T) 
 			t.Errorf("tool schema omits routing rule %q", routingRule)
 		}
 	}
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Function.Parameters, &schema); err != nil {
+		t.Fatalf("decode code-intelligence schema: %v", err)
+	}
+	for _, callShape := range []string{
+		`{"operation":"capabilities"}`,
+		`{"operation":"workspace_symbols","path":"relative/file.ts","query":"Symbol"}`,
+		`{"operation":"structural_search","path":"relative/file.py","language":"python","query":"def $NAME($$$ARGS)"}`,
+	} {
+		if !strings.Contains(schema.Properties["operation"].Description, callShape) {
+			t.Errorf("operation guidance omits canonical call %q", callShape)
+		}
+	}
+	for _, pathRule := range []string{"existing workspace-relative", "Copy a task-supplied path exactly", "never prepend the workspace root"} {
+		if !strings.Contains(schema.Properties["path"].Description, pathRule) {
+			t.Errorf("path guidance omits rule %q", pathRule)
+		}
+	}
 	if !strings.Contains(string(tool.Function.Parameters), `"selector"`) || !strings.Contains(string(tool.Function.Parameters), `^[A-Za-z_][A-Za-z0-9_]*$`) {
 		t.Fatalf("tool schema omits the bounded structural selector: %s", tool.Function.Parameters)
 	}
@@ -63,6 +86,29 @@ func TestAgentLoopCodeIntelligenceToolIsAdvertisedAndReadOnlySafe(t *testing.T) 
 	}, types.TaskRun{}, agentToolDefinitionOptions{})
 	if !hasToolDefinition(readOnlyTools, AgentToolCodeIntelligence) {
 		t.Fatalf("read-only catalog omits %s", AgentToolCodeIntelligence)
+	}
+}
+
+func TestAgentLoopCodeIntelligenceCanonicalPythonPatternMatchesDogfoodFixture(t *testing.T) {
+	if os.Getenv("HECATE_CODEINTEL_DOGFOOD") != "1" {
+		t.Skip("set HECATE_CODEINTEL_DOGFOOD=1 to verify the canonical pattern with installed ast-grep")
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	result, err := codeintel.NewService().Query(context.Background(), root, codeintel.Request{
+		Operation:  codeintel.OpStructuralSearch,
+		Path:       "e2e/testdata/code-intelligence-dogfood/python_target.py",
+		Language:   "python",
+		Query:      "def $NAME($$$ARGS)",
+		MaxResults: 10,
+	})
+	if err != nil {
+		t.Fatalf("run canonical Python structural pattern: %v", err)
+	}
+	if result.Provider != "ast-grep" || len(result.Items) != 2 {
+		t.Fatalf("canonical Python structural result = provider %q items %d, want ast-grep and 2 fixture functions", result.Provider, len(result.Items))
 	}
 }
 
