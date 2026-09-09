@@ -42,6 +42,14 @@ type Task struct {
 	// the snapshot and preserves their existing tool behavior; false is an
 	// explicit all-tools denial for new preset-backed assignments.
 	AgentPresetToolsEnabled *bool `json:",omitempty"`
+	// AgentPresetApprovalPolicy snapshots the resolved Agent Preset approval
+	// posture for a native project-assignment task. QA does not consume this
+	// layer. Empty means there is no frozen native-assignment approval layer,
+	// including for Hecate Chat, External Agent, QA, and legacy/manual tasks, and
+	// preserves their existing runtime, MCP-server, and browser approval
+	// behavior. New assignment tasks store one of the AgentPresetApproval* values
+	// below so later preset edits cannot change retries or resumes.
+	AgentPresetApprovalPolicy string `json:",omitempty"`
 	// AgentPresetBrowserAllowed snapshots whether the resolved Hecate Agent
 	// Preset permits the native, read-only browser evidence tool. nil marks
 	// legacy/manual tasks and fails closed: browser evidence is never inferred
@@ -130,6 +138,28 @@ type Task struct {
 // A Task does not become queued until its first Run is durably admitted.
 const TaskStatusNotStarted = "not_started"
 
+// Agent Preset approval policy values. These are an additive policy layer for
+// native project-assignment agent loops: they never weaken the runtime-wide,
+// per-MCP-server, browser, workflow, or sandbox policy floors.
+const (
+	AgentPresetApprovalInherit = "inherit"
+	AgentPresetApprovalRequire = "require"
+	AgentPresetApprovalBlock   = "block"
+	AgentPresetApprovalAllow   = "allow"
+)
+
+// IsValidAgentPresetApprovalPolicy reports whether v is a recognized frozen
+// Agent Preset approval posture. Empty represents the absence of the native
+// project-assignment layer and is accepted by storage/runtime consumers.
+func IsValidAgentPresetApprovalPolicy(v string) bool {
+	switch v {
+	case "", AgentPresetApprovalInherit, AgentPresetApprovalRequire, AgentPresetApprovalBlock, AgentPresetApprovalAllow:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	WorkspaceSystemPromptInherit = "inherit"
 	WorkspaceSystemPromptExclude = "exclude"
@@ -142,15 +172,16 @@ const (
 // token is never written to the task blob.
 const MCPEnvEncPrefix = "enc:"
 
-// MCP approval policy values. These control whether the agent loop
-// dispatches an MCP tool call from the configured server immediately,
-// pauses for operator approval, or refuses to call it at all.
+// MCP approval policy values. These establish the server-local baseline for
+// whether the agent loop dispatches an MCP tool call, pauses for operator
+// approval, or refuses to call it. Additive runtime policy, including a frozen
+// native-assignment preset approval policy, may require approval for an auto
+// call or deny a call whose server baseline requires approval.
 //
-//   - MCPApprovalAuto: dispatch immediately. Equivalent to leaving
-//     the field empty.
-//   - MCPApprovalRequireApproval: pause the agent loop on every call
-//     to a tool from this server, emit an approval record, and resume
-//     dispatch only after the operator approves.
+//   - MCPApprovalAuto: add no server-specific approval gate. Equivalent to
+//     leaving the field empty.
+//   - MCPApprovalRequireApproval: make every call to a tool from this server
+//     require approval unless a stronger policy denies the call.
 //   - MCPApprovalBlock: never dispatch; the agent loop returns a tool
 //     error to the LLM ("blocked by policy") so the model can pick a
 //     different tool without involving the operator.
